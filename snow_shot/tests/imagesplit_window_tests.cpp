@@ -1007,6 +1007,17 @@ int main(int argc, char** argv) {
         selectedFilesOpenIndependentWindows();
         emptyAndFailedSelectionsRemainUsable();
         selectedFileQueriesCancelWithWindowLifecycle();
+    } else if (arguments.contains(QStringLiteral("--import-sources-only"))) {
+        replacementAndCancellation();
+        independentHistoryAndSourceWindows();
+        savedPinsOpenIndependentSplitWindows(directory.path(), false);
+        savedPinsOpenIndependentSplitWindows(directory.path(), true);
+        nativeHistoryPixelsAreShared();
+        realAnimatedFilesKeepTheirInitialCanvas(directory.path());
+        admissionAndLateCallbacks();
+        shutdownDuringWorkers();
+        canceledCloseResumesReplacement();
+        loadingErrorsFollowLanguageAcrossQueuedCompletion();
     } else if (preview >= 0) {
         require(preview + 1 < arguments.size(), "preview requires output path");
         renderPreview(arguments[preview + 1], arguments.contains(QStringLiteral("--dark")),

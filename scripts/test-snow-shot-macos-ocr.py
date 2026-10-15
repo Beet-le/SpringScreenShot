@@ -51,6 +51,88 @@ class MacOSOcrAssets(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Invalid bundled resource link'):
             ocr.prepare_bundle(app)
 
+    def test_bundle_preparation_removes_reused_loose_audio_and_preserves_ocr(self):
+        app = self.root / 'Snow Shot.app'
+        runtime = app / 'Contents/MacOS'
+        resources = app / 'Contents/Resources'
+        for directory in (runtime, resources):
+            audio = directory / 'audios/camera_shutter.mp3'
+            audio.parent.mkdir(parents=True)
+            audio.write_bytes(b'obsolete loose resource')
+            model = directory / 'assets/ocr/models' / directory.name / 'rec.onnx'
+            model.parent.mkdir(parents=True)
+            model.write_bytes(directory.name.encode())
+
+        for unused in range(2):
+            ocr.prepare_bundle(app)
+            self.assertFalse((runtime / 'audios').exists())
+            self.assertFalse((runtime / 'audios').is_symlink())
+            self.assertFalse((resources / 'audios').exists())
+            for name in ('MacOS', 'Resources'):
+                self.assertEqual(
+                    (resources / 'assets/ocr/models' / name / 'rec.onnx').read_bytes(),
+                    name.encode())
+            # Exercise an already-normalized resource link on the second run.
+            if unused == 0:
+                audio = resources / 'audios/camera_shutter.mp3'
+                audio.parent.mkdir()
+                audio.write_bytes(b'previous installed audio')
+                (runtime / 'audios').symlink_to('../Resources/audios')
+
+    def test_bundle_audio_cleanup_preserves_unrelated_files_and_external_link_targets(self):
+        app = self.root / 'Snow Shot.app'
+        runtime = app / 'Contents/MacOS'
+        resources = app / 'Contents/Resources'
+        external = self.root / 'external.mp3'
+        external.write_bytes(b'outside package')
+        for directory in (runtime, resources):
+            audio = directory / 'audios'
+            audio.mkdir(parents=True)
+            (audio / 'camera_shutter.mp3').symlink_to(external)
+            (audio / (directory.name + '.mp3')).write_bytes(directory.name.encode())
+
+        ocr.prepare_bundle(app)
+        self.assertEqual(external.read_bytes(), b'outside package')
+        self.assertTrue((runtime / 'audios').is_symlink())
+        self.assertFalse((resources / 'audios/camera_shutter.mp3').exists())
+        self.assertFalse((resources / 'audios/camera_shutter.mp3').is_symlink())
+        for name in ('MacOS', 'Resources'):
+            self.assertEqual((resources / 'audios' / (name + '.mp3')).read_bytes(), name.encode())
+
+    def test_bundle_audio_cleanup_removes_destination_only_files_and_empty_directories(self):
+        app = self.root / 'Snow Shot.app'
+        runtime = app / 'Contents/MacOS'
+        resources = app / 'Contents/Resources'
+        runtime.mkdir(parents=True)
+        audio = resources / 'audios/camera_shutter.mp3'
+        audio.parent.mkdir(parents=True)
+        audio.write_bytes(b'previous installed audio')
+        ocr.prepare_bundle(app)
+        self.assertFalse(audio.parent.exists())
+        for directory in (runtime, resources):
+            (directory / 'audios').mkdir()
+        ocr.prepare_bundle(app)
+        self.assertFalse((runtime / 'audios').exists())
+        self.assertFalse((runtime / 'audios').is_symlink())
+        self.assertFalse((resources / 'audios').exists())
+
+    def test_bundle_audio_cleanup_rejects_external_parent_links(self):
+        external = self.root / 'external-audios'
+        external.mkdir()
+        shutter = external / 'camera_shutter.mp3'
+        shutter.write_bytes(b'outside package')
+        for name in ('MacOS', 'Resources'):
+            with self.subTest(directory=name):
+                app = self.root / (name + '.app')
+                runtime = app / 'Contents/MacOS'
+                resources = app / 'Contents/Resources'
+                runtime.mkdir(parents=True)
+                resources.mkdir()
+                (app / 'Contents' / name / 'audios').symlink_to(external)
+                with self.assertRaisesRegex(ValueError, 'Invalid bundled resource'):
+                    ocr.prepare_bundle(app)
+                self.assertEqual(shutter.read_bytes(), b'outside package')
+
     def test_manifest_pins_final_bytes_and_preserves_models(self):
         ocr.finalize(self.source, self.runtime)
         result = ocr.verify_assets(self.source, self.runtime)

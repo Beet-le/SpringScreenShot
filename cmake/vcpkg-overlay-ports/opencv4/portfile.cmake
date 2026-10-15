@@ -38,6 +38,7 @@ vcpkg_from_github(
       0021-fix-qt-gen-def.patch
       0022-android-use-vcpkg-cpu-features.patch
       0023-ffmpeg8-support.patch
+      0025-dnn-snow-shot-qr-layers.patch
       "${PATCH1_FILE}"
 )
 # Disallow accidental build of vendored copies. 3rdparty/protobuf is the one
@@ -449,6 +450,9 @@ vcpkg_cmake_configure(
         # cv::barcode for EAN/UPC. This keeps the port build time far below a
         # full contrib build.
         -DBUILD_LIST=wechat_qrcode
+        # Constructor registration otherwise retains every DNN layer family,
+        # even when the final static executable enables dead-code stripping.
+        -DOPENCV_DNN_SNOW_SHOT_QR=ON
         -DBUILD_opencv_apps=OFF
         -DBUILD_opencv_java=OFF
         -DBUILD_opencv_js=OFF
@@ -511,6 +515,9 @@ vcpkg_cmake_configure(
 
 vcpkg_cmake_install()
 vcpkg_cmake_config_fixup()
+file(APPEND "${CURRENT_PACKAGES_DIR}/share/opencv4/OpenCVConfig.cmake"
+    "\n# Snow Shot's bundled Caffe graphs define the supported DNN layer closure.\n"
+    "set(OpenCV_SNOW_SHOT_QR_PROFILE TRUE)\n")
 vcpkg_copy_pdbs()
 
 if (NOT VCPKG_BUILD_TYPE)

@@ -629,7 +629,6 @@ include([==[{(ROOT / 'cmake/SnowShotMiniMacOS.cmake').as_posix()}]==])
             files = [runtime / name for name in ('snow_shot_mini', 'snow-shot-mini-mcp',
                                                 'snow-ocr-process', 'crashpad_handler')]
             files.extend([assets / 'ocr/asset-manifest.json',
-                          bundle / 'Contents/Resources/audios/camera_shutter.mp3',
                           bundle / 'Contents/Resources/snow-shot.icns'])
             files.extend(bundle / ('Contents/Resources/' + language + '.lproj/InfoPlist.strings')
                          for language in ('en', 'zh-Hans', 'zh-Hant'))
@@ -659,6 +658,8 @@ include([==[{(ROOT / 'cmake/SnowShotMiniMacOS.cmake').as_posix()}]==])
                              'Contents/Resources/assets/ocr/models/' + model['id'] + '/' + model['files'][0]['name'],
                              'Contents/Resources/assets/ocr/models/unused/engine.onnx',
                              'Contents/Resources/assets/ocr/development-libraries.json',
+                             'Contents/MacOS/audios/camera_shutter.mp3',
+                             'Contents/Resources/audios/camera_shutter.mp3',
                              'Contents/Resources/audios/unused.mp3',
                              'Contents/Resources/unused-model.zip',
                              'Contents/Resources/snow_shot_en_US.qm',
@@ -670,6 +671,8 @@ include([==[{(ROOT / 'cmake/SnowShotMiniMacOS.cmake').as_posix()}]==])
                     forbidden.parent.mkdir(parents=True, exist_ok=True)
                     forbidden.write_text('forbidden')
                     self.assertNotEqual(verify().returncode, 0)
+                    if '/audios/' in relative:
+                        self.assertNotEqual(verify(static=False).returncode, 0)
                     forbidden.unlink()
                     parent = forbidden.parent
                     while parent != bundle:
@@ -679,10 +682,13 @@ include([==[{(ROOT / 'cmake/SnowShotMiniMacOS.cmake').as_posix()}]==])
                             break
                         parent = parent.parent
                     self.assertEqual(verify().returncode, 0)
-            for relative in ('Contents/Resources/models', 'Contents/Resources/assets/ocr/models'):
+            for relative in ('Contents/Resources/models', 'Contents/Resources/assets/ocr/models',
+                             'Contents/MacOS/audios', 'Contents/Resources/audios'):
                 unused_directory = bundle / relative
                 unused_directory.mkdir()
                 self.assertNotEqual(verify().returncode, 0)
+                if relative.endswith('/audios'):
+                    self.assertNotEqual(verify(static=False).returncode, 0)
                 unused_directory.rmdir()
             qt_config = bundle / 'Contents/Resources/qt.conf'
             qt_config.write_text('[Paths]\nPlugins = PlugIns\n')

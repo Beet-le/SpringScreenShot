@@ -990,6 +990,8 @@ set(SNOW_SHOT_SETTINGS_SOURCES
     include/snow_shot/presentation/components/pinnedwindowmanagementpagewidget.h
     src/presentation/components/pinnedwindowmanagementpagewidget.cpp
     src/presentation/services/screenshotclipboardcontent.cpp
+    src/presentation/services/imageimportsourcereader_p.h
+    src/presentation/services/imageimportsourcereader_p.cpp
     src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp
     src/presentation/components/texttranslationsettingswidget.cpp
     src/presentation/components/customaimodelssettingswidget.cpp
@@ -2125,7 +2127,7 @@ if(APPLE)
         FILES "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
 endif()
 
-if(EXISTS "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
+if(WIN32 AND EXISTS "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
     add_custom_command(TARGET snow_shot POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E make_directory
             "$<TARGET_FILE_DIR:snow_shot>/audios"
@@ -2135,7 +2137,7 @@ if(EXISTS "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
         COMMENT "Staging the camera shutter audio"
         VERBATIM
     )
-else()
+elseif(WIN32)
     message(WARNING
         "Camera shutter audio was not found: ${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
 endif()
@@ -8600,6 +8602,18 @@ if(SNOW_SHOT_BUILD_TESTS)
         endif()
     endif()
 
+    add_executable(snow-shot-qr-dnn-model-tests tests/qr_dnn_model_tests.cpp)
+    target_link_libraries(snow-shot-qr-dnn-model-tests PRIVATE
+        opencv_wechat_qrcode opencv_objdetect)
+    set(_snow_qr_model_test_arguments "${SNOW_SHOT_QR_MODELS_DIR}")
+    if(OpenCV_SNOW_SHOT_QR_PROFILE)
+        list(APPEND _snow_qr_model_test_arguments --minimal-registry)
+    endif()
+    add_test(NAME snow-shot-qr-dnn-model-tests
+        COMMAND snow-shot-qr-dnn-model-tests ${_snow_qr_model_test_arguments})
+    unset(_snow_qr_model_test_arguments)
+    set_tests_properties(snow-shot-qr-dnn-model-tests PROPERTIES LABELS unit TIMEOUT 60)
+
     add_executable(snow-shot-qr-recognition-service-tests
         tests/screenshot_qr_recognition_service_tests.cpp
         include/snow_shot/presentation/screenshotqrrecognitionservice.h
@@ -10234,7 +10248,7 @@ if(SNOW_SHOT_ENABLE_MCP)
         DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 endif()
-if(EXISTS "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
+if(WIN32 AND EXISTS "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
     install(FILES "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}"
         DESTINATION "${CMAKE_INSTALL_BINDIR}/audios"
         RENAME camera_shutter.mp3

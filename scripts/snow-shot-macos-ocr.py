@@ -207,12 +207,27 @@ def validate_bundle_directories(app):
         require_real_directory(app / relative)
 
 
+def remove_legacy_shutter_audio(app):
+    # macOS plays the embedded Qt resource. Remove the obsolete loose copy from
+    # reused stages, then prune only empty directories and their runtime links.
+    for name in ('MacOS', 'Resources'):
+        directory = app / 'Contents' / name / 'audios'
+        if not directory.exists():
+            continue
+        (directory / 'camera_shutter.mp3').unlink(missing_ok=True)
+        if not any(directory.iterdir()):
+            if directory.is_symlink():
+                directory.unlink()
+            else:
+                directory.rmdir()
+
+
 def prepare_bundle(app, library_directory=None, runtime_only=False):
     """Seal data as resources while preserving executable-relative lookup paths.
 
     codesign interprets regular files inside MacOS as nested code. Directory
-    symlinks preserve the existing assets/ocr and audios contracts without
-    signing model files or JSON as executable code.
+    symlinks preserve executable-relative resource lookup without signing model
+    files or JSON as executable code.
     """
     validate_bundle_directories(app)
     if runtime_only:
@@ -236,6 +251,13 @@ def prepare_bundle(app, library_directory=None, runtime_only=False):
             continue
         if not source.is_dir() or destination.is_symlink():
             raise ValueError(f'Invalid bundled resource directory: {source}')
+        if name == 'audios':
+            # Neither copytree nor copy2 may follow a stale audio-file link
+            # into an external directory while merging a reused stage.
+            for directory in (source, destination):
+                obsolete = directory / 'camera_shutter.mp3'
+                if obsolete.is_symlink():
+                    obsolete.unlink()
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             shutil.copytree(source, destination, dirs_exist_ok=True)
@@ -243,6 +265,7 @@ def prepare_bundle(app, library_directory=None, runtime_only=False):
         else:
             source.rename(destination)
         source.symlink_to(Path('../Resources') / name, target_is_directory=True)
+    remove_legacy_shutter_audio(app)
     if runtime_only:
         verify_no_bundled_models(app / 'Contents/Resources')
     if library_directory is not None:

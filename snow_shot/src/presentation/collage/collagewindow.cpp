@@ -13,8 +13,8 @@
 #include "snow_shot/presentation/windowcloseshortcut.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/capturehistoryrepository.h"
-#include "snow_shot/storage/pinnedwindowrepository.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "../services/imageimportsourcereader_p.h"
 #include "icon_renderer.h"
 #include "widgets/button.h"
 #include "widgets/message.h"
@@ -814,12 +814,10 @@ struct CollageWindow::Impl {
                 };
                 QImage image;
                 if (request.clipboard) {
-                    const auto content = ScreenshotClipboardContentReader::decode(
+                    image = readImageImportClipboard(
                         *request.clipboard, cancelled, [decoded, &error](qint64 bytes) {
                             return decoded->reservation->resize(bytes, &error);
                         });
-                    if (content)
-                        image = content->image;
                 } else if (request.record) {
                     const QSize size =
                         request.record->result ? request.record->result->imageSize : QSize();
@@ -837,46 +835,17 @@ struct CollageWindow::Impl {
                     if (result)
                         image = *result;
                 } else if (!request.pinnedId.isEmpty()) {
-                    qint64 allocatedBytes = 0;
-                    const auto allocate = [decoded, &error, &allocatedBytes](qint64 bytes) {
-                        allocatedBytes = std::max(allocatedBytes, bytes);
-                        return decoded->reservation->resize(allocatedBytes, &error);
-                    };
-                    const auto pinned =
-                        storage::ApplicationStorage::instance().pinnedWindows().loadPreviewSource(
-                            request.pinnedId, allocate, cancelled);
-                    if (pinned && !cancelled()) {
-                        if (pinned->sourceKind == storage::PinnedWindowSourceKind::ClipboardText) {
-                            ScreenshotClipboardOriginalContent original;
-                            original.html = pinned->originalHtml;
-                            original.text = pinned->originalText;
-                            original.textStyle = pinned->textStyle;
-                            const auto rendered =
-                                ScreenshotClipboardContentReader::renderOriginalText(
-                                    original, pinned->firstCreationTextDpi, {}, allocate);
-                            if (rendered)
-                                image = rendered->image;
-                        } else {
-                            image = pinned->image;
-                        }
-                    }
+                    image = readImageImportPinnedRecord(request.pinnedId, cancelled,
+                                                        [decoded, &error](qint64 bytes) {
+                                                            return decoded->reservation->resize(
+                                                                bytes, &error);
+                                                        })
+                                .image;
                 } else {
-                    const bool supported =
-                        ScreenshotClipboardContentReader::supportedImageFileExtensions().contains(
-                            QFileInfo(request.path).suffix().toLower());
-                    auto file = request.file;
-                    if (!file && supported) {
-                        const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles(
-                            {request.path}, cancelled);
-                        if (!files.isEmpty())
-                            file = files.first();
-                    }
-                    if (file) {
-                        image = ScreenshotClipboardContentReader::decodeImageFile(
-                            *file, cancelled, [decoded, &error](qint64 bytes) {
-                                return decoded->reservation->resize(bytes, &error);
-                            });
-                    }
+                    image = readImageImportFile(
+                        request.path, request.file, cancelled, [decoded, &error](qint64 bytes) {
+                            return decoded->reservation->resize(bytes, &error);
+                        });
                 }
                 if (cancelled())
                     return ScreenshotExportTaskResult::failure(

@@ -9,8 +9,8 @@
 #include "snow_shot/presentation/windowcloseshortcut.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/capturehistoryrepository.h"
-#include "snow_shot/storage/pinnedwindowrepository.h"
 #include "imagesplitimagepreparation_p.h"
+#include "../services/imageimportsourcereader_p.h"
 #include "icon_renderer.h"
 #include "widgets/button.h"
 #include "widgets/message.h"
@@ -704,47 +704,25 @@ void ImageSplitWindow::presentPinnedRecord(const QString& recordId) {
             const auto cancelled = [&cancellation] {
                 return cancellation.isCancellationRequested();
             };
-            qint64 allocatedBytes = 0;
-            const auto allocate = [loaded, cancelled, &allocatedBytes](qint64 bytes) {
+            const auto allocate = [loaded, cancelled](qint64 bytes) {
                 if (cancelled())
                     return false;
-                allocatedBytes = std::max(allocatedBytes, bytes);
                 if (!loaded->reservation)
-                    loaded->reservation = reserveCollageImport(allocatedBytes);
-                else if (!loaded->reservation->resize(allocatedBytes))
+                    loaded->reservation = reserveCollageImport(bytes);
+                else if (!loaded->reservation->resize(bytes))
                     loaded->reservation.reset();
                 if (!loaded->reservation)
                     loaded->errorSource =
                         "The image is too large or there is not enough memory to load it.";
                 return loaded->reservation != nullptr;
             };
-            if (cancelled())
-                return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Cancelled,
-                                                           {});
-            const auto record =
-                storage::ApplicationStorage::instance().pinnedWindows().loadPreviewSource(
-                    recordId, allocate, cancelled);
-            QImage image;
-            if (record && !cancelled()) {
-                loaded->originalFileName = record->originalFileName;
-                loaded->createdUtc = record->createdUtc;
-                if (record->sourceKind == storage::PinnedWindowSourceKind::ClipboardText) {
-                    ScreenshotClipboardOriginalContent original;
-                    original.html = record->originalHtml;
-                    original.text = record->originalText;
-                    original.textStyle = record->textStyle;
-                    const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
-                        original, record->firstCreationTextDpi, {}, allocate);
-                    if (rendered)
-                        image = rendered->image;
-                } else {
-                    image = record->image;
-                }
-            }
+            auto source = readImageImportPinnedRecord(recordId, cancelled, allocate);
+            loaded->originalFileName = std::move(source.originalFileName);
+            loaded->createdUtc = source.createdUtc;
             if (loaded->errorSource)
                 return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
                                       loaded->errorSource);
-            return prepareImage(std::move(image), loaded, cancellation);
+            return prepareImage(std::move(source.image), loaded, cancellation);
         },
         [this, loaded, token](ScreenshotExportTaskResult result) {
             m_impl->finishLoading(loaded, loaded->originalFileName, loaded->createdUtc, false,
@@ -843,19 +821,11 @@ void ImageSplitWindow::replaceFile(const QString& path) {
             } else {
                 QString error;
                 loaded->reservation = reserveCollageImport(0, &error);
-                const bool supported =
-                    ScreenshotClipboardContentReader::supportedImageFileExtensions().contains(
-                        QFileInfo(path).suffix().toLower());
-                const auto files =
-                    supported
-                        ? ScreenshotClipboardContentReader::snapshotLocalFiles({path}, cancelled)
-                        : QList<ScreenshotClipboardLocalImage>();
-                if (loaded->reservation && files.size() == 1) {
-                    image = ScreenshotClipboardContentReader::decodeImageFile(
-                        files.first(), cancelled, [loaded, &error](qint64 bytes) {
+                if (loaded->reservation)
+                    image = readImageImportFile(
+                        path, std::nullopt, cancelled, [loaded, &error](qint64 bytes) {
                             return loaded->reservation->resize(bytes, &error);
                         });
-                }
                 if (image.isNull() && !error.isEmpty())
                     return loadingFailure(
                         loaded, ScreenshotExportFailureStage::Source,
@@ -915,7 +885,7 @@ void ImageSplitWindow::paste() {
     d.job = ScreenshotExportCoordinator::shared().submit(
         this, ScreenshotExportCoordinator::Priority::Background,
         [snapshot = std::move(*snapshot), loaded](const auto& cancellation) mutable {
-            auto content = ScreenshotClipboardContentReader::decode(
+            QImage image = readImageImportClipboard(
                 std::move(snapshot),
                 [&cancellation] { return cancellation.isCancellationRequested(); },
                 [loaded](qint64 bytes) {
@@ -928,8 +898,6 @@ void ImageSplitWindow::paste() {
             if (loaded->errorSource)
                 return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
                                       loaded->errorSource);
-            QImage image = content ? std::move(content->image) : QImage();
-            content.reset();
             return prepareImage(std::move(image), loaded, cancellation);
         },
         fail);

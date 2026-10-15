@@ -21,6 +21,7 @@ else()
 endif()
 
 add_test(NAME snow_image_core_tests COMMAND snow_image_core_tests)
+add_test(NAME snow_image_raster_store_tests COMMAND snow_image_core_tests --raster-stores-only)
 add_test(NAME snow_image_pixel_ownership_tests COMMAND snow_image_core_tests --ownership-only)
 add_test(NAME snow_image_buffer_paths_tests COMMAND snow_image_core_tests --buffer-paths-only)
 add_test(NAME snow_image_processing_tests COMMAND snow_image_core_tests --processing-only)
