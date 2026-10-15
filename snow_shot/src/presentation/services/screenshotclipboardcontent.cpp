@@ -641,7 +641,7 @@ std::optional<ScreenshotClipboardContentSnapshot>
 snow_shot::presentation::detail::snapshotClipboardMimeData(
     const QMimeData* mimeData, qreal devicePixelRatio, const QColor& baseColor,
     bool includeDetachedImage, const AllocationCheck& allocate,
-    std::optional<ScreenshotClipboardContentSnapshot> nativeSnapshot) {
+    std::optional<ScreenshotClipboardContentSnapshot> nativeSnapshot, bool imagesOnly) {
     ensureScreenshotClipboardAppearanceMimeSupport();
     if (!std::isfinite(devicePixelRatio) || devicePixelRatio <= 0.0) {
         return std::nullopt;
@@ -654,13 +654,15 @@ snow_shot::presentation::detail::snapshotClipboardMimeData(
     snapshot.baseColor = baseColor;
     if (!mimeData)
         return snapshot.isValid() ? std::optional(std::move(snapshot)) : std::nullopt;
-    if (!nativeCaptured && mimeData->hasFormat(screenshotClipboardPlacementNativeMimeType())) {
+    if (!imagesOnly && !nativeCaptured &&
+        mimeData->hasFormat(screenshotClipboardPlacementNativeMimeType())) {
         if (allocate && !allocate(kScreenshotClipboardPlacementMaximumBytes))
             return std::nullopt;
         snapshot.placement = readScreenshotClipboardPlacement(mimeData);
     }
 
-    if (!nativeCaptured && mimeData->hasFormat(screenshotClipboardAppearanceNativeMimeType())) {
+    if (!imagesOnly && !nativeCaptured &&
+        mimeData->hasFormat(screenshotClipboardAppearanceNativeMimeType())) {
         snapshot.appearance = readScreenshotClipboardAppearance(mimeData);
         if (allocate && !allocate(snapshotBytes(snapshot)))
             return std::nullopt;
@@ -703,6 +705,9 @@ snow_shot::presentation::detail::snapshotClipboardMimeData(
             }
         }
     }
+
+    if (imagesOnly)
+        return snapshot.isValid() ? std::optional(std::move(snapshot)) : std::nullopt;
 
     const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles(
         ScreenshotClipboardContentReader::localFilePaths(mimeData));
@@ -1095,8 +1100,19 @@ ScreenshotClipboardContentReader::snapshotLocalFiles(const QStringList& paths,
     return files;
 }
 
+QStringList ScreenshotClipboardContentReader::localImageFilePaths(const QMimeData* mimeData) {
+    QStringList paths;
+    const auto extensions = supportedImageFileExtensions();
+    for (const auto& path : localFilePaths(mimeData)) {
+        if (extensions.contains(QFileInfo(path).suffix().toLower()))
+            paths.append(path);
+    }
+    return paths;
+}
+
 static std::optional<ScreenshotClipboardContentSnapshot>
-snapshotClipboardOnce(QClipboard* clipboard, qreal devicePixelRatio, AllocationCheck allocate) {
+snapshotClipboardOnce(QClipboard* clipboard, qreal devicePixelRatio, AllocationCheck allocate,
+                      bool imagesOnly) {
     if (clipboard == nullptr) {
         return std::nullopt;
     }
@@ -1142,29 +1158,31 @@ snapshotClipboardOnce(QClipboard* clipboard, qreal devicePixelRatio, AllocationC
             SNOW_SHOT_PIN_PERF_MILESTONE("clipboard.native_dib_copied");
             nativeSnapshot->nativeDib = std::move(*native);
         }
-        const UINT format = RegisterClipboardFormatW(L"SnowShotScreenshotPlacement");
-        const auto handle = static_cast<HGLOBAL>(GetClipboardData(format));
-        const auto size = handle ? GlobalSize(handle) : 0;
-        if (size && size <= static_cast<SIZE_T>(kScreenshotClipboardPlacementMaximumBytes) &&
-            (!checked ||
-             checked(snapshotBytes(*nativeSnapshot) + kScreenshotClipboardPlacementMaximumBytes))) {
-            if (const void* bytes = GlobalLock(handle)) {
-                nativeSnapshot->placement = decodeScreenshotClipboardPlacement(
-                    QByteArray(static_cast<const char*>(bytes), static_cast<qsizetype>(size)));
-                GlobalUnlock(handle);
+        if (!imagesOnly) {
+            const UINT format = RegisterClipboardFormatW(L"SnowShotScreenshotPlacement");
+            const auto handle = static_cast<HGLOBAL>(GetClipboardData(format));
+            const auto size = handle ? GlobalSize(handle) : 0;
+            if (size && size <= static_cast<SIZE_T>(kScreenshotClipboardPlacementMaximumBytes) &&
+                (!checked || checked(snapshotBytes(*nativeSnapshot) +
+                                     kScreenshotClipboardPlacementMaximumBytes))) {
+                if (const void* bytes = GlobalLock(handle)) {
+                    nativeSnapshot->placement = decodeScreenshotClipboardPlacement(
+                        QByteArray(static_cast<const char*>(bytes), static_cast<qsizetype>(size)));
+                    GlobalUnlock(handle);
+                }
             }
-        }
-        const UINT appearanceFormat = RegisterClipboardFormatW(L"SnowShotScreenshotAppearance");
-        const auto appearanceHandle = static_cast<HGLOBAL>(GetClipboardData(appearanceFormat));
-        const auto appearanceSize = appearanceHandle ? GlobalSize(appearanceHandle) : 0;
-        if (appearanceSize &&
-            appearanceSize <= static_cast<SIZE_T>(kScreenshotClipboardAppearanceMaximumBytes) &&
-            (!checked ||
-             checked(snapshotBytes(*nativeSnapshot) + static_cast<qint64>(appearanceSize) * 4))) {
-            if (const void* bytes = GlobalLock(appearanceHandle)) {
-                nativeSnapshot->appearance = decodeScreenshotClipboardAppearance(QByteArray(
-                    static_cast<const char*>(bytes), static_cast<qsizetype>(appearanceSize)));
-                GlobalUnlock(appearanceHandle);
+            const UINT appearanceFormat = RegisterClipboardFormatW(L"SnowShotScreenshotAppearance");
+            const auto appearanceHandle = static_cast<HGLOBAL>(GetClipboardData(appearanceFormat));
+            const auto appearanceSize = appearanceHandle ? GlobalSize(appearanceHandle) : 0;
+            if (appearanceSize &&
+                appearanceSize <= static_cast<SIZE_T>(kScreenshotClipboardAppearanceMaximumBytes) &&
+                (!checked || checked(snapshotBytes(*nativeSnapshot) +
+                                     static_cast<qint64>(appearanceSize) * 4))) {
+                if (const void* bytes = GlobalLock(appearanceHandle)) {
+                    nativeSnapshot->appearance = decodeScreenshotClipboardAppearance(QByteArray(
+                        static_cast<const char*>(bytes), static_cast<qsizetype>(appearanceSize)));
+                    GlobalUnlock(appearanceHandle);
+                }
             }
         }
     }
@@ -1172,10 +1190,10 @@ snapshotClipboardOnce(QClipboard* clipboard, qreal devicePixelRatio, AllocationC
         return std::nullopt;
     auto snapshot = snow_shot::presentation::detail::snapshotClipboardMimeData(
         clipboard->mimeData(), devicePixelRatio, baseColor, false, checked,
-        std::move(nativeSnapshot));
+        std::move(nativeSnapshot), imagesOnly);
 #else
     auto snapshot = snow_shot::presentation::detail::snapshotClipboardMimeData(
-        clipboard->mimeData(), devicePixelRatio, baseColor, false, checked);
+        clipboard->mimeData(), devicePixelRatio, baseColor, false, checked, {}, imagesOnly);
 #endif
     if (rejected)
         return std::nullopt;
@@ -1194,7 +1212,7 @@ snapshotClipboardOnce(QClipboard* clipboard, qreal devicePixelRatio, AllocationC
         // Providers that expose only QMimeData::imageData() remain supported.
         SNOW_SHOT_PIN_PERF_COUNTER("clipboard.native_dib_fallback", 1);
         const auto* mime = clipboard->mimeData();
-        if (mime) {
+        if (mime && (!imagesOnly || mime->hasImage() || !snapshot->encodedImages.isEmpty())) {
             if (checked && !checked(snapshotBytes(*snapshot) + kMaximumClipboardImageBytes))
                 return std::nullopt;
             const auto value = mime->imageData();
@@ -1207,9 +1225,10 @@ snapshotClipboardOnce(QClipboard* clipboard, qreal devicePixelRatio, AllocationC
     return !rejected && snapshot.has_value() && snapshot->isValid() ? snapshot : std::nullopt;
 }
 
-std::optional<ScreenshotClipboardContentSnapshot>
-ScreenshotClipboardContentReader::snapshot(QClipboard* clipboard, qreal devicePixelRatio,
-                                           AllocationCheck allocate) {
+static std::optional<ScreenshotClipboardContentSnapshot> snapshotClipboard(QClipboard* clipboard,
+                                                                           qreal devicePixelRatio,
+                                                                           AllocationCheck allocate,
+                                                                           bool imagesOnly) {
 #ifdef Q_OS_MACOS
     // A process that has never copied an image must also recognize native PNG.
     snow_shot::platform::macos::initializeImageClipboardConverter();
@@ -1218,11 +1237,28 @@ ScreenshotClipboardContentReader::snapshot(QClipboard* clipboard, qreal devicePi
     ensureScreenshotClipboardAppearanceMimeSupport();
     for (int attempt = 0; attempt < 2; ++attempt) {
         const auto revision = screenshotClipboardRevision();
-        auto result = snapshotClipboardOnce(clipboard, devicePixelRatio, allocate);
+        auto result = snapshotClipboardOnce(clipboard, devicePixelRatio, allocate, imagesOnly);
         if (revision == screenshotClipboardRevision())
             return result;
     }
     return std::nullopt;
+}
+
+std::optional<ScreenshotClipboardContentSnapshot>
+ScreenshotClipboardContentReader::snapshot(QClipboard* clipboard, qreal devicePixelRatio,
+                                           AllocationCheck allocate) {
+    return snapshotClipboard(clipboard, devicePixelRatio, std::move(allocate), false);
+}
+
+std::optional<ScreenshotClipboardContentSnapshot>
+ScreenshotClipboardContentReader::snapshotImage(QClipboard* clipboard, qreal devicePixelRatio,
+                                                AllocationCheck allocate) {
+    auto captured = snapshotClipboard(clipboard, devicePixelRatio, allocate, true);
+    // Lazy providers require conservative admission before capture. Queue only the bytes
+    // actually retained so another window can capture its own clipboard image concurrently.
+    if (captured && allocate && !allocate(snapshotBytes(*captured)))
+        return std::nullopt;
+    return captured;
 }
 
 std::optional<ScreenshotClipboardContentSnapshot>

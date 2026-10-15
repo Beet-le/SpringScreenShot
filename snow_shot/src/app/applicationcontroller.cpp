@@ -1866,6 +1866,12 @@ class ApplicationController::Impl {
             ensureCollageWindowCoordinator().presentSelectedFiles(std::move(backend), target);
             break;
         }
+        case presentation::GlobalShortcutAction::SplitSelectedImages: {
+            auto backend = platform::createSelectedFileBackend();
+            const auto target = backend->captureTarget();
+            ensureImageSplitWindowCoordinator().presentSelectedFiles(std::move(backend), target);
+            break;
+        }
         case presentation::GlobalShortcutAction::OpenPinToScreenManagement:
             ensureMainWindow().showPinToScreenManagement();
             break;

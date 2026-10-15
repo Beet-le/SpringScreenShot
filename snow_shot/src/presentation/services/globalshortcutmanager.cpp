@@ -23,7 +23,7 @@ namespace {
 constexpr int MAX_SHORTCUTS_PER_ACTION = 2;
 constexpr int FIRST_REGISTRATION_ID = 0x2200;
 constexpr int LAST_REGISTRATION_ID = 0xBFFF;
-constexpr std::size_t ACTION_COUNT = 26;
+constexpr std::size_t ACTION_COUNT = 27;
 
 constexpr std::array<GlobalShortcutAction, ACTION_COUNT> ALL_ACTIONS = {
     GlobalShortcutAction::Screenshot,
@@ -43,6 +43,7 @@ constexpr std::array<GlobalShortcutAction, ACTION_COUNT> ALL_ACTIONS = {
     GlobalShortcutAction::OpenPinToScreenManagement,
     GlobalShortcutAction::GlobalCanvas,
     GlobalShortcutAction::StitchSelectedImages,
+    GlobalShortcutAction::SplitSelectedImages,
     GlobalShortcutAction::SwitchWindowGroup,
     GlobalShortcutAction::OpenSettings,
     GlobalShortcutAction::PinClipboardContent,
@@ -169,6 +170,8 @@ shortcuts::ShortcutBindingList persistedShortcuts(const storage::ShortcutSetting
         return settings.globalCanvas();
     case GlobalShortcutAction::StitchSelectedImages:
         return settings.stitchSelectedImages();
+    case GlobalShortcutAction::SplitSelectedImages:
+        return settings.splitSelectedImages();
     case GlobalShortcutAction::OpenPinToScreenManagement:
         return settings.openPinToScreenManagement();
     case GlobalShortcutAction::OpenSettings:
@@ -236,6 +239,8 @@ bool persistShortcuts(const storage::ShortcutSettings& settings, GlobalShortcutA
         return settings.setGlobalCanvas(bindings);
     case GlobalShortcutAction::StitchSelectedImages:
         return settings.setStitchSelectedImages(bindings);
+    case GlobalShortcutAction::SplitSelectedImages:
+        return settings.setSplitSelectedImages(bindings);
     case GlobalShortcutAction::OpenPinToScreenManagement:
         return settings.setOpenPinToScreenManagement(bindings);
     case GlobalShortcutAction::OpenSettings:

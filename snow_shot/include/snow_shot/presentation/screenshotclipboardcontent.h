@@ -127,6 +127,8 @@ class ScreenshotClipboardContentReader final {
     [[nodiscard]] static QStringList supportedImageFileExtensions();
     [[nodiscard]] static QStringList supportedFileExtensions();
     [[nodiscard]] static QStringList localFilePaths(const QMimeData* mimeData);
+    // Preserves clipboard order and duplicates; file validation belongs to the import worker.
+    [[nodiscard]] static QStringList localImageFilePaths(const QMimeData* mimeData);
     // File metadata is independent of GUI state and may be captured on a worker.
     [[nodiscard]] static QList<ScreenshotClipboardLocalImage>
     snapshotLocalFiles(const QStringList& paths, CancellationCheck cancelled = {});
@@ -140,6 +142,9 @@ class ScreenshotClipboardContentReader final {
     // MIME data needed by decode(), which is safe to run on an export worker.
     [[nodiscard]] static std::optional<ScreenshotClipboardContentSnapshot>
     snapshot(QClipboard* clipboard, qreal devicePixelRatio, AllocationCheck allocate = {});
+    // Image-only import: never rasterize clipboard text or follow file/HTML fallbacks.
+    [[nodiscard]] static std::optional<ScreenshotClipboardContentSnapshot>
+    snapshotImage(QClipboard* clipboard, qreal devicePixelRatio, AllocationCheck allocate = {});
     [[nodiscard]] static std::optional<ScreenshotClipboardContentSnapshot>
     snapshotMimeData(const QMimeData* mimeData, qreal devicePixelRatio, const QColor& baseColor,
                      AllocationCheck allocate = {});

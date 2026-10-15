@@ -551,6 +551,10 @@
             <translation>清空全部图像？</translation>
         </message>
         <message>
+            <source>Clipboard image</source>
+            <translation>剪贴板图像</translation>
+        </message>
+        <message>
             <source>Collage</source>
             <translation>图片拼接</translation>
         </message>
@@ -860,12 +864,20 @@ Files:
             <translation>列数</translation>
         </message>
         <message>
+            <source>Drag an image file here, or choose Select Image</source>
+            <translation>将图像文件拖到此处，或点击“选择图像”</translation>
+        </message>
+        <message>
             <source>Drop one image file at a time.</source>
             <translation>请一次拖入一个图像文件。</translation>
         </message>
         <message>
             <source>Drop one image to replace the current image</source>
             <translation>拖入一张图像以替换当前图像</translation>
+        </message>
+        <message>
+            <source>Drop one image to split</source>
+            <translation>拖入一张图像进行分割</translation>
         </message>
         <message>
             <source>Enter a positive integer.</source>
@@ -922,6 +934,14 @@ Files:
         <message>
             <source>Rows</source>
             <translation>行数</translation>
+        </message>
+        <message>
+            <source>Select Image</source>
+            <translation>选择图像</translation>
+        </message>
+        <message>
+            <source>Select an image to split</source>
+            <translation>选择要分割的图像</translation>
         </message>
         <message>
             <source>Split direction</source>
@@ -1001,8 +1021,16 @@ Files:
     <context>
         <name>ImageSplitWindow</name>
         <message>
+            <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</source>
+            <translation>请在“系统设置 &gt; 隐私与安全性 &gt; 自动化”中允许 Snow Shot 访问访达，然后重试。</translation>
+        </message>
+        <message>
             <source>Cancel</source>
             <translation>取消</translation>
+        </message>
+        <message>
+            <source>Could not read the selected image files. Please try again.</source>
+            <translation>无法读取选中的图片文件，请重试。</translation>
         </message>
         <message>
             <source>Discard</source>
@@ -1071,6 +1099,14 @@ Files:
         <message>
             <source>Select Image</source>
             <translation>选择图像</translation>
+        </message>
+        <message>
+            <source>The file manager is unavailable. Open it and try again.</source>
+            <translation>文件管理器不可用，请打开后重试。</translation>
+        </message>
+        <message>
+            <source>The file manager took too long to return the selected files. Please try again.</source>
+            <translation>文件管理器返回选中文件的时间过长，请重试。</translation>
         </message>
         <message>
             <source>The image and current split edits will be discarded.</source>

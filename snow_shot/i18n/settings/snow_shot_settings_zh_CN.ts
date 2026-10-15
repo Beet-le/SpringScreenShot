@@ -3005,6 +3005,10 @@
             <translation>打开</translation>
         </message>
         <message>
+            <source>Open Image Splitting for each selected image file, or an empty window if no images are selected</source>
+            <translation>为每个选中的图片文件打开图片分割；未选中图片时打开空白窗口</translation>
+        </message>
+        <message>
             <source>Open Image Stitching with selected image files, or an empty window if no images are selected</source>
             <translation>使用选中的图片文件打开图片拼接；未选中图片时打开空白窗口</translation>
         </message>
@@ -4111,6 +4115,10 @@
         <message>
             <source>Speed First reduces computation on short text and may change recognition results.</source>
             <translation>速度优先会减少短文字的计算量，并可能改变识别结果。</translation>
+        </message>
+        <message>
+            <source>Split Selected Images</source>
+            <translation>分割选中图像</translation>
         </message>
         <message>
             <source>Spotlight</source>

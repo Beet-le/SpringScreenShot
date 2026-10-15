@@ -21,6 +21,7 @@
 #include "widgets/modal.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QCursor>
 #include <QDateTime>
 #include <QFileDialog>
@@ -53,6 +54,7 @@ using adqt::widgets::AdModal;
     QT_TRANSLATE_NOOP("CollageWindow", "Cancel"),
     QT_TRANSLATE_NOOP("CollageWindow", "Clear all"),
     QT_TRANSLATE_NOOP("CollageWindow", "Clear all images?"),
+    QT_TRANSLATE_NOOP("CollageWindow", "Clipboard image"),
     QT_TRANSLATE_NOOP("CollageWindow", "Collage"),
     QT_TRANSLATE_NOOP("CollageWindow", "Copy"),
     QT_TRANSLATE_NOOP("CollageWindow", "Copying collage…"),
@@ -141,6 +143,8 @@ struct ImportItem {
     std::optional<ScreenshotPinnedImageSnapshot> live = std::nullopt;
     std::optional<SelectedFilesImport> selection = std::nullopt;
     std::optional<ScreenshotClipboardLocalImage> file = std::nullopt;
+    std::optional<ScreenshotClipboardContentSnapshot> clipboard = std::nullopt;
+    std::shared_ptr<CollageImportReservation> reservation = {};
 };
 
 struct ImportedImage {
@@ -207,6 +211,7 @@ struct CollageWindow::Impl {
     std::shared_ptr<std::atomic_bool> pdfCancellation;
     CollagePdfExportResult lastPdfResult;
     QSet<QString> pendingPdfSettingFields;
+    WindowShortcutManager* pasteShortcuts = nullptr;
 
     Impl(CollageWindow& owner, CollageWindowServices ports)
         : q(owner), services(std::move(ports)), document(new CollageDocument(&q)),
@@ -285,6 +290,24 @@ struct CollageWindow::Impl {
         QObject::connect(&LanguageManager::instance(), &LanguageManager::languageChanged, &q,
                          [this] { retranslate(); });
         QObject::connect(qApp, &QCoreApplication::aboutToQuit, &q, &CollageWindow::shutdown);
+        pasteShortcuts = new WindowShortcutManager(&q);
+        WindowShortcutManager::Binding binding;
+        binding.id = QStringLiteral("collagePaste");
+        for (const auto& sequence : QKeySequence::keyBindings(QKeySequence::Paste)) {
+            if (sequence.count() == 1)
+                binding.keyCombinations.append(sequence[0]);
+        }
+        binding.priority = WindowShortcutManager::StandardPriority::WindowCommand;
+        binding.canActivate = [this](const auto& context) {
+            const auto* receiver = qobject_cast<QWidget*>(context.receiver);
+            return canPaste() && receiver && receiver->window() == editor->window() &&
+                   !WindowShortcutManager::focusAcceptsTextInput(context.focusWidget);
+        };
+        binding.activate = [this](const auto&) {
+            q.paste();
+            return true;
+        };
+        static_cast<void>(pasteShortcuts->addBinding(&q, std::move(binding)));
         retranslate();
         updateActions();
     }
@@ -456,6 +479,11 @@ struct CollageWindow::Impl {
         cancelButton->setEnabled(!pdfCancelRequested);
         editor->setLoading(importing);
         editor->setExportBusy(exporting);
+    }
+
+    bool canPaste() const {
+        return modal->isOpen() && !closing && !importing && !exporting && !confirmationPending &&
+               !fileDialog && !choosingPdf;
     }
 
     void cancelWork() {
@@ -776,7 +804,8 @@ struct CollageWindow::Impl {
             &q, ScreenshotExportCoordinator::Priority::Background,
             [request, decoded, historyReader](const ScreenshotExportCancellation& cancellation) {
                 QString error;
-                decoded->reservation = reserveCollageImport(0, &error);
+                decoded->reservation =
+                    request.reservation ? request.reservation : reserveCollageImport(0, &error);
                 if (!decoded->reservation)
                     return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Source,
                                                                error);
@@ -784,7 +813,14 @@ struct CollageWindow::Impl {
                     return cancellation.isCancellationRequested();
                 };
                 QImage image;
-                if (request.record) {
+                if (request.clipboard) {
+                    const auto content = ScreenshotClipboardContentReader::decode(
+                        *request.clipboard, cancelled, [decoded, &error](qint64 bytes) {
+                            return decoded->reservation->resize(bytes, &error);
+                        });
+                    if (content)
+                        image = content->image;
+                } else if (request.record) {
                     const QSize size =
                         request.record->result ? request.record->result->imageSize : QSize();
                     const qint64 bytes = size.isEmpty() ? 0 : collageImageImportBytes(size, &error);
@@ -1224,6 +1260,7 @@ void CollageWindow::present(const QVector<storage::CaptureHistoryRecord>& record
         m_impl->modal->setWindowMinimumSize(QSize(900, 600).boundedTo(available));
     }
     m_impl->modal->present();
+    m_impl->pasteShortcuts->addScopeWindow(m_impl->editor->window());
     if (firstPresentation)
         installWindowCloseShortcut(m_impl->editor->window(), [this] { requestClose(); });
     QVector<ImportItem> requested;
@@ -1258,6 +1295,38 @@ void CollageWindow::addFiles(const QStringList& paths) {
     for (const QString& path : paths)
         requested.append({{}, {}, path, path, 0});
     m_impl->beginImport(std::move(requested));
+}
+
+void CollageWindow::paste() {
+    auto& d = *m_impl;
+    if (!d.canPaste())
+        return;
+    auto* clipboard = QApplication::clipboard();
+    const auto paths = ScreenshotClipboardContentReader::localImageFilePaths(clipboard->mimeData());
+    if (!paths.isEmpty()) {
+        addFiles(paths);
+        return;
+    }
+    QString error;
+    auto reservation = reserveCollageImport(0, &error);
+    bool rejected = !reservation;
+    auto snapshot = ScreenshotClipboardContentReader::snapshotImage(
+        clipboard, editor()->devicePixelRatioF(), [&](qint64 bytes) {
+            rejected = rejected || !reservation || !reservation->resize(bytes, &error);
+            return !rejected;
+        });
+    if (rejected) {
+        d.externalStatus(error);
+        emit importFinished({error});
+        return;
+    }
+    if (!snapshot)
+        return;
+    ImportItem item;
+    item.label = collageText("Clipboard image");
+    item.clipboard = std::move(snapshot);
+    item.reservation = std::move(reservation);
+    d.beginImport({std::move(item)});
 }
 
 void CollageWindow::addSelectedFiles(std::shared_ptr<platform::SelectedFileBackend> backend,

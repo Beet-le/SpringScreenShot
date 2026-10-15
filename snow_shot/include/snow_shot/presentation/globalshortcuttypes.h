@@ -36,6 +36,7 @@ enum class GlobalShortcutAction {
     ScreenshotQuickSave,
     HideShowAllWindows,
     StitchSelectedImages,
+    SplitSelectedImages,
 };
 
 [[nodiscard]] constexpr bool controlsGlobalHotkeyGates(GlobalShortcutAction action) {

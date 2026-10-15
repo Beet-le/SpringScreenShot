@@ -3005,6 +3005,10 @@
             <translation>Open</translation>
         </message>
         <message>
+            <source>Open Image Splitting for each selected image file, or an empty window if no images are selected</source>
+            <translation>Open Image Splitting for each selected image file, or an empty window if no images are selected</translation>
+        </message>
+        <message>
             <source>Open Image Stitching with selected image files, or an empty window if no images are selected</source>
             <translation>Open Image Stitching with selected image files, or an empty window if no images are selected</translation>
         </message>
@@ -4111,6 +4115,10 @@
         <message>
             <source>Speed First reduces computation on short text and may change recognition results.</source>
             <translation>Speed First reduces computation on short text and may change recognition results.</translation>
+        </message>
+        <message>
+            <source>Split Selected Images</source>
+            <translation>Split Selected Images</translation>
         </message>
         <message>
             <source>Spotlight</source>

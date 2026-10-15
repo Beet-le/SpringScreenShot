@@ -2493,6 +2493,8 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                       QStringLiteral("global_shortcuts/global_canvas"));
         resetShortcut(GlobalShortcutAction::StitchSelectedImages,
                       QStringLiteral("global_shortcuts/stitch_selected_images"));
+        resetShortcut(GlobalShortcutAction::SplitSelectedImages,
+                      QStringLiteral("global_shortcuts/split_selected_images"));
         resetShortcut(GlobalShortcutAction::TranslateSelectedText,
                       QStringLiteral("global_shortcuts/translate_selected_text"));
         resetShortcut(GlobalShortcutAction::ToggleGlobalHotkeys,
