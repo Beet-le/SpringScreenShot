@@ -372,6 +372,7 @@ pub struct TextPaintGeometry {
     pub has_text: bool,
     pub font_size: f64,
     pub fill: ColorRgba8,
+    pub fill_style: FillStyle,
     pub stroke: ColorRgba8,
     pub stroke_width: f64,
     pub text_ink_reserve: f64,
@@ -392,6 +393,7 @@ impl TextPaintGeometry {
             has_text: !text.text.is_empty(),
             font_size: text.font_size,
             fill: text.fill,
+            fill_style: text.fill_style,
             stroke: text.stroke,
             stroke_width: text.stroke_width,
             text_ink_reserve: text.text_ink_reserve,
@@ -610,7 +612,7 @@ fn serial_text_attachment(
 /// `snow_scene_text_fill_outset` instead of measuring its own padding. One
 /// definition, so the painted pill and the dirty regions cannot drift apart.
 pub fn text_fill_outset(text: &TextPaintGeometry) -> (f64, f64) {
-    if text.fill.a != 0 && text.font_size > 0.0 {
+    if text.fill_style.is_visible(text.fill) && text.font_size > 0.0 {
         let line_height = text_line_height(text.font_size);
         (
             line_height * TEXT_BACKGROUND_HORIZONTAL_PADDING_PER_LINE_HEIGHT,
@@ -952,7 +954,7 @@ pub fn rectangle_hit_test(rect: &RectangleData, point: Point<f64>, hit_tolerance
         if rect.is_spotlight() {
             return contour.exterior_distance(local) <= hit_tolerance.max(0.0);
         }
-        return (rect.fill.a != 0 && contour.contains(local))
+        return (rect.fill_style.is_visible(rect.fill) && contour.contains(local))
             || (rect.stroke.a != 0
                 && rect.stroke_width > 0.0
                 && contour.outline_distance(local)
@@ -1011,7 +1013,7 @@ pub fn rectangle_hit_test(rect: &RectangleData, point: Point<f64>, hit_tolerance
                 crate::HighlightShape::Rectangle => unreachable!(),
             }
         };
-        if rect.fill.a != 0 && contains(0.0) {
+        if rect.fill_style.is_visible(rect.fill) && contains(0.0) {
             return true;
         }
         if rect.stroke.a == 0 || rect.stroke_width <= 0.0 {
@@ -1020,7 +1022,7 @@ pub fn rectangle_hit_test(rect: &RectangleData, point: Point<f64>, hit_tolerance
         let band = rect.stroke_width / 2.0 + hit_tolerance;
         return contains(band) && !contains(-band);
     }
-    let fill_hit = rect.fill.a != 0
+    let fill_hit = rect.fill_style.is_visible(rect.fill)
         && rounded_rect_contains_local_point(rect.width, rect.height, rect.corner_radii, local);
     fill_hit || rectangle_stroke_hit_test(rect, local, hit_tolerance)
 }
@@ -1353,6 +1355,57 @@ pub(crate) fn element_visible_bounds(element: &ElementRecord) -> Option<DrawRect
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn border_fill_has_no_interior_hits_or_text_background_padding() {
+        let color = ColorRgba8 {
+            r: 255,
+            g: 204,
+            b: 199,
+            a: 255,
+        };
+        for shape in [
+            crate::HighlightShape::Rectangle,
+            crate::HighlightShape::Ellipse,
+            crate::HighlightShape::Diamond,
+        ] {
+            for radius in [0.0, 6.0] {
+                let mut rect = RectangleData {
+                    rectangle_kind: crate::RectangleElementKind::Rectangle,
+                    highlight_shape: shape,
+                    center: Point::default(),
+                    width: 100.0,
+                    height: 80.0,
+                    rotation: 0.0,
+                    fill: color,
+                    fill_style: FillStyle::Border,
+                    stroke: color,
+                    stroke_width: 2.0,
+                    stroke_style: StrokeStyle::Solid,
+                    corner_radii: CornerRadii::splat(radius),
+                    opacity: 1.0,
+                };
+                assert!(!rectangle_hit_test(&rect, Point::default(), 0.0));
+                let edge = if shape == crate::HighlightShape::Diamond {
+                    Point::new(25.0, -20.0)
+                } else {
+                    Point::new(0.0, -40.0)
+                };
+                assert!(rectangle_hit_test(&rect, edge, 0.0));
+                rect.fill_style = FillStyle::Solid;
+                assert!(rectangle_hit_test(&rect, Point::default(), 0.0));
+            }
+        }
+        let mut text = centered_text_geometry(0.0, 0.0, 100.0, 40.0);
+        assert!(text_fill_outset(&text).0 > 0.0);
+        text.fill_style = FillStyle::Border;
+        assert_eq!(text_fill_outset(&text), (0.0, 0.0));
+        let bounds = text_paint_bounds(&text);
+        text.fill_style = FillStyle::Solid;
+        text.fill.a = 0;
+        assert_eq!(text_paint_bounds(&text), bounds);
+    }
+
     use super::*;
     use crate::InkBox;
 
@@ -1382,6 +1435,7 @@ mod tests {
                 b: 0xff,
                 a: 0xff,
             },
+            fill_style: FillStyle::Solid,
             stroke: ColorRgba8::default(),
             stroke_width: 0.0,
         }

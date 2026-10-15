@@ -1,5 +1,6 @@
 #include "snow_canvas_display_item.h"
 
+#include "snow_canvas_fill_render.h"
 #include "snow_canvas_render_geometry.h"
 
 #include <QPainterPathStroker>
@@ -611,7 +612,9 @@ void SnowCanvasSceneItem::queryPressurePathChunks(
 
 void SnowCanvasSceneItem::rebuildAggregateClosedPath() {
     m_aggregateClosedPath = {};
-    if (!m_pathClosed || fill.a == 0) {
+    // Speech bubbles draw their outline from this path even without a visible fill.
+    if (!m_pathClosed || (kind != SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE &&
+                          !snow_canvas_fill_render::hasVisibleFill(fill, fill_style))) {
         return;
     }
     for (const PathChunk& chunk : m_pathGeometry.chunks) {
@@ -638,7 +641,8 @@ std::uint64_t SnowCanvasSceneItem::pathGeometryRevision() const {
 bool SnowCanvasSceneItem::needsArrowTextClip(double canvasAntialiasGuard) const {
     if (m_pathGeometry.chunks.empty() || arrow_shaft_type == SNOW_ARROW_SHAFT_TYPE_TAPERED ||
         arrowhead_primitive_count != 0 || arrow_start_head != SNOW_ARROWHEAD_NONE ||
-        arrow_end_head != SNOW_ARROWHEAD_NONE || (m_pathClosed && fill.a != 0) ||
+        arrow_end_head != SNOW_ARROWHEAD_NONE ||
+        (m_pathClosed && snow_canvas_fill_render::hasVisibleFill(fill, fill_style)) ||
         !std::isfinite(canvasAntialiasGuard) || canvasAntialiasGuard < 0.0 ||
         !std::isfinite(stroke_width) || stroke_width <= 0.0) {
         return true;

@@ -144,11 +144,17 @@ void translucentColorSwatchesShowCheckerboardUnderlay() {
             snow_shot::presentation::createScreenshotToolPaletteColorPickerTrigger(
                 &drawingPicker, QString(), Qt::transparent, metrics,
                 ColorPickerTrigger::Preview::Fill);
+        adqt::widgets::AdColorPicker referencePicker;
+        auto* referenceTrigger =
+            snow_shot::presentation::createScreenshotToolPaletteColorPickerTrigger(
+                &referencePicker, QString(), Qt::transparent, metrics,
+                ColorPickerTrigger::Preview::Swatch);
         adqt::widgets::AdControlScaleScope triggerScope(drawingTrigger);
+        adqt::widgets::AdControlScaleScope referenceScope(referenceTrigger);
         const auto context =
             adqt::widgets::AdControlScaleContext::fromDprsAndContentScale(1.0, 1.0, scale);
         triggerScope.publishScale(context);
-        const QImage triggerImage = renderButton(*drawingTrigger);
+        referenceScope.publishScale(context);
         for (const bool summary : {false, true}) {
             std::unique_ptr<ColorSwatchButton> button(createScreenshotToolPaletteColorButton(
                 nullptr, nullptr, Qt::red, summary, true, metrics));
@@ -156,6 +162,11 @@ void translucentColorSwatchesShowCheckerboardUnderlay() {
             buttonScope.publishScale(context);
             for (const int alpha : {128, 254, 255, 0}) {
                 const QColor color(255, 0, 0, alpha);
+                drawingTrigger->setSwatchColor(color);
+                referenceTrigger->setSwatchColor(color);
+                const QImage triggerImage = renderButton(*drawingTrigger);
+                require(triggerImage == renderButton(*referenceTrigger),
+                        "fill color triggers render the standard color block at every scale");
                 button->setSwatchColor(color);
                 const QImage image = renderButton(*button);
                 const QRect interior =
@@ -175,11 +186,8 @@ void translucentColorSwatchesShowCheckerboardUnderlay() {
                         const QColor pixel = image.pixelColor(x, y);
                         alternateCells += pixel == expectedCells.pixelColor(0, 0) ? 1 : 0;
                         baseCells += pixel == expectedCells.pixelColor(1, 0) ? 1 : 0;
-                        if (alpha == 0) {
-                            require(
-                                pixel == triggerImage.pixelColor(x, y),
-                                "transparent presets must match the drawing fill picker trigger");
-                        }
+                        require(pixel == triggerImage.pixelColor(x, y),
+                                "color presets must match the drawing fill picker trigger");
                         if (alpha == 255) {
                             require(pixel == color, "opaque swatches must remain solid colors");
                         }
@@ -8514,6 +8522,17 @@ void mixedColorsKeepUniformStyleButtonsActive() {
                          "uniform stroke style should stay active when stroke colors differ");
     requireControlActive(palette, "Cross-line fill",
                          "uniform fill style should stay active when fill colors differ");
+    selectedState.shapeStyle.fillStyle = SnowCanvasFillStyle::Border;
+    palette.setStyleToolbarState(selectedState);
+    requireControlActive(palette, "Border",
+                         "uniform Border mode stays active when stored fill colors differ");
+    const QColor color(QStringLiteral("#FFCCC7"));
+    selectedState.shapeStyle.fill = color;
+    selectedState.shapeStyleMixed = SnowCanvasShapeStylePropertyFillStyle;
+    palette.setStyleToolbarState(selectedState);
+    const QImage triggerImage = renderButton(*fillPicker->triggerContent());
+    require(triggerImage.pixelColor(triggerImage.rect().center()) == color,
+            "mixed fill styles retain the uniform color block in the color trigger");
 }
 
 void rectangleStyleUsesScreenshotCreationDefaults() {
@@ -15134,6 +15153,103 @@ void selectedStrokeColorDragKeepsPickerIndicatorInSync() {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
+void borderFillControlsRetainColorAndSavedPreferences() {
+    SnowCanvasRuntime runtime(
+        SnowCanvasRuntimeConfig{snow_shot::presentation::screenshotCanvasStyleDefaults()});
+    require(runtime.isValid(), "screenshot defaults initialize the canvas runtime");
+    require(runtime.setQuickSelectionDisabledTools({SnowCanvasTool::Shape}) && runtime.reset(),
+            "screenshot startup preferences and canvas reset succeed with Border defaults");
+    SnowCanvasWidget screenshotCanvas(runtime);
+    SnowCanvasWidget pinnedCanvas(runtime);
+    require(screenshotCanvas.setCanvasTool(SnowCanvasTool::Text) &&
+                pinnedCanvas.setCanvasTool(SnowCanvasTool::SerialNumber) &&
+                screenshotCanvas.canvasStyleToolbarState().textStyle.fillStyle ==
+                    SnowCanvasFillStyle::Border &&
+                pinnedCanvas.canvasStyleToolbarState().serialNumberStyle.fillStyle ==
+                    SnowCanvasFillStyle::Border,
+            "screenshot and pinned viewports expose the configured Border fills");
+    auto textStyle = screenshotCanvas.canvasStyleToolbarState().textStyle;
+    auto serialStyle = pinnedCanvas.canvasStyleToolbarState().serialNumberStyle;
+    for (const auto mode : {SnowCanvasFillStyle::Solid, SnowCanvasFillStyle::Border}) {
+        textStyle.fillStyle = mode;
+        serialStyle.fillStyle = mode;
+        require(screenshotCanvas.commitStyleEdit(
+                    SnowCanvasTextEdit{textStyle, SnowCanvasTextStyleMixedFillStyle}) &&
+                    pinnedCanvas.commitStyleEdit(SnowCanvasSerialNumberEdit{
+                        serialStyle, SnowCanvasSerialNumberStyleMixedFillStyle}) &&
+                    screenshotCanvas.canvasStyleToolbarState().textStyle.fillStyle == mode &&
+                    pinnedCanvas.canvasStyleToolbarState().serialNumberStyle.fillStyle == mode,
+                "initialized screenshot and pinned canvases commit fill style edits");
+    }
+
+    using Tool = ScreenshotToolPalette::Tool;
+    for (auto tool : {Tool::Shape, Tool::SpeechBubble, Tool::Line, Tool::FreeDraw, Tool::Text,
+                      Tool::SerialNumber}) {
+        ScreenshotToolPalette::Options options;
+        options.showTextTool = true;
+        options.showSerialNumberTool = true;
+        ScreenshotToolPalette palette(options);
+        palette.setActiveTool(tool);
+        const bool text = tool == Tool::Text;
+        const bool serial = tool == Tool::SerialNumber;
+        auto* picker =
+            colorPickerWithAccessibleName(palette, text     ? "Text fill color"
+                                                   : serial ? "Sequence number fill color"
+                                                            : "Fill color");
+        require(picker != nullptr, "each configurable fill exposes its color picker");
+        requireControlActive(palette, "Border", "Border starts selected");
+        require(picker->value().solidColor == QColor("#FFCCC7"), "the latent fill is pale red");
+        auto* trigger = picker->triggerContent();
+        require(trigger != nullptr, "fill color trigger should be present");
+        const QImage initialSwatch = renderButton(*trigger);
+        require(initialSwatch.pixelColor(initialSwatch.rect().center()) == QColor("#FFCCC7"),
+                "Border mode displays the stored fill color as a solid block");
+        const QColor chosen(23, 67, 109, 128);
+        picker->commitValue(adqt::widgets::AdColorValue::solid(chosen));
+        requireControlActive(palette, "Border", "choosing a color retains Border mode");
+        const QImage chosenSwatch = renderButton(*trigger);
+        for (const char* tooltip : {text     ? "Solid text fill"
+                                    : serial ? "Solid sequence number fill"
+                                             : "Solid fill",
+                                    text     ? "Cross-line text fill"
+                                    : serial ? "Cross-line sequence number fill"
+                                             : "Cross-line fill",
+                                    text     ? "Line text fill"
+                                    : serial ? "Line sequence number fill"
+                                             : "Line fill",
+                                    "Border"}) {
+            clickStyleControl(palette, tooltip);
+            require(picker->value().solidColor == chosen,
+                    "switching fill styles retains the chosen color");
+            require(renderButton(*trigger) == chosenSwatch,
+                    "fill style changes preserve the color block in the trigger");
+        }
+    }
+    const auto original = snow_shot::presentation::screenshotCanvasToolStyleDefaults();
+    const auto restore = qScopeGuard([&] {
+        static_cast<void>(snow_shot::presentation::persistScreenshotCanvasToolStyles(original));
+    });
+    for (auto mode : {SnowCanvasFillStyle::Line, SnowCanvasFillStyle::CrossLine,
+                      SnowCanvasFillStyle::Solid, SnowCanvasFillStyle::Border}) {
+        auto saved = snow_shot::presentation::screenshotCanvasStyleDefaults();
+        saved.rectangle.fillStyle = mode;
+        saved.speechBubble.fillStyle = mode;
+        saved.line.fillStyle = mode;
+        saved.freeDraw.fillStyle = mode;
+        saved.text.fillStyle = mode;
+        saved.serialNumber.fillStyle = mode;
+        saved.rectangle.fill = QColor(23, 67, 109, 0);
+        require(snow_shot::presentation::persistScreenshotCanvasToolStyles(saved),
+                "save fill modes");
+        require(snow_shot::presentation::screenshotCanvasToolStyleDefaults() == saved,
+                "Border and legacy fill preferences round-trip without migration");
+        SnowCanvasRuntime restored(
+            SnowCanvasRuntimeConfig{snow_shot::presentation::screenshotCanvasToolStyleDefaults()});
+        require(restored.isValid() && restored.reset(),
+                "saved fill preferences initialize and reset the screenshot canvas");
+    }
+}
+
 void fillStyleButtonsFollowFillColorPickerTrigger() {
     ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
     palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
@@ -15162,10 +15278,13 @@ void fillStyleButtonsFollowFillColorPickerTrigger() {
     require(toolbarLayout != nullptr, "fill color picker should have a toolbar layout");
     const int fillPickerIndex = layoutWidgetIndex(toolbarLayout, fillPicker);
     require(fillPickerIndex >= 0, "fill color picker should be in the toolbar layout");
-    require(layoutWidgetIndex(toolbarLayout, solidFill) == fillPickerIndex + 1 &&
-                layoutWidgetIndex(toolbarLayout, crossLineFill) == fillPickerIndex + 2 &&
-                layoutWidgetIndex(toolbarLayout, lineFill) == fillPickerIndex + 3,
-            "fill style buttons should follow the fill color picker in reverse order");
+    auto* borderFill = controlWithTooltip(palette, "Border");
+    require(borderFill != nullptr &&
+                layoutWidgetIndex(toolbarLayout, borderFill) == fillPickerIndex + 1 &&
+                layoutWidgetIndex(toolbarLayout, solidFill) == fillPickerIndex + 2 &&
+                layoutWidgetIndex(toolbarLayout, crossLineFill) == fillPickerIndex + 3 &&
+                layoutWidgetIndex(toolbarLayout, lineFill) == fillPickerIndex + 4,
+            "fill styles should follow the picker in Border, Solid, Cross-line, Line order");
 
     fillPicker->setPopupLayerMode(QApplication::platformName() == QStringLiteral("offscreen")
                                       ? adqt::widgets::AdColorPicker::PopupLayerMode::InWindow
@@ -16686,13 +16805,14 @@ void screenshotProductStyleProfileIsComplete() {
         snow_shot::presentation::screenshotCanvasStyleDefaults();
     const QColor red(0xf5, 0x22, 0x2d, 255);
     const QColor redAccent(0xf4, 0x21, 0x2c, 255);
+    const QColor fill(0xff, 0xcc, 0xc7, 255);
     const QColor transparent(0xff, 0xff, 0xff, 0);
     const auto exact = [](double left, double right) {
         return snowCanvasExactDoubleEqual(left, right);
     };
 
-    require(defaults.rectangle.fill == transparent &&
-                defaults.rectangle.fillStyle == SnowCanvasFillStyle::Solid &&
+    require(defaults.rectangle.fill == fill &&
+                defaults.rectangle.fillStyle == SnowCanvasFillStyle::Border &&
                 defaults.rectangle.stroke == red && exact(defaults.rectangle.strokeWidth, 2.0) &&
                 defaults.rectangle.strokeStyle == SnowCanvasStrokeStyle::Solid &&
                 defaults.rectangle.cornerRadii == SnowCanvasCornerRadii{6.0, 6.0, 6.0, 6.0},
@@ -16715,10 +16835,10 @@ void screenshotProductStyleProfileIsComplete() {
         const char* message;
     };
     const ShapeExpectation shapes[] = {
-        {&defaults.line, transparent, red, 2.0, 1.0, SnowCanvasArrowType::Curve,
+        {&defaults.line, fill, red, 2.0, 1.0, SnowCanvasArrowType::Curve,
          SnowCanvasHighlightShape::Rectangle,
          "line defaults should match the Snow Shot product profile"},
-        {&defaults.freeDraw, transparent, red, 2.0, 1.0, SnowCanvasArrowType::Straight,
+        {&defaults.freeDraw, fill, red, 2.0, 1.0, SnowCanvasArrowType::Straight,
          SnowCanvasHighlightShape::Rectangle,
          "free-draw defaults should match the Snow Shot product profile"},
         {&defaults.rectangleHighlight, red, redAccent, 0.0, 1.0, SnowCanvasArrowType::Straight,
@@ -16730,7 +16850,10 @@ void screenshotProductStyleProfileIsComplete() {
     };
     for (const ShapeExpectation& expected : shapes) {
         require(expected.style->fill == expected.fill &&
-                    expected.style->fillStyle == SnowCanvasFillStyle::Solid &&
+                    expected.style->fillStyle ==
+                        (expected.style == &defaults.line || expected.style == &defaults.freeDraw
+                             ? SnowCanvasFillStyle::Border
+                             : SnowCanvasFillStyle::Solid) &&
                     expected.style->stroke == expected.stroke &&
                     exact(expected.style->strokeWidth, expected.strokeWidth) &&
                     expected.style->strokeStyle == SnowCanvasStrokeStyle::Solid &&
@@ -16751,8 +16874,8 @@ void screenshotProductStyleProfileIsComplete() {
                 exact(defaults.penFilter.strokeWidth, 30.0),
             "filter defaults should match the Snow Shot product profile");
     require(defaults.text.color == red && exact(defaults.text.fontSize, 30.0) &&
-                defaults.text.fontFamily.isEmpty() && defaults.text.fill == transparent &&
-                defaults.text.fillStyle == SnowCanvasFillStyle::Solid &&
+                defaults.text.fontFamily.isEmpty() && defaults.text.fill == fill &&
+                defaults.text.fillStyle == SnowCanvasFillStyle::Border &&
                 defaults.text.stroke == QColor(0xff, 0xcc, 0xc7, 255) &&
                 exact(defaults.text.strokeWidth, 0.0) &&
                 defaults.text.cornerRadii == SnowCanvasCornerRadii{6.0, 6.0, 6.0, 6.0} &&
@@ -16762,8 +16885,8 @@ void screenshotProductStyleProfileIsComplete() {
             "text defaults should match the Snow Shot product profile");
     require(defaults.serialNumber.number == 1 &&
                 defaults.serialNumber.type == SnowCanvasSerialNumberType::OutlinedCircle &&
-                defaults.serialNumber.color == red && defaults.serialNumber.fill == transparent &&
-                defaults.serialNumber.fillStyle == SnowCanvasFillStyle::Solid &&
+                defaults.serialNumber.color == red && defaults.serialNumber.fill == fill &&
+                defaults.serialNumber.fillStyle == SnowCanvasFillStyle::Border &&
                 exact(defaults.serialNumber.fontSize, 24.0) &&
                 defaults.serialNumber.fontFamily.isEmpty() &&
                 exact(defaults.serialNumber.strokeWidth, 2.0) &&
@@ -18885,6 +19008,14 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--border-fill-only"))) {
+        screenshotProductStyleProfileIsComplete();
+        borderFillControlsRetainColorAndSavedPreferences();
+        fillStyleButtonsFollowFillColorPickerTrigger();
+        mixedColorsKeepUniformStyleButtonsActive();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--canvas-style-persistence-only"))) {
         screenshotProductStyleProfileIsComplete();
         canvasToolStylesPersistIndependentlyWithoutGlobalStyles();
@@ -19203,6 +19334,7 @@ int main(int argc, char** argv) {
     cornerRadiusButtonsRestoreTheDefaultValue();
     colorSamplerStopsWhenPopupClosureRetiresItsEditor();
     selectedStrokeColorDragKeepsPickerIndicatorInSync();
+    borderFillControlsRetainColorAndSavedPreferences();
     fillStyleButtonsFollowFillColorPickerTrigger();
     configurationDrivenStyleEditorsShareStructuralContracts();
     styleToolbarRowSpacingFollowsPhysicalScale();

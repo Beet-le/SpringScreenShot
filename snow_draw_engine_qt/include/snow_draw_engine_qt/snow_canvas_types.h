@@ -333,6 +333,7 @@ enum class SnowCanvasFillStyle {
     Line,
     CrossLine,
     Solid,
+    Border = 3,
 };
 
 enum class SnowCanvasStrokeStyle {

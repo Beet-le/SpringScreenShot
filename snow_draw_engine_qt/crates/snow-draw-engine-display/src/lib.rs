@@ -462,6 +462,13 @@ pub enum DisplayFillStyle {
     CrossLine,
     #[default]
     Solid,
+    Border = 3,
+}
+
+impl DisplayFillStyle {
+    pub fn is_visible(self, color: ColorRgba8) -> bool {
+        self != Self::Border && color.a != 0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

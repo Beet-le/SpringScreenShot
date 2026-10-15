@@ -319,7 +319,7 @@ void readShapeValue(const QJsonObject& object, SnowCanvasShapeStyle* style) {
     style->arrowRatio = 1.0;
     readDouble(object, QStringLiteral("arrow_ratio"), &style->arrowRatio);
     style->arrowRatio = snowCanvasNormalizeArrowRatio(style->arrowRatio);
-    readEnum(object, QStringLiteral("fill_style"), static_cast<int>(SnowCanvasFillStyle::Solid),
+    readEnum(object, QStringLiteral("fill_style"), static_cast<int>(SnowCanvasFillStyle::Border),
              &style->fillStyle);
     readEnum(object, QStringLiteral("start_arrowhead"),
              static_cast<int>(SnowCanvasArrowhead::IndentedTriangle), &style->startArrowhead);
@@ -406,7 +406,7 @@ void readTextValue(const QJsonObject& object, SnowCanvasTextStyle* style) {
     readDouble(object, QStringLiteral("font_size"), &style->fontSize);
     if (object.value(QStringLiteral("font_family")).isString())
         style->fontFamily = object.value(QStringLiteral("font_family")).toString();
-    readEnum(object, QStringLiteral("fill_style"), static_cast<int>(SnowCanvasFillStyle::Solid),
+    readEnum(object, QStringLiteral("fill_style"), static_cast<int>(SnowCanvasFillStyle::Border),
              &style->fillStyle);
     readDouble(object, QStringLiteral("stroke_width"), &style->strokeWidth);
     readCornerRadii(object, &style->cornerRadii);
@@ -445,7 +445,7 @@ void readSerialNumberValue(const QJsonObject& object, SnowCanvasSerialNumberStyl
         style->color = color;
     if (colorValue(object.value(QStringLiteral("fill")), &color))
         style->fill = color;
-    readEnum(object, QStringLiteral("fill_style"), static_cast<int>(SnowCanvasFillStyle::Solid),
+    readEnum(object, QStringLiteral("fill_style"), static_cast<int>(SnowCanvasFillStyle::Border),
              &style->fillStyle);
     readDouble(object, QStringLiteral("font_size"), &style->fontSize);
     if (object.value(QStringLiteral("font_family")).isString())

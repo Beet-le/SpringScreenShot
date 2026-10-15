@@ -273,7 +273,7 @@ void applyRectangleStrokeStyle(QPen& pen, SnowStrokeStyle style) {
 }
 
 QBrush fillBrushForStyle(const SnowColorRgba8& color, SnowFillStyle style) {
-    if (color.a == 0) {
+    if (!snow_canvas_fill_render::hasVisibleFill(color, style)) {
         return Qt::NoBrush;
     }
     QBrush brush(toQColor(color));
@@ -705,7 +705,7 @@ void drawRectItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
         item.width <= 0.0 || item.height <= 0.0 || zoom <= 0.0) {
         return;
     }
-    const bool hasFill = item.fill.a != 0;
+    const bool hasFill = snow_canvas_fill_render::hasVisibleFill(item.fill, item.fill_style);
     const bool hasStroke = item.stroke.a != 0 && item.stroke_width > 0.0;
     if (!hasFill && !hasStroke) {
         return;
@@ -833,7 +833,7 @@ void drawSpeechBubbleItem(QPainter& painter, const SceneDisplayInfo& displayInfo
     painter.save();
     painter.setWorldTransform(canvasToViewTransform(projection), true);
     painter.setOpacity(qBound(0.0, item.opacity, 1.0));
-    if (item.fill.a != 0) {
+    if (snow_canvas_fill_render::hasVisibleFill(item.fill, item.fill_style)) {
         painter.setPen(Qt::NoPen);
         snow_canvas_fill_render::drawStyledFill(painter, *path, item.fill, item.fill_style,
                                                 item.stroke_width);
@@ -877,7 +877,9 @@ void drawOwnedPathChunks(QPainter& painter, const ArrowRenderProjection& project
                         : QRectF();
     painter.setWorldTransform(canvasToViewTransform(projection.view), true);
 
-    if (item.pathIsClosed() && item.fill.a != 0 && !item.aggregateClosedPath().isEmpty()) {
+    if (item.pathIsClosed() &&
+        snow_canvas_fill_render::hasVisibleFill(item.fill, item.fill_style) &&
+        !item.aggregateClosedPath().isEmpty()) {
         snow_canvas_fill_render::drawStyledFill(painter, item.aggregateClosedPath(), item.fill,
                                                 item.fill_style, item.stroke_width);
     }
@@ -993,7 +995,8 @@ void drawArrowItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
             item.arrow_point_count >= 3 && item.arrow_points != nullptr &&
             item.arrow_points[0].x == item.arrow_points[item.arrow_point_count - 1].x &&
             item.arrow_points[0].y == item.arrow_points[item.arrow_point_count - 1].y;
-        if (fallbackClosed && item.fill.a != 0 && !rustPath.isEmpty()) {
+        if (fallbackClosed && snow_canvas_fill_render::hasVisibleFill(item.fill, item.fill_style) &&
+            !rustPath.isEmpty()) {
             QPainterPath fillPath = rustPath;
             fillPath.closeSubpath();
             snow_canvas_fill_render::drawStyledFill(painter, fillPath, item.fill, item.fill_style,
@@ -1028,7 +1031,7 @@ void drawTextItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
     painter.setOpacity(qBound(0.0, item.opacity, 1.0));
 
     const QRectF localRect(-width / 2.0, -height / 2.0, width, height);
-    if (item.fill.a != 0) {
+    if (snow_canvas_fill_render::hasVisibleFill(item.fill, item.fill_style)) {
         snow_canvas_text_render::drawBackground(painter, item, painter.font(), localRect, zoom);
     }
 
@@ -1053,7 +1056,8 @@ void drawSerialNumberItem(QPainter& painter, const SceneDisplayInfo& displayInfo
     }
     const bool solid = serialNumberIsSolid(item);
     const bool square = serialNumberIsSquare(item);
-    if (!solid && item.fill.a == 0 && (item.stroke.a == 0 || strokeWidth <= 0.0)) {
+    if (!solid && !snow_canvas_fill_render::hasVisibleFill(item.fill, item.fill_style) &&
+        (item.stroke.a == 0 || strokeWidth <= 0.0)) {
         return;
     }
 
@@ -1324,7 +1328,7 @@ void drawOverlayRectItem(QPainter& painter, const OverlayDisplayInfo& displayInf
         item.width <= 0.0 || item.height <= 0.0) {
         return;
     }
-    const bool hasFill = item.fill.a != 0;
+    const bool hasFill = snow_canvas_fill_render::hasVisibleFill(item.fill, item.fill_style);
     const bool hasStroke = item.stroke.a != 0 && item.stroke_width > 0.0;
     if (!hasFill && !hasStroke) {
         return;

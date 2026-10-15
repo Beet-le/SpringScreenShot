@@ -172,6 +172,10 @@
             <translation>粗体</translation>
         </message>
         <message>
+            <source>Border</source>
+            <translation>边框</translation>
+        </message>
+        <message>
             <source>Brightness</source>
             <translation>亮度</translation>
         </message>

@@ -439,3 +439,9 @@ python snow_shot/tests/mcp_live_tests.py `
   build/windows-msvc-debug/snow_shot/Debug/snow_shot.exe `
   build/windows-msvc-debug/cargo/x86_64-pc-windows-msvc/debug/snow-shot-mcp.exe
 ```
+
+Configurable canvas fill styles accept `fill_style: "border"`, `"solid"`, `"cross_line"`,
+or `"line"` in screenshot and background-document tool-style patches and pinned-image
+`tool_style` edits. Border preserves the stored fill color and renders no fill.
+Fresh Snow Shot drawing preferences use Border with `#FFCCC7`;
+existing saved preferences are retained.

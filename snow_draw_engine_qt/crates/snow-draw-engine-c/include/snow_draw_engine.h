@@ -393,7 +393,8 @@ typedef enum SnowTextVerticalAlign {
 typedef enum SnowFillStyle {
     SNOW_FILL_STYLE_LINE = 0,
     SNOW_FILL_STYLE_CROSS_LINE = 1,
-    SNOW_FILL_STYLE_SOLID = 2
+    SNOW_FILL_STYLE_SOLID = 2,
+    SNOW_FILL_STYLE_BORDER = 3
 } SnowFillStyle;
 
 typedef enum SnowStrokeStyle {

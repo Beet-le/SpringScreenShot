@@ -607,6 +607,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "FillBorder",
+      "name": "fill-border",
+      "source": "../src/presentation/components/icons/resources/fill-border.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "FillSolid",
       "name": "fill-solid",
       "source": "../src/presentation/components/icons/resources/fill-solid.svg",

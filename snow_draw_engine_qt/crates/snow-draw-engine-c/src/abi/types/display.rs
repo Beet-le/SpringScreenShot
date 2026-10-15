@@ -40,6 +40,7 @@ snow_c_enum! {
         Line = 0,
         CrossLine = 1,
         Solid = 2,
+        Border = 3,
     }
 }
 

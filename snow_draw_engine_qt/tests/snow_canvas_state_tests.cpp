@@ -464,6 +464,57 @@ SnowStyleToolbarState toolbarState(SnowCanvasRuntime& runtime, SnowViewport view
     return state;
 }
 
+void configuredFillStylesValidateEveryTool() {
+    for (const auto fillStyle : {SnowCanvasFillStyle::Line, SnowCanvasFillStyle::CrossLine,
+                                 SnowCanvasFillStyle::Solid, SnowCanvasFillStyle::Border}) {
+        auto defaults = customStyleDefaults();
+        SnowCanvasFillStyle* fills[] = {
+            &defaults.rectangle.fillStyle,
+            &defaults.arrow.fillStyle,
+            &defaults.line.fillStyle,
+            &defaults.freeDraw.fillStyle,
+            &defaults.rectangleHighlight.fillStyle,
+            &defaults.penHighlight.fillStyle,
+            &defaults.speechBubble.fillStyle,
+            &defaults.text.fillStyle,
+            &defaults.serialNumber.fillStyle,
+        };
+        for (auto* fill : fills)
+            *fill = fillStyle;
+
+        SnowCanvasRuntime runtime(SnowCanvasRuntimeConfig{defaults});
+        require(runtime.isValid(), "every supported fill style can initialize a runtime");
+        auto verifyStyles = [&] {
+            const auto viewport = createViewport(runtime);
+            const auto expected = snow_canvas_types::toEngineFillStyle(fillStyle);
+            require(
+                toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_SHAPE).shape_style.fill_style ==
+                        expected &&
+                    toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_SPEECH_BUBBLE)
+                            .shape_style.fill_style == expected &&
+                    toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_TEXT).text_style.fill_style ==
+                        expected &&
+                    toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_SERIAL_NUMBER)
+                            .serial_number_style.fill_style == expected,
+                "configured fills reach shape, speech bubble, text and serial tools");
+        };
+        verifyStyles();
+        require(runtime.reset(), "every supported fill style survives runtime reset");
+        verifyStyles();
+
+        for (auto* fill : fills) {
+            for (const int invalid : {-1, 4}) {
+                // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+                *fill = static_cast<SnowCanvasFillStyle>(invalid);
+                SnowCanvasRuntime rejected(SnowCanvasRuntimeConfig{defaults});
+                require(!rejected.isValid(),
+                        "out-of-range fill styles are rejected for every configured tool");
+            }
+            *fill = fillStyle;
+        }
+    }
+}
+
 void configuredRuntimeProfileFollowsRestoreAndResetLifecycle() {
     const SnowCanvasStyleDefaults defaults = customStyleDefaults();
     SnowCanvasRuntimeConfig config;
@@ -752,6 +803,7 @@ int main() {
     filterStyleParticipatesInToolbarStateDiffs();
     publicCanvasDtosUseExactCompleteEquality();
     watermarkConfigurationConversionsPreserveSnapshotsAndUtf8Boundaries();
+    configuredFillStylesValidateEveryTool();
     configuredRuntimeProfileFollowsRestoreAndResetLifecycle();
     defaultRuntimeUsesGenericEngineDefaults();
     serializedSnapshotsOwnBytesAndPreserveUndoAndRedo();

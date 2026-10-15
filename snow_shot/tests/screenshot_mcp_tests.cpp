@@ -974,6 +974,17 @@ void completeToolStyleContract() {
                     (SnowCanvasSerialNumberStyleMixedNumber | SnowCanvasSerialNumberStyleMixedType |
                      SnowCanvasSerialNumberStyleMixedNumericType),
             "serial-number patches must carry exactly the requested property flags");
+    for (const auto& target : {QStringLiteral("rectangle"), QStringLiteral("line"),
+                               QStringLiteral("freehand"), QStringLiteral("text"),
+                               QStringLiteral("serial_number"), QStringLiteral("speech_bubble")}) {
+        require(apply(target, {{QStringLiteral("fill_style"), QStringLiteral("border")}}),
+                "MCP accepts Border for configurable fills");
+        const auto mode = target == QStringLiteral("text") ? styles.state.textStyle.fillStyle
+                          : target == QStringLiteral("serial_number")
+                              ? styles.state.serialNumberStyle.fillStyle
+                              : styles.state.shapeStyle.fillStyle;
+        require(mode == SnowCanvasFillStyle::Border, "Border reaches the style command sink");
+    }
     for (int connection = 0; connection < 3; ++connection) {
         const QString types[] = {QStringLiteral("none"), QStringLiteral("leader_line"),
                                  QStringLiteral("gradient")};
@@ -1070,7 +1081,8 @@ void completeToolStyleContract() {
 } // namespace
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    if (app.arguments().contains(QStringLiteral("--magnifier-only"))) {
+    if (app.arguments().contains(QStringLiteral("--magnifier-only")) ||
+        app.arguments().contains(QStringLiteral("--border-fill-only"))) {
         completeToolStyleContract();
         return 0;
     }

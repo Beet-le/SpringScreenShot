@@ -749,6 +749,7 @@ enum FillStyle {
     Line,
     CrossLine,
     Solid,
+    Border,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -1043,6 +1044,55 @@ pub fn schema(name: &str, input: Option<Value>) -> Result<Map<String, Value>, se
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn border_fill_and_legacy_modes_validate_across_canvas_domains() {
+        for target in [
+            "rectangle",
+            "line",
+            "freehand",
+            "text",
+            "serial_number",
+            "speech_bubble",
+        ] {
+            for mode in [
+                "border",
+                "solid",
+                "cross_line",
+                "line",
+                "Border",
+                "none",
+                "",
+            ] {
+                let valid = matches!(mode, "border" | "solid" | "cross_line" | "line");
+                let patch = json!({"target":target,"style":{"fill_style":mode}});
+                for (name, owner) in [
+                    ("snow_shot_screenshot_set_tool_style", "session_id"),
+                    ("snow_shot_document_set_tool_style", "document_id"),
+                ] {
+                    let mut input = patch.clone();
+                    input[owner] = json!("fixture");
+                    input["expected_revision"] = json!(1);
+                    let result = schema(name, Some(input));
+                    assert_eq!(
+                        result.is_ok(),
+                        valid,
+                        "{name}: {target}: {mode}: {result:?}"
+                    );
+                }
+                let result = schema(
+                    "snow_shot_pinned_edit",
+                    Some(json!({"id":"fixture","expected_revision":1,
+                        "action":"tool_style","payload":patch})),
+                );
+                assert_eq!(
+                    result.is_ok(),
+                    valid,
+                    "pinned: {target}: {mode}: {result:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn eraser_tool_ids_are_accepted_for_screenshots_and_documents() {

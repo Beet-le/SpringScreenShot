@@ -115,7 +115,7 @@ fn draw_path_item_bounds(
 ) -> Option<DirtyRegion> {
     if let Some(pressure) = &item.pressure_geometry {
         let mut bounds = pressure.canvas_bounds;
-        if item.fill.a != 0 {
+        if item.fill_style.is_visible(item.fill) {
             let center = item.geometry.canvas_bounds;
             bounds = [
                 bounds[0].min(center[0]),

@@ -383,10 +383,11 @@ pub fn speech_bubble_hit_test(value: &SpeechBubbleData, point: Point<f64>, toler
     }
     let geometry = cached_geometry(value);
     let has_stroke = value.body.stroke.a != 0 && value.body.stroke_width > 0.0;
-    if (value.body.fill.a != 0 || has_stroke) && point_inside_body(&geometry.body, point) {
+    let has_fill = value.body.fill_style.is_visible(value.body.fill);
+    if (has_fill || has_stroke) && point_inside_body(&geometry.body, point) {
         return true;
     }
-    if value.body.fill.a != 0
+    if has_fill
         && geometry
             .triangles
             .iter()
@@ -394,7 +395,7 @@ pub fn speech_bubble_hit_test(value: &SpeechBubbleData, point: Point<f64>, toler
     {
         return true;
     }
-    if value.body.fill.a == 0 && !has_stroke {
+    if !has_fill && !has_stroke {
         return false;
     }
     let distance = if has_stroke {
@@ -1271,6 +1272,28 @@ mod tests {
             opacity: 1.0,
         })
     }
+    #[test]
+    fn border_fill_keeps_stroke_hit_policy_without_invisible_tail_fill() {
+        let mut value = bubble(HighlightShape::Rectangle);
+        let tail = speech_bubble_default_tail(&value, Point::new(0.0, 100.0), 1.0);
+        value.tails.push(tail);
+        value.body.fill_style = FillStyle::Border;
+        let mut transparent = value.clone();
+        transparent.body.fill_style = FillStyle::Solid;
+        transparent.body.fill.a = 0;
+        for y in -40..110 {
+            for x in -60..60 {
+                let point = Point::new(f64::from(x), f64::from(y));
+                assert_eq!(
+                    speech_bubble_hit_test(&value, point, 1.0),
+                    speech_bubble_hit_test(&transparent, point, 1.0)
+                );
+            }
+        }
+        value.body.stroke_width = 0.0;
+        assert!(!speech_bubble_hit_test(&value, Point::default(), 0.0));
+    }
+
     fn distance(a: Point<f64>, b: Point<f64>) -> f64 {
         (a.x - b.x).hypot(a.y - b.y)
     }

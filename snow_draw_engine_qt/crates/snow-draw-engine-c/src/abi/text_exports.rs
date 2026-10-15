@@ -876,6 +876,7 @@ fn text_paint_geometry_from_c(item: &SnowSceneDisplayItem) -> TextPaintGeometry 
         has_text: item.text_utf8_len != 0,
         font_size: item.font_size,
         fill: item.fill.into(),
+        fill_style: snow_fill_style_to_rust(item.fill_style),
         stroke: item.stroke.into(),
         stroke_width: item.stroke_width,
     }

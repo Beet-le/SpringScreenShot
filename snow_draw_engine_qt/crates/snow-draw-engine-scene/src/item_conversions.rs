@@ -503,6 +503,12 @@ pub(crate) fn text_paint_geometry_from_display_item(text: &TextDisplayItem) -> T
         has_text: !text.text.is_empty(),
         font_size: text.font_size,
         fill: text.fill,
+        fill_style: match text.fill_style {
+            DisplayFillStyle::Line => FillStyle::Line,
+            DisplayFillStyle::CrossLine => FillStyle::CrossLine,
+            DisplayFillStyle::Solid => FillStyle::Solid,
+            DisplayFillStyle::Border => FillStyle::Border,
+        },
         stroke: text.stroke,
         stroke_width: text.stroke_width,
     }
@@ -668,6 +674,7 @@ fn display_fill_style(style: FillStyle) -> DisplayFillStyle {
         FillStyle::Line => DisplayFillStyle::Line,
         FillStyle::CrossLine => DisplayFillStyle::CrossLine,
         FillStyle::Solid => DisplayFillStyle::Solid,
+        FillStyle::Border => DisplayFillStyle::Border,
     }
 }
 

@@ -405,6 +405,7 @@ pub(crate) fn snow_fill_style_from_rust(value: DisplayFillStyle) -> SnowFillStyl
         DisplayFillStyle::Line => SnowFillStyle::Line,
         DisplayFillStyle::CrossLine => SnowFillStyle::CrossLine,
         DisplayFillStyle::Solid => SnowFillStyle::Solid,
+        DisplayFillStyle::Border => SnowFillStyle::Border,
     }
 }
 
@@ -413,6 +414,7 @@ pub(crate) fn snow_fill_style_to_rust(value: SnowFillStyle) -> snow_draw_engine:
         SnowFillStyle::Line => snow_draw_engine::FillStyle::Line,
         SnowFillStyle::CrossLine => snow_draw_engine::FillStyle::CrossLine,
         SnowFillStyle::Solid => snow_draw_engine::FillStyle::Solid,
+        SnowFillStyle::Border => snow_draw_engine::FillStyle::Border,
     }
 }
 
@@ -421,6 +423,7 @@ pub(crate) fn snow_document_fill_style_from_rust(value: FillStyle) -> SnowFillSt
         FillStyle::Line => SnowFillStyle::Line,
         FillStyle::CrossLine => SnowFillStyle::CrossLine,
         FillStyle::Solid => SnowFillStyle::Solid,
+        FillStyle::Border => SnowFillStyle::Border,
     }
 }
 
@@ -879,11 +882,7 @@ impl From<TextStyle> for SnowTextStyle {
             color: value.color.into(),
             font_size: value.font_size,
             fill: value.fill.into(),
-            fill_style: match value.fill_style {
-                snow_draw_engine::FillStyle::Line => SnowFillStyle::Line,
-                snow_draw_engine::FillStyle::CrossLine => SnowFillStyle::CrossLine,
-                snow_draw_engine::FillStyle::Solid => SnowFillStyle::Solid,
-            },
+            fill_style: snow_document_fill_style_from_rust(value.fill_style),
             stroke: value.stroke.into(),
             stroke_width: value.stroke_width,
             corner_radii: value.corner_radii.into(),
@@ -976,11 +975,7 @@ impl From<SerialNumberStyle> for SnowSerialNumberStyle {
             },
             color: value.color.into(),
             fill: value.fill.into(),
-            fill_style: match value.fill_style {
-                snow_draw_engine::FillStyle::Line => SnowFillStyle::Line,
-                snow_draw_engine::FillStyle::CrossLine => SnowFillStyle::CrossLine,
-                snow_draw_engine::FillStyle::Solid => SnowFillStyle::Solid,
-            },
+            fill_style: snow_document_fill_style_from_rust(value.fill_style),
             font_size: value.font_size,
             stroke_width: value.stroke_width,
             stroke_style: snow_stroke_style_from_rust(value.stroke_style),
@@ -1762,6 +1757,27 @@ impl From<snow_draw_engine::BrushEraserStyle> for SnowBrushEraserStyle {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn border_fill_round_trips_through_document_and_display_abi() {
+        assert_eq!(SnowFillStyle::Border as i32, 3);
+        assert_eq!(
+            snow_fill_style_from_rust(DisplayFillStyle::Border),
+            SnowFillStyle::Border
+        );
+        assert_eq!(
+            snow_fill_style_to_rust(SnowFillStyle::Border),
+            FillStyle::Border
+        );
+        assert_eq!(
+            snow_document_fill_style_from_rust(FillStyle::Border),
+            SnowFillStyle::Border
+        );
+        assert_eq!(SnowFillStyle::Line as i32, 0);
+        assert_eq!(SnowFillStyle::CrossLine as i32, 1);
+        assert_eq!(SnowFillStyle::Solid as i32, 2);
+    }
+
     use super::*;
     use snow_draw_engine::{FillStyle, StyleDefaults};
 

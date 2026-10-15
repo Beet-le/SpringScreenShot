@@ -172,6 +172,10 @@
             <translation>Bold</translation>
         </message>
         <message>
+            <source>Border</source>
+            <translation>Border</translation>
+        </message>
+        <message>
             <source>Brightness</source>
             <translation>Brightness</translation>
         </message>

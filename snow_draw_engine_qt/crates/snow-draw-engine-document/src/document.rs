@@ -803,6 +803,13 @@ pub enum FillStyle {
     CrossLine,
     #[default]
     Solid,
+    Border = 3,
+}
+
+impl FillStyle {
+    pub fn is_visible(self, color: ColorRgba8) -> bool {
+        self != Self::Border && color.a != 0
+    }
 }
 
 #[repr(u32)]
@@ -2530,6 +2537,36 @@ mod annotation_sync_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn border_fill_serialization_preserves_color_and_legacy_styles() {
+        let color = ColorRgba8 {
+            r: 255,
+            g: 204,
+            b: 199,
+            a: 255,
+        };
+        for (style, name) in [
+            (FillStyle::Line, "Line"),
+            (FillStyle::CrossLine, "CrossLine"),
+            (FillStyle::Solid, "Solid"),
+            (FillStyle::Border, "Border"),
+        ] {
+            let text = TextData {
+                fill: color,
+                fill_style: style,
+                ..TextData::default()
+            };
+            let saved = serde_json::to_value(&text).unwrap();
+            assert_eq!(saved["fill_style"], name);
+            let restored: TextData = serde_json::from_value(saved).unwrap();
+            assert_eq!(restored.fill, color);
+            assert_eq!(restored.fill_style, style);
+            assert_eq!(style.is_visible(color), style != FillStyle::Border);
+            assert!(!style.is_visible(ColorRgba8::default()));
+        }
+        assert_eq!(FillStyle::default(), FillStyle::Solid);
+    }
 
     use super::*;
 

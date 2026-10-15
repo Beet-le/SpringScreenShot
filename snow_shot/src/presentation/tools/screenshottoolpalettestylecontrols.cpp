@@ -571,6 +571,7 @@ void finalizeRawEditorRoot(QWidget* root) {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Cross-line fill"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Line fill"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid fill"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Border"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pick color from canvas"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current pen highlight stroke width"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pen highlight stroke width %1 (%2px)"),
@@ -1778,7 +1779,8 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
                    : ScreenshotToolPaletteTranslationText("Fill color %1").arg(color.name());
     };
     fillConfig.styleTooltip = [](SnowCanvasFillStyle style) {
-        return style == SnowCanvasFillStyle::CrossLine
+        return style == SnowCanvasFillStyle::Border ? ScreenshotToolPaletteTranslationText("Border")
+               : style == SnowCanvasFillStyle::CrossLine
                    ? ScreenshotToolPaletteTranslationText("Cross-line fill")
                : style == SnowCanvasFillStyle::Line
                    ? ScreenshotToolPaletteTranslationText("Line fill")
@@ -3412,7 +3414,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
                    : ScreenshotToolPaletteTranslationText("Text fill color %1").arg(color.name());
     };
     textFillConfig.styleTooltip = [](SnowCanvasFillStyle style) {
-        return style == SnowCanvasFillStyle::CrossLine
+        return style == SnowCanvasFillStyle::Border ? ScreenshotToolPaletteTranslationText("Border")
+               : style == SnowCanvasFillStyle::CrossLine
                    ? ScreenshotToolPaletteTranslationText("Cross-line text fill")
                : style == SnowCanvasFillStyle::Line
                    ? ScreenshotToolPaletteTranslationText("Line text fill")
@@ -3713,7 +3716,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSerialNumberFamily(
                          .arg(color.name());
     };
     serialNumberFillConfig.styleTooltip = [](SnowCanvasFillStyle style) {
-        return style == SnowCanvasFillStyle::CrossLine
+        return style == SnowCanvasFillStyle::Border ? ScreenshotToolPaletteTranslationText("Border")
+               : style == SnowCanvasFillStyle::CrossLine
                    ? ScreenshotToolPaletteTranslationText("Cross-line sequence number fill")
                : style == SnowCanvasFillStyle::Line
                    ? ScreenshotToolPaletteTranslationText("Line sequence number fill")

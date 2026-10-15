@@ -5867,6 +5867,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_mcp_capabilities.py"
             --speech-bubble-only)
     set_tests_properties(snow-shot-speech-bubble-mcp-capabilities-tests PROPERTIES TIMEOUT 30 LABELS unit)
+    add_test(NAME snow-shot-border-fill-mcp-tests
+        COMMAND snow-shot-mcp-tests --border-fill-only -platform offscreen)
+    set_tests_properties(snow-shot-border-fill-mcp-tests PROPERTIES TIMEOUT 30 LABELS unit)
     add_test(NAME snow-shot-magnifier-mcp-style-tests
         COMMAND snow-shot-mcp-tests --magnifier-only -platform offscreen)
     set_tests_properties(snow-shot-magnifier-mcp-style-tests PROPERTIES TIMEOUT 30 LABELS unit)
@@ -6046,6 +6049,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         NAME snow-shot-screenshot-tool-palette-tests
         COMMAND snow-shot-screenshot-tool-palette-tests
     )
+    add_test(NAME snow-shot-border-fill-controls-tests
+        COMMAND snow-shot-screenshot-tool-palette-tests --border-fill-only -platform offscreen)
+    set_tests_properties(snow-shot-border-fill-controls-tests PROPERTIES TIMEOUT 60 LABELS unit)
     add_test(NAME snow-shot-screenshot-tool-palette-distance-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --distance-only -platform offscreen)
     set_tests_properties(snow-shot-screenshot-tool-palette-distance-tests
@@ -7521,6 +7527,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         qt_import_plugins(snow-shot-generated-icon-pack-tests
             NO_DEFAULT INCLUDE ${_snow_shot_static_qt_plugins})
     endif()
+    add_test(NAME snow-shot-border-fill-icon-tests
+        COMMAND snow-shot-generated-icon-pack-tests --border-fill-only -platform offscreen)
+    set_tests_properties(snow-shot-border-fill-icon-tests PROPERTIES TIMEOUT 30 LABELS unit)
     add_test(
         NAME snow-shot-generated-icon-pack-tests
         COMMAND snow-shot-generated-icon-pack-tests

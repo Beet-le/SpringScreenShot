@@ -187,6 +187,7 @@ fn key(body: &RectangleData, text: &TextData, generation: u64) -> u64 {
     text.stroke_width.to_bits().hash(&mut hash);
     text.stroke.a.hash(&mut hash);
     text.fill.a.hash(&mut hash);
+    (text.fill_style as u8).hash(&mut hash);
     body.width.to_bits().hash(&mut hash);
     (body.highlight_shape as u8).hash(&mut hash);
     body.stroke_width.to_bits().hash(&mut hash);

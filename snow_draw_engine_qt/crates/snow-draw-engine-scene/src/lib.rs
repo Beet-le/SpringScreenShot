@@ -1160,7 +1160,8 @@ fn pressure_geometry_dirty_regions(
         || old.opacity != new.opacity
         || old.blend_mode != new.blend_mode
         || old.brush_mode != new.brush_mode
-        || ((old.geometry.closed || new.geometry.closed) && (old.fill.a != 0 || new.fill.a != 0))
+        || ((old.geometry.closed || new.geometry.closed)
+            && (old.fill_style.is_visible(old.fill) || new.fill_style.is_visible(new.fill)))
     {
         return None;
     }
@@ -1216,7 +1217,8 @@ fn path_geometry_dirty_region(
     if !style_unchanged
         || old.geometry == new.geometry
         || old.geometry.revision == new.geometry.revision
-        || ((old.geometry.closed || new.geometry.closed) && (old.fill.a != 0 || new.fill.a != 0))
+        || ((old.geometry.closed || new.geometry.closed)
+            && (old.fill_style.is_visible(old.fill) || new.fill_style.is_visible(new.fill)))
     {
         return None;
     }
