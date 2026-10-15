@@ -1663,6 +1663,30 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationIntegerRange{0, std::numeric_limits<int>::max(), 1}},
     {QStringLiteral("collage/background_color"), QStringLiteral("#FFFFFFFF"),
      ConfigurationValueKind::String},
+    {QStringLiteral("collage/pdf_paper_size"),
+     QStringLiteral("a4"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("a3"), QStringLiteral("a4"), QStringLiteral("a5"), QStringLiteral("b5"),
+      QStringLiteral("letter"), QStringLiteral("legal"), QStringLiteral("custom"),
+      QStringLiteral("image_size")}},
+    {QStringLiteral("collage/pdf_orientation"),
+     QStringLiteral("portrait"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("portrait"), QStringLiteral("landscape")}},
+    // Decimal dimensions and margins use key-specific finite-number normalization below.
+    {QStringLiteral("collage/pdf_custom_width_mm"), 210.0, ConfigurationValueKind::Structured},
+    {QStringLiteral("collage/pdf_custom_height_mm"), 297.0, ConfigurationValueKind::Structured},
+    {QStringLiteral("collage/pdf_margin_top_mm"), 10.0, ConfigurationValueKind::Structured},
+    {QStringLiteral("collage/pdf_margin_bottom_mm"), 10.0, ConfigurationValueKind::Structured},
+    {QStringLiteral("collage/pdf_margin_left_mm"), 10.0, ConfigurationValueKind::Structured},
+    {QStringLiteral("collage/pdf_margin_right_mm"), 10.0, ConfigurationValueKind::Structured},
+    {QStringLiteral("collage/pdf_export_mode"),
+     QStringLiteral("combined"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("combined"), QStringLiteral("per_page")}},
     {QStringLiteral("screenshot/manual_save_format_options"), QJsonObject(),
      ConfigurationValueKind::Structured},
     {QStringLiteral("screenshot/image_format"),
@@ -2586,6 +2610,16 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     const ConfigurationSchemaEntry* schemaEntry = entry(key);
     if (schemaEntry == nullptr) {
         return {};
+    }
+    if (key.startsWith(QStringLiteral("collage/pdf_custom_")) ||
+        key.startsWith(QStringLiteral("collage/pdf_margin_"))) {
+        if (!value.isDouble() || !std::isfinite(value.toDouble()))
+            return {};
+        const bool customDimension = key.startsWith(QStringLiteral("collage/pdf_custom_"));
+        if (customDimension ? value.toDouble() <= 0 || value.toDouble() > 381'000'000
+                            : value.toDouble() < 0)
+            return {};
+        return {value, true, false};
     }
 #ifdef Q_OS_MACOS
     if (key == u"updates/mode" &&

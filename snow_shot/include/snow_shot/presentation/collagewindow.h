@@ -3,6 +3,7 @@
 #define SNOW_SHOT_PRESENTATION_COLLAGEWINDOW_H
 
 #include "snow_shot/presentation/collagedocument.h"
+#include "snow_shot/presentation/collagepdfexport.h"
 #include "snow_shot/storage/capturehistorytypes.h"
 #include "snow_shot/presentation/screenshotpinnedimagesnapshot.h"
 #include "snow_shot/platform/selectedfiles.h"
@@ -30,6 +31,12 @@ struct CollageWindowServices final {
     Export save;
     std::function<void(QWidget*, bool clear, std::function<void(bool)>)> confirm;
     std::function<std::optional<QImage>(const storage::CaptureHistoryRecord&)> readHistory;
+    using PdfChoice = std::function<void(std::optional<CollagePdfDestination>)>;
+    std::function<void(QWidget*, CollagePdfExportMode, PdfChoice)> choosePdfDestination;
+    std::function<CollagePdfExportResult(const QVector<CollageItem>&, const CollagePdfSettings&,
+                                         const CollagePdfDestination&, std::function<bool()>,
+                                         std::function<void(const CollagePdfExportProgress&)>)>
+        exportPdf;
 };
 
 class CollageWindow final : public QObject {
@@ -59,6 +66,7 @@ class CollageWindow final : public QObject {
     void closed();
     void importFinished(const QStringList& failures);
     void exportFinished(bool success);
+    void pdfExportFinished(const CollagePdfExportResult& result);
 
   private:
     struct Impl;

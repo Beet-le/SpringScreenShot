@@ -4,6 +4,30 @@
     <context>
         <name>CollageDocument</name>
         <message>
+            <source>Enter a nonnegative page margin.</source>
+            <translation>Enter a nonnegative page margin.</translation>
+        </message>
+        <message>
+            <source>Enter a positive paper dimension.</source>
+            <translation>Enter a positive paper dimension.</translation>
+        </message>
+        <message>
+            <source>Select a paper orientation.</source>
+            <translation>Select a paper orientation.</translation>
+        </message>
+        <message>
+            <source>Select a paper size.</source>
+            <translation>Select a paper size.</translation>
+        </message>
+        <message>
+            <source>Select an export mode.</source>
+            <translation>Select an export mode.</translation>
+        </message>
+        <message>
+            <source>The PDF page settings are invalid.</source>
+            <translation>The PDF page settings are invalid.</translation>
+        </message>
+        <message>
             <source>The collage exceeds the 8 GiB image limit. Try fewer images or smaller layout settings.</source>
             <translation>The collage exceeds the 8 GiB image limit. Try fewer images or smaller layout settings.</translation>
         </message>
@@ -24,6 +48,14 @@
             <translation>The collage layout settings are invalid.</translation>
         </message>
         <message>
+            <source>The margins must leave a usable content area.</source>
+            <translation>The margins must leave a usable content area.</translation>
+        </message>
+        <message>
+            <source>The paper dimension exceeds the PDF size limit.</source>
+            <translation>The paper dimension exceeds the PDF size limit.</translation>
+        </message>
+        <message>
             <source>There is not enough available memory for this collage operation. Try fewer images or close other collage windows.</source>
             <translation>There is not enough available memory for this collage operation. Try fewer images or close other collage windows.</translation>
         </message>
@@ -37,6 +69,10 @@
         <message>
             <source> px</source>
             <translation> px</translation>
+        </message>
+        <message>
+            <source>%1 × %2 mm</source>
+            <translation>%1 × %2 mm</translation>
         </message>
         <message>
             <source>%1 × %2 px</source>
@@ -151,6 +187,10 @@
             <translation>Image spacing unit</translation>
         </message>
         <message>
+            <source>Image type</source>
+            <translation>Image type</translation>
+        </message>
+        <message>
             <source>Layout direction</source>
             <translation>Layout direction</translation>
         </message>
@@ -173,6 +213,10 @@
         <message>
             <source>Outer border unit</source>
             <translation>Outer border unit</translation>
+        </message>
+        <message>
+            <source>PDF document</source>
+            <translation>PDF document</translation>
         </message>
         <message>
             <source>Percentage</source>
@@ -227,8 +271,16 @@
             <translation>Select to center this image; drag onto another image to swap</translation>
         </message>
         <message>
+            <source>Static image</source>
+            <translation>Static image</translation>
+        </message>
+        <message>
             <source>Total: %1 images</source>
             <translation>Total: %1 images</translation>
+        </message>
+        <message>
+            <source>Total: %1 pages</source>
+            <translation>Total: %1 pages</translation>
         </message>
         <message>
             <source>Uniform size</source>
@@ -245,6 +297,223 @@
         <message>
             <source>Yellow</source>
             <translation>Yellow</translation>
+        </message>
+    </context>
+    <context>
+        <name>CollagePdfExport</name>
+        <message>
+            <source>Export was canceled.</source>
+            <translation>Export was canceled.</translation>
+        </message>
+        <message>
+            <source>No output destination was selected.</source>
+            <translation>No output destination was selected.</translation>
+        </message>
+        <message>
+            <source>Page %1 could not be exported: %2</source>
+            <translation>Page %1 could not be exported: %2</translation>
+        </message>
+        <message>
+            <source>The PDF could not be saved: %1</source>
+            <translation>The PDF could not be saved: %1</translation>
+        </message>
+        <message>
+            <source>The PDF settings or images are invalid.</source>
+            <translation>The PDF settings or images are invalid.</translation>
+        </message>
+        <message>
+            <source>The image could not be prepared for PDF export.</source>
+            <translation>The image could not be prepared for PDF export.</translation>
+        </message>
+        <message>
+            <source>The output folder could not be created.</source>
+            <translation>The output folder could not be created.</translation>
+        </message>
+        <message>
+            <source>The selected PDF already exists. Choose another filename.</source>
+            <translation>The selected PDF already exists. Choose another filename.</translation>
+        </message>
+        <message>
+            <source>There is not enough memory to export the PDF.</source>
+            <translation>There is not enough memory to export the PDF.</translation>
+        </message>
+    </context>
+    <context>
+        <name>CollagePdfPageGrid</name>
+        <message>
+            <source>Add images</source>
+            <translation>Add images</translation>
+        </message>
+        <message>
+            <source>Add images to create a PDF document</source>
+            <translation>Add images to create a PDF document</translation>
+        </message>
+        <message>
+            <source>Add multiple image files at once</source>
+            <translation>Add multiple image files at once</translation>
+        </message>
+        <message>
+            <source>Clear</source>
+            <translation>Clear</translation>
+        </message>
+        <message>
+            <source>Delete image</source>
+            <translation>Delete image</translation>
+        </message>
+        <message>
+            <source>Drag image files here, or choose Add images</source>
+            <translation>Drag image files here, or choose Add images</translation>
+        </message>
+        <message>
+            <source>Drag pages to reorder. Use the arrow keys to select a page and Enter to preview the original image.</source>
+            <translation>Drag pages to reorder. Use the arrow keys to select a page and Enter to preview the original image.</translation>
+        </message>
+        <message>
+            <source>Drop images to add pages</source>
+            <translation>Drop images to add pages</translation>
+        </message>
+        <message>
+            <source>Flip horizontally</source>
+            <translation>Flip horizontally</translation>
+        </message>
+        <message>
+            <source>Flip vertically</source>
+            <translation>Flip vertically</translation>
+        </message>
+        <message>
+            <source>Image preview was cancelled.</source>
+            <translation>Image preview was cancelled.</translation>
+        </message>
+        <message>
+            <source>PDF document pages</source>
+            <translation>PDF document pages</translation>
+        </message>
+        <message>
+            <source>Page %1</source>
+            <translation>Page %1</translation>
+        </message>
+        <message>
+            <source>Page %1: %2</source>
+            <translation>Page %1: %2</translation>
+        </message>
+        <message>
+            <source>Preview original image</source>
+            <translation>Preview original image</translation>
+        </message>
+        <message>
+            <source>Replace image</source>
+            <translation>Replace image</translation>
+        </message>
+        <message>
+            <source>Reset transform</source>
+            <translation>Reset transform</translation>
+        </message>
+        <message>
+            <source>Rotate clockwise by 90°</source>
+            <translation>Rotate clockwise by 90°</translation>
+        </message>
+        <message>
+            <source>Rotate counterclockwise by 90°</source>
+            <translation>Rotate counterclockwise by 90°</translation>
+        </message>
+        <message>
+            <source>The original image is unavailable.</source>
+            <translation>The original image is unavailable.</translation>
+        </message>
+        <message>
+            <source>The page preview shows the last valid settings.</source>
+            <translation>The page preview shows the last valid settings.</translation>
+        </message>
+    </context>
+    <context>
+        <name>CollagePdfSettingsWidget</name>
+        <message>
+            <source>A3</source>
+            <translation>A3</translation>
+        </message>
+        <message>
+            <source>A4</source>
+            <translation>A4</translation>
+        </message>
+        <message>
+            <source>A5</source>
+            <translation>A5</translation>
+        </message>
+        <message>
+            <source>B5</source>
+            <translation>B5</translation>
+        </message>
+        <message>
+            <source>Combined export</source>
+            <translation>Combined export</translation>
+        </message>
+        <message>
+            <source>Custom</source>
+            <translation>Custom</translation>
+        </message>
+        <message>
+            <source>Custom paper</source>
+            <translation>Custom paper</translation>
+        </message>
+        <message>
+            <source>Custom paper height</source>
+            <translation>Custom paper height</translation>
+        </message>
+        <message>
+            <source>Custom paper width</source>
+            <translation>Custom paper width</translation>
+        </message>
+        <message>
+            <source>Export mode</source>
+            <translation>Export mode</translation>
+        </message>
+        <message>
+            <source>Height</source>
+            <translation>Height</translation>
+        </message>
+        <message>
+            <source>Image Size</source>
+            <translation>Image Size</translation>
+        </message>
+        <message>
+            <source>Landscape</source>
+            <translation>Landscape</translation>
+        </message>
+        <message>
+            <source>Legal</source>
+            <translation>Legal</translation>
+        </message>
+        <message>
+            <source>Letter</source>
+            <translation>Letter</translation>
+        </message>
+        <message>
+            <source>Page margin</source>
+            <translation>Page margin</translation>
+        </message>
+        <message>
+            <source>Paper orientation</source>
+            <translation>Paper orientation</translation>
+        </message>
+        <message>
+            <source>Paper size</source>
+            <translation>Paper size</translation>
+        </message>
+        <message>
+            <source>Per-page export</source>
+            <translation>Per-page export</translation>
+        </message>
+        <message>
+            <source>Portrait</source>
+            <translation>Portrait</translation>
+        </message>
+        <message>
+            <source>Width</source>
+            <translation>Width</translation>
+        </message>
+        <message>
+            <source>mm</source>
+            <translation>mm</translation>
         </message>
     </context>
     <context>
@@ -268,6 +537,10 @@
         <message>
             <source>Cancel</source>
             <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Canceling PDF export…</source>
+            <translation>Canceling PDF export…</translation>
         </message>
         <message>
             <source>Clear all</source>
@@ -310,6 +583,10 @@
             <translation>Export could not be started. Try again.</translation>
         </message>
         <message>
+            <source>Exporting PDF page %1 of %2: %3%</source>
+            <translation>Exporting PDF page %1 of %2: %3%</translation>
+        </message>
+        <message>
             <source>Image loading could not be started. Try again.</source>
             <translation>Image loading could not be started. Try again.</translation>
         </message>
@@ -320,6 +597,22 @@
         <message>
             <source>Loading images: %1 of %2</source>
             <translation>Loading images: %1 of %2</translation>
+        </message>
+        <message>
+            <source>PDF documents</source>
+            <translation>PDF documents</translation>
+        </message>
+        <message>
+            <source>PDF export was canceled. Your images and edits are preserved.</source>
+            <translation>PDF export was canceled. Your images and edits are preserved.</translation>
+        </message>
+        <message>
+            <source>Page %1 was not saved.</source>
+            <translation>Page %1 was not saved.</translation>
+        </message>
+        <message>
+            <source>Pages %1–%2 were not saved.</source>
+            <translation>Pages %1–%2 were not saved.</translation>
         </message>
         <message>
             <source>Pinned window %1</source>
@@ -342,8 +635,22 @@
             <translation>Save</translation>
         </message>
         <message>
+            <source>Save PDF document</source>
+            <translation>Save PDF document</translation>
+        </message>
+        <message>
             <source>Save as file</source>
             <translation>Save as file</translation>
+        </message>
+        <message>
+            <source>Saved pages: %1
+Files:
+%2
+%3</source>
+            <translation>Saved pages: %1
+Files:
+%2
+%3</translation>
         </message>
         <message>
             <source>Saving collage…</source>
@@ -358,10 +665,18 @@
             <translation>Screenshot %1</translation>
         </message>
         <message>
+            <source>Select destination folder</source>
+            <translation>Select destination folder</translation>
+        </message>
+        <message>
             <source>Some images could not be loaded:
 %1</source>
             <translation>Some images could not be loaded:
 %1</translation>
+        </message>
+        <message>
+            <source>The PDFs could not be exported. Try again.</source>
+            <translation>The PDFs could not be exported. Try again.</translation>
         </message>
         <message>
             <source>The file manager is unavailable. Open it and try again.</source>

@@ -22,14 +22,18 @@
 
 #include <QApplication>
 #include <QCursor>
+#include <QDateTime>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QMimeData>
 #include <QPointer>
 #include <QScreen>
+#include <QSet>
 #include <QTimer>
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <utility>
 
 namespace snow_shot::presentation {
@@ -68,6 +72,17 @@ using adqt::widgets::AdModal;
     QT_TRANSLATE_NOOP("CollageWindow", "Save"),
     QT_TRANSLATE_NOOP("CollageWindow", "Save as file"),
     QT_TRANSLATE_NOOP("CollageWindow", "Saving collage…"),
+    QT_TRANSLATE_NOOP("CollageWindow", "Save PDF document"),
+    QT_TRANSLATE_NOOP("CollageWindow", "Select destination folder"),
+    QT_TRANSLATE_NOOP("CollageWindow", "PDF documents"),
+    QT_TRANSLATE_NOOP("CollageWindow", "Exporting PDF page %1 of %2: %3%"),
+    QT_TRANSLATE_NOOP("CollageWindow", "Canceling PDF export…"),
+    QT_TRANSLATE_NOOP("CollageWindow",
+                      "PDF export was canceled. Your images and edits are preserved."),
+    QT_TRANSLATE_NOOP("CollageWindow", "Saved pages: %1\nFiles:\n%2\n%3"),
+    QT_TRANSLATE_NOOP("CollageWindow", "Pages %1–%2 were not saved."),
+    QT_TRANSLATE_NOOP("CollageWindow", "Page %1 was not saved."),
+    QT_TRANSLATE_NOOP("CollageWindow", "The PDFs could not be exported. Try again."),
     QT_TRANSLATE_NOOP("CollageWindow", "Saving could not be started. Try again."),
     QT_TRANSLATE_NOOP("CollageWindow", "Screenshot %1"),
     QT_TRANSLATE_NOOP("CollageWindow", "Some images could not be loaded:\n%1"),
@@ -132,6 +147,12 @@ struct ImportedImage {
     QImage preview;
     std::shared_ptr<CollageImportReservation> reservation;
 };
+struct PdfProgressState final {
+    std::atomic<qsizetype> completedPages{0};
+    std::atomic<qsizetype> totalPages{0};
+    std::atomic<qsizetype> pageNumber{0};
+    std::atomic<int> pagePercent{0};
+};
 } // namespace
 
 struct CollageWindow::Impl {
@@ -143,6 +164,9 @@ struct CollageWindow::Impl {
         Copying,
         Saving,
         ImportFailures,
+        PdfSaving,
+        PdfCancelling,
+        PdfPartial,
         External
     };
     CollageWindow& q;
@@ -174,14 +198,30 @@ struct CollageWindow::Impl {
     bool copying = false;
     Status status = Status::None;
     bool confirmationClear = false;
+    quint64 confirmationGeneration = 0;
+    bool pdfExporting = false;
+    bool choosingPdf = false;
+    bool pdfCancelRequested = false;
+    QTimer* pdfProgressTimer;
+    std::shared_ptr<PdfProgressState> pdfProgress;
+    std::shared_ptr<std::atomic_bool> pdfCancellation;
+    CollagePdfExportResult lastPdfResult;
+    QSet<QString> pendingPdfSettingFields;
 
     Impl(CollageWindow& owner, CollageWindowServices ports)
         : q(owner), services(std::move(ports)), document(new CollageDocument(&q)),
-          editor(new components::CollageEditorWidget(document)), modal(new AdModal(&q)) {
+          editor(new components::CollageEditorWidget(document)), modal(new AdModal(&q)),
+          pdfProgressTimer(new QTimer(&q)) {
         auto& storage = storage::ApplicationStorage::instance();
         if (!storage.isInitialized())
             static_cast<void>(storage.initialize());
         document->setSettings(CollageSettingsStore(storage.configuration()).read());
+        document->setPdfSettings(CollageSettingsStore(storage.configuration()).readPdf());
+        pdfProgressTimer->setInterval(100);
+        QObject::connect(pdfProgressTimer, &QTimer::timeout, &q, [this] {
+            if (pdfExporting && !choosingPdf && !pdfCancelRequested)
+                showStatus(Status::PdfSaving);
+        });
         modal->setObjectName(QStringLiteral("collageModal"));
         modal->setMode(AdModal::Mode::Window);
         modal->setCentered(true);
@@ -249,6 +289,24 @@ struct CollageWindow::Impl {
 
     void persistSettings(const QStringList& fields) {
         auto& configuration = storage::ApplicationStorage::instance().configuration();
+        if (!fields.isEmpty() && fields.first().startsWith(QStringLiteral("pdf/"))) {
+            for (const auto& field : fields)
+                pendingPdfSettingFields.insert(field.mid(4));
+            const auto settings = document->pdfSettings();
+            if (!validateCollagePdfSettings(settings).isEmpty())
+                return;
+            const auto persistable = CollageSettingsStore::persistablePdfFields(
+                pendingPdfSettingFields.values(), settings);
+            if (persistable.isEmpty())
+                return;
+            if (!CollageSettingsStore(configuration).writePdf(persistable, settings))
+                externalStatus(collageText("The layout settings could not be remembered: %1")
+                                   .arg(configuration.lastError()));
+            else
+                for (const auto& field : persistable)
+                    pendingPdfSettingFields.remove(field);
+            return;
+        }
         if (!CollageSettingsStore(configuration).write(fields, document->settings()))
             externalStatus(collageText("The layout settings could not be remembered: %1")
                                .arg(configuration.lastError()));
@@ -298,6 +356,48 @@ struct CollageWindow::Impl {
             message = collageText("Some images could not be loaded:\n%1")
                           .arg(importFailures().join(u'\n'));
             break;
+        case Status::PdfSaving:
+            if (pdfProgress)
+                message = collageText("Exporting PDF page %1 of %2: %3%")
+                              .arg(std::max<qsizetype>(1, pdfProgress->pageNumber.load()))
+                              .arg(pdfProgress->totalPages.load())
+                              .arg(pdfProgress->pagePercent.load());
+            break;
+        case Status::PdfCancelling:
+            message = collageText("Canceling PDF export…");
+            break;
+        case Status::PdfPartial: {
+            QString reason =
+                lastPdfResult.cancelled
+                    ? collageText("PDF export was canceled. Your images and edits are preserved.")
+                    : lastPdfResult.errorMessage();
+            if (reason.isEmpty())
+                reason = collageText("The PDFs could not be exported. Try again.");
+            if (!lastPdfResult.completedPages.isEmpty()) {
+                QStringList pages;
+                for (auto page : lastPdfResult.completedPages)
+                    pages.append(QString::number(page));
+                const auto firstRemaining = lastPdfResult.completedPages.last() + 1;
+                if (firstRemaining <= lastPdfResult.totalCount)
+                    reason +=
+                        u'\n' + (firstRemaining == lastPdfResult.totalCount
+                                     ? collageText("Page %1 was not saved.").arg(firstRemaining)
+                                     : collageText("Pages %1–%2 were not saved.")
+                                           .arg(firstRemaining)
+                                           .arg(lastPdfResult.totalCount));
+                reason = collageText("Saved pages: %1\nFiles:\n%2\n%3")
+                             .arg(pages.join(QStringLiteral(", ")), lastPdfResult.paths.join(u'\n'),
+                                  reason);
+            }
+            AdMessage::Request request;
+            request.key = QStringLiteral("collageStatus");
+            request.content = reason;
+            request.durationMs = 0;
+            statusMessage = lastPdfResult.cancelled
+                                ? AdMessageService::info(std::move(request), editor->window())
+                                : AdMessageService::error(std::move(request), editor->window());
+            return;
+        }
         case Status::None:
         case Status::External:
             break;
@@ -341,11 +441,17 @@ struct CollageWindow::Impl {
     }
 
     void updateActions() {
-        const bool ready = !closing && !importing && !exporting && document->layout().isValid();
+        const bool pdf = document->outputType() == CollageOutputType::PdfDocument;
+        const bool valid = pdf ? !document->items().isEmpty() &&
+                                     validateCollagePdfSettings(document->pdfSettings()).isEmpty()
+                               : document->layout().isValid();
+        const bool ready = !closing && !importing && !exporting && !confirmationPending && valid;
+        copyButton->setVisible(!pdf);
         copyButton->setEnabled(ready);
         saveButton->setEnabled(ready);
         copyButton->setBusy(exporting && copying);
         saveButton->setBusy(exporting && !copying);
+        cancelButton->setEnabled(!pdfCancelRequested);
         editor->setLoading(importing);
         editor->setExportBusy(exporting);
     }
@@ -354,6 +460,14 @@ struct CollageWindow::Impl {
         ++generation;
         job.cancel();
         job = {};
+        if (pdfCancellation)
+            pdfCancellation->store(true);
+        pdfProgressTimer->stop();
+        pdfCancellation.reset();
+        pdfProgress.reset();
+        pdfExporting = false;
+        choosingPdf = false;
+        pdfCancelRequested = false;
         clipboard.cancelAll();
         nativeSave.cancel();
         nativeSave = {};
@@ -401,11 +515,15 @@ struct CollageWindow::Impl {
         if (closing || confirmationPending)
             return;
         confirmationPending = true;
+        const auto confirmationToken = ++confirmationGeneration;
+        updateActions();
         const QPointer<CollageWindow> guard(&q);
-        auto complete = [guard, accepted = std::move(accepted)](bool yes) {
-            if (!guard || guard->m_impl->closing)
+        auto complete = [guard, confirmationToken, accepted = std::move(accepted)](bool yes) {
+            if (!guard || guard->m_impl->closing || !guard->m_impl->confirmationPending ||
+                confirmationToken != guard->m_impl->confirmationGeneration)
                 return;
             guard->m_impl->confirmationPending = false;
+            guard->m_impl->updateActions();
             if (yes)
                 accepted();
         };
@@ -637,7 +755,9 @@ struct CollageWindow::Impl {
         }
         // Consume the source now; processed snapshots must not retain raster donors or rendered
         // caches while subsequent imports are pending. The worker/completion owns this request.
-        const ImportItem request = std::move(imports[importIndex++]);
+        // Moving a small std::function may retain its callable in the source. Explicitly
+        // empty the consumed slot so completed image producers retire before the batch ends.
+        const ImportItem request = std::exchange(imports[importIndex++], ImportItem{});
         showStatus(request.selection ? Status::ReadingSelection : Status::Loading);
         const quint64 token = generation;
         if (request.selection) {
@@ -834,8 +954,192 @@ struct CollageWindow::Impl {
             complete(false, collageText("Saving could not be started. Try again."));
     }
 
+    void finishPdfExport(CollagePdfExportResult result) {
+        if (closing || !pdfExporting)
+            return;
+        pdfProgressTimer->stop();
+        job = {};
+        choosingPdf = false;
+        pdfCancelRequested = false;
+        pdfCancellation.reset();
+        pdfProgress.reset();
+        lastPdfResult = std::move(result);
+        const bool success = lastPdfResult.succeeded();
+        showStatus(Status::None);
+        const QPointer<CollageWindow> guard(&q);
+        const quint64 token = generation;
+        emit q.pdfExportFinished(lastPdfResult);
+        if (!guard || token != generation)
+            return;
+        emit q.exportFinished(success);
+        if (!guard || token != generation)
+            return;
+        pdfExporting = false;
+        exporting = false;
+        closing = success;
+        updateActions();
+        if (success)
+            modal->accept();
+        else
+            showStatus(Status::PdfPartial);
+    }
+
+    void requestPdfCancellation() {
+        if (!pdfExporting || pdfCancelRequested)
+            return;
+        pdfCancelRequested = true;
+        if (pdfCancellation)
+            pdfCancellation->store(true);
+        if (choosingPdf) {
+            // A chooser port may reply later; choosingPdf is cleared by the terminal completion.
+            CollagePdfExportResult result;
+            result.totalCount = document->items().size();
+            result.cancelled = true;
+            if (fileDialog)
+                fileDialog->reject();
+            finishPdfExport(std::move(result));
+            return;
+        }
+        job.cancel();
+        showStatus(Status::PdfCancelling);
+        updateActions();
+    }
+
+    void writePdf(QVector<CollageItem> items, CollagePdfSettings settings,
+                  CollagePdfDestination destination, quint64 token) {
+        choosingPdf = false;
+        auto result = std::make_shared<CollagePdfExportResult>();
+        result->totalCount = items.size();
+        const auto cancellation = pdfCancellation;
+        const auto progress = pdfProgress;
+        const auto writer = services.exportPdf;
+        showStatus(Status::PdfSaving);
+        pdfProgressTimer->start();
+        job = ScreenshotExportCoordinator::shared().submit(
+            &q, ScreenshotExportCoordinator::Priority::Foreground,
+            [items = std::move(items), settings, destination = std::move(destination), result,
+             cancellation, progress, writer](const ScreenshotExportCancellation& jobCancellation) {
+                const auto cancelled = [cancellation, jobCancellation] {
+                    return cancellation->load() || jobCancellation.isCancellationRequested();
+                };
+                const auto report = [progress](const CollagePdfExportProgress& value) {
+                    progress->completedPages.store(value.completedPages);
+                    progress->totalPages.store(value.totalPages);
+                    progress->pageNumber.store(value.pageNumber);
+                    progress->pagePercent.store(
+                        qRound(std::clamp(value.pageFraction, 0.0, 1.0) * 100));
+                };
+                *result = writer
+                              ? writer(items, settings, destination, cancelled, report)
+                              : exportCollagePdf(items, settings, destination, cancelled, report);
+                return ScreenshotExportTaskResult{};
+            },
+            [this, result, token](const ScreenshotExportTaskResult& task) {
+                if (closing || token != generation || !pdfExporting)
+                    return;
+                if (!task.succeeded()) {
+                    result->cancelled =
+                        task.failureStage == ScreenshotExportFailureStage::Cancelled;
+                    if (result->error.isEmpty() && !result->cancelled)
+                        result->error =
+                            task.error.isEmpty()
+                                ? collageText("The PDFs could not be exported. Try again.")
+                                : task.error;
+                }
+                finishPdfExport(std::move(*result));
+            });
+        if (!job.isValid()) {
+            result->error = collageText("Export could not be started. Try again.");
+            finishPdfExport(std::move(*result));
+        }
+    }
+
+    void startPdfExport() {
+        if (closing || exporting || importing || confirmationPending || fileDialog ||
+            document->items().isEmpty() ||
+            !validateCollagePdfSettings(document->pdfSettings()).isEmpty())
+            return;
+        pdfExporting = true;
+        exporting = true;
+        copying = false;
+        choosingPdf = true;
+        pdfCancelRequested = false;
+        pdfCancellation = std::make_shared<std::atomic_bool>(false);
+        pdfProgress = std::make_shared<PdfProgressState>();
+        const auto items = document->items();
+        const auto settings = document->pdfSettings();
+        pdfProgress->totalPages.store(items.size());
+        const auto token = ++generation;
+        updateActions();
+        const QPointer<CollageWindow> guard(&q);
+        auto chosen = [guard, items, settings, token](std::optional<CollagePdfDestination> choice) {
+            if (!guard)
+                return;
+            auto& d = *guard->m_impl;
+            if (d.closing || token != d.generation || !d.pdfExporting || !d.choosingPdf)
+                return;
+            if (!choice || choice->path.isEmpty()) {
+                CollagePdfExportResult result;
+                result.totalCount = items.size();
+                result.cancelled = true;
+                d.finishPdfExport(std::move(result));
+                return;
+            }
+            d.writePdf(items, settings, std::move(*choice), token);
+        };
+        if (services.choosePdfDestination) {
+            services.choosePdfDestination(editor->window(), settings.exportMode, std::move(chosen));
+            return;
+        }
+        auto* dialog = new QFileDialog(editor->window());
+        fileDialog = dialog;
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowModality(Qt::WindowModal);
+        const bool combined = settings.exportMode == CollagePdfExportMode::Combined;
+        dialog->setWindowTitle(combined ? collageText("Save PDF document")
+                                        : collageText("Select destination folder"));
+        dialog->setDirectory(storage::ScreenshotSettings().lastManualSaveDirectory());
+        if (combined) {
+            dialog->setAcceptMode(QFileDialog::AcceptSave);
+            dialog->setFileMode(QFileDialog::AnyFile);
+            dialog->setNameFilter(QStringLiteral("%1 (*.pdf)").arg(collageText("PDF documents")));
+            dialog->setDefaultSuffix(QStringLiteral("pdf"));
+            dialog->setOption(QFileDialog::DontConfirmOverwrite, false);
+            dialog->selectFile(QStringLiteral("SnowShot_%1.pdf")
+                                   .arg(QDateTime::currentDateTime().toString(
+                                       QStringLiteral("yyyy-MM-dd_HH-mm-ss"))));
+        } else {
+            dialog->setFileMode(QFileDialog::Directory);
+            dialog->setOption(QFileDialog::ShowDirsOnly, true);
+        }
+        QObject::connect(
+            dialog, &QDialog::finished, &q,
+            [dialog, chosen = std::move(chosen), combined](int code) mutable {
+                const auto files = dialog->selectedFiles();
+                if (code != QDialog::Accepted || files.isEmpty())
+                    chosen(std::nullopt);
+                else {
+                    QString path = files.first();
+                    if (combined && QFileInfo(path).suffix().compare(QStringLiteral("pdf"),
+                                                                     Qt::CaseInsensitive) != 0)
+                        path += QStringLiteral(".pdf");
+                    // Qt confirmed the exact typed path. A suffix adjustment never
+                    // authorizes replacing a different destination.
+                    chosen(CollagePdfDestination{path, combined && path == files.first() &&
+                                                           QFileInfo::exists(path)});
+                }
+            });
+        dialog->open();
+    }
+
     void startExport(bool copy) {
-        if (closing || exporting || importing || !document->layout().isValid())
+        if (document->outputType() == CollageOutputType::PdfDocument) {
+            if (!copy)
+                startPdfExport();
+            return;
+        }
+        if (closing || exporting || importing || confirmationPending ||
+            !document->layout().isValid())
             return;
         copying = copy;
         exporting = true;
@@ -968,6 +1272,10 @@ void CollageWindow::replaceFile(quint64 id, const QString& path) {
 void CollageWindow::requestClose() {
     if (m_impl->closing)
         return;
+    if (m_impl->pdfExporting) {
+        m_impl->requestPdfCancellation();
+        return;
+    }
     const auto discard = [this] {
         m_impl->closing = true;
         m_impl->cancelWork();
@@ -982,6 +1290,8 @@ void CollageWindow::requestClear() {
     if (m_impl->exporting || m_impl->document->items().isEmpty())
         return;
     m_impl->askConfirmation(true, [this] {
+        if (m_impl->exporting)
+            return;
         m_impl->cancelWork();
         m_impl->document->clear();
         m_impl->failures.clear();

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "snow_shot/presentation/components/collageeditorwidget.h"
+#include "snow_shot/presentation/components/collagepdfpagegrid.h"
+#include "snow_shot/presentation/components/collagepdfsettingswidget.h"
 
 #include "snow_shot/presentation/screenshotwheelinput.h"
 #include "snow_shot/presentation/screenshotexportcoordinator.h"
@@ -113,6 +115,11 @@ constexpr std::array<const char*, 8> kColorValues{"#FFFFFF", "#000000", "#8C8C8C
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Uniform size"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Original size"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Layout direction"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Image type"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Static image"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "PDF document"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "%1 × %2 mm"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Total: %1 pages"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Image sizing"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Outer border"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Image spacing"),
@@ -658,6 +665,7 @@ struct CollagePreviewCanvas::Impl {
     bool dragging = false;
     bool automaticFit = true;
     bool editing = true;
+    bool rendering = true;
     CanvasActionToolbar* toolbar = nullptr;
     std::array<AdButton*, 6> actions{};
     OverlayControlButton* fit = nullptr;
@@ -684,7 +692,8 @@ struct CollagePreviewCanvas::Impl {
             item.height() * detail.transformedPixels.height() / detail.fullSize.height()};
     }
     void requestDetails() {
-        if (!layout.isValid())
+        if (!rendering || document->outputType() == CollageOutputType::PdfDocument ||
+            !layout.isValid())
             return;
         for (qsizetype index = 0; index < document->items().size(); ++index) {
             const auto& item = document->items()[index];
@@ -911,6 +920,11 @@ struct CollagePreviewCanvas::Impl {
         detailTimer->start();
     }
     void refresh() {
+        if (!rendering || document->outputType() == CollageOutputType::PdfDocument) {
+            detailTimer->stop();
+            cancelDetails();
+            return;
+        }
         const bool firstRefresh = !initialized;
         const auto nextSettings = document->settings();
         if (initialized && nextSettings.background != cachedSettings.background &&
@@ -1110,6 +1124,21 @@ void CollagePreviewCanvas::setEditingEnabled(bool enabled) {
     m_impl->targetId = 0;
     m_impl->dragging = false;
     m_impl->geometryChanged();
+}
+void CollagePreviewCanvas::setRenderingEnabled(bool enabled) {
+    auto& d = *m_impl;
+    if (d.rendering == enabled)
+        return;
+    d.rendering = enabled;
+    if (!enabled) {
+        d.detailTimer->stop();
+        d.cancelDetails();
+        d.details.clear();
+        d.detailCacheBytes = 0;
+        d.previewStatisticsChanged();
+    } else {
+        d.refresh();
+    }
 }
 void CollagePreviewCanvas::retranslateUi() {
     setAccessibleName(text("Collage preview"));
@@ -1315,6 +1344,11 @@ struct CollageEditorWidget::Impl {
     CollageEditorWidget* owner = nullptr;
     CollageDocument* document = nullptr;
     CollagePreviewCanvas* canvas = nullptr;
+    CollagePdfPageGrid* pdfGrid = nullptr;
+    CollagePdfSettingsWidget* pdfSettings = nullptr;
+    AdSegmented* outputType = nullptr;
+    AdFormItem* outputTypeField = nullptr;
+    AdFormItem* pdfSettingsField = nullptr;
     ImageDropSurface* emptyState = nullptr;
     QLabel* emptyPrompt = nullptr;
     AdButton* emptyAdd = nullptr;
@@ -1351,8 +1385,10 @@ struct CollageEditorWidget::Impl {
     bool exporting = false;
 
     void positionDropHint() {
-        const auto* target = document->items().isEmpty() ? static_cast<QWidget*>(emptyState)
-                                                         : static_cast<QWidget*>(canvas);
+        const auto* target = document->outputType() == CollageOutputType::PdfDocument
+                                 ? static_cast<QWidget*>(pdfGrid)
+                             : document->items().isEmpty() ? static_cast<QWidget*>(emptyState)
+                                                           : static_cast<QWidget*>(canvas);
         dropHint->setGeometry(target->geometry());
         dropHint->raise();
     }
@@ -1428,6 +1464,8 @@ struct CollageEditorWidget::Impl {
         canvas->setEditingEnabled(!exporting);
         emptyAdd->setEnabled(!loading && !exporting);
         emptyAdd->setBusy(loading);
+        pdfGrid->setLoading(loading);
+        pdfGrid->setExportBusy(exporting);
     }
     void settingsChanged(const QString& field, const std::function<void(CollageSettings&)>& edit) {
         if (syncing)
@@ -1447,8 +1485,48 @@ struct CollageEditorWidget::Impl {
             canvas->fitToCanvas();
         emit owner->settingsEdited(field);
     }
+    void refreshPdfDescription() {
+        const auto settings = document->lastValidPdfSettings();
+        QSize pixels(1, 1);
+        if (settings.paperSize == CollagePdfPaperSize::ImageSize) {
+            const auto& items = document->items();
+            const auto selected =
+                std::find_if(items.cbegin(), items.cend(), [this](const auto& item) {
+                    return item.id == document->selectedId();
+                });
+            pixels = selected == items.cend() ? QSize{} : transformedSize(*selected);
+        }
+        const auto page = calculateCollagePdfPageLayout(pixels, settings);
+        dimensions->setText(
+            page.isValid()
+                ? text("%1 × %2 mm")
+                      .arg(owner->locale().toString(page.pageMillimeters.width(), 'g', 6))
+                      .arg(owner->locale().toString(page.pageMillimeters.height(), 'g', 6))
+                : QString{});
+        dimensions->setVisible(page.isValid());
+        total->setText(text("Total: %1 pages").arg(document->items().size()));
+    }
     void refresh(bool force = false) {
         syncing = true;
+        const bool pdf = document->outputType() == CollageOutputType::PdfDocument;
+        outputType->setCurrentValue(pdf ? QStringLiteral("pdf") : QStringLiteral("static"));
+        pdfSettingsField->setVisible(pdf);
+        pdfSettings->setVisible(pdf);
+        pdfGrid->setVisible(pdf);
+        for (auto* field : fields)
+            field->setVisible(!pdf);
+        gridField->setVisible(!pdf && document->settings().direction == CollageDirection::Custom);
+        canvas->setRenderingEnabled(!pdf);
+        if (pdf) {
+            canvas->hide();
+            thumbnailRow->hide();
+            emptyState->hide();
+            dropHint->hide();
+            refreshPdfDescription();
+            syncing = false;
+            enabled();
+            return;
+        }
         const auto nextSettings = document->settings();
         force = force || !initialized;
         const bool backgroundOnly = !force &&
@@ -1624,6 +1702,8 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     previewColumn->setSpacing(theme.marginXS);
     d.canvas = new CollagePreviewCanvas(document, this);
     previewColumn->addWidget(d.canvas, 1);
+    d.pdfGrid = new CollagePdfPageGrid(document, this);
+    previewColumn->addWidget(d.pdfGrid, 1);
     d.emptyState = new ImageDropSurface(false, this);
     d.emptyState->setObjectName(QStringLiteral("collageEmptyState"));
     auto* emptyLayout = static_cast<QVBoxLayout*>(d.emptyState->layout());
@@ -1677,6 +1757,12 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
         d.fields[index] = d.form->addField({}, control, QString::fromLatin1(name));
         return control;
     };
+    d.outputType = new AdSegmented(d.form);
+    d.outputType->setObjectName(QStringLiteral("collageImageType"));
+    d.outputType->setDistribution(AdSegmented::Distribution::Fill);
+    d.outputType->addOption({}, QStringLiteral("static"));
+    d.outputType->addOption({}, QStringLiteral("pdf"));
+    d.outputTypeField = d.form->addField({}, d.outputType, QStringLiteral("output_type"));
     d.direction = segmented("collageDirection", "vertical", "horizontal", 0);
     d.direction->addOption({}, QStringLiteral("custom"));
     auto* grid = new QWidget(d.form);
@@ -1793,6 +1879,9 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     colorLayout->addWidget(d.color, 0, Qt::AlignVCenter);
     colorLayout->addStretch(1);
     d.fields[4] = d.form->addField({}, colors, QStringLiteral("background"));
+    d.pdfSettings = new CollagePdfSettingsWidget(document, d.form);
+    d.pdfSettingsField = d.form->addField({}, d.pdfSettings, QStringLiteral("pdf_settings"));
+    d.pdfSettingsField->setNoStyle(true);
     d.form->layout()->setAlignment(Qt::AlignTop);
 
     d.thumbnailRow = new QWidget(this);
@@ -1838,6 +1927,22 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     connect(d.add, &QAbstractButton::clicked, this, &CollageEditorWidget::addImagesRequested);
     connect(d.emptyAdd, &QAbstractButton::clicked, this, &CollageEditorWidget::addImagesRequested);
     connect(d.clear, &QAbstractButton::clicked, this, &CollageEditorWidget::clearRequested);
+    connect(d.outputType, &AdSegmented::currentValueChanged, this, [this](const QVariant& value) {
+        if (!m_impl->syncing && !m_impl->exporting)
+            m_impl->document->setOutputType(value.toString() == QStringLiteral("pdf")
+                                                ? CollageOutputType::PdfDocument
+                                                : CollageOutputType::StaticImage);
+    });
+    connect(d.pdfSettings, &CollagePdfSettingsWidget::settingsEdited, this,
+            [this](const QString& field) { emit settingsEdited(QStringLiteral("pdf/") + field); });
+    connect(d.pdfGrid, &CollagePdfPageGrid::addImagesRequested, this,
+            &CollageEditorWidget::addImagesRequested);
+    connect(d.pdfGrid, &CollagePdfPageGrid::imageFilesDropped, this,
+            &CollageEditorWidget::imageFilesDropped);
+    connect(d.pdfGrid, &CollagePdfPageGrid::replaceImageRequested, this,
+            &CollageEditorWidget::replaceImageRequested);
+    connect(d.pdfGrid, &CollagePdfPageGrid::clearRequested, this,
+            &CollageEditorWidget::clearRequested);
     connect(d.direction, &AdSegmented::currentValueChanged, this, [this](const QVariant& value) {
         m_impl->settingsChanged(QStringLiteral("direction"), [&value](CollageSettings& settings) {
             settings.direction =
@@ -1888,6 +1993,8 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     });
     connect(document, &CollageDocument::changed, this, [this] { m_impl->refresh(); });
     connect(document, &CollageDocument::selectionChanged, this, [this] {
+        if (m_impl->document->outputType() == CollageOutputType::PdfDocument)
+            m_impl->refreshPdfDescription();
         const auto selected = m_impl->document->selectedId();
         if (auto* thumbnail = m_impl->thumbnailById.value(m_impl->selectedThumbnail))
             thumbnail->update();
@@ -1928,12 +2035,21 @@ void CollageEditorWidget::setExportBusy(bool busy) {
 CollagePreviewCanvas* CollageEditorWidget::canvas() const {
     return m_impl->canvas;
 }
+CollagePdfPageGrid* CollageEditorWidget::pdfGrid() const {
+    return m_impl->pdfGrid;
+}
 QWidget* CollageEditorWidget::outputDescriptionWidget() const {
     return m_impl->outputDescription;
 }
 void CollageEditorWidget::retranslateUi() {
     auto& d = *m_impl;
     d.syncing = true;
+    d.outputTypeField->setLabel(text("Image type"));
+    d.outputType->setAccessibleName(text("Image type"));
+    d.outputType->setOptionLabel(0, text("Static image"));
+    d.outputType->setOptionLabel(1, text("PDF document"));
+    d.pdfSettings->retranslateUi();
+    d.pdfGrid->retranslateUi();
     d.direction->setOptionLabel(0, text("Vertical"));
     d.direction->setOptionLabel(1, text("Horizontal"));
     d.direction->setOptionLabel(2, text("Custom"));

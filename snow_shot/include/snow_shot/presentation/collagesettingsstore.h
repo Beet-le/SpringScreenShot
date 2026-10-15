@@ -3,6 +3,7 @@
 #define SNOW_SHOT_PRESENTATION_COLLAGESETTINGSSTORE_H
 
 #include "snow_shot/presentation/collagedocument.h"
+#include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/configurationstore.h"
 #include "snow_shot/storage/settingsadapters.h"
 
@@ -84,7 +85,153 @@ class CollageSettingsStore final {
         return m_configuration.setValues(values);
     }
 
+    [[nodiscard]] CollagePdfSettings readPdf() const {
+        CollagePdfSettings result;
+        const auto value = [&](const QString& field) {
+            return m_configuration.value(QStringLiteral("collage/pdf_") + field);
+        };
+        const QString paper = value(QStringLiteral("paper_size")).toString();
+        if (paper == QStringLiteral("a3"))
+            result.paperSize = CollagePdfPaperSize::A3;
+        else if (paper == QStringLiteral("a5"))
+            result.paperSize = CollagePdfPaperSize::A5;
+        else if (paper == QStringLiteral("b5"))
+            result.paperSize = CollagePdfPaperSize::B5;
+        else if (paper == QStringLiteral("letter"))
+            result.paperSize = CollagePdfPaperSize::Letter;
+        else if (paper == QStringLiteral("legal"))
+            result.paperSize = CollagePdfPaperSize::Legal;
+        else if (paper == QStringLiteral("custom"))
+            result.paperSize = CollagePdfPaperSize::Custom;
+        else if (paper == QStringLiteral("image_size"))
+            result.paperSize = CollagePdfPaperSize::ImageSize;
+        result.orientation =
+            value(QStringLiteral("orientation")).toString() == QStringLiteral("landscape")
+                ? CollagePdfOrientation::Landscape
+                : CollagePdfOrientation::Portrait;
+        result.customWidthMm = value(QStringLiteral("custom_width_mm")).toDouble(210);
+        result.customHeightMm = value(QStringLiteral("custom_height_mm")).toDouble(297);
+        result.marginTopMm = value(QStringLiteral("margin_top_mm")).toDouble(10);
+        // The single margin control uses the previous top-margin preference on every side.
+        result.marginBottomMm = result.marginTopMm;
+        result.marginLeftMm = result.marginTopMm;
+        result.marginRightMm = result.marginTopMm;
+        result.exportMode =
+            value(QStringLiteral("export_mode")).toString() == QStringLiteral("per_page")
+                ? CollagePdfExportMode::PerPage
+                : CollagePdfExportMode::Combined;
+        // Individual values can be valid while a hand-edited configuration or edits from
+        // independent windows produce an unusable combination. Start with a usable form.
+        return validateCollagePdfSettings(result).isEmpty() ? result : CollagePdfSettings{};
+    }
+
+    bool writePdf(const QString& field, const CollagePdfSettings& settings) const {
+        return writePdf(QStringList{field}, settings);
+    }
+
+    // Active page validation may ignore hidden drafts. Keep their edits pending until their
+    // values can be stored, without blocking independent preferences that are ready to persist.
+    [[nodiscard]] static QStringList persistablePdfFields(const QStringList& fields,
+                                                          const CollagePdfSettings& settings) {
+        QStringList result;
+        for (const auto& field : fields)
+            if (!pdfFieldValues(field, settings).isEmpty())
+                result.append(field);
+        return result;
+    }
+
+    bool writePdf(const QStringList& fields, const CollagePdfSettings& settings) const {
+        if (!validateCollagePdfSettings(settings).isEmpty())
+            return false;
+        QMap<QString, QJsonValue> values;
+        for (const QString& field : fields) {
+            const auto next = pdfFieldValues(field, settings);
+            if (next.isEmpty())
+                return false;
+            values.insert(next);
+        }
+        return m_configuration.setValues(values);
+    }
+
   private:
+    [[nodiscard]] static QMap<QString, QJsonValue>
+    pdfFieldValues(const QString& field, const CollagePdfSettings& settings) {
+        QMap<QString, QJsonValue> values;
+        if (field == QStringLiteral("margin_mm")) {
+            const double margin = settings.marginTopMm;
+            if (settings.marginBottomMm != margin || settings.marginLeftMm != margin ||
+                settings.marginRightMm != margin)
+                return {};
+            for (const auto* key :
+                 {"margin_top_mm", "margin_bottom_mm", "margin_left_mm", "margin_right_mm"})
+                values.insert(QStringLiteral("collage/pdf_") + QString::fromLatin1(key), margin);
+        } else {
+            QJsonValue value;
+            if (field == QStringLiteral("paper_size")) {
+                switch (settings.paperSize) {
+                case CollagePdfPaperSize::A3:
+                    value = QStringLiteral("a3");
+                    break;
+                case CollagePdfPaperSize::A4:
+                    value = QStringLiteral("a4");
+                    break;
+                case CollagePdfPaperSize::A5:
+                    value = QStringLiteral("a5");
+                    break;
+                case CollagePdfPaperSize::B5:
+                    value = QStringLiteral("b5");
+                    break;
+                case CollagePdfPaperSize::Letter:
+                    value = QStringLiteral("letter");
+                    break;
+                case CollagePdfPaperSize::Legal:
+                    value = QStringLiteral("legal");
+                    break;
+                case CollagePdfPaperSize::Custom:
+                    value = QStringLiteral("custom");
+                    break;
+                case CollagePdfPaperSize::ImageSize:
+                    value = QStringLiteral("image_size");
+                    break;
+                }
+            } else if (field == QStringLiteral("orientation")) {
+                if (settings.orientation != CollagePdfOrientation::Portrait &&
+                    settings.orientation != CollagePdfOrientation::Landscape)
+                    return {};
+                value = settings.orientation == CollagePdfOrientation::Portrait
+                            ? QStringLiteral("portrait")
+                            : QStringLiteral("landscape");
+            } else if (field == QStringLiteral("export_mode")) {
+                if (settings.exportMode != CollagePdfExportMode::Combined &&
+                    settings.exportMode != CollagePdfExportMode::PerPage)
+                    return {};
+                value = settings.exportMode == CollagePdfExportMode::Combined
+                            ? QStringLiteral("combined")
+                            : QStringLiteral("per_page");
+            } else if (field == QStringLiteral("custom_width_mm"))
+                value = settings.customWidthMm;
+            else if (field == QStringLiteral("custom_height_mm"))
+                value = settings.customHeightMm;
+            else if (field == QStringLiteral("margin_top_mm"))
+                value = settings.marginTopMm;
+            else if (field == QStringLiteral("margin_bottom_mm"))
+                value = settings.marginBottomMm;
+            else if (field == QStringLiteral("margin_left_mm"))
+                value = settings.marginLeftMm;
+            else if (field == QStringLiteral("margin_right_mm"))
+                value = settings.marginRightMm;
+            else
+                return {};
+            values.insert(QStringLiteral("collage/pdf_") + field, value);
+        }
+        // Use the same serialization and schema admission for eligibility and atomic writes.
+        // In particular, never publish a hidden NaN draft through JSON's conversion to null.
+        for (auto it = values.cbegin(); it != values.cend(); ++it)
+            if (!storage::ConfigurationSchema::normalize(it.key(), it.value()).valid)
+                return {};
+        return values;
+    }
+
     storage::ConfigurationStore& m_configuration;
 };
 

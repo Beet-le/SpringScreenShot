@@ -6,8 +6,11 @@
 
 #include <QColor>
 #include <QImage>
+#include <QMap>
 #include <QObject>
 #include <QRect>
+#include <QRectF>
+#include <QSizeF>
 #include <QString>
 #include <QStringList>
 #include <QTransform>
@@ -20,6 +23,46 @@ namespace snow_shot::presentation {
 
 enum class CollageDirection { Vertical, Horizontal, Custom };
 enum class CollageSizing { Original, Uniform };
+enum class CollageOutputType { StaticImage, PdfDocument };
+enum class CollagePdfPaperSize { A3, A4, A5, B5, Letter, Legal, Custom, ImageSize };
+enum class CollagePdfOrientation { Portrait, Landscape };
+enum class CollagePdfExportMode { Combined, PerPage };
+
+struct CollagePdfSettings final {
+    CollagePdfPaperSize paperSize = CollagePdfPaperSize::A4;
+    CollagePdfOrientation orientation = CollagePdfOrientation::Portrait;
+    qreal customWidthMm = 210;
+    qreal customHeightMm = 297;
+    qreal marginTopMm = 10;
+    qreal marginBottomMm = 10;
+    qreal marginLeftMm = 10;
+    qreal marginRightMm = 10;
+    CollagePdfExportMode exportMode = CollagePdfExportMode::Combined;
+
+    // Treat two NaNs as the same incomplete field so UI refreshes do not emit repeatedly.
+    friend bool operator==(const CollagePdfSettings&, const CollagePdfSettings&);
+};
+
+struct CollagePdfPageLayout final {
+    QSizeF pageMillimeters;
+    QRectF contentMillimeters;
+    QRectF imageMillimeters;
+    QString error;
+    QMap<QString, QString> fieldErrors;
+
+    [[nodiscard]] bool isValid() const {
+        return pageMillimeters.isValid() && !pageMillimeters.isEmpty() &&
+               !contentMillimeters.isEmpty() && !imageMillimeters.isEmpty() && error.isEmpty() &&
+               fieldErrors.isEmpty();
+    }
+};
+
+// Validation keys match CollageSettingsStore's PDF field names. Geometry is top-left based,
+// in millimeters, and is shared by screen previews and PDF export. ImageSize uses transformed
+// pixels at 96 DPI with no margins or paper-orientation adjustment.
+[[nodiscard]] QMap<QString, QString> validateCollagePdfSettings(const CollagePdfSettings& settings);
+[[nodiscard]] CollagePdfPageLayout
+calculateCollagePdfPageLayout(QSize transformedPixels, const CollagePdfSettings& settings);
 
 struct CollageSettings final {
     CollageDirection direction = CollageDirection::Vertical;
@@ -71,8 +114,15 @@ class CollageDocument final : public QObject {
     ~CollageDocument() override;
 
     [[nodiscard]] const QVector<CollageItem>& items() const;
+    // Changes only when the ordered image collection or one of its transforms changes.
+    [[nodiscard]] quint64 contentRevision() const;
     [[nodiscard]] CollageSettings settings() const;
     void setSettings(const CollageSettings& settings);
+    [[nodiscard]] CollageOutputType outputType() const;
+    void setOutputType(CollageOutputType type);
+    [[nodiscard]] CollagePdfSettings pdfSettings() const;
+    void setPdfSettings(const CollagePdfSettings& settings);
+    [[nodiscard]] CollagePdfSettings lastValidPdfSettings() const;
     [[nodiscard]] CollageLayout layout() const;
     [[nodiscard]] QString lastError() const;
 
@@ -81,6 +131,8 @@ class CollageDocument final : public QObject {
     bool remove(quint64 id);
     void clear();
     bool swapItems(quint64 first, quint64 second);
+    // finalIndex names the desired position after moving, rather than an insertion boundary.
+    bool moveItem(quint64 id, int finalIndex);
     bool rotate(quint64 id, bool clockwise);
     bool flip(quint64 id, bool horizontal);
     bool resetTransform(quint64 id);

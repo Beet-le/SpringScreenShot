@@ -1078,6 +1078,95 @@ void zoomedCanvasUsesFullResolutionPixels() {
         "zoomed previews must draw full-resolution source pixels while preserving the original");
 }
 
+void sequenceNumbersUsePdfBadgeStyle() {
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto originalTheme = themes.config();
+    for (const auto theme : {adqt::theme::ThemeScheme::Light, adqt::theme::ThemeScheme::Dark}) {
+        themes.setPreset(theme);
+        ImageSplitDocument document;
+        QImage source({1000, 1000}, QImage::Format_ARGB32_Premultiplied);
+        source.fill(Qt::white);
+        document.setImage(source);
+        auto settings = document.settings();
+        settings.direction = ImageSplitDirection::Grid;
+        settings.rows = 10;
+        settings.columns = 10;
+        require(document.setSettings(settings), "badge fixture must produce one hundred results");
+        ImageSplitPreviewCanvas canvas(&document);
+        canvas.resize(1120, 1080);
+        canvas.show();
+        pump();
+        const auto state = document.state();
+        for (const int fontSize : {13, 17}) {
+            auto font = canvas.font();
+            font.setPixelSize(fontSize);
+            canvas.setFont(font);
+            pump();
+            for (const qreal scale : {1.0, 1.25, 1.5, 2.0}) {
+                const auto output = renderCanvas(canvas, scale);
+                for (const int index : {0, 9, 99}) {
+                    const auto label = QString::number(index + 1);
+                    const QSize size(
+                        std::max(24, canvas.fontMetrics().horizontalAdvance(label) + 12), 22);
+                    const auto origin =
+                        canvas.imageToViewport(document.layout().regionAt(index).topLeft()) +
+                        QPointF(4, 4);
+                    // Render the existing PDF page label independently as the visual reference.
+                    QLabel reference;
+                    reference.setFont(canvas.font());
+                    reference.setAlignment(Qt::AlignCenter);
+                    reference.setText(label);
+                    reference.setStyleSheet(QStringLiteral(
+                        "color: white; background-color: rgba(0, 0, 0, 130); border-radius: 4px;"));
+                    reference.resize(size);
+                    QImage expected(output.size(), QImage::Format_ARGB32_Premultiplied);
+                    expected.setDevicePixelRatio(scale);
+                    expected.fill(Qt::white);
+                    QPainter painter(&expected);
+                    painter.translate(origin);
+                    reference.render(&painter, {}, {}, QWidget::DrawChildren);
+                    painter.end();
+                    const QRect bounds(qFloor(origin.x() * scale), qFloor(origin.y() * scale),
+                                       qCeil(size.width() * scale), qCeil(size.height() * scale));
+                    int different = 0;
+                    for (int y = bounds.top(); y <= bounds.bottom(); ++y) {
+                        for (int x = bounds.left(); x <= bounds.right(); ++x) {
+                            const auto actual = output.pixelColor(x, y);
+                            const auto wanted = expected.pixelColor(x, y);
+                            if (std::abs(actual.red() - wanted.red()) > 8 ||
+                                std::abs(actual.green() - wanted.green()) > 8 ||
+                                std::abs(actual.blue() - wanted.blue()) > 8)
+                                ++different;
+                        }
+                    }
+                    const bool matches = different < bounds.width() * bounds.height() / 10;
+                    if (!matches) {
+                        std::cerr << "Badge " << label.toStdString() << ", font " << fontSize
+                                  << ", scale " << scale << ": " << different << " of "
+                                  << bounds.width() * bounds.height() << " pixels differ\n";
+                        const auto directory =
+                            qEnvironmentVariable("SNOW_TEST_IMAGE_SPLIT_CANVAS_ARTIFACT_DIR");
+                        if (!directory.isEmpty()) {
+                            output.copy(bounds).save(QDir(directory).filePath("badge-actual.png"));
+                            expected.copy(bounds).save(QDir(directory).filePath("badge-pdf.png"));
+                        }
+                    }
+                    require(matches,
+                            "result ordinals must match PDF badge size, corners, opacity and font "
+                            "in both themes at every DPI");
+                    const auto fill = output.pixelColor(qFloor((origin.x() + 5) * scale),
+                                                        qFloor((origin.y() + 2) * scale));
+                    require(fill == QColor(125, 125, 125),
+                            "sequence badges must retain the PDF translucent black background");
+                }
+            }
+        }
+        require(document.state() == state && document.image() == source,
+                "sequence number styling must preserve split geometry and source pixels");
+    }
+    themes.setConfig(originalTheme);
+}
+
 void denseGuidesDoNotHideLaterReadableRegions() {
     ImageSplitDocument document;
     QImage source(QSize(5001, 300), QImage::Format_ARGB32_Premultiplied);
@@ -1812,6 +1901,7 @@ int main(int argc, char** argv) {
             transformedRulersAndManualGestures();
             splitLineSelectionFollowsCrossing();
             zoomedCanvasUsesFullResolutionPixels();
+            sequenceNumbersUsePdfBadgeStyle();
             denseGuidesDoNotHideLaterReadableRegions();
             elongatedImagesKeepViewportAndLineInteractionsUsable();
             themesHighDpiAndLanguage();
@@ -1836,6 +1926,7 @@ int main(int argc, char** argv) {
         invalidDirectionDoesNotEditThePreviousAxis();
         submissionCommitsValidPendingDraftsOnly();
         zoomedCanvasUsesFullResolutionPixels();
+        sequenceNumbersUsePdfBadgeStyle();
         denseGuidesDoNotHideLaterReadableRegions();
         elongatedImagesKeepViewportAndLineInteractionsUsable();
         canvasBackgroundAndRulersFollowImage();

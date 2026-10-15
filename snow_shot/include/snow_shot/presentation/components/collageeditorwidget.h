@@ -9,6 +9,7 @@
 #include <memory>
 
 namespace snow_shot::presentation::components {
+class CollagePdfPageGrid;
 
 class CollagePreviewCanvas final : public QWidget {
     Q_OBJECT
@@ -22,6 +23,7 @@ class CollagePreviewCanvas final : public QWidget {
     void centerImage(quint64 id);
     void preserveViewport();
     void setEditingEnabled(bool enabled);
+    void setRenderingEnabled(bool enabled);
     void retranslateUi();
 
   protected:
@@ -52,6 +54,7 @@ class CollageEditorWidget final : public QWidget {
     void setExportBusy(bool busy);
     void retranslateUi();
     [[nodiscard]] CollagePreviewCanvas* canvas() const;
+    [[nodiscard]] CollagePdfPageGrid* pdfGrid() const;
     [[nodiscard]] QWidget* outputDescriptionWidget() const;
 
   signals:

@@ -8,6 +8,7 @@
 #include "antd_icons.h"
 #include "snow_shot/presentation/screenshotwheelinput.h"
 #include "snow_shot/presentation/styles/thememanager.h"
+#include "snow_shot/presentation/styles/sequencenumberbadgestyle.h"
 #include "snow_shot/presentation/windowshortcutmanager.h"
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "theme/theme_manager.h"
@@ -53,6 +54,7 @@ using adqt::widgets::AdFormItem;
 using adqt::widgets::AdInputNumber;
 using adqt::widgets::AdScrollArea;
 using adqt::widgets::AdSegmented;
+using styles::SequenceNumberBadgeStyle;
 constexpr qreal kRulerHeight = 28;
 constexpr qreal kRulerWidth = 38;
 constexpr qreal kPositionBadgeHeight = 22;
@@ -515,10 +517,10 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent* event) {
         };
         drawLines(true);
         drawLines(false);
-        QFont numberFont = font();
-        numberFont.setPixelSize(12);
-        painter.setFont(numberFont);
-        const QFontMetrics metrics(numberFont);
+        painter.setFont(font());
+        const QFontMetrics metrics(font());
+        constexpr int minimumCellHeight =
+            SequenceNumberBadgeStyle::height + SequenceNumberBadgeStyle::inset + 2;
         const auto readableCells = [&](bool horizontal, qreal minimumSpan) {
             QVector<int> result;
             const auto& lines = horizontal ? layout.verticalLines : layout.horizontalLines;
@@ -548,8 +550,10 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent* event) {
             sample(last);
             return result;
         };
-        const auto readableColumns = readableCells(true, metrics.horizontalAdvance(u'1') + 16);
-        const auto readableRows = readableCells(false, 26);
+        const auto readableColumns = readableCells(
+            true, SequenceNumberBadgeStyle::size(metrics, QStringLiteral("1")).width() +
+                      SequenceNumberBadgeStyle::inset + 2);
+        const auto readableRows = readableCells(false, minimumCellHeight);
         const qint64 columns = layout.verticalLines.size() + 1;
         for (const int row : readableRows) {
             for (const int column : readableColumns) {
@@ -560,22 +564,20 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent* event) {
                 // An ordinal stays at the top of its cell. Avoid preparing text for badges that
                 // cannot intersect a narrow guide or coordinate-hint repaint.
                 if (!damage.intersects(
-                        QRectF(target.topLeft(), QSizeF(target.width(), 26)).toAlignedRect()))
+                        QRectF(target.topLeft(), QSizeF(target.width(), minimumCellHeight))
+                            .toAlignedRect()))
                     continue;
                 const auto label = QString::number(index + 1);
-                const QSizeF badge(metrics.horizontalAdvance(label) + 10, 20);
-                if (target.width() < badge.width() + 6)
+                const auto badge = SequenceNumberBadgeStyle::size(metrics, label);
+                if (target.width() < badge.width() + SequenceNumberBadgeStyle::inset + 2)
                     continue;
-                const QRectF badgeRect(target.topLeft() + QPointF(4, 4), badge);
+                const QRectF badgeRect(target.topLeft() + QPointF(SequenceNumberBadgeStyle::inset,
+                                                                  SequenceNumberBadgeStyle::inset),
+                                       QSizeF(badge));
                 if (!badgeRect.intersects(viewport) ||
                     !damage.intersects(badgeRect.adjusted(-1, -1, 1, 1).toAlignedRect()))
                     continue;
-                painter.setRenderHint(QPainter::Antialiasing);
-                painter.setPen(Qt::NoPen);
-                painter.setBrush(Qt::black);
-                painter.drawRoundedRect(badgeRect, 3, 3);
-                painter.setPen(Qt::white);
-                painter.drawText(badgeRect, Qt::AlignCenter, label);
+                SequenceNumberBadgeStyle::paint(painter, badgeRect, label);
             }
         }
     }

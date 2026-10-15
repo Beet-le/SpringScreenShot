@@ -291,8 +291,8 @@ void selectionOutlineUsesThreePixelBorder() {
                         const std::array base{before.red(), before.green(), before.blue()};
                         const std::array painted{after.red(), after.green(), after.blue()};
                         const std::array stroke{0x40, 0x96, 0xff};
-                        int channel = 0;
-                        for (int i = 1; i < 3; ++i) {
+                        std::size_t channel = 0;
+                        for (std::size_t i = 1; i < 3; ++i) {
                             if (std::abs(stroke[i] - base[i]) >
                                 std::abs(stroke[channel] - base[channel]))
                                 channel = i;
@@ -368,8 +368,8 @@ void replacementHighlightMatchesDrawEngineMarquee() {
                                                          painted.blue()};
                         const std::array stroke{0x40, 0x96, 0xff};
                         std::array<qreal, 3> tinted{};
-                        int channel = 0;
-                        for (int i = 0; i < 3; ++i) {
+                        std::size_t channel = 0;
+                        for (std::size_t i = 0; i < 3; ++i) {
                             tinted[i] =
                                 baseChannels[i] + (stroke[i] - baseChannels[i]) * .2 * fillCoverage;
                             if (std::abs(stroke[i] - tinted[i]) >

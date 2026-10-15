@@ -432,8 +432,8 @@ void transformedRowsPreserveNativePixelsAndBoundMemory() {
         const auto source = colors.convertToFormat(format);
         for (const auto& transform : transforms) {
             const auto native = snowCanvasTransformImage(source, transform);
-            QVector<CollageItem> expectedItems{{1, 1, native, {}, {}, {}, {}}};
-            QVector<CollageItem> actualItems{{1, 1, source, {}, transform, {}, {}}};
+            QVector<CollageItem> expectedItems{{1, 1, native, {}, {}, {}, {}, {}}};
+            QVector<CollageItem> actualItems{{1, 1, source, {}, transform, {}, {}, {}}};
             const auto expected =
                 materializeCollageRows(prepareCollageRows(expectedItems, settings));
             auto rows = prepareCollageRows(actualItems, settings);
@@ -462,8 +462,8 @@ void transformedRowsPreserveNativePixelsAndBoundMemory() {
     const auto highDpiKey = highDpiSource.cacheKey();
     for (const auto& transform : transforms) {
         const auto native = snowCanvasTransformImage(highDpiSource, transform);
-        const QVector<CollageItem> expectedItems{{1, 1, native, {}, {}, {}, {}}};
-        const QVector<CollageItem> actualItems{{1, 1, highDpiSource, {}, transform, {}, {}}};
+        const QVector<CollageItem> expectedItems{{1, 1, native, {}, {}, {}, {}, {}}};
+        const QVector<CollageItem> actualItems{{1, 1, highDpiSource, {}, transform, {}, {}, {}}};
         const auto expected = materializeCollageRows(prepareCollageRows(expectedItems, settings));
         const auto actual = materializeCollageRows(prepareCollageRows(actualItems, settings));
         require(!actual.isNull() && actual == expected && native.devicePixelRatio() == 2 &&
@@ -796,6 +796,7 @@ void scalingAndLargeAxes() {
                       {},
                       {},
                       QString::number(index),
+                      {},
                       {}});
     settings.direction = CollageDirection::Horizontal;
     settings.sizing = CollageSizing::Original;
@@ -808,7 +809,7 @@ void scalingAndLargeAxes() {
     thinItems.reserve(140000);
     const QImage thinImage = fixture({1000, 1});
     for (int index = 0; index < 140000; ++index)
-        thinItems.append({quint64(index + 1), 1, thinImage, {}, {}, {}, {}});
+        thinItems.append({quint64(index + 1), 1, thinImage, {}, {}, {}, {}, {}});
     const auto thinLayout = calculateCollageLayout(thinItems, settings);
     require(thinLayout.isValid() && thinLayout.size == QSize(140000000, 1),
             "very wide single-row geometry fits the output image limit");

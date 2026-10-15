@@ -954,6 +954,7 @@ set(SNOW_SHOT_SETTINGS_SOURCES
     include/snow_shot/presentation/components/confirmationskipbutton.h
     include/snow_shot/presentation/components/overlaycontrolbutton.h
     include/snow_shot/presentation/components/canvasactiontoolbar.h
+    include/snow_shot/presentation/styles/sequencenumberbadgestyle.h
     include/snow_shot/presentation/components/imagedropsurface.h
     include/snow_shot/presentation/components/screenshothistorypagewidget.h
     include/snow_shot/presentation/components/emptystateicon.h
@@ -1264,9 +1265,15 @@ add_library(snow_shot_collage STATIC
     include/snow_shot/presentation/collagewindowcoordinator.h
     include/snow_shot/presentation/collagesettingsstore.h
     include/snow_shot/presentation/components/collageeditorwidget.h
+    include/snow_shot/presentation/components/collagepdfpagegrid.h
+    include/snow_shot/presentation/components/collagepdfsettingswidget.h
+    include/snow_shot/presentation/collagepdfexport.h
     src/presentation/collage/collagewindow.cpp
     src/presentation/collage/collagewindowcoordinator.cpp
-    src/presentation/collage/collageeditorwidget.cpp)
+    src/presentation/collage/collageeditorwidget.cpp
+    src/presentation/collage/collagepdfpagegrid.cpp
+    src/presentation/collage/collagepdfsettingswidget.cpp
+    src/presentation/collage/collagepdfexport.cpp)
 target_include_directories(snow_shot_collage PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
 target_link_libraries(snow_shot_collage PUBLIC snow_shot_collage_core snow_shot_settings)
 
@@ -1305,6 +1312,19 @@ set(SNOW_SHOT_COLLAGE_EXPORT_TEST_SOURCES
     src/presentation/ocr/screenshotocrtextlayout.cpp
     src/presentation/overlay/screenshotselectionshadowrenderer.cpp)
 if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-collage-pdf-document-tests tests/collage_pdf_document_tests.cpp)
+    target_link_libraries(snow-shot-collage-pdf-document-tests PRIVATE
+        snow_shot_collage_core snow_shot_storage)
+    add_test(NAME snow-shot-collage-pdf-document-tests COMMAND snow-shot-collage-pdf-document-tests)
+    set_tests_properties(snow-shot-collage-pdf-document-tests PROPERTIES LABELS unit)
+    add_executable(snow-shot-collage-pdf-export-tests tests/collage_pdf_export_tests.cpp
+        src/presentation/collage/collagepdfexport.cpp
+        src/presentation/services/screenshotpdfexport.cpp)
+    target_include_directories(snow-shot-collage-pdf-export-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
+    target_link_libraries(snow-shot-collage-pdf-export-tests PRIVATE snow_shot_collage_core)
+    add_test(NAME snow-shot-collage-pdf-export-tests COMMAND snow-shot-collage-pdf-export-tests)
+    set_tests_properties(snow-shot-collage-pdf-export-tests PROPERTIES LABELS unit)
     add_executable(snow-shot-collage-document-tests tests/collage_document_tests.cpp)
     target_link_libraries(snow-shot-collage-document-tests PRIVATE snow_shot_collage_core)
     add_test(NAME snow-shot-collage-document-tests COMMAND snow-shot-collage-document-tests)
@@ -1323,6 +1343,22 @@ if(SNOW_SHOT_BUILD_TESTS)
         add_test(NAME snow-shot-collage-${_collage_test}-tests
             COMMAND snow-shot-collage-${_collage_test}-tests -platform offscreen)
         set_tests_properties(snow-shot-collage-${_collage_test}-tests PROPERTIES LABELS unit
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
+    foreach(_collage_pdf_test IN ITEMS grid settings window)
+        add_executable(snow-shot-collage-pdf-${_collage_pdf_test}-tests
+            tests/collage_pdf_${_collage_pdf_test}_tests.cpp ${SNOW_SHOT_COLLAGE_EXPORT_TEST_SOURCES})
+        target_include_directories(snow-shot-collage-pdf-${_collage_pdf_test}-tests PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/image"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/services")
+        target_link_libraries(snow-shot-collage-pdf-${_collage_pdf_test}-tests PRIVATE
+            snow_shot_collage snow_shot_diagnostics)
+        snow_shot_import_offscreen_platform(snow-shot-collage-pdf-${_collage_pdf_test}-tests)
+        snow_shot_add_translations(snow-shot-collage-pdf-${_collage_pdf_test}-tests)
+        add_test(NAME snow-shot-collage-pdf-${_collage_pdf_test}-tests
+            COMMAND snow-shot-collage-pdf-${_collage_pdf_test}-tests -platform offscreen)
+        set_tests_properties(snow-shot-collage-pdf-${_collage_pdf_test}-tests PROPERTIES LABELS unit
             ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endforeach()
@@ -1414,6 +1450,13 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
 if(SNOW_APPS_BUILD_BENCHMARKS)
+    add_executable(snow-shot-collage-pdf-performance-benchmark
+        tests/collage_pdf_performance_benchmark.cpp ${SNOW_SHOT_COLLAGE_EXPORT_TEST_SOURCES})
+    target_link_libraries(snow-shot-collage-pdf-performance-benchmark PRIVATE
+        snow_shot_collage snow_shot_diagnostics)
+    target_include_directories(snow-shot-collage-pdf-performance-benchmark PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
+    snow_shot_import_offscreen_platform(snow-shot-collage-pdf-performance-benchmark)
     add_executable(snow-shot-collage-performance-benchmark tests/collage_performance_benchmark.cpp
         ${SNOW_SHOT_COLLAGE_EXPORT_TEST_SOURCES})
     target_link_libraries(snow-shot-collage-performance-benchmark PRIVATE

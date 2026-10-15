@@ -137,10 +137,10 @@ AreaSpan areaSpan(int sourceSize, int outputSize, int outputIndex) {
 }
 
 void addPixel(ChannelSums& sums, QRgb pixel, int weight) {
-    sums[0] += std::uint64_t(qRed(pixel)) * weight;
-    sums[1] += std::uint64_t(qGreen(pixel)) * weight;
-    sums[2] += std::uint64_t(qBlue(pixel)) * weight;
-    sums[3] += std::uint64_t(qAlpha(pixel)) * weight;
+    sums[0] += std::uint64_t(qRed(pixel)) * std::uint64_t(weight);
+    sums[1] += std::uint64_t(qGreen(pixel)) * std::uint64_t(weight);
+    sums[2] += std::uint64_t(qBlue(pixel)) * std::uint64_t(weight);
+    sums[3] += std::uint64_t(qAlpha(pixel)) * std::uint64_t(weight);
 }
 
 class PremultipliedPixels final {
@@ -232,15 +232,15 @@ class PremultipliedPixels final {
                 return false;
             const int count = std::min(available, span.last - first);
             for (int x = 0; x < count; ++x) {
-                interior[0] += qRed(data[x]);
-                interior[1] += qGreen(data[x]);
-                interior[2] += qBlue(data[x]);
-                interior[3] += m_opaque ? 255 : qAlpha(data[x]);
+                interior[0] += std::uint64_t(qRed(data[x]));
+                interior[1] += std::uint64_t(qGreen(data[x]));
+                interior[2] += std::uint64_t(qBlue(data[x]));
+                interior[3] += std::uint64_t(m_opaque ? 255 : qAlpha(data[x]));
             }
             first += count;
         }
         for (size_t channel = 0; channel < sums.size(); ++channel)
-            sums[channel] += interior[channel] * outputWidth;
+            sums[channel] += interior[channel] * std::uint64_t(outputWidth);
         return pixel(span.last, span.lastWeight);
     }
 

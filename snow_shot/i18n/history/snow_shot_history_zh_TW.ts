@@ -4,6 +4,30 @@
     <context>
         <name>CollageDocument</name>
         <message>
+            <source>Enter a nonnegative page margin.</source>
+            <translation>請輸入非負的頁面邊界。</translation>
+        </message>
+        <message>
+            <source>Enter a positive paper dimension.</source>
+            <translation>請輸入正數的紙張尺寸。</translation>
+        </message>
+        <message>
+            <source>Select a paper orientation.</source>
+            <translation>請選擇紙張方向。</translation>
+        </message>
+        <message>
+            <source>Select a paper size.</source>
+            <translation>請選擇紙張大小。</translation>
+        </message>
+        <message>
+            <source>Select an export mode.</source>
+            <translation>請選擇匯出模式。</translation>
+        </message>
+        <message>
+            <source>The PDF page settings are invalid.</source>
+            <translation>PDF 頁面設定無效。</translation>
+        </message>
+        <message>
             <source>The collage exceeds the 8 GiB image limit. Try fewer images or smaller layout settings.</source>
             <translation>圖片拼接超過了 8 GiB 影像限制。請減少影像數量或調小版面設定。</translation>
         </message>
@@ -24,6 +48,14 @@
             <translation>圖片拼接版面設定無效。</translation>
         </message>
         <message>
+            <source>The margins must leave a usable content area.</source>
+            <translation>頁面邊界必須保留可用的內容區域。</translation>
+        </message>
+        <message>
+            <source>The paper dimension exceeds the PDF size limit.</source>
+            <translation>紙張尺寸超過了 PDF 大小限制。</translation>
+        </message>
+        <message>
             <source>There is not enough available memory for this collage operation. Try fewer images or close other collage windows.</source>
             <translation>可用記憶體不足，無法執行此圖片拼接操作。請減少影像數量或關閉其他圖片拼接視窗。</translation>
         </message>
@@ -37,6 +69,10 @@
         <message>
             <source> px</source>
             <translation> 像素</translation>
+        </message>
+        <message>
+            <source>%1 × %2 mm</source>
+            <translation>%1 × %2 公釐</translation>
         </message>
         <message>
             <source>%1 × %2 px</source>
@@ -151,6 +187,10 @@
             <translation>影像間距單位</translation>
         </message>
         <message>
+            <source>Image type</source>
+            <translation>影像類型</translation>
+        </message>
+        <message>
             <source>Layout direction</source>
             <translation>版面方向</translation>
         </message>
@@ -173,6 +213,10 @@
         <message>
             <source>Outer border unit</source>
             <translation>外邊框單位</translation>
+        </message>
+        <message>
+            <source>PDF document</source>
+            <translation>PDF 文件</translation>
         </message>
         <message>
             <source>Percentage</source>
@@ -227,8 +271,16 @@
             <translation>選取以將此影像置中；拖到另一影像上以交換位置</translation>
         </message>
         <message>
+            <source>Static image</source>
+            <translation>靜態影像</translation>
+        </message>
+        <message>
             <source>Total: %1 images</source>
             <translation>總計：%1 張影像</translation>
+        </message>
+        <message>
+            <source>Total: %1 pages</source>
+            <translation>總計：%1 頁</translation>
         </message>
         <message>
             <source>Uniform size</source>
@@ -245,6 +297,223 @@
         <message>
             <source>Yellow</source>
             <translation>黃色</translation>
+        </message>
+    </context>
+    <context>
+        <name>CollagePdfExport</name>
+        <message>
+            <source>Export was canceled.</source>
+            <translation>匯出已取消。</translation>
+        </message>
+        <message>
+            <source>No output destination was selected.</source>
+            <translation>未選擇輸出位置。</translation>
+        </message>
+        <message>
+            <source>Page %1 could not be exported: %2</source>
+            <translation>無法匯出第 %1 頁：%2</translation>
+        </message>
+        <message>
+            <source>The PDF could not be saved: %1</source>
+            <translation>無法儲存 PDF：%1</translation>
+        </message>
+        <message>
+            <source>The PDF settings or images are invalid.</source>
+            <translation>PDF 設定或影像無效。</translation>
+        </message>
+        <message>
+            <source>The image could not be prepared for PDF export.</source>
+            <translation>無法準備影像以供匯出為 PDF。</translation>
+        </message>
+        <message>
+            <source>The output folder could not be created.</source>
+            <translation>無法建立輸出資料夾。</translation>
+        </message>
+        <message>
+            <source>The selected PDF already exists. Choose another filename.</source>
+            <translation>所選 PDF 已存在，請選擇其他檔案名稱。</translation>
+        </message>
+        <message>
+            <source>There is not enough memory to export the PDF.</source>
+            <translation>記憶體不足，無法匯出 PDF。</translation>
+        </message>
+    </context>
+    <context>
+        <name>CollagePdfPageGrid</name>
+        <message>
+            <source>Add images</source>
+            <translation>新增影像</translation>
+        </message>
+        <message>
+            <source>Add images to create a PDF document</source>
+            <translation>新增影像以建立 PDF 文件</translation>
+        </message>
+        <message>
+            <source>Add multiple image files at once</source>
+            <translation>可一次加入多張圖片</translation>
+        </message>
+        <message>
+            <source>Clear</source>
+            <translation>清空</translation>
+        </message>
+        <message>
+            <source>Delete image</source>
+            <translation>刪除影像</translation>
+        </message>
+        <message>
+            <source>Drag image files here, or choose Add images</source>
+            <translation>將影像檔案拖曳至此處，或選擇「新增影像」</translation>
+        </message>
+        <message>
+            <source>Drag pages to reorder. Use the arrow keys to select a page and Enter to preview the original image.</source>
+            <translation>拖曳頁面以調整順序。使用方向鍵選取頁面，按 Enter 鍵預覽原始影像。</translation>
+        </message>
+        <message>
+            <source>Drop images to add pages</source>
+            <translation>放開滑鼠以新增頁面</translation>
+        </message>
+        <message>
+            <source>Flip horizontally</source>
+            <translation>水平翻轉</translation>
+        </message>
+        <message>
+            <source>Flip vertically</source>
+            <translation>垂直翻轉</translation>
+        </message>
+        <message>
+            <source>Image preview was cancelled.</source>
+            <translation>影像預覽已取消。</translation>
+        </message>
+        <message>
+            <source>PDF document pages</source>
+            <translation>PDF 文件頁面</translation>
+        </message>
+        <message>
+            <source>Page %1</source>
+            <translation>第 %1 頁</translation>
+        </message>
+        <message>
+            <source>Page %1: %2</source>
+            <translation>第 %1 頁：%2</translation>
+        </message>
+        <message>
+            <source>Preview original image</source>
+            <translation>預覽原始影像</translation>
+        </message>
+        <message>
+            <source>Replace image</source>
+            <translation>取代影像</translation>
+        </message>
+        <message>
+            <source>Reset transform</source>
+            <translation>重設變換</translation>
+        </message>
+        <message>
+            <source>Rotate clockwise by 90°</source>
+            <translation>順時針旋轉 90°</translation>
+        </message>
+        <message>
+            <source>Rotate counterclockwise by 90°</source>
+            <translation>逆時針旋轉 90°</translation>
+        </message>
+        <message>
+            <source>The original image is unavailable.</source>
+            <translation>原始影像無法使用。</translation>
+        </message>
+        <message>
+            <source>The page preview shows the last valid settings.</source>
+            <translation>頁面預覽使用上一次有效的設定。</translation>
+        </message>
+    </context>
+    <context>
+        <name>CollagePdfSettingsWidget</name>
+        <message>
+            <source>A3</source>
+            <translation>A3</translation>
+        </message>
+        <message>
+            <source>A4</source>
+            <translation>A4</translation>
+        </message>
+        <message>
+            <source>A5</source>
+            <translation>A5</translation>
+        </message>
+        <message>
+            <source>B5</source>
+            <translation>B5</translation>
+        </message>
+        <message>
+            <source>Combined export</source>
+            <translation>合併匯出</translation>
+        </message>
+        <message>
+            <source>Custom</source>
+            <translation>自訂</translation>
+        </message>
+        <message>
+            <source>Custom paper</source>
+            <translation>自訂紙張</translation>
+        </message>
+        <message>
+            <source>Custom paper height</source>
+            <translation>自訂紙張高度</translation>
+        </message>
+        <message>
+            <source>Custom paper width</source>
+            <translation>自訂紙張寬度</translation>
+        </message>
+        <message>
+            <source>Export mode</source>
+            <translation>匯出模式</translation>
+        </message>
+        <message>
+            <source>Height</source>
+            <translation>高度</translation>
+        </message>
+        <message>
+            <source>Image Size</source>
+            <translation>圖像大小</translation>
+        </message>
+        <message>
+            <source>Landscape</source>
+            <translation>橫向</translation>
+        </message>
+        <message>
+            <source>Legal</source>
+            <translation>Legal</translation>
+        </message>
+        <message>
+            <source>Letter</source>
+            <translation>Letter</translation>
+        </message>
+        <message>
+            <source>Page margin</source>
+            <translation>頁邊距</translation>
+        </message>
+        <message>
+            <source>Paper orientation</source>
+            <translation>紙張方向</translation>
+        </message>
+        <message>
+            <source>Paper size</source>
+            <translation>紙張大小</translation>
+        </message>
+        <message>
+            <source>Per-page export</source>
+            <translation>逐頁匯出</translation>
+        </message>
+        <message>
+            <source>Portrait</source>
+            <translation>直向</translation>
+        </message>
+        <message>
+            <source>Width</source>
+            <translation>寬度</translation>
+        </message>
+        <message>
+            <source>mm</source>
+            <translation>公釐</translation>
         </message>
     </context>
     <context>
@@ -268,6 +537,10 @@
         <message>
             <source>Cancel</source>
             <translation>取消</translation>
+        </message>
+        <message>
+            <source>Canceling PDF export…</source>
+            <translation>正在取消 PDF 匯出…</translation>
         </message>
         <message>
             <source>Clear all</source>
@@ -310,6 +583,10 @@
             <translation>無法開始匯出，請重試。</translation>
         </message>
         <message>
+            <source>Exporting PDF page %1 of %2: %3%</source>
+            <translation>正在匯出 PDF 第 %1 頁，共 %2 頁：%3%</translation>
+        </message>
+        <message>
             <source>Image loading could not be started. Try again.</source>
             <translation>無法開始載入影像，請重試。</translation>
         </message>
@@ -320,6 +597,22 @@
         <message>
             <source>Loading images: %1 of %2</source>
             <translation>正在載入影像：%1 / %2</translation>
+        </message>
+        <message>
+            <source>PDF documents</source>
+            <translation>PDF 文件</translation>
+        </message>
+        <message>
+            <source>PDF export was canceled. Your images and edits are preserved.</source>
+            <translation>PDF 匯出已取消。您的影像與編輯已保留。</translation>
+        </message>
+        <message>
+            <source>Page %1 was not saved.</source>
+            <translation>第 %1 頁未儲存。</translation>
+        </message>
+        <message>
+            <source>Pages %1–%2 were not saved.</source>
+            <translation>第 %1–%2 頁未儲存。</translation>
         </message>
         <message>
             <source>Pinned window %1</source>
@@ -342,8 +635,22 @@
             <translation>儲存</translation>
         </message>
         <message>
+            <source>Save PDF document</source>
+            <translation>儲存 PDF 文件</translation>
+        </message>
+        <message>
             <source>Save as file</source>
             <translation>儲存為檔案</translation>
+        </message>
+        <message>
+            <source>Saved pages: %1
+Files:
+%2
+%3</source>
+            <translation>已儲存頁面：%1
+檔案：
+%2
+%3</translation>
         </message>
         <message>
             <source>Saving collage…</source>
@@ -358,10 +665,18 @@
             <translation>截圖 %1</translation>
         </message>
         <message>
+            <source>Select destination folder</source>
+            <translation>選擇目的地資料夾</translation>
+        </message>
+        <message>
             <source>Some images could not be loaded:
 %1</source>
             <translation>部分影像無法載入：
 %1</translation>
+        </message>
+        <message>
+            <source>The PDFs could not be exported. Try again.</source>
+            <translation>無法匯出 PDF，請重試。</translation>
         </message>
         <message>
             <source>The file manager is unavailable. Open it and try again.</source>
