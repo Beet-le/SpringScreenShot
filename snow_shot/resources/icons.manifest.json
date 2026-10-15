@@ -951,6 +951,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "RecordingMicrophoneOff",
+      "name": "recording-microphone-off",
+      "source": "../src/presentation/components/icons/resources/recording-microphone-off.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "RecordingPostProcessing",
       "name": "recording-post-processing",
       "source": "../src/presentation/components/icons/resources/recording-post-processing.svg",
@@ -986,6 +994,14 @@
       "symbol": "RecordingResume",
       "name": "recording-resume",
       "source": "../src/presentation/components/icons/resources/recording-resume.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "RecordingSpeakerOff",
+      "name": "recording-speaker-off",
+      "source": "../src/presentation/components/icons/resources/recording-speaker-off.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

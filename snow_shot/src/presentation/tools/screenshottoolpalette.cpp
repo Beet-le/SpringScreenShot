@@ -5008,7 +5008,7 @@ bool ScreenshotToolPalette::activateToolFromToolbar(Tool tool, bool toggleVisibl
         toolbar_settings::DrawingSettings().alwaysShowFirstToolbarGroupButton();
     const bool alreadyActive =
         !toggleVisibleButton || fixedGroupButton ? m_activeTool.has_value() && *m_activeTool == tool
-        : requestedButton != nullptr             ? m_activeToolButton == requestedButton
+        : requestedButton != nullptr ? m_activeToolButton == requestedButton
                                      : m_activeTool.has_value() && *m_activeTool == tool;
     const Tool requestedTool = alreadyActive && tool != Tool::Select ? Tool::Select : tool;
     activateDrawingTool(requestedTool);
@@ -10202,13 +10202,13 @@ void ScreenshotToolPalette::updateRecordingControls() {
         const QColor microphoneIconColor =
             m_recordingMicrophoneEnabled ? scheme.map.colorSuccess : scheme.map.colorTextQuaternary;
 
-        // Match the original recording toolbar: this is always a text button,
-        // with a green microphone icon when the setting is enabled and a
-        // disabled-text icon when it is not.  Disabling interaction while
-        // recording must not alter that visual state.
+        // The audio setting controls both glyph and tint. Temporarily disabling
+        // interaction while recording must not imply that audio is muted.
         setScreenshotToolPaletteButtonActive(m_recordMicrophoneButton, false);
         m_recordMicrophoneButton->setIconRef(snow_shot::presentation::icons::withPrimaryColor(
-            custom_outlined_icons::RecordingMicrophone(), microphoneIconColor));
+            m_recordingMicrophoneEnabled ? custom_outlined_icons::RecordingMicrophone()
+                                         : custom_outlined_icons::RecordingMicrophoneOff(),
+            microphoneIconColor));
         m_recordMicrophoneButton->setEnabled(microphoneControlEnabled);
         if (m_recordMicrophoneGainPopover) {
             m_recordMicrophoneGainPopover->setAudioEnabled(m_recordingMicrophoneEnabled);
@@ -10229,12 +10229,12 @@ void ScreenshotToolPalette::updateRecordingControls() {
                                                 ? scheme.map.colorSuccess
                                                 : scheme.map.colorTextQuaternary;
 
-        // Keep the system-audio toggle visually consistent with the
-        // microphone toggle: no filled state, and disabling interaction must
-        // not change the icon color selected by the setting.
+        // Keep the speaker glyph and tint consistent with its audio setting.
         setScreenshotToolPaletteButtonActive(m_recordSystemAudioButton, false);
         m_recordSystemAudioButton->setIconRef(snow_shot::presentation::icons::withPrimaryColor(
-            outlined_icons::Sound(), systemAudioIconColor));
+            m_recordingSystemAudioEnabled ? outlined_icons::Sound()
+                                          : custom_outlined_icons::RecordingSpeakerOff(),
+            systemAudioIconColor));
         m_recordSystemAudioButton->setEnabled(systemAudioControlEnabled);
         if (m_recordSystemAudioGainPopover) {
             m_recordSystemAudioGainPopover->setAudioEnabled(m_recordingSystemAudioEnabled);
