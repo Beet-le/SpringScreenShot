@@ -15,6 +15,10 @@
 #include <iostream>
 #include <stdexcept>
 
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
+
 using namespace snow_shot::presentation;
 
 namespace {
@@ -111,6 +115,109 @@ void structure(const QByteArray& pdf, int pages) {
                 "every cross-reference entry must identify its own object");
     }
 }
+
+void publicationReleasesFiles(const QString& directory) {
+    CollageDocument document;
+    require(document.append(fixture(), QStringLiteral("source.png")), "fixture must import");
+    for (const auto mode : {CollagePdfExportMode::Combined, CollagePdfExportMode::PerPage}) {
+        const QDir output(
+            QDir(directory).filePath(QStringLiteral("publication-%1").arg(static_cast<int>(mode))));
+        CollagePdfSettings settings;
+        settings.exportMode = mode;
+        const QString destination = mode == CollagePdfExportMode::Combined
+                                        ? output.filePath(QStringLiteral("new.pdf"))
+                                        : output.path();
+        const auto result = exportCollagePdf(document.items(), settings, {destination});
+        require(result.succeeded(), qPrintable(result.errorMessage()));
+        require(result.paths.size() == 1 && result.completedPages == QVector<qsizetype>{1},
+                "new combined and per-page exports must publish their completed PDF");
+        structure(read(result.paths.first()), 1);
+        const QString moved = result.paths.first() + QStringLiteral(".moved");
+        require(QFile::rename(result.paths.first(), moved) && QFile::remove(moved),
+                "published PDFs must have no export-owned handle blocking rename or removal");
+        require(output.entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty(),
+                "successful publication must leave no temporary file or directory");
+    }
+}
+
+void combinedPublicationConflict(const QString& directory) {
+    const QDir output(QDir(directory).filePath(QStringLiteral("combined-conflict")));
+    const QString path = output.filePath(QStringLiteral("new.pdf"));
+    CollageDocument document;
+    require(document.append(fixture(), QStringLiteral("source.png")), "fixture must import");
+    bool raced = false;
+    const auto result = exportCollagePdf(document.items(), {}, {path}, {},
+                                         [&](const CollagePdfExportProgress& value) {
+                                             if (!raced && value.pageFraction >= 0.99) {
+                                                 raced = true;
+                                                 write(path, "created during export");
+                                             }
+                                         });
+    require(raced && !result.succeeded() && !result.cancelled && !result.error.isEmpty() &&
+                result.paths.isEmpty() && result.completedPages.isEmpty() &&
+                read(path) == "created during export",
+            "combined publication must preserve a destination created during PDF encoding");
+    require(output.entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot) ==
+                QStringList{QStringLiteral("new.pdf")},
+            "failed publication must remove its staging file and directory");
+    require(QFile::remove(path) && exportCollagePdf(document.items(), {}, {path}).succeeded(),
+            "publication failure must allow export to the same destination on retry");
+    structure(read(path), 1);
+}
+
+void cancellationCleansNewFiles(const QString& directory) {
+    CollageDocument document;
+    require(document.append(fixture(), QStringLiteral("source.png")), "fixture must import");
+    for (const auto mode : {CollagePdfExportMode::Combined, CollagePdfExportMode::PerPage}) {
+        const QDir output(
+            QDir(directory).filePath(QStringLiteral("cancel-new-%1").arg(static_cast<int>(mode))));
+        CollagePdfSettings settings;
+        settings.exportMode = mode;
+        const QString destination = mode == CollagePdfExportMode::Combined
+                                        ? output.filePath(QStringLiteral("new.pdf"))
+                                        : output.path();
+        bool cancelled = false;
+        const auto result = exportCollagePdf(
+            document.items(), settings, {destination}, [&] { return cancelled; },
+            [&](const CollagePdfExportProgress& value) {
+                if (value.pageFraction > 0.2)
+                    cancelled = true;
+            });
+        require(result.cancelled && result.paths.isEmpty() && result.completedPages.isEmpty(),
+                "cancellation before publication must not report any completed PDF");
+        require(output.entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty(),
+                "canceled new exports must remove every staging file and directory");
+        require(exportCollagePdf(document.items(), settings, {destination}).succeeded(),
+                "canceled exports must release their staging handles before retry");
+    }
+}
+
+#ifdef Q_OS_WIN
+void lockedDestinationPreservesOriginal(const QString& directory) {
+    const QDir output(QDir(directory).filePath(QStringLiteral("locked-destination")));
+    require(QDir().mkpath(output.path()), "locked destination directory must exist");
+    const QString path = output.filePath(QStringLiteral("locked.pdf"));
+    write(path, "original locked PDF");
+    CollageDocument document;
+    require(document.append(fixture(), QStringLiteral("source.png")), "fixture must import");
+    const HANDLE handle =
+        CreateFileW(reinterpret_cast<LPCWSTR>(path.utf16()), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    require(handle != INVALID_HANDLE_VALUE, "fixture must lock the existing destination");
+    const auto result = exportCollagePdf(document.items(), {}, {path, true});
+    CloseHandle(handle);
+    require(!result.succeeded() && !result.cancelled && !result.error.isEmpty() &&
+                result.paths.isEmpty() && result.completedPages.isEmpty() &&
+                read(path) == "original locked PDF",
+            "a real destination lock must report failure and preserve the original bytes");
+    require(output.entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot) ==
+                QStringList{QStringLiteral("locked.pdf")},
+            "a destination lock must not leave any temporary file or directory");
+    require(exportCollagePdf(document.items(), {}, {path, true}).succeeded(),
+            "authorized replacement must succeed after the destination lock is released");
+    structure(read(path), 1);
+}
+#endif
 
 void transformsAndSourceResolution(const QString& directory) {
     for (int rotation = 0; rotation < 4; ++rotation) {
@@ -326,7 +433,7 @@ void cancellationAndPartialFailure(const QString& directory) {
     require(partial.cancelled && partial.completedPages == QVector<qsizetype>{1} &&
                 partial.paths.size() == 1 && QFileInfo::exists(partial.paths.first()),
             "per-page cancellation must retain and identify only completed page files");
-    require(output.entryList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot).size() == 1,
+    require(output.entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).size() == 1,
             "cancellation must leave no unfinished staging file");
     const QDir failureOutput(QDir(directory).filePath(QStringLiteral("partial-failure")));
     auto invalidSource = snapshot;
@@ -347,8 +454,9 @@ void cancellationAndPartialFailure(const QString& directory) {
                 failure.completedPages == QVector<qsizetype>{1} && failure.paths.size() == 1 &&
                 failure.error.contains(QStringLiteral("Page 2")),
             "per-page failure must report its failing page and preserve completed page paths");
-    require(failureOutput.entryList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot).size() == 1,
-            "failed export must clean up every incomplete staging file");
+    require(
+        failureOutput.entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).size() == 1,
+        "failed export must clean up every incomplete staging file");
     require(exportCollagePdf(snapshot, {}, {QDir(directory).filePath(QStringLiteral("retry.pdf"))})
                 .succeeded(),
             "preserved editing content must export successfully on retry");
@@ -466,6 +574,12 @@ int main(int argc, char** argv) {
     try {
         QTemporaryDir temporary;
         require(temporary.isValid(), "PDF fixture directory must exist");
+        publicationReleasesFiles(temporary.path());
+        combinedPublicationConflict(temporary.path());
+        cancellationCleansNewFiles(temporary.path());
+#ifdef Q_OS_WIN
+        lockedDestinationPreservesOriginal(temporary.path());
+#endif
         transformsAndSourceResolution(temporary.path());
         combinedOrderAndGeometry(temporary.path());
         imageSizedPages(temporary.path());
