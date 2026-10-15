@@ -439,6 +439,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "BrushPressureSensitive",
+      "name": "brush-pressure-sensitive",
+      "source": "../src/presentation/components/icons/resources/brush-pressure-sensitive.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "BrushRegular",
+      "name": "brush-regular",
+      "source": "../src/presentation/components/icons/resources/brush-regular.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "ColorPicker",
       "name": "color-picker",
       "source": "../src/presentation/components/icons/resources/color-picker.svg",
@@ -591,6 +607,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "FillBorder",
+      "name": "fill-border",
+      "source": "../src/presentation/components/icons/resources/fill-border.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "FillSolid",
       "name": "fill-solid",
       "source": "../src/presentation/components/icons/resources/fill-solid.svg",
@@ -658,6 +682,22 @@
       "symbol": "Html",
       "name": "html",
       "source": "../src/presentation/components/icons/resources/html.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ImageSplitting",
+      "name": "image-splitting",
+      "source": "../src/presentation/components/icons/resources/image-splitting.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ImageStitching",
+      "name": "image-stitching",
+      "source": "../src/presentation/components/icons/resources/image-stitching.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

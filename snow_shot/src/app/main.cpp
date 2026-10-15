@@ -215,6 +215,7 @@ int main(int argc, char* argv[]) {
             SnowCaptureDirectRecordingConfig config{};
             config.version = SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION;
             config.struct_size = sizeof(config);
+            config.mouse_highlight_radius = 41;
             config.x = origin.x();
             config.y = origin.y();
             config.width = 321;
@@ -311,6 +312,7 @@ int main(int argc, char* argv[]) {
         SnowCaptureDirectRecordingConfig config{};
         config.version = SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION;
         config.struct_size = sizeof(config);
+        config.mouse_highlight_radius = 41;
         config.width = 640;
         config.height = 480;
         config.capture_backend = backend == u"dxgi" ? 1 : 2;

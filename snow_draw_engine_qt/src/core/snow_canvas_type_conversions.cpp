@@ -34,8 +34,12 @@ template <typename Enum> bool enumInRange(Enum value, Enum first, Enum last) {
     return raw >= static_cast<Underlying>(first) && raw <= static_cast<Underlying>(last);
 }
 
+bool validFillStyle(SnowCanvasFillStyle style) {
+    return enumInRange(style, SnowCanvasFillStyle::Line, SnowCanvasFillStyle::Border);
+}
+
 bool validShapeStyleEnums(const SnowCanvasShapeStyle& style) {
-    return enumInRange(style.fillStyle, SnowCanvasFillStyle::Line, SnowCanvasFillStyle::Solid) &&
+    return validFillStyle(style.fillStyle) &&
            enumInRange(style.startArrowhead, SnowCanvasArrowhead::None,
                        SnowCanvasArrowhead::IndentedTriangle) &&
            enumInRange(style.endArrowhead, SnowCanvasArrowhead::None,
@@ -49,7 +53,9 @@ bool validShapeStyleEnums(const SnowCanvasShapeStyle& style) {
            enumInRange(style.highlightShape, SnowCanvasHighlightShape::Rectangle,
                        SnowCanvasHighlightShape::Ellipse) &&
            enumInRange(style.shape, SnowCanvasRectangleShape::Rectangle,
-                       SnowCanvasRectangleShape::Diamond);
+                       SnowCanvasRectangleShape::Diamond) &&
+           enumInRange(style.brushMode, SnowCanvasBrushMode::Regular,
+                       SnowCanvasBrushMode::PressureSensitive);
 }
 
 } // namespace
@@ -410,6 +416,8 @@ SnowCanvasFillStyle toCanvasFillStyle(SnowFillStyle fillStyle) {
         return SnowCanvasFillStyle::CrossLine;
     case SNOW_FILL_STYLE_SOLID:
         return SnowCanvasFillStyle::Solid;
+    case SNOW_FILL_STYLE_BORDER:
+        return SnowCanvasFillStyle::Border;
     }
     return SnowCanvasFillStyle::Solid;
 }
@@ -422,6 +430,8 @@ SnowFillStyle toEngineFillStyle(SnowCanvasFillStyle fillStyle) {
         return SNOW_FILL_STYLE_CROSS_LINE;
     case SnowCanvasFillStyle::Solid:
         return SNOW_FILL_STYLE_SOLID;
+    case SnowCanvasFillStyle::Border:
+        return SNOW_FILL_STYLE_BORDER;
     }
     return SNOW_FILL_STYLE_SOLID;
 }
@@ -487,6 +497,9 @@ SnowCanvasShapeStyle toCanvasShapeStyle(const SnowShapeStyle& style) {
         style.shape == SNOW_RECTANGLE_SHAPE_ELLIPSE   ? SnowCanvasRectangleShape::Ellipse
         : style.shape == SNOW_RECTANGLE_SHAPE_DIAMOND ? SnowCanvasRectangleShape::Diamond
                                                       : SnowCanvasRectangleShape::Rectangle,
+        style.brush_mode == SNOW_BRUSH_MODE_PRESSURE_SENSITIVE
+            ? SnowCanvasBrushMode::PressureSensitive
+            : SnowCanvasBrushMode::Regular,
     };
 }
 
@@ -511,6 +524,9 @@ SnowShapeStyle toEngineShapeStyle(const SnowCanvasShapeStyle& style) {
         style.shape == SnowCanvasRectangleShape::Ellipse   ? SNOW_RECTANGLE_SHAPE_ELLIPSE
         : style.shape == SnowCanvasRectangleShape::Diamond ? SNOW_RECTANGLE_SHAPE_DIAMOND
                                                            : SNOW_RECTANGLE_SHAPE_RECTANGLE;
+    engineStyle.brush_mode = style.brushMode == SnowCanvasBrushMode::PressureSensitive
+                                 ? SNOW_BRUSH_MODE_PRESSURE_SENSITIVE
+                                 : SNOW_BRUSH_MODE_REGULAR;
     return engineStyle;
 }
 
@@ -860,14 +876,12 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
                      SnowCanvasFilterType::Brightness) ||
         !enumInRange(defaults.penFilter.type, SnowCanvasFilterType::Mosaic,
                      SnowCanvasFilterType::Brightness) ||
-        !enumInRange(defaults.text.fillStyle, SnowCanvasFillStyle::Line,
-                     SnowCanvasFillStyle::Solid) ||
+        !validFillStyle(defaults.text.fillStyle) ||
         !enumInRange(defaults.text.horizontalAlign, SnowCanvasTextHorizontalAlign::Left,
                      SnowCanvasTextHorizontalAlign::Right) ||
         !enumInRange(defaults.text.verticalAlign, SnowCanvasTextVerticalAlign::Top,
                      SnowCanvasTextVerticalAlign::Bottom) ||
-        !enumInRange(defaults.serialNumber.fillStyle, SnowCanvasFillStyle::Line,
-                     SnowCanvasFillStyle::Solid) ||
+        !validFillStyle(defaults.serialNumber.fillStyle) ||
         !enumInRange(defaults.serialNumber.strokeStyle, SnowCanvasStrokeStyle::Solid,
                      SnowCanvasStrokeStyle::Dotted) ||
         !enumInRange(defaults.serialNumber.type, SnowCanvasSerialNumberType::OutlinedCircle,

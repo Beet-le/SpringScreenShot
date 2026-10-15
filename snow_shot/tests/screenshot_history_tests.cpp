@@ -57,6 +57,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -1462,38 +1463,405 @@ void committedSelectionFollowsHistory(const QString& root) {
     ScreenshotSelectionModel selection;
     ScreenshotInteractionState interaction;
     ScreenshotIntelligentSelectionModel intelligent;
-    QVector<ScreenshotSelectionParams> committed;
     ScreenshotHistoryServiceContext context{displays, runtime, selection, interaction, intelligent};
-    context.selectionCommitted = [&](const ScreenshotSelectionParams& params) {
-        committed.push_back(params);
-    };
     ScreenshotHistoryService history(std::move(context), root);
+    const ScreenshotSelectionRestoreTarget target{QRect(0, 0, 200, 100), {}, false};
+    std::optional<ScreenshotSelectionParams> lastExported;
+    int exportedCount = 0;
     for (const auto source : {storage::CaptureHistorySource::CopiedToClipboard,
                               storage::CaptureHistorySource::SavedToFile,
                               storage::CaptureHistorySource::PinnedToScreen}) {
-        const qsizetype before = committed.size();
-        selection.setSelectionRect(QRect(10 + static_cast<int>(before), 20, 80, 50));
+        selection.setSelectionRect(QRect(10 + exportedCount, 20, 80, 50));
         auto entry = takeSnapshot(history.snapshotCurrent(true), "history snapshot failed");
+        entry.createdUtc = QDateTime::currentDateTimeUtc().addMSecs(exportedCount);
         const ScreenshotSelectionParams exported = entry.selection;
-        require(before == committed.size(), "snapshotting must not remember the selection");
+        require(history.latestSelectionParams(target) == lastExported,
+                "snapshotting must not remember the selection");
         selection.setSelectionRect(QRect(100, 5, 30, 20));
         entry.source = source;
         history.commit(std::move(entry));
-        require(committed.size() == before + 1 && committed.constLast() == exported,
-                "history commit must remember the exported snapshot for every destination");
         history.drainPendingWrites();
+        lastExported = exported;
+        ++exportedCount;
+        require(history.latestSelectionParams(target) == lastExported,
+                "every export destination must expose its history selection");
     }
-    const auto exportedSelections = committed;
     auto abandoned = history.snapshotCurrent(true);
     require(abandoned.has_value(), "abandoned export should have a valid snapshot");
     history.commit(ScreenshotHistoryEntry{});
-    require(committed == exportedSelections,
+    require(history.latestSelectionParams(target) == lastExported,
             "uncommitted exports and invalid history must not replace the previous selection");
     require(history.navigatePrevious(), "history navigation should start");
     waitForNavigation(history, "history navigation timed out");
     require(history.returnToCurrentScreenshot(), "live screenshot should be restored");
-    require(committed == exportedSelections,
+    require(history.latestSelectionParams(target) == lastExported,
             "browsing history must not replace the previous exported selection");
+}
+
+struct SelectionHistoryFixture {
+    const QRect bounds{0, 0, 200, 100};
+    ScreenshotDisplaySession displays;
+    SnowCanvasRuntime runtime;
+    ScreenshotSelectionModel selection;
+    ScreenshotInteractionState interaction;
+    ScreenshotIntelligentSelectionModel intelligent;
+    std::unique_ptr<storage::CaptureHistoryRepository> repository;
+    std::unique_ptr<ScreenshotHistoryService> history;
+    const QDateTime started = QDateTime::currentDateTimeUtc();
+
+    explicit SelectionHistoryFixture(const QString& root,
+                                     storage::CaptureHistoryRepositoryOptions options = {}) {
+        displays.appendDisplay(display(QStringLiteral("selection-history"),
+                                       QStringLiteral("Selection history"), bounds,
+                                       solidImage(bounds.size(), qRgb(20, 40, 60))));
+        selection.setSelectionRect(QRect(1, 1, 30, 20));
+        interaction.enterOverlayVisible(false);
+        repository = storage::makeCaptureHistoryRepository(root, std::move(options));
+        history = std::make_unique<ScreenshotHistoryService>(
+            ScreenshotHistoryServiceContext{displays, runtime, selection, interaction, intelligent},
+            *repository);
+    }
+
+    ScreenshotSelectionRestoreTarget target(QPoint origin = {}) const {
+        return {bounds, origin, false};
+    }
+
+    ScreenshotHistoryEntry entry(const ScreenshotSelectionParams& params, int order) const {
+        auto result = takeSnapshot(history->snapshotCurrent(true), "selection snapshot failed");
+        result.selection = params;
+        result.createdUtc = started.addMSecs(order);
+        return result;
+    }
+
+    QString commit(ScreenshotHistoryEntry entry, bool drain = true) {
+        const QString id = entry.id;
+        history->commit(std::move(entry));
+        if (drain)
+            history->drainPendingWrites();
+        return id;
+    }
+
+    bool apply(const ScreenshotSelectionParams& params) {
+        if (!selection.applyParams(params, bounds))
+            return false;
+        interaction.confirmSelection();
+        return true;
+    }
+};
+
+ScreenshotSelectionParams selectionHistoryParams(QRect rectangle, int radius, int shadowWidth,
+                                                 QColor shadowColor) {
+    ScreenshotSelectionParams params;
+    params.selection = rectangle;
+    params.radius = radius;
+    params.shadowWidth = shadowWidth;
+    params.shadowColor = shadowColor;
+    params.lockAspectRatio = true;
+    params.lockDragAspectRatio = true;
+    return params;
+}
+
+void selectionHistoryBrowsesRegionsAndEffects(const QString& root) {
+    SelectionHistoryFixture fixture(root);
+    auto older = selectionHistoryParams(QRect(20, 10, 50, 30), 4, 6, QColor(10, 30, 50, 90));
+    older.region = QRegion(older.selection).subtracted(QRect(30, 20, 10, 10));
+    const auto newest = selectionHistoryParams(QRect(100, 35, 80, 40), 12, 9, QColor(50, 80, 110));
+    fixture.commit(fixture.entry(older, 0));
+    fixture.commit(fixture.entry(older, 1));
+    fixture.commit(fixture.entry(newest, 2));
+    const auto target = fixture.target();
+    const QByteArray canvasBefore = fixture.runtime.serializeDocumentHistory();
+    const QImage imageBefore = fixture.displays.displayAt(0).image;
+    int applied = 0;
+    const auto apply = [&](const ScreenshotSelectionParams& params) {
+        ++applied;
+        return fixture.apply(params);
+    };
+    require(!fixture.history->browseNextSelection(target, apply) && applied == 0,
+            "forward selection history must do nothing before browsing begins");
+    require(fixture.history->latestSelectionParams(target) == newest &&
+                !fixture.history->browseNextSelection(target, apply),
+            "querying the latest selection must not start browsing");
+    require(fixture.history->browsePreviousSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == newest,
+            "first previous selection must apply the newest geometry and effects together");
+    require(!fixture.history->browseNextSelection(target, apply) && applied == 1,
+            "forward selection history must stop at the newest entry");
+    require(fixture.history->browsePreviousSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == older &&
+                fixture.history->browsePreviousSelection(target, apply) && applied == 3,
+            "selection history must preserve compound regions and repeated records");
+    require(!fixture.history->browsePreviousSelection(target, apply) && applied == 3,
+            "previous selection must stop at the oldest entry");
+    require(fixture.history->browseNextSelection(target, apply) &&
+                fixture.history->browseNextSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == newest,
+            "selection history must move forward through newer records");
+    require(!fixture.history->browsePreviousSelection(target, [](const auto&) { return false; }) &&
+                !fixture.history->browseNextSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == newest,
+            "a rejected restore must preserve both selection and browse position");
+    require(fixture.runtime.serializeDocumentHistory() == canvasBefore &&
+                equalPixels(fixture.displays.displayAt(0).image, imageBefore),
+            "selection history must leave captured pixels and annotations unchanged");
+}
+
+void selectionHistoryRestartsAfterEditsAndModeChanges(const QString& root) {
+    SelectionHistoryFixture fixture(root);
+    const auto oldest = selectionHistoryParams(QRect(10, 10, 40, 20), 3, 4, QColor(20, 30, 40));
+    const auto newest = selectionHistoryParams(QRect(80, 35, 60, 30), 7, 8, QColor(50, 60, 70));
+    fixture.commit(fixture.entry(oldest, 0));
+    fixture.commit(fixture.entry(newest, 1));
+    const auto target = fixture.target();
+    const auto apply = [&](const auto& params) { return fixture.apply(params); };
+    const auto reachOldest = [&]() {
+        fixture.history->resetSelectionNavigation();
+        require(fixture.history->browsePreviousSelection(target, apply) &&
+                    fixture.history->browsePreviousSelection(target, apply),
+                "could not browse to the oldest selection");
+    };
+    const auto expectRestart = [&]() {
+        require(!fixture.history->browseNextSelection(target, apply),
+                "an edited selection must reset forward browsing");
+        require(fixture.history->browsePreviousSelection(target, apply) &&
+                    fixture.selection.params(fixture.bounds) == newest,
+                "browsing after a selection change must restart with the newest record");
+    };
+    reachOldest();
+    fixture.selection.setSelectionRect(QRect(30, 20, 50, 25));
+    expectRestart();
+    reachOldest();
+    static_cast<void>(fixture.selection.setCornerRadius(20));
+    expectRestart();
+    reachOldest();
+    static_cast<void>(fixture.selection.setShadowWidth(12));
+    expectRestart();
+    reachOldest();
+    fixture.selection.setShadowColor(QColor(90, 80, 70));
+    expectRestart();
+    reachOldest();
+    fixture.selection.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
+    fixture.selection.cancelRegionOperation();
+    expectRestart();
+    reachOldest();
+    fixture.interaction.returnToSelectionMode(true);
+    fixture.interaction.confirmSelection();
+    expectRestart();
+    reachOldest();
+    require(fixture.history->navigatePrevious() && fixture.history->navigationInProgress() &&
+                !fixture.history->browsePreviousSelection(target, apply),
+            "selection browsing must wait for a full screenshot history restore");
+    waitForNavigation(*fixture.history, "full history restore for selection cursor timed out");
+    expectRestart();
+    reachOldest();
+    fixture.history->resetCaptureNavigation();
+    expectRestart();
+    reachOldest();
+    require(fixture.history->browseNextSelection(target,
+                                                 [&](const auto& params) {
+                                                     const bool result = fixture.apply(params);
+                                                     fixture.history->resetCaptureNavigation();
+                                                     return result;
+                                                 }),
+            "restore callback with synchronous capture reset should still apply its selection");
+    require(!fixture.history->browseNextSelection(target, apply) &&
+                fixture.history->browsePreviousSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == newest,
+            "a synchronous capture reset must not reinstall an obsolete browse position");
+}
+
+void selectionHistoryMapsCoordinatesAndSkipsUnavailableRecords(const QString& root) {
+    SelectionHistoryFixture fixture(root);
+    auto legacy = selectionHistoryParams(QRect(10, 15, 40, 25), 5, 6, QColor(10, 20, 30));
+    auto saved = fixture.entry(legacy, 0);
+    saved.desktopGeometry.reset();
+    fixture.commit(std::move(saved));
+    const auto target = fixture.target(QPoint(-100, -50));
+    require(fixture.history->latestSelectionParams(target) == legacy,
+            "legacy screenshot selection must preserve canvas coordinates");
+
+    auto modern = selectionHistoryParams(QRect(70, 20, 40, 25), 9, 10, QColor(40, 50, 60));
+    QPainterPath path;
+    path.addEllipse(QRectF(modern.selection));
+    modern.region = ScreenshotRegionGeometry::fromPath(path, ScreenshotRegionType::Curve);
+    saved = fixture.entry(modern, 1);
+    saved.desktopGeometry = storage::CaptureHistoryDesktopGeometry{QPoint(-150, -50), false};
+    fixture.commit(std::move(saved));
+    auto translated = modern;
+    translated.selection.translate(-50, 0);
+    translated.region->translate(QPoint(-50, 0));
+    require(fixture.history->latestSelectionParams(target) == translated,
+            "modern selection and vector region must translate through desktop origins");
+
+    auto direct = legacy;
+    direct.selection.translate(-100, -50);
+    direct.region = QRegion(direct.selection).subtracted(QRect(-85, -30, 5, 5));
+    saved = fixture.entry(direct, 2);
+    saved.desktopGeometry.reset();
+    saved.recordedCanvasBounds = QRect(-100, -50, 200, 100);
+    saved.source = storage::CaptureHistorySource::FocusedWindow;
+    fixture.commit(std::move(saved));
+    auto normalized = direct;
+    normalized.selection.translate(100, 50);
+    normalized.region->translate(QPoint(100, 50));
+    require(fixture.history->latestSelectionParams(target) == normalized,
+            "legacy direct capture must normalize both rectangle and compound region");
+
+    saved = fixture.entry(modern, 3);
+    saved.desktopGeometry = storage::CaptureHistoryDesktopGeometry{{}, true};
+    fixture.commit(std::move(saved));
+    saved = fixture.entry(modern, 4);
+    saved.desktopGeometry =
+        storage::CaptureHistoryDesktopGeometry{QPoint(std::numeric_limits<int>::max(), 0), false};
+    fixture.commit(std::move(saved));
+    auto outside = modern;
+    outside.selection.translate(400, 0);
+    outside.region->translate(QPoint(400, 0));
+    saved = fixture.entry(outside, 5);
+    saved.desktopGeometry.reset();
+    fixture.commit(std::move(saved));
+    saved = fixture.entry(modern, 6);
+    saved.contentKind = storage::CaptureHistoryContentKind::Image;
+    saved.resultImage = fixture.displays.displayAt(0).image;
+    fixture.commit(std::move(saved));
+    require(fixture.repository->records().size() == 7 &&
+                fixture.history->latestSelectionParams(target) == normalized,
+            "image-local, incompatible, overflowed and empty clipped regions must be skipped");
+    const auto apply = [&](const auto& params) { return fixture.apply(params); };
+    require(fixture.history->browsePreviousSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == normalized &&
+                fixture.history->browsePreviousSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == translated &&
+                fixture.history->browseNextSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == normalized,
+            "both browse directions must skip unavailable records");
+}
+
+void selectionHistorySharesRepositoryLifecycle(const QString& root) {
+    SelectionHistoryFixture fixture(root);
+    const auto oldest = selectionHistoryParams(QRect(10, 10, 40, 20), 3, 4, QColor(20, 30, 40));
+    const auto newest = selectionHistoryParams(QRect(80, 35, 60, 30), 7, 8, QColor(50, 60, 70));
+    fixture.commit(fixture.entry(oldest, 0));
+    const QString newestId = fixture.commit(fixture.entry(newest, 1));
+    const auto target = fixture.target();
+    const auto apply = [&](const auto& params) { return fixture.apply(params); };
+    auto policy = fixture.repository->policy();
+    policy.enabled = false;
+    require(fixture.repository->updatePolicy(policy).get().success &&
+                !fixture.history->snapshotCurrent(true) &&
+                fixture.history->latestSelectionParams(target) == newest &&
+                fixture.history->browsePreviousSelection(target, apply),
+            "disabling history storage must retain browsing of existing records");
+    require(fixture.repository->remove(newestId).get().success &&
+                !fixture.history->browseNextSelection(target, apply) &&
+                fixture.history->browsePreviousSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == oldest,
+            "removing the browsed record must reset the selection cursor");
+    require(fixture.repository->requestClear().get().success &&
+                !fixture.history->latestSelectionParams(target) &&
+                !fixture.history->browsePreviousSelection(target, apply) &&
+                !fixture.history->browseNextSelection(target, apply),
+            "clearing screenshot history must clear available previous selections");
+
+    policy.enabled = true;
+    policy.maxEntries = 1;
+    require(fixture.repository->updatePolicy(policy).get().success,
+            "could not enable constrained selection history");
+    fixture.commit(fixture.entry(oldest, 2));
+    require(fixture.history->browsePreviousSelection(target, apply),
+            "could not browse retained oldest selection");
+    auto direct = fixture.entry(newest, 3);
+    direct.source = storage::CaptureHistorySource::CurrentMonitor;
+    fixture.commit(std::move(direct));
+    require(fixture.repository->records().size() == 1 &&
+                !fixture.history->browseNextSelection(target, apply) &&
+                fixture.history->browsePreviousSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == newest,
+            "retention pruning must reset the cursor and include direct captures");
+    auto scrolling = fixture.entry(oldest, 4);
+    scrolling.scrolling = true;
+    fixture.commit(std::move(scrolling));
+    require(fixture.history->latestSelectionParams(target) == oldest,
+            "scrolling history must expose its original screenshot selection viewport");
+}
+
+void selectionHistoryUsesPendingMetadataAndDropsFailedWrites(const QString& root) {
+    std::mutex gateMutex;
+    std::condition_variable gateChanged;
+    bool entered = false;
+    bool released = false;
+    storage::CaptureHistoryRepositoryOptions options;
+    options.operationObserved = [&](storage::CaptureHistoryOperation operation) {
+        if (operation != storage::CaptureHistoryOperation::WorkerStarted)
+            return;
+        std::unique_lock lock(gateMutex);
+        entered = true;
+        gateChanged.notify_all();
+        require(gateChanged.wait_for(lock, std::chrono::seconds(5), [&]() { return released; }),
+                "selection publication gate was not released");
+    };
+    SelectionHistoryFixture fixture(root, std::move(options));
+    auto saved = selectionHistoryParams(QRect(std::numeric_limits<int>::max() - 30, 10, 20, 20), 8,
+                                        9, QColor(10, 20, 30));
+    QPainterPath path;
+    path.addEllipse(QRectF(20, 10, 80, 45));
+    saved.region = ScreenshotRegionGeometry::fromPath(path, ScreenshotRegionType::Curve);
+    auto expected = saved;
+    expected.region->translate(QPoint(30, 20));
+    expected.selection = expected.region->boundingRect();
+    const auto target = fixture.target(QPoint(-30, -20));
+    const auto apply = [&](const auto& params) { return fixture.apply(params); };
+    fixture.commit(fixture.entry(saved, 0), false);
+    {
+        std::unique_lock lock(gateMutex);
+        require(gateChanged.wait_for(lock, std::chrono::seconds(5), [&]() { return entered; }),
+                "pending selection publication did not reach its gate");
+    }
+    require(fixture.repository->records().isEmpty() &&
+                fixture.history->latestSelectionParams(target) == expected &&
+                fixture.history->browsePreviousSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == expected,
+            "pending selection reuse must check overflow against its authoritative region");
+    {
+        const std::lock_guard lock(gateMutex);
+        released = true;
+    }
+    gateChanged.notify_all();
+    fixture.history->drainPendingWrites();
+    require(
+        fixture.history->latestSelectionParams(target) == expected &&
+            !fixture.history->browsePreviousSelection(target, apply) &&
+            !fixture.history->browseNextSelection(target, apply),
+        "published selection metadata must retain its authoritative region and browse position");
+    auto invalid = fixture.entry(saved, 1);
+    invalid.selection.selection = QRect(90, 50, 60, 35);
+    invalid.canvasHistory = QByteArrayLiteral("invalid canvas payload");
+    fixture.commit(std::move(invalid));
+    require(fixture.repository->records().size() == 1 &&
+                fixture.history->latestSelectionParams(target) == expected,
+            "failed history writes must not leave a separate previous selection behind");
+    fixture.history.reset();
+    fixture.repository.reset();
+    fixture.repository = storage::makeCaptureHistoryRepository(root);
+    fixture.history = std::make_unique<ScreenshotHistoryService>(
+        ScreenshotHistoryServiceContext{fixture.displays, fixture.runtime, fixture.selection,
+                                        fixture.interaction, fixture.intelligent},
+        *fixture.repository);
+    require(fixture.history->latestSelectionParams(target) == expected &&
+                fixture.history->browsePreviousSelection(target, apply) &&
+                fixture.selection.params(fixture.bounds) == expected,
+            "reloaded history must restore the same authoritative region as pending metadata");
+}
+
+void selectionHistoryBrowserTests(const QString& root) {
+    const QDir directory(root);
+    selectionHistoryBrowsesRegionsAndEffects(directory.filePath(QStringLiteral("regions")));
+    selectionHistoryRestartsAfterEditsAndModeChanges(directory.filePath(QStringLiteral("edits")));
+    selectionHistoryMapsCoordinatesAndSkipsUnavailableRecords(
+        directory.filePath(QStringLiteral("coordinates")));
+    selectionHistorySharesRepositoryLifecycle(directory.filePath(QStringLiteral("lifecycle")));
+    selectionHistoryUsesPendingMetadataAndDropsFailedWrites(
+        directory.filePath(QStringLiteral("pending")));
 }
 
 void historyKeysOnlyWorkDuringSelectionStates() {
@@ -2841,6 +3209,117 @@ void previousSelectionShortcutUsesSharedConfirmation() {
             }
         }
     }
+}
+
+void selectionHistoryShortcutsKeepShiftContextAndConfiguration(const QString& root) {
+    const storage::ScreenshotShortcutSettings settings;
+    const auto original = settings.allShortcuts();
+    const auto restoreShortcuts = qScopeGuard(
+        [&] { require(settings.setAllShortcutsAtomic(original), "restore selection shortcuts"); });
+    auto configured = original;
+    configured.insert(QStringLiteral("select_previously_selected_area"), {QStringLiteral("R")});
+    configured.insert(QStringLiteral("select_next_previously_selected_area"),
+                      {QStringLiteral("Shift+R")});
+    configured.insert(QStringLiteral("keep_selection_width_and_height_consistent"),
+                      {QStringLiteral("Shift")});
+    require(settings.setAllShortcutsAtomic(configured), "configure selection history chords");
+
+    SelectionHistoryFixture fixture(root);
+    const auto older = selectionHistoryParams(QRect(20, 10, 50, 30), 4, 6, QColor(10, 30, 50, 90));
+    const auto newest = selectionHistoryParams(QRect(100, 35, 80, 40), 12, 9, QColor(50, 80, 110));
+    fixture.commit(fixture.entry(older, 0));
+    fixture.commit(fixture.entry(newest, 1));
+    fixture.interaction.setMoveTool(true, false);
+    ScreenshotCaptureState capture;
+    capture.sessionState = ScreenshotSessionState::Editing;
+    ScreenshotGeometryMapper geometry;
+    geometry.rebuild(fixture.displays);
+    int colorFormatCycles = 0;
+    int confirmations = 0;
+    int forwardCalls = 0;
+    ScreenshotOverlayInputActions actions;
+    actions.cycleColorPickerFormat = [&] {
+        ++colorFormatCycles;
+        return true;
+    };
+    actions.selectionConfirmed = [&] { ++confirmations; };
+    ScreenshotOverlayInputHandler handler({capture, fixture.interaction, fixture.selection,
+                                           fixture.intelligent, geometry, fixture.displays,
+                                           actions});
+    const auto apply = [&](const auto& params) { return handler.restorePreviousSelection(params); };
+    actions.selectPreviousSelection = [&] {
+        return fixture.history->browsePreviousSelection(fixture.target(), apply);
+    };
+    actions.selectNextPreviousSelection = [&] {
+        ++forwardCalls;
+        return fixture.history->browseNextSelection(fixture.target(), apply);
+    };
+    QWidget receiver;
+    snow_shot::presentation::WindowShortcutManager manager;
+    manager.addScopeWindow(&receiver);
+    ScreenshotOverlayShortcutController shortcuts(manager, handler, fixture.interaction,
+                                                  fixture.intelligent, actions);
+    const auto forwardChord = [&](bool expected) {
+        require(dispatchShortcut(receiver, Qt::Key_Shift), "arm the physical Shift hold");
+        require(dispatchShortcut(receiver, Qt::Key_R, Qt::ShiftModifier) == expected,
+                "Shift+R must follow selection history availability");
+        static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_R, Qt::ShiftModifier));
+        static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_Shift));
+        require(colorFormatCycles == 0, "Shift+R release must not cycle the color format");
+    };
+    forwardChord(false);
+    require(forwardCalls == 1 && confirmations == 0,
+            "forward history before browsing must not confirm a selection");
+    for (const auto& expected : {newest, older}) {
+        require(dispatchShortcut(receiver, Qt::Key_R) &&
+                    fixture.selection.params(fixture.bounds) == expected,
+                "R must traverse screenshot selection history");
+        static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_R));
+    }
+    require(confirmations == 2, "backward browsing must confirm once per physical R press");
+    require(dispatchShortcut(receiver, Qt::Key_Shift) &&
+                dispatchShortcut(receiver, Qt::Key_R, Qt::ShiftModifier) &&
+                fixture.selection.params(fixture.bounds) == newest && forwardCalls == 2 &&
+                confirmations == 3,
+            "physical Shift+R must restore the newer selection and effects");
+    static_cast<void>(dispatchShortcut(receiver, Qt::Key_R, Qt::ShiftModifier, true));
+    static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_R, Qt::ShiftModifier));
+    static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_Shift));
+    require(forwardCalls == 2 && confirmations == 3 && colorFormatCycles == 0,
+            "held forward history must ignore repeat and suppress standalone Shift effects");
+    forwardChord(false);
+    require(forwardCalls == 3 && confirmations == 3 &&
+                fixture.selection.params(fixture.bounds) == newest,
+            "the forward endpoint must preserve selection and confirmation state");
+    require(dispatchShortcut(receiver, Qt::Key_Shift) &&
+                dispatchShortcutRelease(receiver, Qt::Key_Shift) && colorFormatCycles == 1,
+            "a standalone Shift tap must retain its color-format action");
+
+    const QString forwardId = QStringLiteral("select_next_previously_selected_area");
+    require(settings.setShortcuts(forwardId, {QStringLiteral("Alt+F10")}),
+            "remap forward selection history");
+    shortcuts.reloadConfiguredShortcuts();
+    require(!dispatchShortcut(receiver, Qt::Key_R, Qt::ShiftModifier) && forwardCalls == 3,
+            "remapping forward history must remove its Shift+R default");
+    static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_R, Qt::ShiftModifier));
+    require(dispatchShortcut(receiver, Qt::Key_R), "browse backward before the remapped command");
+    static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_R));
+    require(dispatchShortcut(receiver, Qt::Key_F10, Qt::AltModifier) && forwardCalls == 4 &&
+                confirmations == 5 && fixture.selection.params(fixture.bounds) == newest,
+            "the configured forward key must restore the newer selection");
+    static_cast<void>(dispatchShortcut(receiver, Qt::Key_F10, Qt::AltModifier, true));
+    static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_F10, Qt::AltModifier));
+    require(forwardCalls == 4 && confirmations == 5,
+            "remapped forward history must ignore auto-repeat");
+    require(settings.setShortcuts(forwardId, {}), "disable forward selection history");
+    shortcuts.reloadConfiguredShortcuts();
+    require(dispatchShortcut(receiver, Qt::Key_R),
+            "backward history remains independently enabled");
+    static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_R));
+    require(!dispatchShortcut(receiver, Qt::Key_F10, Qt::AltModifier) && forwardCalls == 4 &&
+                confirmations == 6 && fixture.selection.params(fixture.bounds) == older,
+            "an unassigned forward shortcut must not navigate or confirm");
+    static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_F10, Qt::AltModifier));
 }
 
 void smartSelectionWheelAccumulatesMovement() {
@@ -6838,6 +7317,10 @@ int main(int argc, char** argv) {
     }
     if (QCoreApplication::arguments().contains(QStringLiteral("--previous-selection-only"))) {
         previousSelectionShortcutUsesSharedConfirmation();
+        selectionHistoryShortcutsKeepShiftContextAndConfiguration(
+            QDir(temporary.path()).filePath(QStringLiteral("selection-history-shortcuts")));
+        selectionHistoryBrowserTests(
+            QDir(temporary.path()).filePath(QStringLiteral("selection-browser")));
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -6877,6 +7360,8 @@ int main(int argc, char** argv) {
     if (QCoreApplication::arguments().contains(QStringLiteral("--shortcut-input-only"))) {
         selectAllShortcutSelectsCurrentScreen();
         previousSelectionShortcutUsesSharedConfirmation();
+        selectionHistoryShortcutsKeepShiftContextAndConfiguration(
+            QDir(temporary.path()).filePath(QStringLiteral("selection-history-shortcuts")));
         startupInputWaitsForRevealAndIgnoresSyntheticEvents();
 #ifdef Q_OS_MACOS
         standardCloseExitsScreenshotSession();
@@ -6905,6 +7390,10 @@ int main(int argc, char** argv) {
     }
     selectAllShortcutSelectsCurrentScreen();
     previousSelectionShortcutUsesSharedConfirmation();
+    selectionHistoryShortcutsKeepShiftContextAndConfiguration(
+        QDir(temporary.path()).filePath(QStringLiteral("selection-history-shortcuts")));
+    selectionHistoryBrowserTests(
+        QDir(temporary.path()).filePath(QStringLiteral("selection-browser")));
     snapshotsRetainTheLiveDesktopGeometry();
     metadataLifecycle();
     validationWorkersRetireAndRestart();

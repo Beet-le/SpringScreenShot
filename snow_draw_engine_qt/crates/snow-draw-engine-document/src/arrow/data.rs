@@ -763,7 +763,7 @@ pub fn arrow_hit_test(arrow: &ArrowData, point: Point<f64>, hit_tolerance: f64) 
 
     let global_points = arrow_visual_points(arrow);
     if arrow.is_line()
-        && arrow.fill.a != 0
+        && arrow.fill_style.is_visible(arrow.fill)
         && arrow.opacity > 0.0
         && arrow.fill_path_is_closed()
         && point_in_polygon(&global_points, point)
@@ -1340,6 +1340,31 @@ fn point_in_polygon(points: &[Point<f64>], point: Point<f64>) -> bool {
 
 #[cfg(test)]
 mod line_tests {
+
+    #[test]
+    fn border_fill_keeps_closed_line_interiors_unhittable() {
+        let mut value = line(
+            &[
+                Point::new(-50.0, -40.0),
+                Point::new(50.0, -40.0),
+                Point::new(50.0, 40.0),
+                Point::new(-50.0, 40.0),
+                Point::new(-50.0, -40.0),
+            ],
+            ColorRgba8 {
+                r: 255,
+                g: 204,
+                b: 199,
+                a: 255,
+            },
+        );
+        value.arrow_type = ArrowType::Straight;
+        assert!(arrow_hit_test(&value, Point::default(), 0.0));
+        value.fill_style = FillStyle::Border;
+        assert!(!arrow_hit_test(&value, Point::default(), 0.0));
+        assert!(arrow_hit_test(&value, Point::new(0.0, -40.0), 0.0));
+    }
+
     use super::*;
 
     fn line(points: &[Point<f64>], fill: ColorRgba8) -> ArrowData {

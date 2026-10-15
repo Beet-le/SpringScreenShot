@@ -314,6 +314,14 @@ void drawFillStyleIcon(QPainter* painter, const QRectF& iconRect, SnowCanvasFill
         return;
     }
 
+    if (fillStyle == SnowCanvasFillStyle::Border) {
+        const QPixmap icon = snow_shot::presentation::icons::renderTintedIconPixmap(
+            snow_shot::presentation::icons::custom::outlined::FillBorder(),
+            iconRect.size().toSize(), painter->device()->devicePixelRatioF(), color);
+        painter->drawPixmap(iconRect.toRect(), icon);
+        return;
+    }
+
     painter->save();
     painter->translate(iconRect.topLeft());
     painter->scale(iconRect.width() / 20.0, iconRect.height() / 20.0);
@@ -538,9 +546,10 @@ void drawFillStylePreview(QPainter* painter, const QWidget* widget, const QColor
     }
 
     const auto scheme = snow_shot::presentation::styles::generateThemeColorScheme();
-    const bool showTransparentColor = color.isValid() && color.alpha() == 0;
+    const bool borderStyle = fillStyle == SnowCanvasFillStyle::Border;
+    const bool showTransparentColor = !borderStyle && color.isValid() && color.alpha() == 0;
     QColor contentColor;
-    if (color.isValid() && !showTransparentColor) {
+    if (!borderStyle && color.isValid() && !showTransparentColor) {
         contentColor = color;
     } else if (highlighted) {
         contentColor = scheme.map.colorPrimary;
@@ -958,13 +967,6 @@ void ColorPickerTrigger::setStrokeStyle(SnowCanvasStrokeStyle style) {
     }
 }
 
-void ColorPickerTrigger::setFillStyle(SnowCanvasFillStyle style) {
-    if (m_fillStyle != style) {
-        m_fillStyle = style;
-        update();
-    }
-}
-
 void ColorPickerTrigger::setStrokeWidth(double width) {
     width = std::clamp(width, 0.0, MAX_RECTANGLE_STROKE_WIDTH);
     if (!qFuzzyCompare(m_strokeWidth + 1.0, width + 1.0)) {
@@ -991,7 +993,7 @@ void ColorPickerTrigger::updateAccessibleValue() {
 }
 
 void ColorPickerTrigger::paintEvent(QPaintEvent* event) {
-    if (m_preview == Preview::Swatch && !m_mixed) {
+    if ((m_preview == Preview::Swatch || m_preview == Preview::Fill) && !m_mixed) {
         ColorSwatchButton::paintEvent(event);
         return;
     }
@@ -1013,8 +1015,6 @@ void ColorPickerTrigger::paintEvent(QPaintEvent* event) {
     }
     if (m_preview == Preview::Stroke) {
         drawStrokeStylePreview(&painter, this, swatchColor(), m_strokeStyle, scale, false, false);
-    } else {
-        drawFillStylePreview(&painter, this, swatchColor(), m_fillStyle, scale, false, false);
     }
 }
 

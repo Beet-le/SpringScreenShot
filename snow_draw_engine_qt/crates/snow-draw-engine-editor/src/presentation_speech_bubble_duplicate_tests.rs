@@ -98,6 +98,8 @@ fn start_copy_drag(editor: &mut Editor, document: &DocumentModel, start: Point<f
             .process_input(
                 document,
                 InputEvent::Pointer(PointerEvent {
+                    pressure: None,
+                    timestamp_ms: 0,
                     pointer_id: 1,
                     event_type,
                     device: PointerDevice::Mouse,
@@ -275,6 +277,8 @@ fn speech_bubble_duplicate_preview_matches_measured_source_appearance() {
         .process_input(
             &document,
             InputEvent::Pointer(PointerEvent {
+                pressure: None,
+                timestamp_ms: 0,
                 pointer_id: 1,
                 event_type: PointerEventType::Up,
                 device: PointerDevice::Mouse,
@@ -299,5 +303,48 @@ fn speech_bubble_duplicate_preview_matches_measured_source_appearance() {
     assert_eq!(
         document.text(committed.text_element_id.unwrap()).unwrap(),
         copied_text
+    );
+}
+
+#[test]
+fn border_fill_invalidates_bound_text_measurement_without_changing_color() {
+    let mut document = DocumentModel::new();
+    let owner = insert_bubble(&mut document, Point::new(0.0, 0.0), true);
+    let label = document
+        .speech_bubble(owner)
+        .unwrap()
+        .text_element_id
+        .unwrap();
+    let mut text = document.text(label).unwrap().clone();
+    text.fill = ColorRgba8 {
+        r: 255,
+        g: 204,
+        b: 199,
+        a: 255,
+    };
+    text.fill_style = FillStyle::Solid;
+    let mut change = Transaction::new("filled label");
+    change.update_text(label, text.clone());
+    document.apply_transaction(change).unwrap();
+    let mut editor = Editor::new(EngineConfig::default()).unwrap();
+    measure_labels(&mut editor, &document);
+    assert!(
+        editor
+            .speech_bubble_text_layout_requests(&document)
+            .is_empty()
+    );
+
+    text.fill_style = FillStyle::Border;
+    let mut change = Transaction::new("border label");
+    change.update_text(label, text.clone());
+    document.apply_transaction(change).unwrap();
+    let requests = editor.speech_bubble_text_layout_requests(&document);
+    assert!(requests.iter().any(|request| request.text_id == label));
+    assert_eq!(document.text(label).unwrap().fill, text.fill);
+    measure_labels(&mut editor, &document);
+    assert!(
+        editor
+            .speech_bubble_text_layout_requests(&document)
+            .is_empty()
     );
 }

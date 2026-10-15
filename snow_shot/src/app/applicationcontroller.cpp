@@ -25,6 +25,8 @@
 #include "snow_shot/update/updateservice.h"
 #include "snow_shot/update/startupupdate.h"
 #include "snow_shot/presentation/screenshotexportcoordinator.h"
+#include "snow_shot/presentation/collagewindowcoordinator.h"
+#include "snow_shot/presentation/imagesplitwindow.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
 
 #include "snow_shot/presentation/globalshortcutmanager.h"
@@ -102,6 +104,8 @@ const QString kPinLockedShadowColorKey = QStringLiteral("pin_to_screen/locked_sh
 const QString kTrayEnabledKey = QStringLiteral("tray/enabled");
 const QString kTrayIconKey = QStringLiteral("tray/icon");
 const QString kTrayCustomIconKey = QStringLiteral("tray/custom_icon");
+const QString kTrayDarkIconKey = QStringLiteral("tray/dark_icon");
+const QString kTrayDarkCustomIconKey = QStringLiteral("tray/dark_custom_icon");
 const QString kTrayLeftClickActionKey = QStringLiteral("tray/left_click_action");
 const QString kTrayMiddleClickActionKey = QStringLiteral("tray/middle_click_action");
 const QString kTrayMenuOptionsKey = QStringLiteral("tray/menu_options");
@@ -518,6 +522,9 @@ class ApplicationController::Impl {
         applyRuntimeConfiguration(configuration.value(kTrayEnabledKey), kTrayEnabledKey);
         applyRuntimeConfiguration(configuration.value(kTrayIconKey), kTrayIconKey);
         applyRuntimeConfiguration(configuration.value(kTrayCustomIconKey), kTrayCustomIconKey);
+        applyRuntimeConfiguration(configuration.value(kTrayDarkIconKey), kTrayDarkIconKey);
+        applyRuntimeConfiguration(configuration.value(kTrayDarkCustomIconKey),
+                                  kTrayDarkCustomIconKey);
         applyRuntimeConfiguration(configuration.value(kTrayLeftClickActionKey),
                                   kTrayLeftClickActionKey);
         applyRuntimeConfiguration(configuration.value(kTrayMiddleClickActionKey),
@@ -1283,14 +1290,13 @@ class ApplicationController::Impl {
                         return result;
                     result.image = record->image;
                     result.originalContent = {record->originalHtml, record->originalText,
-                                              record->originalFilePath};
+                                              record->originalFilePath, record->textStyle};
                     result.recognitionResults =
                         liveRecognition.value_or(ScreenshotPinnedWindow::decodeRecognitionSnapshot(
                             record->recognitionResults));
                     if (record->sourceKind == storage::PinnedWindowSourceKind::ClipboardText) {
                         const auto content = ScreenshotClipboardContentReader::renderOriginalText(
-                            {record->originalHtml, record->originalText, {}},
-                            record->firstCreationTextDpi, {}, budget);
+                            result.originalContent, record->firstCreationTextDpi, {}, budget);
                         if (content)
                             result.image = content->image;
                     }
@@ -1491,6 +1497,18 @@ class ApplicationController::Impl {
             QObject::connect(screenshotController.get(),
                              &ScreenshotController::showMainWindowRequested, &q,
                              [this]() { showMainWindow(); });
+            QObject::connect(screenshotController.get(),
+                             &ScreenshotController::imageStitchingRequested, &q,
+                             [this](const QVector<ScreenshotPinnedImageSnapshot>& snapshots) {
+                                 ensureCollageWindowCoordinator().presentPinnedWindows(snapshots);
+                             });
+            QObject::connect(screenshotController.get(),
+                             &ScreenshotController::imageSplittingRequested, &q,
+                             [this](const ScreenshotPinnedImageSnapshot& snapshot) {
+                                 ensureImageSplitWindowCoordinator().presentSource(
+                                     {snapshot.source, snapshot.originalFileName,
+                                      snapshot.createdUtc, snapshot.error, snapshot.outputSize});
+                             });
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
             QObject::connect(screenshotController.get(),
                              &ScreenshotController::translationPageRequested, &q,
@@ -1560,6 +1578,10 @@ class ApplicationController::Impl {
             systemTray.setIconSelection(value.toString(QStringLiteral("default")));
         } else if (key == kTrayCustomIconKey) {
             systemTray.setCustomIconPath(value.toString());
+        } else if (key == kTrayDarkIconKey) {
+            systemTray.setDarkIconSelection(value.toString(QStringLiteral("inherit")));
+        } else if (key == kTrayDarkCustomIconKey) {
+            systemTray.setDarkCustomIconPath(value.toString());
         } else if (key == kTrayLeftClickActionKey) {
             systemTray.setLeftClickAction(value.toString(QStringLiteral("screenshot")));
         } else if (key == kTrayMiddleClickActionKey) {
@@ -1631,6 +1653,22 @@ class ApplicationController::Impl {
                             }
                         }));
                 });
+            QObject::connect(mainWindow, &MainWindow::screenshotHistoryCollageRequested, &q,
+                             [this](const QVector<storage::CaptureHistoryRecord>& records) {
+                                 ensureCollageWindowCoordinator().present(records);
+                             });
+            QObject::connect(mainWindow, &MainWindow::screenshotHistorySplitRequested, &q,
+                             [this](const storage::CaptureHistoryRecord& record) {
+                                 ensureImageSplitWindowCoordinator().presentHistory(record);
+                             });
+            QObject::connect(mainWindow, &MainWindow::pinnedWindowCollageRequested, &q,
+                             [this](const QStringList& recordIds) {
+                                 ensureCollageWindowCoordinator().presentPinnedRecords(recordIds);
+                             });
+            QObject::connect(mainWindow, &MainWindow::pinnedWindowSplitRequested, &q,
+                             [this](const QString& recordId) {
+                                 ensureImageSplitWindowCoordinator().presentPinnedRecord(recordId);
+                             });
         }
         return *mainWindow;
     }
@@ -1823,6 +1861,12 @@ class ApplicationController::Impl {
         case presentation::GlobalShortcutAction::SwitchWindowGroup:
             ensureWindowGroupSwitcher().openPicker();
             break;
+        case presentation::GlobalShortcutAction::StitchSelectedImages: {
+            auto backend = platform::createSelectedFileBackend();
+            const auto target = backend->captureTarget();
+            ensureCollageWindowCoordinator().presentSelectedFiles(std::move(backend), target);
+            break;
+        }
         case presentation::GlobalShortcutAction::OpenPinToScreenManagement:
             ensureMainWindow().showPinToScreenManagement();
             break;
@@ -1867,6 +1911,26 @@ class ApplicationController::Impl {
             break;
         }
         }
+    }
+
+    presentation::ImageSplitWindowCoordinator& ensureImageSplitWindowCoordinator() {
+        if (!imageSplitWindowCoordinator) {
+            imageSplitWindowCoordinator =
+                std::make_unique<presentation::ImageSplitWindowCoordinator>(&q);
+            QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                             imageSplitWindowCoordinator.get(),
+                             &presentation::ImageSplitWindowCoordinator::shutdown);
+        }
+        return *imageSplitWindowCoordinator;
+    }
+
+    presentation::CollageWindowCoordinator& ensureCollageWindowCoordinator() {
+        if (!collageWindowCoordinator) {
+            collageWindowCoordinator = std::make_unique<presentation::CollageWindowCoordinator>(&q);
+            QObject::connect(&app, &QCoreApplication::aboutToQuit, collageWindowCoordinator.get(),
+                             &presentation::CollageWindowCoordinator::shutdown);
+        }
+        return *collageWindowCoordinator;
     }
 
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
@@ -2032,6 +2096,8 @@ class ApplicationController::Impl {
     QThreadPool mcpSourceWorkers;
     int mcpSourceWork = 0;
     std::unique_ptr<presentation::DirectCaptureController> directCaptureController;
+    std::unique_ptr<presentation::CollageWindowCoordinator> collageWindowCoordinator;
+    std::unique_ptr<presentation::ImageSplitWindowCoordinator> imageSplitWindowCoordinator;
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     std::unique_ptr<presentation::SelectedTextTranslationCoordinator>
         selectedTextTranslationCoordinator;

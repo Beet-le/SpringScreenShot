@@ -413,8 +413,8 @@ void tailGesturesAndLifecycle() {
 void patternedAndTransparentTailExports() {
     for (auto shape : {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
                        SnowCanvasRectangleShape::Diamond}) {
-        for (auto fillStyle : {SnowCanvasFillStyle::Solid, SnowCanvasFillStyle::Line,
-                               SnowCanvasFillStyle::CrossLine}) {
+        for (auto fillStyle : {SnowCanvasFillStyle::Border, SnowCanvasFillStyle::Solid,
+                               SnowCanvasFillStyle::Line, SnowCanvasFillStyle::CrossLine}) {
             SnowCanvasRuntime runtime;
             SnowCanvasWidget canvas(runtime);
             prepare(canvas);
@@ -800,6 +800,10 @@ void shapeStyleReflowCommitsWithItsUndoStep() {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--border-fill-only"))) {
+        patternedAndTransparentTailExports();
+        return 0;
+    }
     textAlignmentDefaultsToCenter();
     wrappingGrowthAndCancellation();
     tailGesturesAndLifecycle();

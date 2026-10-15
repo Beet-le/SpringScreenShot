@@ -927,6 +927,7 @@ void ScreenshotToolPaletteFillEditor::build(
 
     const ScreenshotToolPaletteButtonMetrics popupMetrics = popupButtonMetrics(metrics);
     m_styleValues = {
+        SnowCanvasFillStyle::Border,
         SnowCanvasFillStyle::Solid,
         SnowCanvasFillStyle::CrossLine,
         SnowCanvasFillStyle::Line,
@@ -935,7 +936,6 @@ void ScreenshotToolPaletteFillEditor::build(
         parent, config.accessibleName, initialColor, true, config.observePopup, services, receiver);
     m_trigger = createScreenshotToolPaletteColorPickerTrigger(
         m_picker, config.accessibleName, initialColor, metrics, ColorPickerTrigger::Preview::Fill);
-    m_trigger->setFillStyle(initialStyle);
 
     QObject::connect(m_picker, &adqt::widgets::AdColorPicker::popupOpening, receiver,
                      [this, popupMetrics]() { ensurePopupContent(popupMetrics); });
@@ -980,8 +980,7 @@ void ScreenshotToolPaletteFillEditor::update(const QColor& color, SnowCanvasFill
     }
     if (m_trigger != nullptr) {
         m_trigger->setSwatchColor(color);
-        m_trigger->setFillStyle(style);
-        m_trigger->setMixed(colorMixed || styleMixed);
+        m_trigger->setMixed(colorMixed);
     }
     m_colorPresets.update(color, colorMixed);
     for (int index = 0; index < m_styleButtons.size() && index < m_styleValues.size(); ++index) {

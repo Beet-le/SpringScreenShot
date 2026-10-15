@@ -84,7 +84,7 @@ struct ScreenshotOverlayInputActions {
     // the input handler to a concrete controller.
     std::function<void()> selectionConfirmed = []() {};
 
-    // Applies the persisted selection rectangle from the preceding screenshot.
+    // Applies the next older screenshot history selection to the current image.
     std::function<bool()> selectPreviousSelection = []() { return false; };
 
     // Performs the same lasting tool activation as a direct toolbar command.
@@ -141,6 +141,7 @@ struct ScreenshotOverlayInputActions {
     std::function<void()> requestSelectionDragPresentation = {};
     std::function<void(int minDx, int minDy, int maxDx, int maxDy)> adjustSelectionFromToolbar =
         [](int, int, int, int) {};
+    std::function<bool()> selectNextPreviousSelection = [] { return false; };
 };
 
 struct ScreenshotOverlayInputHandlerContext {

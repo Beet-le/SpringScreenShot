@@ -40,6 +40,7 @@ snow_c_enum! {
         Line = 0,
         CrossLine = 1,
         Solid = 2,
+        Border = 3,
     }
 }
 
@@ -161,6 +162,7 @@ pub struct SnowSceneDisplayItem {
     pub is_free_draw: u8,
     pub text_bold: u8,
     pub text_italic: u8,
+    pub brush_mode: u8,
     pub arrow_start_head: SnowArrowhead,
     pub arrow_end_head: SnowArrowhead,
     pub arrow_stroke_style: SnowStrokeStyle,
@@ -330,6 +332,7 @@ impl Default for SnowSceneDisplayItem {
             is_free_draw: 0,
             text_bold: 0,
             text_italic: 0,
+            brush_mode: 0,
             arrow_start_head: SnowArrowhead::None,
             arrow_end_head: SnowArrowhead::None,
             arrow_stroke_style: SnowStrokeStyle::Solid,

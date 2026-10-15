@@ -144,11 +144,17 @@ void translucentColorSwatchesShowCheckerboardUnderlay() {
             snow_shot::presentation::createScreenshotToolPaletteColorPickerTrigger(
                 &drawingPicker, QString(), Qt::transparent, metrics,
                 ColorPickerTrigger::Preview::Fill);
+        adqt::widgets::AdColorPicker referencePicker;
+        auto* referenceTrigger =
+            snow_shot::presentation::createScreenshotToolPaletteColorPickerTrigger(
+                &referencePicker, QString(), Qt::transparent, metrics,
+                ColorPickerTrigger::Preview::Swatch);
         adqt::widgets::AdControlScaleScope triggerScope(drawingTrigger);
+        adqt::widgets::AdControlScaleScope referenceScope(referenceTrigger);
         const auto context =
             adqt::widgets::AdControlScaleContext::fromDprsAndContentScale(1.0, 1.0, scale);
         triggerScope.publishScale(context);
-        const QImage triggerImage = renderButton(*drawingTrigger);
+        referenceScope.publishScale(context);
         for (const bool summary : {false, true}) {
             std::unique_ptr<ColorSwatchButton> button(createScreenshotToolPaletteColorButton(
                 nullptr, nullptr, Qt::red, summary, true, metrics));
@@ -156,6 +162,11 @@ void translucentColorSwatchesShowCheckerboardUnderlay() {
             buttonScope.publishScale(context);
             for (const int alpha : {128, 254, 255, 0}) {
                 const QColor color(255, 0, 0, alpha);
+                drawingTrigger->setSwatchColor(color);
+                referenceTrigger->setSwatchColor(color);
+                const QImage triggerImage = renderButton(*drawingTrigger);
+                require(triggerImage == renderButton(*referenceTrigger),
+                        "fill color triggers render the standard color block at every scale");
                 button->setSwatchColor(color);
                 const QImage image = renderButton(*button);
                 const QRect interior =
@@ -175,11 +186,8 @@ void translucentColorSwatchesShowCheckerboardUnderlay() {
                         const QColor pixel = image.pixelColor(x, y);
                         alternateCells += pixel == expectedCells.pixelColor(0, 0) ? 1 : 0;
                         baseCells += pixel == expectedCells.pixelColor(1, 0) ? 1 : 0;
-                        if (alpha == 0) {
-                            require(
-                                pixel == triggerImage.pixelColor(x, y),
-                                "transparent presets must match the drawing fill picker trigger");
-                        }
+                        require(pixel == triggerImage.pixelColor(x, y),
+                                "color presets must match the drawing fill picker trigger");
                         if (alpha == 255) {
                             require(pixel == color, "opaque swatches must remain solid colors");
                         }
@@ -748,6 +756,10 @@ void recordingEffectSettingsModal() {
                     highlight->value().solidColor == palette.recordingMouseHighlightColor(),
                 "highlight picker and multiply swatch follow palette state");
         require(!swatch->pixmap().isNull(), "highlight preview must render a swatch");
+        auto* radius = settings.modal->contentWidget()->findChild<adqt::widgets::AdInputNumber*>(
+            QStringLiteral("screenRecordingMouseHighlightRadius"));
+        require(radius && radius->value() == palette.recordingMouseHighlightRadius(),
+                "reopening effect settings restores the cached highlight radius");
         require(settings.modal != nullptr && settings.modal->isOpen(),
                 "clicking Settings must build and open the modal");
         auto* surface = settings.modal->contentWidget()->window();
@@ -873,6 +885,13 @@ void recordingEffectSettingsModal() {
         require(form->field(QStringLiteral("progressBarColor"))->label() == label &&
                     opened.progressBar->accessibleName() == label,
                 "progress bar color label and accessible name must retranslate in place");
+        const auto radiusLabel =
+            QCoreApplication::translate("ScreenshotToolPalette", "Mouse highlight radius");
+        require(form->field(QStringLiteral("highlightRadius"))->label() == radiusLabel &&
+                    form->findChild<adqt::widgets::AdInputNumber*>(
+                            QStringLiteral("screenRecordingMouseHighlightRadius"))
+                            ->accessibleName() == radiusLabel,
+                "highlight radius label and accessible name retranslate in place");
     }
     require(first.width() == form->width() && left.top() > first.top() &&
                 left.top() == right.top() && left.width() == right.width() &&
@@ -900,6 +919,21 @@ void recordingEffectSettingsModal() {
     auto* highlightPicker = form->findChild<adqt::widgets::AdColorPicker*>(
         QStringLiteral("screenRecordingMouseHighlightColor"));
     int highlightChanges = 0;
+    auto* highlightRadius = form->findChild<adqt::widgets::AdInputNumber*>(
+        QStringLiteral("screenRecordingMouseHighlightRadius"));
+    require(highlightRadius && highlightRadius->minimum() == 8 &&
+                highlightRadius->maximum() == 128 && highlightRadius->value() == 41 &&
+                highlightRadius->suffixText() == QStringLiteral("px"),
+            "highlight radius control shows its bounds, existing default and pixel units");
+    int radiusChanges = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::recordingMouseHighlightRadiusChanged,
+                     &palette, [&](int) { ++radiusChanges; });
+    highlightRadius->setValue(96);
+    require(radiusChanges == 1 && palette.recordingMouseHighlightRadius() == 96,
+            "highlight radius edits apply immediately");
+    palette.setRecordingMouseHighlightRadius(41);
+    require(radiusChanges == 1 && highlightRadius->value() == 41,
+            "highlight radius synchronization emits no user edit");
     QObject::connect(&palette, &ScreenshotToolPalette::recordingMouseHighlightColorChanged,
                      &palette, [&](const QColor&) { ++highlightChanges; });
     highlightPicker->commitValue(adqt::widgets::AdColorValue::solid(QColor(100, 150, 200, 80)));
@@ -2067,8 +2101,8 @@ void styleToolSwitchesReconcileCompatibleEditorRoots() {
                 styleEditorRoot(freeDrawRow, "shape-fill") == lineFillRoot,
             "Line to Free Draw should preserve all style editor subtrees");
     require(lineToFreeDraw.retained == 3 && lineToFreeDraw.destroyed == 1 &&
-                lineToFreeDraw.created == 0,
-            "Line to Free Draw should remove only the Line type editor");
+                lineToFreeDraw.created == 1,
+            "Line to Free Draw should replace the Line type editor with Brush mode");
 }
 
 void styleToolReuseMapPreservesEveryCompatibleRole() {
@@ -6455,12 +6489,15 @@ void scrollingSettingsUseCenteredFormAndPersistOnAccept() {
         palette.findChild<QFrame*>(QStringLiteral("screenshotScrollingSettingsSeparator"));
     auto* movement =
         palette.findChild<AdButton*>(QStringLiteral("screenshotScrollingMoveVerticalButton"));
-    require(button && separator && movement && button->text().isEmpty() &&
+    auto* splitButton =
+        palette.findChild<AdButton*>(QStringLiteral("screenshotScrollingImageSplittingButton"));
+    require(button && separator && movement && splitButton && button->text().isEmpty() &&
                 button->accessibleName() == QStringLiteral("Settings") &&
                 controls->layout()->itemAt(controls->layout()->count() - 1)->widget() == button &&
                 separator->x() - (movement->x() + movement->width()) == 16 &&
-                button->x() - (separator->x() + separator->width()) == 16,
-            "scrolling settings must follow a spaced separator at the far right");
+                splitButton->x() - (separator->x() + separator->width()) == 16 &&
+                button->x() - (splitButton->x() + splitButton->width()) == 4,
+            "scrolling settings must follow Image Splitting at the far right");
     const auto findModal = [&] {
         return palette.findChild<AdModal*>(QStringLiteral("screenshotScrollingSettingsModal"));
     };
@@ -6642,8 +6679,21 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
                                  : nullptr;
     require(controls != nullptr &&
                 controls->findChild<adqt::widgets::AdRadioButtonGroup*>() == nullptr &&
-                modeButtons.size() == 7 && verticalButton != nullptr && horizontalButton != nullptr,
+                modeButtons.size() == 8 && verticalButton != nullptr && horizontalButton != nullptr,
             "scrolling screenshot should expose two independent mode buttons");
+    auto* splitButton = controls->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotScrollingImageSplittingButton"));
+    auto* settingsButton = controls->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotScrollingSettingsButton"));
+    require(splitButton && settingsButton && splitButton->isVisible() &&
+                splitButton->toolTip() == QStringLiteral("Image Splitting") &&
+                settingsButton->x() - (splitButton->x() + splitButton->width()) == 4,
+            "Image Splitting must appear immediately to the left of Settings");
+    int splitRequests = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::scrollingImageSplittingRequested,
+                     [&] { ++splitRequests; });
+    splitButton->click();
+    require(splitRequests == 1, "Image Splitting must emit one request per click");
     auto* autoScroll = controls->findChild<adqt::widgets::AdButton*>(
         QStringLiteral("screenshotScrollingAutoScrollButton"));
     auto* separator =
@@ -6776,6 +6826,8 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
     require(palette.setPhysicalScale(1.5),
             "scrolling screenshot toolbar should accept a physical scale change");
     requireSeparatorSpacing(24, 6);
+    require(settingsButton->x() - (splitButton->x() + splitButton->width()) == 6,
+            "Image Splitting spacing must scale with the scrolling toolbar");
     for (adqt::widgets::AdButton* button : modeButtons) {
         require(button->size() == QSize(button == interval ? 144 : 48, 48) &&
                     button->iconSize() == QSize(36, 36),
@@ -6830,10 +6882,18 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
                 horizontalButton->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Text,
             "each new scrolling screenshot session should reset to vertical recognition");
     auto& languages = snow_shot::presentation::LanguageManager::instance();
+    splitButton = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotScrollingImageSplittingButton"));
+    require(splitButton != nullptr, "Image Splitting must survive toolbar recreation");
     const QString englishTooltip = interval->toolTip();
     for (const auto& locale : {QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
         require(languages.setLanguage(locale), "load interval translations");
         QCoreApplication::processEvents();
+        const QString splitLabel =
+            QString::fromUtf8(locale == QStringLiteral("zh_CN") ? "图片分割" : "圖片分割");
+        require(splitButton->toolTip() == splitLabel &&
+                    splitButton->accessibleName() == splitButton->toolTip(),
+                "Image Splitting must retranslate its tooltip and accessible name");
         require(interval->toolTip() != englishTooltip &&
                     interval->accessibleName() == interval->toolTip() &&
                     interval->valueText() == QStringLiteral("350ms"),
@@ -6848,6 +6908,8 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
     QCoreApplication::processEvents();
     require(interval->toolTip() == englishTooltip,
             "scaling a translated interval editor must preserve its translation source");
+    require(splitButton->toolTip() == QStringLiteral("Image Splitting"),
+            "Image Splitting must restore its English caption after language changes");
 }
 
 void originalImageToggleLeadsRecognitionActions() {
@@ -8460,6 +8522,17 @@ void mixedColorsKeepUniformStyleButtonsActive() {
                          "uniform stroke style should stay active when stroke colors differ");
     requireControlActive(palette, "Cross-line fill",
                          "uniform fill style should stay active when fill colors differ");
+    selectedState.shapeStyle.fillStyle = SnowCanvasFillStyle::Border;
+    palette.setStyleToolbarState(selectedState);
+    requireControlActive(palette, "Border",
+                         "uniform Border mode stays active when stored fill colors differ");
+    const QColor color(QStringLiteral("#FFCCC7"));
+    selectedState.shapeStyle.fill = color;
+    selectedState.shapeStyleMixed = SnowCanvasShapeStylePropertyFillStyle;
+    palette.setStyleToolbarState(selectedState);
+    const QImage triggerImage = renderButton(*fillPicker->triggerContent());
+    require(triggerImage.pixelColor(triggerImage.rect().center()) == color,
+            "mixed fill styles retain the uniform color block in the color trigger");
 }
 
 void rectangleStyleUsesScreenshotCreationDefaults() {
@@ -8536,6 +8609,169 @@ void lineToolIsDiscoverableSelectableAndUsesLinearStyleControls() {
             "the canvas should accept the distinct Line tool identity");
     require(canvas.canvasTool() == SnowCanvasTool::Line,
             "the canvas should retain Line while using shared linear geometry");
+}
+
+void pressureBrushToolbarPreservesStylesAndMixedSelection() {
+    using Tool = ScreenshotToolPalette::Tool;
+    ScreenshotToolPalette::Options options;
+    options.showLineTool = true;
+    options.showFreeDrawTool = true;
+    options.styleDefaults.freeDraw.brushMode = SnowCanvasBrushMode::PressureSensitive;
+    ScreenshotToolPalette palette(options);
+    palette.setActiveTool(Tool::FreeDraw);
+    const auto group = [&palette]() {
+        auto* root = palette.findChild<QWidget*>(QStringLiteral("screenshotBrushModeButtonGroup"));
+        return root == nullptr ? nullptr : root->findChild<adqt::widgets::AdRadioButtonGroup*>();
+    };
+    auto* brushGroup = group();
+    require(brushGroup != nullptr && brushGroup->checkedId() == 1 &&
+                brushGroup->buttons().size() == 2 && !brushGroup->button(0)->icon().isNull() &&
+                !brushGroup->button(1)->icon().isNull(),
+            "the brush toolbar must restore its mode and display both dedicated icons");
+    auto* row = palette.findChild<QWidget*>(QStringLiteral("screenshotFreeDrawStyleControls"));
+    require(row != nullptr &&
+                row->layout()->indexOf(styleEditorRoot(row, "brush-mode")) >
+                    row->layout()->indexOf(styleEditorRoot(row, "outline-width")) &&
+                row->layout()->indexOf(styleEditorRoot(row, "brush-mode")) <
+                    row->layout()->indexOf(styleEditorRoot(row, "shape-fill")),
+            "Brush mode must follow stroke width and precede the existing fill editor");
+
+    auto expected = palette.creationStyleDefaults();
+    int edits = 0;
+    SnowCanvasShapeStyle emitted;
+    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
+                     [&edits, &emitted](const SnowCanvasShapeStyle& style, quint32 properties,
+                                        SnowCanvasShapeKind kind) {
+                         require(properties == SnowCanvasShapeStylePropertyBrushMode &&
+                                     kind == SnowCanvasShapeKind::FreeDraw,
+                                 "Brush mode edits must affect only the Free Draw mode property");
+                         emitted = style;
+                         ++edits;
+                     });
+    brushGroup->button(0)->click();
+    expected.freeDraw.brushMode = SnowCanvasBrushMode::Regular;
+    require(edits == 1 && emitted.brushMode == SnowCanvasBrushMode::Regular &&
+                palette.creationStyleDefaults() == expected,
+            "Regular brush must update independent creation defaults without altering appearance");
+    palette.setActiveTool(Tool::Line);
+    require(group() == nullptr, "Line must not expose brush-specific options");
+    palette.setActiveTool(Tool::FreeDraw);
+    brushGroup = group();
+    require(brushGroup != nullptr && brushGroup->checkedId() == 0,
+            "Brush mode must survive style editor recreation");
+    brushGroup->button(1)->click();
+    expected.freeDraw.brushMode = SnowCanvasBrushMode::PressureSensitive;
+    require(edits == 2 && palette.creationStyleDefaults() == expected,
+            "recreated brush controls must retain one active edit callback");
+
+    SnowCanvasStyleToolbarState selected;
+    selected.source = SnowCanvasStyleToolbarSource::SelectedFreeDraw;
+    selected.shapeStyle = expected.freeDraw;
+    selected.shapeStyle.brushMode = SnowCanvasBrushMode::Regular;
+    palette.setStyleToolbarState(selected);
+    require(brushGroup->checkedId() == 0 && edits == 2,
+            "selected brush synchronization must update the control without creating an edit");
+    selected.shapeStyleMixed = SnowCanvasShapeStyleMixedBrushMode;
+    palette.setStyleToolbarState(selected);
+    require(brushGroup->checkedId() == -1,
+            "mixed selected brush modes must leave both options unchecked");
+    brushGroup->button(0)->click();
+    require(edits == 3 && brushGroup->checkedId() == 0 &&
+                emitted.brushMode == SnowCanvasBrushMode::Regular,
+            "an explicit choice must resolve mixed Brush mode even if its representative matches");
+
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    const struct {
+        const char* locale;
+        const char* regular;
+        const char* pressure;
+    } translations[] = {{"en_US", "Regular brush", "Pressure-sensitive brush"},
+                        {"zh_CN", "普通画笔", "压感画笔"},
+                        {"zh_TW", "一般筆刷", "壓感筆刷"}};
+    for (const auto& translation : translations) {
+        require(language.setLanguage(QString::fromLatin1(translation.locale)),
+                "brush translation catalog must load");
+        QCoreApplication::processEvents();
+        require(group() == brushGroup &&
+                    brushGroup->button(0)->toolTip() == QString::fromUtf8(translation.regular) &&
+                    brushGroup->button(1)->toolTip() == QString::fromUtf8(translation.pressure) &&
+                    brushGroup->button(0)->accessibleName() ==
+                        QString::fromUtf8(translation.regular) &&
+                    brushGroup->button(1)->accessibleName() ==
+                        QString::fromUtf8(translation.pressure) &&
+                    edits == 3,
+                "brush tooltips and accessible names must retranslate without rebuilding or edits");
+    }
+    require(language.setLanguage(QStringLiteral("en_US")), "restore English brush labels");
+}
+
+void pressureBrushPreferencePersistsAndRejectsUnknownValues() {
+    using namespace snow_shot::presentation;
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto defaults = screenshotCanvasStyleDefaults();
+    require(defaults.freeDraw.brushMode == SnowCanvasBrushMode::Regular,
+            "new brush preferences must default to Regular");
+    require(persistScreenshotCanvasToolStyles(defaults), "prepare brush style preferences");
+    ScreenshotToolPalette::Options options;
+    options.styleDefaults = defaults;
+    ScreenshotToolPalette palette(options);
+    SnowCanvasWidget canvas;
+    ScreenshotStyleBinding binding(palette, canvas, &palette);
+    applyScreenshotCanvasToolStyles(canvas, defaults);
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    require(canvas.setCanvasTool(SnowCanvasTool::FreeDraw), "activate brush creation preferences");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::FreeDraw);
+    auto* root = palette.findChild<QWidget*>(QStringLiteral("screenshotBrushModeButtonGroup"));
+    auto* brushGroup =
+        root == nullptr ? nullptr : root->findChild<adqt::widgets::AdRadioButtonGroup*>();
+    require(brushGroup != nullptr, "bound brush controls must materialize");
+    brushGroup->button(1)->click();
+    defaults.freeDraw.brushMode = SnowCanvasBrushMode::PressureSensitive;
+    require(binding.lastSaveSucceeded() == true &&
+                screenshotCanvasToolStyleDefaults() == defaults &&
+                canvas.canvasStyleToolbarState().shapeStyle.brushMode ==
+                    SnowCanvasBrushMode::PressureSensitive,
+            "brush edits must save through the binding and synchronize canvas creation style");
+    clickStyleControl(palette, "Stroke width 4");
+    defaults.freeDraw.strokeWidth = 4.0;
+    require(screenshotCanvasToolStyleDefaults() == defaults,
+            "stroke width edits must preserve saved Brush mode");
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    auto& configuration = storage.configuration();
+    const QString key = QStringLiteral("drawing/free_draw_style");
+    const QJsonObject saved = configuration.value(key).toObject();
+    require(saved.value(QStringLiteral("brush_mode")) == QStringLiteral("pressure-sensitive") &&
+                !configuration.value(QStringLiteral("drawing/line_style"))
+                     .toObject()
+                     .contains(QStringLiteral("brush_mode")),
+            "brush preferences must use their own stable string field");
+    require(configuration.flushNow().success, "flush brush preferences to disk");
+    snow_shot::storage::ConfigurationStore reopened(
+        QDir(storage.configurationDirectory()).filePath(QStringLiteral("config.json")), true,
+        false);
+    require(reopened.value(key) == saved, "brush preferences must survive configuration reopening");
+
+    for (const QJsonValue& invalid :
+         {QJsonValue(), QJsonValue(-1), QJsonValue(1), QJsonValue(true),
+          QJsonValue(QStringLiteral("unknown")), QJsonValue(QStringLiteral("PressureSensitive"))}) {
+        QJsonObject legacy = saved;
+        legacy.insert(QStringLiteral("brush_mode"), invalid);
+        require(configuration.setValue(key, legacy), "write legacy or invalid brush preference");
+        auto expected = defaults;
+        expected.freeDraw.brushMode = SnowCanvasBrushMode::Regular;
+        require(
+            screenshotCanvasToolStyleDefaults() == expected,
+            "missing and invalid Brush modes must fall back to Regular preserving other styles");
+    }
+    QJsonObject legacy = saved;
+    legacy.remove(QStringLiteral("brush_mode"));
+    require(configuration.setValue(key, legacy) &&
+                screenshotCanvasToolStyleDefaults().freeDraw.brushMode ==
+                    SnowCanvasBrushMode::Regular,
+            "older preferences without Brush mode must retain Regular behavior");
 }
 
 void freeDrawToolIsDistinctAndUsesIndependentPathStyleControls() {
@@ -14917,6 +15153,103 @@ void selectedStrokeColorDragKeepsPickerIndicatorInSync() {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
+void borderFillControlsRetainColorAndSavedPreferences() {
+    SnowCanvasRuntime runtime(
+        SnowCanvasRuntimeConfig{snow_shot::presentation::screenshotCanvasStyleDefaults()});
+    require(runtime.isValid(), "screenshot defaults initialize the canvas runtime");
+    require(runtime.setQuickSelectionDisabledTools({SnowCanvasTool::Shape}) && runtime.reset(),
+            "screenshot startup preferences and canvas reset succeed with Border defaults");
+    SnowCanvasWidget screenshotCanvas(runtime);
+    SnowCanvasWidget pinnedCanvas(runtime);
+    require(screenshotCanvas.setCanvasTool(SnowCanvasTool::Text) &&
+                pinnedCanvas.setCanvasTool(SnowCanvasTool::SerialNumber) &&
+                screenshotCanvas.canvasStyleToolbarState().textStyle.fillStyle ==
+                    SnowCanvasFillStyle::Border &&
+                pinnedCanvas.canvasStyleToolbarState().serialNumberStyle.fillStyle ==
+                    SnowCanvasFillStyle::Border,
+            "screenshot and pinned viewports expose the configured Border fills");
+    auto textStyle = screenshotCanvas.canvasStyleToolbarState().textStyle;
+    auto serialStyle = pinnedCanvas.canvasStyleToolbarState().serialNumberStyle;
+    for (const auto mode : {SnowCanvasFillStyle::Solid, SnowCanvasFillStyle::Border}) {
+        textStyle.fillStyle = mode;
+        serialStyle.fillStyle = mode;
+        require(screenshotCanvas.commitStyleEdit(
+                    SnowCanvasTextEdit{textStyle, SnowCanvasTextStyleMixedFillStyle}) &&
+                    pinnedCanvas.commitStyleEdit(SnowCanvasSerialNumberEdit{
+                        serialStyle, SnowCanvasSerialNumberStyleMixedFillStyle}) &&
+                    screenshotCanvas.canvasStyleToolbarState().textStyle.fillStyle == mode &&
+                    pinnedCanvas.canvasStyleToolbarState().serialNumberStyle.fillStyle == mode,
+                "initialized screenshot and pinned canvases commit fill style edits");
+    }
+
+    using Tool = ScreenshotToolPalette::Tool;
+    for (auto tool : {Tool::Shape, Tool::SpeechBubble, Tool::Line, Tool::FreeDraw, Tool::Text,
+                      Tool::SerialNumber}) {
+        ScreenshotToolPalette::Options options;
+        options.showTextTool = true;
+        options.showSerialNumberTool = true;
+        ScreenshotToolPalette palette(options);
+        palette.setActiveTool(tool);
+        const bool text = tool == Tool::Text;
+        const bool serial = tool == Tool::SerialNumber;
+        auto* picker =
+            colorPickerWithAccessibleName(palette, text     ? "Text fill color"
+                                                   : serial ? "Sequence number fill color"
+                                                            : "Fill color");
+        require(picker != nullptr, "each configurable fill exposes its color picker");
+        requireControlActive(palette, "Border", "Border starts selected");
+        require(picker->value().solidColor == QColor("#FFCCC7"), "the latent fill is pale red");
+        auto* trigger = picker->triggerContent();
+        require(trigger != nullptr, "fill color trigger should be present");
+        const QImage initialSwatch = renderButton(*trigger);
+        require(initialSwatch.pixelColor(initialSwatch.rect().center()) == QColor("#FFCCC7"),
+                "Border mode displays the stored fill color as a solid block");
+        const QColor chosen(23, 67, 109, 128);
+        picker->commitValue(adqt::widgets::AdColorValue::solid(chosen));
+        requireControlActive(palette, "Border", "choosing a color retains Border mode");
+        const QImage chosenSwatch = renderButton(*trigger);
+        for (const char* tooltip : {text     ? "Solid text fill"
+                                    : serial ? "Solid sequence number fill"
+                                             : "Solid fill",
+                                    text     ? "Cross-line text fill"
+                                    : serial ? "Cross-line sequence number fill"
+                                             : "Cross-line fill",
+                                    text     ? "Line text fill"
+                                    : serial ? "Line sequence number fill"
+                                             : "Line fill",
+                                    "Border"}) {
+            clickStyleControl(palette, tooltip);
+            require(picker->value().solidColor == chosen,
+                    "switching fill styles retains the chosen color");
+            require(renderButton(*trigger) == chosenSwatch,
+                    "fill style changes preserve the color block in the trigger");
+        }
+    }
+    const auto original = snow_shot::presentation::screenshotCanvasToolStyleDefaults();
+    const auto restore = qScopeGuard([&] {
+        static_cast<void>(snow_shot::presentation::persistScreenshotCanvasToolStyles(original));
+    });
+    for (auto mode : {SnowCanvasFillStyle::Line, SnowCanvasFillStyle::CrossLine,
+                      SnowCanvasFillStyle::Solid, SnowCanvasFillStyle::Border}) {
+        auto saved = snow_shot::presentation::screenshotCanvasStyleDefaults();
+        saved.rectangle.fillStyle = mode;
+        saved.speechBubble.fillStyle = mode;
+        saved.line.fillStyle = mode;
+        saved.freeDraw.fillStyle = mode;
+        saved.text.fillStyle = mode;
+        saved.serialNumber.fillStyle = mode;
+        saved.rectangle.fill = QColor(23, 67, 109, 0);
+        require(snow_shot::presentation::persistScreenshotCanvasToolStyles(saved),
+                "save fill modes");
+        require(snow_shot::presentation::screenshotCanvasToolStyleDefaults() == saved,
+                "Border and legacy fill preferences round-trip without migration");
+        SnowCanvasRuntime restored(
+            SnowCanvasRuntimeConfig{snow_shot::presentation::screenshotCanvasToolStyleDefaults()});
+        require(restored.isValid() && restored.reset(),
+                "saved fill preferences initialize and reset the screenshot canvas");
+    }
+}
+
 void fillStyleButtonsFollowFillColorPickerTrigger() {
     ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
     palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
@@ -14945,10 +15278,13 @@ void fillStyleButtonsFollowFillColorPickerTrigger() {
     require(toolbarLayout != nullptr, "fill color picker should have a toolbar layout");
     const int fillPickerIndex = layoutWidgetIndex(toolbarLayout, fillPicker);
     require(fillPickerIndex >= 0, "fill color picker should be in the toolbar layout");
-    require(layoutWidgetIndex(toolbarLayout, solidFill) == fillPickerIndex + 1 &&
-                layoutWidgetIndex(toolbarLayout, crossLineFill) == fillPickerIndex + 2 &&
-                layoutWidgetIndex(toolbarLayout, lineFill) == fillPickerIndex + 3,
-            "fill style buttons should follow the fill color picker in reverse order");
+    auto* borderFill = controlWithTooltip(palette, "Border");
+    require(borderFill != nullptr &&
+                layoutWidgetIndex(toolbarLayout, borderFill) == fillPickerIndex + 1 &&
+                layoutWidgetIndex(toolbarLayout, solidFill) == fillPickerIndex + 2 &&
+                layoutWidgetIndex(toolbarLayout, crossLineFill) == fillPickerIndex + 3 &&
+                layoutWidgetIndex(toolbarLayout, lineFill) == fillPickerIndex + 4,
+            "fill styles should follow the picker in Border, Solid, Cross-line, Line order");
 
     fillPicker->setPopupLayerMode(QApplication::platformName() == QStringLiteral("offscreen")
                                       ? adqt::widgets::AdColorPicker::PopupLayerMode::InWindow
@@ -16469,13 +16805,14 @@ void screenshotProductStyleProfileIsComplete() {
         snow_shot::presentation::screenshotCanvasStyleDefaults();
     const QColor red(0xf5, 0x22, 0x2d, 255);
     const QColor redAccent(0xf4, 0x21, 0x2c, 255);
+    const QColor fill(0xff, 0xcc, 0xc7, 255);
     const QColor transparent(0xff, 0xff, 0xff, 0);
     const auto exact = [](double left, double right) {
         return snowCanvasExactDoubleEqual(left, right);
     };
 
-    require(defaults.rectangle.fill == transparent &&
-                defaults.rectangle.fillStyle == SnowCanvasFillStyle::Solid &&
+    require(defaults.rectangle.fill == fill &&
+                defaults.rectangle.fillStyle == SnowCanvasFillStyle::Border &&
                 defaults.rectangle.stroke == red && exact(defaults.rectangle.strokeWidth, 2.0) &&
                 defaults.rectangle.strokeStyle == SnowCanvasStrokeStyle::Solid &&
                 defaults.rectangle.cornerRadii == SnowCanvasCornerRadii{6.0, 6.0, 6.0, 6.0},
@@ -16498,10 +16835,10 @@ void screenshotProductStyleProfileIsComplete() {
         const char* message;
     };
     const ShapeExpectation shapes[] = {
-        {&defaults.line, transparent, red, 2.0, 1.0, SnowCanvasArrowType::Curve,
+        {&defaults.line, fill, red, 2.0, 1.0, SnowCanvasArrowType::Curve,
          SnowCanvasHighlightShape::Rectangle,
          "line defaults should match the Snow Shot product profile"},
-        {&defaults.freeDraw, transparent, red, 2.0, 1.0, SnowCanvasArrowType::Straight,
+        {&defaults.freeDraw, fill, red, 2.0, 1.0, SnowCanvasArrowType::Straight,
          SnowCanvasHighlightShape::Rectangle,
          "free-draw defaults should match the Snow Shot product profile"},
         {&defaults.rectangleHighlight, red, redAccent, 0.0, 1.0, SnowCanvasArrowType::Straight,
@@ -16513,7 +16850,10 @@ void screenshotProductStyleProfileIsComplete() {
     };
     for (const ShapeExpectation& expected : shapes) {
         require(expected.style->fill == expected.fill &&
-                    expected.style->fillStyle == SnowCanvasFillStyle::Solid &&
+                    expected.style->fillStyle ==
+                        (expected.style == &defaults.line || expected.style == &defaults.freeDraw
+                             ? SnowCanvasFillStyle::Border
+                             : SnowCanvasFillStyle::Solid) &&
                     expected.style->stroke == expected.stroke &&
                     exact(expected.style->strokeWidth, expected.strokeWidth) &&
                     expected.style->strokeStyle == SnowCanvasStrokeStyle::Solid &&
@@ -16534,8 +16874,8 @@ void screenshotProductStyleProfileIsComplete() {
                 exact(defaults.penFilter.strokeWidth, 30.0),
             "filter defaults should match the Snow Shot product profile");
     require(defaults.text.color == red && exact(defaults.text.fontSize, 30.0) &&
-                defaults.text.fontFamily.isEmpty() && defaults.text.fill == transparent &&
-                defaults.text.fillStyle == SnowCanvasFillStyle::Solid &&
+                defaults.text.fontFamily.isEmpty() && defaults.text.fill == fill &&
+                defaults.text.fillStyle == SnowCanvasFillStyle::Border &&
                 defaults.text.stroke == QColor(0xff, 0xcc, 0xc7, 255) &&
                 exact(defaults.text.strokeWidth, 0.0) &&
                 defaults.text.cornerRadii == SnowCanvasCornerRadii{6.0, 6.0, 6.0, 6.0} &&
@@ -16545,8 +16885,8 @@ void screenshotProductStyleProfileIsComplete() {
             "text defaults should match the Snow Shot product profile");
     require(defaults.serialNumber.number == 1 &&
                 defaults.serialNumber.type == SnowCanvasSerialNumberType::OutlinedCircle &&
-                defaults.serialNumber.color == red && defaults.serialNumber.fill == transparent &&
-                defaults.serialNumber.fillStyle == SnowCanvasFillStyle::Solid &&
+                defaults.serialNumber.color == red && defaults.serialNumber.fill == fill &&
+                defaults.serialNumber.fillStyle == SnowCanvasFillStyle::Border &&
                 exact(defaults.serialNumber.fontSize, 24.0) &&
                 defaults.serialNumber.fontFamily.isEmpty() &&
                 exact(defaults.serialNumber.strokeWidth, 2.0) &&
@@ -18417,6 +18757,13 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--pressure-brush-only"))) {
+        pressureBrushToolbarPreservesStylesAndMixedSelection();
+        pressureBrushPreferencePersistsAndRejectsUnknownValues();
+        freeDrawToolIsDistinctAndUsesIndependentPathStyleControls();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--eraser-only"))) {
         eraserResetRemainsAvailableWithoutSelection();
         eraserStyleToolbarHeightMatchesOtherTools();
@@ -18658,6 +19005,14 @@ int main(int argc, char** argv) {
         toolbarScalingDoesNotRelayoutPopupContent();
         popupColorEditorButtonsKeepPopupScaleAfterToolbarDpiCommit();
         familiesHydratedAfterScaleKeepTheSamePhysicalSize();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--border-fill-only"))) {
+        screenshotProductStyleProfileIsComplete();
+        borderFillControlsRetainColorAndSavedPreferences();
+        fillStyleButtonsFollowFillColorPickerTrigger();
+        mixedColorsKeepUniformStyleButtonsActive();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -18919,6 +19274,8 @@ int main(int argc, char** argv) {
     repeatedToolsAndDifferentialStyleSynchronizationAreNoOps();
     editorlessToolsRejectStaleStyleToolbarState();
     lineToolIsDiscoverableSelectableAndUsesLinearStyleControls();
+    pressureBrushToolbarPreservesStylesAndMixedSelection();
+    pressureBrushPreferencePersistsAndRejectsUnknownValues();
     freeDrawToolIsDistinctAndUsesIndependentPathStyleControls();
     highlightVariantsUseConfiguredPopoverGroup();
     drawingToolbarGroupsUseToolbarPopoverMetrics();
@@ -18977,6 +19334,7 @@ int main(int argc, char** argv) {
     cornerRadiusButtonsRestoreTheDefaultValue();
     colorSamplerStopsWhenPopupClosureRetiresItsEditor();
     selectedStrokeColorDragKeepsPickerIndicatorInSync();
+    borderFillControlsRetainColorAndSavedPreferences();
     fillStyleButtonsFollowFillColorPickerTrigger();
     configurationDrivenStyleEditorsShareStructuralContracts();
     styleToolbarRowSpacingFollowsPhysicalScale();
