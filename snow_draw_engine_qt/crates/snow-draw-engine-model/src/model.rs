@@ -280,6 +280,8 @@ mod tests {
 
     fn rect(center_x: f64) -> RectangleData {
         RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(center_x, 0.0),

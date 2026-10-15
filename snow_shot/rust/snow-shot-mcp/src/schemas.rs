@@ -385,6 +385,7 @@ struct Style {
     strength: Option<f64>,
     gap: Option<f64>,
     stroke_style: Option<StrokeStyle>,
+    stroke_rendering_style: Option<StrokeRenderingStyle>,
     arrow_type: Option<ArrowType>,
     filter: Option<Filter>,
 }
@@ -405,6 +406,13 @@ enum StrokeStyle {
     Solid,
     Dashed,
     Dotted,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum StrokeRenderingStyle {
+    Architect,
+    Artist,
+    Cartoonist,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -969,6 +977,8 @@ struct StylePatch {
     fill_style: Option<FillStyle>,
     #[serde(default)]
     stroke_style: Option<StrokeStyle>,
+    #[serde(default)]
+    stroke_rendering_style: Option<StrokeRenderingStyle>,
     #[serde(default)]
     start_arrowhead: Option<Arrowhead>,
     #[serde(default)]
@@ -1794,6 +1804,46 @@ mod tests {
                         .any(|member| member == source)
                 );
             }
+        }
+    }
+
+    #[test]
+    fn stroke_rendering_styles_are_typed() {
+        for value in ["architect", "artist", "cartoonist"] {
+            for target in ["rectangle", "arrow", "line"] {
+                assert!(
+                    schema(
+                        "snow_shot_screenshot_set_tool_style",
+                        Some(json!({
+                            "session_id":"s", "expected_revision":1, "target":target,
+                            "style":{"stroke_rendering_style":value}
+                        }))
+                    )
+                    .is_ok()
+                );
+            }
+            assert!(
+                schema(
+                    "snow_shot_screenshot_apply_annotations",
+                    Some(json!({
+                        "session_id":"s", "expected_revision":1, "operations":[{
+                            "type":"rectangle", "bounds":[0,0,20,20],
+                            "style":{"stroke_rendering_style":value}
+                        }]
+                    }))
+                )
+                .is_ok()
+            );
+        }
+        for value in [json!("rough"), json!(1)] {
+            let result = schema(
+                "snow_shot_screenshot_set_tool_style",
+                Some(json!({
+                    "session_id":"s", "expected_revision":1, "target":"rectangle",
+                    "style":{"stroke_rendering_style":value}
+                })),
+            );
+            assert!(result.is_err());
         }
     }
 

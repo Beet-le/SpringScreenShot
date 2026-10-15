@@ -7,13 +7,12 @@ use crate::{
     Operation, Transaction, arrow_bounds, arrow_hit_test, arrow_is_degenerate,
     document_geometry::{
         element_visible_bounds, filter_bounds, filter_rect_proxy, pen_filter_bounds,
-        pen_filter_rect_proxy, rect_bounds, rectangle_hit_test, serial_number_bounds,
-        serial_number_hit_test, serial_number_rect_proxy, text_bounds, text_hit_test,
-        validate_element_data,
+        pen_filter_rect_proxy, rectangle_hit_test, serial_number_bounds, serial_number_hit_test,
+        serial_number_rect_proxy, text_bounds, text_hit_test, validate_element_data,
     },
     free_draw_bounds, free_draw_hit_test,
 };
-pub use snow_draw_engine_core::arrow::StrokeStyle;
+pub use snow_draw_engine_core::arrow::{StrokeRenderingStyle, StrokeStyle};
 use snow_draw_engine_core::{ColorRgba8, CornerRadii, DrawRect, ErrorCode, Point};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -500,6 +499,10 @@ pub struct RectangleData {
     pub stroke: ColorRgba8,
     pub stroke_width: f64,
     pub stroke_style: StrokeStyle,
+    #[serde(default)]
+    pub stroke_rendering_style: snow_draw_engine_core::arrow::StrokeRenderingStyle,
+    #[serde(default)]
+    pub stroke_rendering_seed: u32,
     pub corner_radii: CornerRadii,
     pub opacity: f64,
 }
@@ -744,6 +747,7 @@ impl RectangleData {
         self.corner_radii = CornerRadii::default();
         self.fill_style = FillStyle::Solid;
         self.stroke_style = StrokeStyle::Solid;
+        self.stroke_rendering_style = Default::default();
         self
     }
 
@@ -758,6 +762,7 @@ impl RectangleData {
         self.stroke_width = 0.0;
         self.fill_style = FillStyle::Solid;
         self.stroke_style = StrokeStyle::Solid;
+        self.stroke_rendering_style = Default::default();
         self.opacity = 1.0;
         self
     }
@@ -966,12 +971,12 @@ impl ElementData {
 
     pub(crate) fn bounds(&self) -> DrawRect {
         match self {
-            Self::Rectangle(rect) => rect_bounds(rect),
+            Self::Rectangle(rect) => crate::rect_paint_bounds(rect),
             Self::SpeechBubble(value) => crate::speech_bubble_bounds(value),
             Self::Magnifier(value) => crate::magnifier_interaction_bounds(value),
             Self::Filter(filter) => filter_bounds(filter),
             Self::PenFilter(filter) => pen_filter_bounds(filter),
-            Self::Arrow(arrow) => arrow_bounds(arrow),
+            Self::Arrow(arrow) => crate::arrow_paint_bounds(arrow),
             Self::FreeDraw(free_draw) => free_draw_bounds(free_draw),
             Self::Text(text) => text_bounds(text),
             Self::SerialNumber(serial) => serial_number_bounds(serial),
@@ -1699,6 +1704,8 @@ impl Document {
         }
         if let Ok(free_draw) = self.free_draw(id) {
             return Some(RectangleData {
+                stroke_rendering_seed: 0,
+                stroke_rendering_style: Default::default(),
                 rectangle_kind: RectangleElementKind::Rectangle,
                 highlight_shape: HighlightShape::Rectangle,
                 center: Point::new(
@@ -1719,6 +1726,8 @@ impl Document {
         }
         if let Ok(text) = self.text(id) {
             return Some(RectangleData {
+                stroke_rendering_seed: 0,
+                stroke_rendering_style: Default::default(),
                 rectangle_kind: RectangleElementKind::Rectangle,
                 highlight_shape: HighlightShape::Rectangle,
                 center: text.center,
@@ -2732,6 +2741,8 @@ mod tests {
     #[test]
     fn common_element_state_has_one_geometry_opacity_and_z_order_definition() {
         let rectangle = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
             highlight_shape: HighlightShape::Rectangle,
             center: Point::new(10.0, 20.0),
@@ -2921,6 +2932,8 @@ mod tests {
         );
 
         let spotlight = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
             highlight_shape: HighlightShape::Rectangle,
             center: Point::new(10.0, 20.0),

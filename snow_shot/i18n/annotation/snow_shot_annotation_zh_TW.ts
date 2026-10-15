@@ -120,6 +120,10 @@
             <translation>阿拉伯數字</translation>
         </message>
         <message>
+            <source>Architect</source>
+            <translation>建築師</translation>
+        </message>
+        <message>
             <source>Arrow</source>
             <translation>箭頭</translation>
         </message>
@@ -142,6 +146,10 @@
         <message>
             <source>Arrow stroke width %1</source>
             <translation>箭頭筆畫寬度 %1</translation>
+        </message>
+        <message>
+            <source>Artist</source>
+            <translation>藝術家</translation>
         </message>
         <message>
             <source>Auto Filter</source>
@@ -206,6 +214,10 @@
         <message>
             <source>Capture interface during scrolling screenshot</source>
             <translation>捲動截圖時擷取介面</translation>
+        </message>
+        <message>
+            <source>Cartoonist</source>
+            <translation>漫畫家</translation>
         </message>
         <message>
             <source>Center horizontally</source>

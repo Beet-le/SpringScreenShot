@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <string_view>
 
 namespace {
 void require(bool condition, const char* message) {
@@ -45,6 +46,60 @@ void filterStyleParticipatesInToolbarStateDiffs() {
     require(snow_canvas_types::toCanvasStyleToolbarState(brushChanged.styleToolbarState)
                     .brushEraserStyle.strokeWidth == 42.0,
             "C/Qt state conversion must preserve independent brush width");
+}
+
+void strokeRenderingStylesRoundTripAndPatchIndependently() {
+    SnowCanvasShapeStyle original;
+    original.fill = QColor(Qt::transparent);
+    original.stroke = QColor(32, 64, 96);
+    original.strokeWidth = 3.0;
+    original.strokeStyle = SnowCanvasStrokeStyle::Dotted;
+    require(original.strokeRenderingStyle == SnowCanvasStrokeRenderingStyle::Architect,
+            "existing canvas styles default to Architect");
+    for (const auto rendering :
+         {SnowCanvasStrokeRenderingStyle::Architect, SnowCanvasStrokeRenderingStyle::Artist,
+          SnowCanvasStrokeRenderingStyle::Cartoonist}) {
+        auto style = original;
+        style.strokeRenderingStyle = rendering;
+        require(snow_canvas_types::toCanvasShapeStyle(
+                    snow_canvas_types::toEngineShapeStyle(style)) == style,
+                "every rendering style survives the Qt/C ABI round trip");
+        auto patched = original;
+        auto requested = style;
+        requested.strokeStyle = SnowCanvasStrokeStyle::Dashed;
+        requested.strokeWidth = 19.0;
+        snowCanvasMergeStyle(patched, requested, SnowCanvasShapeStylePropertyStrokeRenderingStyle);
+        require(patched == style,
+                "rendering patches preserve stroke pattern and unrelated properties");
+    }
+    auto changed = original;
+    changed.strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Artist;
+    require(changed != original, "rendering style participates in public shape equality");
+    SnowCanvasRectangleShapeStyle rectangle;
+    auto roughRectangle = rectangle;
+    roughRectangle.strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Artist;
+    require(rectangle != roughRectangle,
+            "rendering style participates in rectangle preference equality");
+    SnowCanvasArrowStyle arrow;
+    auto roughArrow = arrow;
+    roughArrow.strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Cartoonist;
+    require(arrow != roughArrow, "rendering style participates in arrow preference equality");
+
+    snow_canvas_state::Snapshot before;
+    auto after = before;
+    after.styleToolbarState.shape_style.stroke_rendering_style = SNOW_STROKE_RENDERING_STYLE_ARTIST;
+    require(snow_canvas_state::diffSnapshots(before, after).styleToolbarChanged,
+            "rendering changes synchronize toolbar state");
+    before = after;
+    after.styleToolbarState.shape_style_mixed = SnowCanvasShapeStyleMixedStrokeRenderingStyle;
+    require(snow_canvas_state::diffSnapshots(before, after).styleToolbarChanged,
+            "mixed rendering state synchronizes the toolbar");
+
+    SnowCanvasStyleDefaults invalid;
+    invalid.rectangle.strokeRenderingStyle = static_cast<SnowCanvasStrokeRenderingStyle>(99);
+    SnowStyleDefaults engineDefaults{};
+    require(!snow_canvas_types::toEngineStyleDefaults(invalid, engineDefaults),
+            "invalid rendering preferences are rejected before crossing the C ABI");
 }
 
 void magnifierStylePatchesAndSynchronization() {
@@ -797,7 +852,12 @@ void serializedSnapshotsOwnBytesAndPreserveUndoAndRedo() {
 }
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--stroke-rendering-only") {
+        strokeRenderingStylesRoundTripAndPatchIndependently();
+        return 0;
+    }
+    strokeRenderingStylesRoundTripAndPatchIndependently();
     magnifierStylePatchesAndSynchronization();
     serialNumberStrokePatchesPreserveOtherProperties();
     filterStyleParticipatesInToolbarStateDiffs();

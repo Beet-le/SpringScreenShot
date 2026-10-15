@@ -123,6 +123,12 @@ pub(crate) fn scene_item_from_rect(id: ElementId, rect: RectangleData) -> SceneD
         stroke: rect.stroke,
         stroke_width: rect.stroke_width,
         stroke_style: rect.stroke_style,
+        stroke_rendering_style: if rect.is_highlight() || rect.is_spotlight() {
+            Default::default()
+        } else {
+            rect.stroke_rendering_style
+        },
+        stroke_rendering_seed: rect.stroke_rendering_seed,
         corner_radii: rect.corner_radii,
         opacity: rect.opacity,
         shape: match rect.highlight_shape {
@@ -182,6 +188,12 @@ pub(crate) fn scene_item_from_arrow(id: ElementId, arrow: ArrowData) -> SceneDis
         stroke: arrow.stroke,
         stroke_width: arrow.stroke_width,
         stroke_style: arrow.stroke_style,
+        stroke_rendering_style: if arrow.is_regular_arrow() || arrow.is_line() {
+            arrow.stroke_rendering_style
+        } else {
+            Default::default()
+        },
+        stroke_rendering_seed: arrow.stroke_rendering_seed,
         fill: arrow.fill,
         fill_style: display_fill_style(arrow.fill_style),
         arrowhead_primitives,
@@ -221,6 +233,8 @@ pub(crate) fn scene_item_from_free_draw(
         .pressure_geometry(geometry.revision, &geometry)
         .map(Arc::new);
     SceneDisplayItem::Arrow(ArrowDisplayItem {
+        stroke_rendering_style: Default::default(),
+        stroke_rendering_seed: 0,
         brush_mode: free_draw.brush_mode,
         pressure_geometry,
         bound_text_id: None,
@@ -256,6 +270,8 @@ pub(crate) fn scene_item_from_free_draw_preview(
     preview: &FreeDrawPreview,
 ) -> SceneDisplayItem {
     SceneDisplayItem::Arrow(ArrowDisplayItem {
+        stroke_rendering_style: Default::default(),
+        stroke_rendering_seed: 0,
         brush_mode: preview.brush_mode,
         pressure_geometry: preview.pressure_geometry.clone(),
         bound_text_id: None,
@@ -323,6 +339,7 @@ fn arrowhead_display_primitive(primitive: ArrowheadRenderPrimitive) -> Arrowhead
             points: vec![line.from, line.to],
             center: [0.0, 0.0],
             diameter: 0.0,
+            roughness_cap: line.roughness_cap,
             fill_mode: ArrowheadDisplayFillMode::Stroke,
             dash_mode: arrowhead_display_dash_mode(line.dash_mode),
         },
@@ -331,6 +348,7 @@ fn arrowhead_display_primitive(primitive: ArrowheadRenderPrimitive) -> Arrowhead
             points: polygon.points,
             center: [0.0, 0.0],
             diameter: 0.0,
+            roughness_cap: polygon.roughness_cap,
             fill_mode: arrowhead_display_fill_mode(polygon.fill_mode),
             dash_mode: arrowhead_display_dash_mode(polygon.dash_mode),
         },
@@ -339,6 +357,7 @@ fn arrowhead_display_primitive(primitive: ArrowheadRenderPrimitive) -> Arrowhead
             points: Vec::new(),
             center: circle.center,
             diameter: circle.diameter,
+            roughness_cap: circle.roughness_cap,
             fill_mode: arrowhead_display_fill_mode(circle.fill_mode),
             dash_mode: arrowhead_display_dash_mode(circle.dash_mode),
         },
@@ -875,6 +894,8 @@ pub(crate) fn arrow_handle_item(handle: ArrowHandleState, zoom: f64) -> UiRectan
             ArrowHandleKind::Segment => UiShapeKind::ArrowSegmentHandle,
         },
         RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: handle.center,
@@ -1052,6 +1073,8 @@ mod tests {
 
     fn preview_rect(center: Point<f64>, width: f64, height: f64) -> RectangleData {
         RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center,
@@ -1132,6 +1155,8 @@ mod tests {
                 generation: 2,
             },
             RectangleData {
+                stroke_rendering_style: Default::default(),
+                stroke_rendering_seed: 0,
                 rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
                 highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
                 center: Point::default(),
@@ -1161,6 +1186,8 @@ mod tests {
         let item = ui_rect_item(
             UiShapeKind::SelectionCandidateFrame,
             RectangleData {
+                stroke_rendering_style: Default::default(),
+                stroke_rendering_seed: 0,
                 rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
                 highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
                 center: Point::default(),
@@ -1226,6 +1253,8 @@ mod tests {
     #[test]
     fn rectangle_highlight_display_item_uses_multiply_blending() {
         let highlight = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::default(),
@@ -1650,6 +1679,8 @@ pub(crate) fn scene_item_from_speech_bubble(
         .flat_map(|chunk| chunk.commands.iter().copied())
         .collect();
     let path = ArrowDisplayItem {
+        stroke_rendering_style: Default::default(),
+        stroke_rendering_seed: 0,
         brush_mode: Default::default(),
         pressure_geometry: None,
         id: display_item_id(id),

@@ -15,6 +15,8 @@ fn insert_bubble(document: &mut DocumentModel, center: Point<f64>, labeled: bool
     let owner = document.allocate_element_id();
     let label = labeled.then(|| document.allocate_element_id());
     let mut bubble = SpeechBubbleData::new(RectangleData {
+        stroke_rendering_seed: 0,
+        stroke_rendering_style: Default::default(),
         rectangle_kind: RectangleElementKind::Rectangle,
         highlight_shape: HighlightShape::Rectangle,
         center,

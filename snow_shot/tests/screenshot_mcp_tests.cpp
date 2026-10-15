@@ -939,6 +939,31 @@ void completeToolStyleContract() {
         return mcpStylePatch(
             styles, styles, {{QStringLiteral("target"), target}, {QStringLiteral("style"), patch}});
     };
+    for (const auto& target :
+         {QStringLiteral("rectangle"), QStringLiteral("arrow"), QStringLiteral("line")}) {
+        const QStringList values{QStringLiteral("architect"), QStringLiteral("artist"),
+                                 QStringLiteral("cartoonist")};
+        for (int index = 0; index < values.size(); ++index) {
+            require(apply(target, {{QStringLiteral("stroke_rendering_style"), values.at(index)}}) &&
+                        styles.state.shapeStyle.strokeRenderingStyle ==
+                            static_cast<SnowCanvasStrokeRenderingStyle>(index) &&
+                        styles.properties == SnowCanvasShapeStylePropertyStrokeRenderingStyle,
+                    "rendering MCP styles should map names to exact rendering property patches");
+        }
+    }
+    const int renderingUpdates = styles.updates;
+    for (const auto& target :
+         {QStringLiteral("freehand"), QStringLiteral("speech_bubble"), QStringLiteral("text"),
+          QStringLiteral("serial_number"), QStringLiteral("rectangle_highlight")}) {
+        require(
+            !apply(target, {{QStringLiteral("stroke_rendering_style"), QStringLiteral("artist")}}),
+            "rendering MCP styles should reject unsupported tool targets");
+    }
+    require(!apply(QStringLiteral("rectangle"),
+                   {{QStringLiteral("stroke_rendering_style"), QStringLiteral("rough")}}) &&
+                !apply(QStringLiteral("arrow"), {{QStringLiteral("stroke_rendering_style"), 1}}) &&
+                styles.updates == renderingUpdates,
+            "invalid rendering MCP patches should reject atomically before command dispatch");
     require(apply(QStringLiteral("arrow"),
                   {{QStringLiteral("arrow_shaft_type"), QStringLiteral("tapered")},
                    {QStringLiteral("arrow_ratio"), 2.5}}) &&
@@ -1082,6 +1107,7 @@ void completeToolStyleContract() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     if (app.arguments().contains(QStringLiteral("--magnifier-only")) ||
+        app.arguments().contains(QStringLiteral("--stroke-rendering-only")) ||
         app.arguments().contains(QStringLiteral("--border-fill-only"))) {
         completeToolStyleContract();
         return 0;

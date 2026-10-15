@@ -117,6 +117,8 @@ mod tests {
 
     fn rectangle(center: Point<f64>) -> RectangleData {
         RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
             highlight_shape: Default::default(),
             center,

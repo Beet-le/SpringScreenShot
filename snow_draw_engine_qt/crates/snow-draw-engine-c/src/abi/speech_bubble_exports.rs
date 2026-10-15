@@ -122,6 +122,8 @@ pub unsafe extern "C" fn snow_speech_bubble_resolve_text_layout(
         }
         let info = unsafe { &*info };
         let body = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
             highlight_shape: match info.bubble_shape {
                 SnowRectangleShape::Rectangle => snow_draw_engine::HighlightShape::Rectangle,

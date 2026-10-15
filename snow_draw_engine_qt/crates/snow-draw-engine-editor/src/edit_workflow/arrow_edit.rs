@@ -447,6 +447,8 @@ mod tests {
             rectangle_id,
             ElementMeta::default(),
             RectangleData {
+                stroke_rendering_style: Default::default(),
+                stroke_rendering_seed: 0,
                 rectangle_kind: RectangleElementKind::Rectangle,
                 highlight_shape: HighlightShape::Rectangle,
                 center: Point::new(0.0, 0.0),
@@ -542,6 +544,8 @@ mod tests {
             rectangle_id,
             ElementMeta::default(),
             RectangleData {
+                stroke_rendering_style: Default::default(),
+                stroke_rendering_seed: 0,
                 rectangle_kind: RectangleElementKind::Rectangle,
                 highlight_shape: HighlightShape::Rectangle,
                 center: Point::new(0.0, 0.0),

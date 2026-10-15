@@ -232,6 +232,7 @@ struct Style {
     strength: f64,
     gap: f64,
     stroke_style: crate::StrokeStyle,
+    stroke_rendering_style: crate::StrokeRenderingStyle,
     arrow_type: crate::ArrowType,
     filter: Filter,
 }
@@ -262,6 +263,7 @@ impl Default for Style {
             strength: 0.5,
             gap: 56.0,
             stroke_style: Default::default(),
+            stroke_rendering_style: Default::default(),
             arrow_type: Default::default(),
             filter: Default::default(),
         }
@@ -330,7 +332,7 @@ fn text_valid(text: &str) -> Result<(), ErrorCode> {
         Ok(())
     }
 }
-fn rectangle(b: [f64; 4], s: &Style) -> Result<RectangleData, ErrorCode> {
+fn rectangle(b: [f64; 4], s: &Style, id: ElementId) -> Result<RectangleData, ErrorCode> {
     s.validate()?;
     let (center, width, height) = bounds(b)?;
     Ok(RectangleData {
@@ -345,6 +347,11 @@ fn rectangle(b: [f64; 4], s: &Style) -> Result<RectangleData, ErrorCode> {
         stroke: rgba(s.stroke),
         stroke_width: s.stroke_width,
         stroke_style: s.stroke_style,
+        stroke_rendering_style: s.stroke_rendering_style,
+        stroke_rendering_seed: snow_draw_engine_core::arrow::stroke_rendering_seed(
+            id.index,
+            id.generation,
+        ),
         corner_radii: CornerRadii::default(),
         opacity: s.opacity,
     })
@@ -427,13 +434,13 @@ impl Engine {
                     bounds: b,
                     style: s,
                 } => {
-                    tx.insert_rectangle(id, meta, rectangle(b, &s)?);
+                    tx.insert_rectangle(id, meta, rectangle(b, &s, id)?);
                 }
                 Annotation::Ellipse {
                     bounds: b,
                     style: s,
                 } => {
-                    let mut data = rectangle(b, &s)?;
+                    let mut data = rectangle(b, &s, id)?;
                     data.highlight_shape = HighlightShape::Ellipse;
                     tx.insert_rectangle(id, meta, data);
                 }
@@ -441,7 +448,7 @@ impl Engine {
                     bounds: b,
                     style: s,
                 } => {
-                    let mut data = rectangle(b, &s)?;
+                    let mut data = rectangle(b, &s, id)?;
                     data.highlight_shape = HighlightShape::Diamond;
                     tx.insert_rectangle(id, meta, data);
                 }
@@ -452,14 +459,14 @@ impl Engine {
                     tx.insert_rectangle(
                         id,
                         meta,
-                        rectangle(b, &s)?.into_highlight(HighlightShape::Ellipse),
+                        rectangle(b, &s, id)?.into_highlight(HighlightShape::Ellipse),
                     );
                 }
                 Annotation::RoundedRectangle {
                     bounds: b,
                     style: s,
                 } => {
-                    let mut r = rectangle(b, &s)?;
+                    let mut r = rectangle(b, &s, id)?;
                     r.corner_radii = CornerRadii::splat(s.corner_radius);
                     tx.insert_rectangle(id, meta, r);
                 }
@@ -470,14 +477,14 @@ impl Engine {
                     tx.insert_rectangle(
                         id,
                         meta,
-                        rectangle(b, &s)?.into_highlight(HighlightShape::Rectangle),
+                        rectangle(b, &s, id)?.into_highlight(HighlightShape::Rectangle),
                     );
                 }
                 Annotation::Spotlight {
                     bounds: b,
                     style: s,
                 } => {
-                    tx.insert_rectangle(id, meta, rectangle(b, &s)?.into_spotlight());
+                    tx.insert_rectangle(id, meta, rectangle(b, &s, id)?.into_spotlight());
                     tx.update_spotlight(SpotlightConfig {
                         color: rgba(s.color),
                         opacity: s.opacity,
@@ -636,6 +643,12 @@ impl Engine {
                     )
                     .ok_or(ErrorCode::InvalidArgument)?;
                     data.opacity = s.opacity;
+                    data.stroke_rendering_style = s.stroke_rendering_style;
+                    data.stroke_rendering_seed =
+                        snow_draw_engine_core::arrow::stroke_rendering_seed(
+                            id.index,
+                            id.generation,
+                        );
                     data = match linear_kind {
                         LinearElementKind::Line => data.into_line(rgba(s.fill), FillStyle::Solid),
                         LinearElementKind::PenHighlight => data.into_pen_highlight(),
@@ -858,6 +871,107 @@ mod tests {
                 json!(vec![json!({"type":"rectangle","bounds":[0,0,1,1]}); 257])
             )
             .is_err()
+        );
+    }
+    #[test]
+    fn stroke_rendering_annotations_history_and_sessions_preserve_styles_and_seeds() {
+        use snow_draw_engine_core::arrow::StrokeRenderingStyle;
+        let mut engine = Engine::new(EngineConfig::default());
+        apply(&mut engine, json!([
+            {"type":"rectangle", "bounds":[10,20,100,80], "style":{"stroke_rendering_style":"artist"}},
+            {"type":"arrow", "points":[[0,0],[100,80]], "style":{"stroke_rendering_style":"cartoonist"}},
+            {"type":"line", "points":[[0,80],[100,0]], "style":{"stroke_rendering_style":"artist"}}
+        ])).unwrap();
+        let ids = engine.model.paint_order().to_vec();
+        let rect = *engine.model.rectangle(ids[0]).unwrap();
+        let arrow = engine.model.arrow(ids[1]).unwrap().clone();
+        let line = engine.model.arrow(ids[2]).unwrap().clone();
+        assert_eq!(rect.stroke_rendering_style, StrokeRenderingStyle::Artist);
+        assert_eq!(
+            arrow.stroke_rendering_style,
+            StrokeRenderingStyle::Cartoonist
+        );
+        assert_eq!(line.stroke_rendering_style, StrokeRenderingStyle::Artist);
+        assert!(line.is_line());
+        assert_ne!(rect.stroke_rendering_seed, arrow.stroke_rendering_seed);
+        engine.undo().unwrap();
+        assert!(engine.model.paint_order().is_empty());
+        engine.redo().unwrap();
+        assert_eq!(*engine.model.rectangle(ids[0]).unwrap(), rect);
+        assert_eq!(*engine.model.arrow(ids[1]).unwrap(), arrow);
+        for restored in [
+            Engine::from_serialized_document_session_with_config(
+                &engine.serialize_document_session().unwrap(),
+                EngineConfig::default(),
+            )
+            .unwrap(),
+            Engine::from_serialized_document_history_with_config(
+                &engine.serialize_document_history().unwrap(),
+                EngineConfig::default(),
+            )
+            .unwrap(),
+        ] {
+            assert_eq!(*restored.model.rectangle(ids[0]).unwrap(), rect);
+            assert_eq!(*restored.model.arrow(ids[1]).unwrap(), arrow);
+            assert_eq!(*restored.model.arrow(ids[2]).unwrap(), line);
+        }
+    }
+    #[test]
+    fn stroke_rendering_legacy_sessions_default_to_architect_without_changing_undo_history() {
+        fn remove_rendering_fields(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::Object(fields) => {
+                    fields.remove("stroke_rendering_style");
+                    fields.remove("stroke_rendering_seed");
+                    for child in fields.values_mut() {
+                        remove_rendering_fields(child);
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for child in items {
+                        remove_rendering_fields(child);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut engine = Engine::new(EngineConfig::default());
+        apply(
+            &mut engine,
+            json!([
+                {"type":"rectangle", "bounds":[10,20,100,80]},
+                {"type":"arrow", "points":[[0,0],[100,80]]}
+            ]),
+        )
+        .unwrap();
+        let ids = engine.model.paint_order().to_vec();
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&engine.serialize_document_session().unwrap()).unwrap();
+        legacy["schemaVersion"] = 14.into();
+        remove_rendering_fields(&mut legacy);
+        let mut restored = Engine::from_serialized_document_session_with_config(
+            &serde_json::to_vec(&legacy).unwrap(),
+            EngineConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            restored
+                .model
+                .rectangle(ids[0])
+                .unwrap()
+                .stroke_rendering_style,
+            crate::StrokeRenderingStyle::Architect
+        );
+        assert_eq!(
+            restored.model.arrow(ids[1]).unwrap().stroke_rendering_seed,
+            0
+        );
+        restored.undo().unwrap();
+        assert!(restored.model.paint_order().is_empty());
+        restored.redo().unwrap();
+        assert_eq!(
+            restored.model.arrow(ids[1]).unwrap().stroke_rendering_style,
+            crate::StrokeRenderingStyle::Architect
         );
     }
 }

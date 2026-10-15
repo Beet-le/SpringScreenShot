@@ -170,6 +170,8 @@ pub struct RectangleDisplayItem {
     pub stroke: ColorRgba8,
     pub stroke_width: f64,
     pub stroke_style: StrokeStyle,
+    pub stroke_rendering_style: snow_draw_engine_core::arrow::StrokeRenderingStyle,
+    pub stroke_rendering_seed: u32,
     pub corner_radii: CornerRadii,
     pub opacity: f64,
     pub shape: DisplayRectangleShape,
@@ -407,6 +409,7 @@ pub struct ArrowheadDisplayPrimitive {
     pub points: Vec<[f64; 2]>,
     pub center: [f64; 2],
     pub diameter: f64,
+    pub roughness_cap: Option<f64>,
     pub fill_mode: ArrowheadDisplayFillMode,
     pub dash_mode: ArrowheadDisplayDashMode,
 }
@@ -432,6 +435,8 @@ pub struct ArrowDisplayItem {
     pub stroke: ColorRgba8,
     pub stroke_width: f64,
     pub stroke_style: StrokeStyle,
+    pub stroke_rendering_style: snow_draw_engine_core::arrow::StrokeRenderingStyle,
+    pub stroke_rendering_seed: u32,
     pub fill: ColorRgba8,
     pub fill_style: DisplayFillStyle,
     pub arrowhead_primitives: Vec<ArrowheadDisplayPrimitive>,
@@ -553,6 +558,8 @@ pub struct SerialNumberConnectorDisplayItem {
 impl Default for ArrowDisplayItem {
     fn default() -> Self {
         Self {
+            stroke_rendering_seed: 0,
+            stroke_rendering_style: Default::default(),
             brush_mode: Default::default(),
             pressure_geometry: None,
             bound_text_id: None,
@@ -583,6 +590,8 @@ impl Default for ArrowDisplayItem {
 impl Default for RectangleDisplayItem {
     fn default() -> Self {
         Self {
+            stroke_rendering_seed: 0,
+            stroke_rendering_style: Default::default(),
             id: DisplayItemId::default(),
             center_x: 0.0,
             center_y: 0.0,

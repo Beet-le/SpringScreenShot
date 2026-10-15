@@ -17273,6 +17273,510 @@ void drawingColorsPreserveAlphaAcrossEditsAndToolSwitches() {
     }
 }
 
+QWidget* openStrokeRenderingRow(ScreenshotToolPalette& palette, ScreenshotToolPalette::Tool tool) {
+    palette.setActiveTool(tool);
+    auto* picker = colorPickerWithAccessibleName(palette, tool == ScreenshotToolPalette::Tool::Arrow
+                                                              ? "Arrow stroke color"
+                                                              : "Stroke color");
+    require(picker != nullptr, "stroke rendering fixture needs a stroke color picker");
+    picker->setPopupLayerMode(adqt::widgets::AdColorPicker::PopupLayerMode::InWindow);
+    picker->setPopupVisible(true);
+    QApplication::processEvents();
+    auto* row = picker->popupContent()->findChild<QWidget*>(
+        QStringLiteral("screenshotStrokeRenderingStyles"));
+    require(row != nullptr, "stroke rendering options should materialize below stroke patterns");
+    return row;
+}
+
+QList<adqt::widgets::AdButton*> strokeRenderingButtons(QWidget* row) {
+    const auto buttons =
+        row->findChildren<adqt::widgets::AdButton*>(QString(), Qt::FindDirectChildrenOnly);
+    require(buttons.size() == 3, "stroke rendering should have exactly three option buttons");
+    return buttons;
+}
+
+void strokeRenderingControlsPreserveIndependentToolStyles() {
+    using Tool = ScreenshotToolPalette::Tool;
+    using Rendering = SnowCanvasStrokeRenderingStyle;
+    const auto product = snow_shot::presentation::screenshotCanvasStyleDefaults();
+    require(product.rectangle.strokeRenderingStyle == Rendering::Architect &&
+                product.arrow.strokeRenderingStyle == Rendering::Architect &&
+                product.line.strokeRenderingStyle == Rendering::Architect,
+            "Architect should remain the default for each supported tool");
+    ScreenshotToolPalette::Options options;
+    options.showLineTool = true;
+    options.showFreeDrawTool = true;
+    options.showSpeechBubbleTool = true;
+    options.styleDefaults = product;
+    ScreenshotToolPalette palette(options);
+    SnowCanvasShapeStyle emitted;
+    quint32 properties = 0;
+    SnowCanvasShapeKind kind = SnowCanvasShapeKind::Rectangle;
+    int commits = 0;
+    QObject::connect(
+        &palette, &ScreenshotToolPalette::shapeStyleChanged, &palette,
+        [&](const SnowCanvasShapeStyle& style, quint32 changed, SnowCanvasShapeKind changedKind) {
+            emitted = style;
+            properties = changed;
+            kind = changedKind;
+            ++commits;
+        });
+    auto expected = product;
+    for (const auto tool : {Tool::Shape, Tool::Arrow, Tool::Line}) {
+        QWidget* row = openStrokeRenderingRow(palette, tool);
+        require(!row->isHidden(), "supported tools should expose stroke rendering controls");
+        const auto buttons = strokeRenderingButtons(row);
+        require(buttons.at(0)->toolTip() == QStringLiteral("Architect") &&
+                    buttons.at(1)->toolTip() == QStringLiteral("Artist") &&
+                    buttons.at(2)->toolTip() == QStringLiteral("Cartoonist"),
+                "rendering options should follow Architect, Artist, Cartoonist order");
+        require(row->parentWidget()->layout()->indexOf(row) == 1,
+                "rendering options should be the row directly below the stroke patterns");
+        const int before = commits;
+        const int index = tool == Tool::Arrow ? 2 : 1;
+        buttons.at(index)->click();
+        const auto style = static_cast<Rendering>(index);
+        auto& expectedStyle = tool == Tool::Arrow  ? expected.arrow
+                              : tool == Tool::Line ? expected.line
+                                                   : expected.rectangle;
+        expectedStyle.strokeRenderingStyle = style;
+        require(commits == before + 1 &&
+                    properties == SnowCanvasShapeStylePropertyStrokeRenderingStyle &&
+                    emitted.strokeRenderingStyle == style &&
+                    kind == (tool == Tool::Arrow  ? SnowCanvasShapeKind::Arrow
+                             : tool == Tool::Line ? SnowCanvasShapeKind::Line
+                                                  : SnowCanvasShapeKind::Rectangle) &&
+                    palette.creationStyleDefaults() == expected,
+                "a rendering choice should emit one property and remember only its tool");
+        buttons.at(index)->click();
+        require(commits == before + 1, "clicking the current rendering style should be a no-op");
+        clickStyleControl(palette, tool == Tool::Arrow ? "Dashed arrow stroke" : "Dashed stroke");
+        expectedStyle.strokeStyle = SnowCanvasStrokeStyle::Dashed;
+        require(properties == SnowCanvasShapeStylePropertyStrokeStyle &&
+                    emitted.strokeRenderingStyle == style &&
+                    palette.creationStyleDefaults() == expected,
+                "stroke patterns should preserve the independent rendering preference");
+    }
+    for (int pass = 0; pass < 2; ++pass) {
+        for (const auto tool :
+             {Tool::FreeDraw, Tool::SpeechBubble, Tool::Shape, Tool::Arrow, Tool::Line}) {
+            QWidget* row = openStrokeRenderingRow(palette, tool);
+            const auto buttons = strokeRenderingButtons(row);
+            const bool supported = tool == Tool::Shape || tool == Tool::Arrow || tool == Tool::Line;
+            require(
+                row->isHidden() != supported,
+                "reused stroke editors should expose rendering styles only for supported tools");
+            require(
+                row->parentWidget()
+                        ->findChildren<QWidget*>(QStringLiteral("screenshotStrokeRenderingStyles"))
+                        .size() == 1,
+                "switching tools should retain a single rendering row");
+            if (!supported) {
+                const int before = commits;
+                buttons.at(2)->click();
+                require(commits == before, "hidden rendering controls must not edit other tools");
+            }
+        }
+    }
+    require(palette.creationStyleDefaults() == expected,
+            "reconciliation should preserve each tool's rendering and pattern choices");
+}
+
+void strokeRenderingMixedSelectionResolvesOneProperty() {
+    using Tool = ScreenshotToolPalette::Tool;
+    for (const auto tool : {Tool::Shape, Tool::Arrow, Tool::Line}) {
+        ScreenshotToolPalette::Options options;
+        options.showLineTool = true;
+        ScreenshotToolPalette palette(options);
+        QWidget* row = openStrokeRenderingRow(palette, tool);
+        const auto buttons = strokeRenderingButtons(row);
+        SnowCanvasStyleToolbarState state;
+        state.source = tool == Tool::Arrow  ? SnowCanvasStyleToolbarSource::SelectedArrow
+                       : tool == Tool::Line ? SnowCanvasStyleToolbarSource::SelectedLine
+                                            : SnowCanvasStyleToolbarSource::SelectedRectangle;
+        state.shapeStyle.strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Artist;
+        state.shapeStyle.strokeStyle = SnowCanvasStrokeStyle::Dashed;
+        state.shapeStyleMixed =
+            SnowCanvasShapeStyleMixedStrokeRenderingStyle | SnowCanvasShapeStyleMixedStroke;
+        palette.setStyleToolbarState(state);
+        for (auto* button : buttons) {
+            require(button->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Text,
+                    "mixed rendering styles should leave every option inactive");
+        }
+        requireControlActive(palette, tool == Tool::Arrow ? "Dashed arrow stroke" : "Dashed stroke",
+                             "mixed rendering and colors should preserve a uniform stroke pattern");
+        int commits = 0;
+        quint32 properties = 0;
+        QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged, &palette,
+                         [&](const SnowCanvasShapeStyle&, quint32 changed, SnowCanvasShapeKind) {
+                             ++commits;
+                             properties = changed;
+                         });
+        buttons.at(1)->click();
+        require(commits == 1 && properties == SnowCanvasShapeStylePropertyStrokeRenderingStyle &&
+                    buttons.at(1)->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Tonal,
+                "choosing the displayed mixed style should resolve and emit exactly that property");
+        state.shapeStyleMixed = SnowCanvasShapeStyleMixedStrokeStyle;
+        palette.setStyleToolbarState(state);
+        require(buttons.at(1)->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Tonal,
+                "uniform rendering should remain active while stroke patterns differ");
+    }
+}
+
+void strokeRenderingPreferencesRoundTripAndRejectUnknownValues() {
+    using namespace snow_shot::presentation;
+    using Rendering = SnowCanvasStrokeRenderingStyle;
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto defaults = screenshotCanvasStyleDefaults();
+    defaults.rectangle.strokeRenderingStyle = Rendering::Artist;
+    defaults.arrow.strokeRenderingStyle = Rendering::Cartoonist;
+    defaults.line.strokeRenderingStyle = Rendering::Artist;
+    require(persistScreenshotCanvasToolStyles(defaults) &&
+                screenshotCanvasToolStyleDefaults() == defaults,
+            "rendering preferences should persist independently for shape, arrow, and line");
+    SnowCanvasWidget canvas;
+    applyScreenshotCanvasToolStyles(canvas, defaults);
+    for (const auto tool : {SnowCanvasTool::Shape, SnowCanvasTool::Arrow, SnowCanvasTool::Line}) {
+        require(canvas.setCanvasTool(tool), "activate a tool with restored rendering preferences");
+        require(canvas.canvasStyleToolbarState().shapeStyle.strokeRenderingStyle ==
+                    (tool == SnowCanvasTool::Arrow ? Rendering::Cartoonist : Rendering::Artist),
+                "restored rendering preference should reach canvas creation state");
+    }
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    for (const auto& key :
+         {QStringLiteral("drawing/shape_style"), QStringLiteral("drawing/arrow_style"),
+          QStringLiteral("drawing/line_style")}) {
+        for (const auto value :
+             {QJsonValue(QJsonValue::Undefined), QJsonValue(), QJsonValue(-1), QJsonValue(3),
+              QJsonValue(1.5), QJsonValue(QStringLiteral("artist"))}) {
+            QJsonObject object = storage.configuration().value(key).toObject();
+            object.insert(QStringLiteral("stroke_rendering_style"), value);
+            require(storage.configuration().setValue(key, object),
+                    "prepare invalid rendering preference");
+            const auto loaded = screenshotCanvasToolStyleDefaults();
+            const auto& style = key.endsWith(QStringLiteral("shape_style"))   ? loaded.rectangle
+                                : key.endsWith(QStringLiteral("arrow_style")) ? loaded.arrow
+                                                                              : loaded.line;
+            require(style.strokeRenderingStyle == Rendering::Architect && style.strokeWidth == 2.0,
+                    "missing or invalid rendering preferences should preserve Architect and other "
+                    "fields");
+        }
+    }
+}
+
+void strokeRenderingSelectionEditUsesHistoryAndRemembersOnlyItsProperty() {
+    using namespace snow_shot::presentation;
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    const auto defaults = screenshotCanvasStyleDefaults();
+    require(persistScreenshotCanvasToolStyles(defaults), "prepare rendering selection preferences");
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    ScreenshotToolPalette::Options options;
+    options.styleDefaults = defaults;
+    ScreenshotToolPalette palette(options);
+    int saves = 0;
+    ScreenshotStyleBinding binding(palette, canvas, &palette, {},
+                                   [&](const SnowCanvasStyleEdit& edit) {
+                                       ++saves;
+                                       return persistScreenshotCanvasStyleEdit(edit);
+                                   });
+    applyScreenshotCanvasToolStyles(canvas, defaults);
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    const auto created =
+        QJsonDocument::fromJson(
+            runtime.applyAnnotationTransaction(
+                R"({"version":1,"operations":[{"type":"rectangle","bounds":[10,10,80,50],"style":{"stroke_width":7}}]})"))
+            .object()
+            .value(QStringLiteral("created_element_ids"))
+            .toArray();
+    require(created.size() == 1, "create a selected rendering fixture");
+    SnowCanvasRuntimeEditor editor(runtime);
+    const auto id = created.first().toObject();
+    require(canvas.setCanvasTool(SnowCanvasTool::Select) &&
+                editor.select(static_cast<quint32>(id.value(QStringLiteral("index")).toInt()),
+                              static_cast<quint32>(id.value(QStringLiteral("generation")).toInt())),
+            "select a shape for rendering style editing");
+    QWidget* row = openStrokeRenderingRow(palette, ScreenshotToolPalette::Tool::Shape);
+    palette.setStyleToolbarState(canvas.canvasStyleToolbarState());
+    require(canvas.canvasStyleToolbarState().source ==
+                SnowCanvasStyleToolbarSource::SelectedRectangle,
+            "rendering fixture should expose selected shape state");
+    const auto document = [&] {
+        auto content = QJsonDocument::fromJson(runtime.serializeDocumentSession())
+                           .object()
+                           .value(QStringLiteral("document"))
+                           .toObject();
+        // History replay advances the revision while restoring document contents.
+        content.remove(QStringLiteral("revision"));
+        return content;
+    };
+    const QJsonValue before = document();
+    strokeRenderingButtons(row).at(1)->click();
+    auto expected = defaults;
+    expected.rectangle.strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Artist;
+    const QJsonValue after = document();
+    require(
+        after != before && saves == 1 && binding.lastSaveSucceeded() == true &&
+            canvas.canvasStyleToolbarState().shapeStyle.strokeRenderingStyle ==
+                SnowCanvasStrokeRenderingStyle::Artist &&
+            canvas.canvasStyleToolbarState().shapeStyle.strokeWidth == 7 &&
+            palette.creationStyleDefaults() == expected &&
+            screenshotCanvasToolStyleDefaults() == expected,
+        "selected rendering edit should preserve appearance and remember only the edited property");
+    const bool undone = canvas.undo();
+    if (!undone || document() != before || saves != 1 ||
+        screenshotCanvasToolStyleDefaults() != expected) {
+        std::cerr << "Rendering undo result=" << undone << ", saves=" << saves
+                  << ", preferences=" << (screenshotCanvasToolStyleDefaults() == expected)
+                  << "\nBefore: " << QJsonDocument(before.toObject()).toJson().constData()
+                  << "\nRestored: " << QJsonDocument(document()).toJson().constData() << '\n';
+    }
+    require(undone && document() == before && saves == 1 &&
+                screenshotCanvasToolStyleDefaults() == expected,
+            "undo should restore the original rendering without overwriting creation preferences");
+    require(canvas.redo() && document() == after && saves == 1,
+            "redo should restore rendering without issuing another preference save");
+}
+
+void styledDrawTemplatesPersistNormalizeAndRemainInsertable() {
+    using namespace snow_shot;
+    const storage::DrawTemplateSettings settings;
+    const auto original = settings.templates();
+    const auto restore = qScopeGuard([&] { static_cast<void>(settings.setTemplates(original)); });
+    const QString key = QStringLiteral("drawing/draw_templates");
+    const QStringList kinds{QStringLiteral("rectangle"), QStringLiteral("arrow"),
+                            QStringLiteral("line")};
+    QVector<storage::DrawTemplate> templates;
+    QVector<QJsonObject> sourceData;
+    const auto elementData = [](const QByteArray& payload) {
+        const auto elements =
+            QJsonDocument::fromJson(payload).object().value(QStringLiteral("elements")).toArray();
+        require(elements.size() == 1, "styled template should contain one complete element");
+        const auto data = elements.first().toObject().value(QStringLiteral("data")).toObject();
+        require(data.size() == 1, "styled template should contain one typed element payload");
+        return data.begin().value().toObject();
+    };
+    for (const auto& kind : kinds) {
+        QJsonObject operation{
+            {QStringLiteral("type"), kind},
+            {QStringLiteral("style"),
+             QJsonObject{{QStringLiteral("stroke_rendering_style"),
+                          kind == QStringLiteral("rectangle") ? QStringLiteral("artist")
+                                                              : QStringLiteral("cartoonist")},
+                         {QStringLiteral("stroke_style"), QStringLiteral("dashed")},
+                         {QStringLiteral("stroke_width"), 3}}}};
+        if (kind == QStringLiteral("rectangle")) {
+            operation.insert(QStringLiteral("bounds"), QJsonArray{0, 0, 80, 50});
+        } else {
+            operation.insert(QStringLiteral("points"),
+                             QJsonArray{QJsonArray{0, 0}, QJsonArray{120, 45}});
+        }
+        SnowCanvasRuntime source;
+        const auto result =
+            QJsonDocument::fromJson(source.applyAnnotationTransaction(
+                                        QJsonDocument(QJsonObject{{QStringLiteral("version"), 1},
+                                                                  {QStringLiteral("operations"),
+                                                                   QJsonArray{operation}}})
+                                            .toJson(QJsonDocument::Compact)))
+                .object();
+        const auto created = result.value(QStringLiteral("created_element_ids")).toArray();
+        require(created.size() == 1, "create a real styled element for template storage");
+        const auto id = created.first().toObject();
+        SnowCanvasRuntimeEditor sourceEditor(source);
+        require(sourceEditor.select(
+                    static_cast<quint32>(id.value(QStringLiteral("index")).toInt()),
+                    static_cast<quint32>(id.value(QStringLiteral("generation")).toInt())),
+                "select the styled template source");
+        const QByteArray payload = source.serializeSelectedDrawTemplate();
+        require(
+            QJsonDocument::fromJson(payload).object().value(QStringLiteral("schemaVersion")) ==
+                QJsonValue(6),
+            "storage compatibility coverage should follow the engine's current template version");
+        const auto data = elementData(payload);
+        require(
+            data.value(QStringLiteral("stroke_rendering_style")) ==
+                    (kind == QStringLiteral("rectangle") ? QStringLiteral("artist")
+                                                         : QStringLiteral("cartoonist")) &&
+                data.value(QStringLiteral("stroke_rendering_seed")).isDouble() &&
+                data.value(QStringLiteral("stroke_style")) == QStringLiteral("dashed"),
+            "real template serialization should include rendering style, stable seed, and pattern");
+        const QPointF duplicateOffset(160, 90);
+        require(sourceEditor.duplicateSelected(duplicateOffset),
+                "duplicate the selected styled element through the Qt and C APIs");
+        const QByteArray duplicatePayload = source.serializeSelectedDrawTemplate();
+        const auto duplicate = QJsonDocument::fromJson(duplicatePayload).object();
+        const auto before = QJsonDocument::fromJson(payload).object();
+        require(duplicate.value(QStringLiteral("selectedIds")) !=
+                    before.value(QStringLiteral("selectedIds")),
+                "direct duplication should select a new element identity");
+        const auto sourceCenter = before.value(QStringLiteral("sourceCenter")).toObject();
+        const auto duplicateCenter = duplicate.value(QStringLiteral("sourceCenter")).toObject();
+        require(
+            duplicateCenter.value(QStringLiteral("x")).toDouble() ==
+                    sourceCenter.value(QStringLiteral("x")).toDouble() + duplicateOffset.x() &&
+                duplicateCenter.value(QStringLiteral("y")).toDouble() ==
+                    sourceCenter.value(QStringLiteral("y")).toDouble() + duplicateOffset.y(),
+            "direct duplication should translate the selected geometry by the requested offset");
+        const auto duplicateData = elementData(duplicatePayload);
+        for (const auto& field :
+             {QStringLiteral("stroke_rendering_style"), QStringLiteral("stroke_rendering_seed"),
+              QStringLiteral("stroke_style"), QStringLiteral("stroke_width")}) {
+            require(duplicateData.value(field) == data.value(field),
+                    "direct duplication should preserve exact rendering style, seed, pattern, and "
+                    "width");
+        }
+        require(source.undo() && source.serializeSelectedDrawTemplate() == payload,
+                "one undo should remove the styled duplicate and restore the original selection");
+        require(source.redo() && source.serializeSelectedDrawTemplate() == duplicatePayload,
+                "redo should restore the exact styled duplicate and its seed");
+        templates.push_back({kind, payload});
+        sourceData.push_back(data);
+    }
+    require(settings.setTemplates(templates) && settings.templates() == templates,
+            "store actual engine-generated styled templates without changing their payloads");
+    auto& applicationStorage = storage::ApplicationStorage::instance();
+    require(applicationStorage.configuration().flushNow().success,
+            "flush styled templates for a storage restart");
+    storage::ConfigurationStore reopened(
+        QDir(applicationStorage.configurationDirectory()).filePath(QStringLiteral("config.json")),
+        true, false);
+    const auto stored = reopened.value(key).toArray();
+    const auto normalized = storage::ConfigurationSchema::normalize(key, stored);
+    require(stored.size() == templates.size() && normalized.valid && !normalized.changed &&
+                normalized.value == stored,
+            "real styled templates should survive reopening and configuration normalization");
+    for (int index = 0; index < templates.size(); ++index) {
+        const auto entry = stored.at(index).toObject();
+        const QByteArray payload =
+            QByteArray::fromBase64(entry.value(QStringLiteral("payload")).toString().toLatin1());
+        require(entry.value(QStringLiteral("name")) == templates.at(index).name &&
+                    payload == templates.at(index).payload,
+                "reopened template storage should retain names, order, and exact serialized bytes");
+        SnowCanvasRuntime destination;
+        SnowCanvasRuntimeEditor destinationEditor(destination);
+        require(destinationEditor.insertDrawTemplate(payload, QPointF(400, 300)),
+                "reopened styled template should remain insertable into a fresh runtime");
+        const auto inserted = elementData(destination.serializeSelectedDrawTemplate());
+        for (const auto& field :
+             {QStringLiteral("stroke_rendering_style"), QStringLiteral("stroke_rendering_seed"),
+              QStringLiteral("stroke_style"), QStringLiteral("stroke_width")}) {
+            require(inserted.value(field) == sourceData.at(index).value(field),
+                    "stored template insertion should preserve rendering style, seed, pattern, and "
+                    "width");
+        }
+    }
+    const auto withVersion = [&](const QJsonValue& version) {
+        auto object = QJsonDocument::fromJson(templates.first().payload).object();
+        object.insert(QStringLiteral("schemaVersion"), version);
+        return QJsonDocument(object).toJson(QJsonDocument::Compact);
+    };
+    for (int version = 1; version <= 6; ++version) {
+        const auto payload = withVersion(version);
+        require(
+            settings.setTemplates({{QStringLiteral("  Compatible  "), payload}}) &&
+                settings.templates() ==
+                    QVector<storage::DrawTemplate>{{QStringLiteral("Compatible"), payload}},
+            "storage should accept every supported template version through its shared validator");
+    }
+    require(settings.setTemplates(templates),
+            "restore actual styled templates before invalid edits");
+    for (const auto& version : {QJsonValue(), QJsonValue(-1), QJsonValue(0), QJsonValue(7),
+                                QJsonValue(1.5), QJsonValue(QStringLiteral("6"))}) {
+        const auto invalid = withVersion(version);
+        require(!settings.setTemplates({templates.first(), {QStringLiteral("Invalid"), invalid}}) &&
+                    settings.templates() == templates,
+                "unsupported template versions should reject the whole settings edit atomically");
+        const QJsonArray entries{
+            stored.first(),
+            QJsonObject{{QStringLiteral("name"), QStringLiteral("Invalid")},
+                        {QStringLiteral("payload"), QString::fromLatin1(invalid.toBase64())}}};
+        const auto repaired = storage::ConfigurationSchema::normalize(key, entries);
+        require(repaired.valid && repaired.changed && repaired.value == QJsonArray{stored.first()},
+                "configuration repair should discard only unsupported templates and preserve valid "
+                "ones");
+    }
+}
+
+void strokeRenderingPopupKeepsDpiAndRetranslates() {
+    using namespace snow_shot::presentation;
+    auto& language = LanguageManager::instance();
+    require(language.setLanguage(QStringLiteral("en_US")),
+            "start rendering popup coverage in English");
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(language.setLanguage(QStringLiteral("en_US"))); });
+    QWidget host;
+    host.resize(700, 650);
+    const QString snapshotDirectory = qEnvironmentVariable("SNOW_STROKE_RENDERING_SNAPSHOT_DIR");
+    if (!snapshotDirectory.isEmpty()) {
+        host.show();
+    }
+    ScreenshotToolPalette palette(ScreenshotToolPalette::Options{}, &host);
+    palette.move(20, 30);
+    palette.show();
+    QWidget* row = openStrokeRenderingRow(palette, ScreenshotToolPalette::Tool::Shape);
+    const auto buttons = strokeRenderingButtons(row);
+    const QSize size = buttons.at(0)->size();
+    const QSize rowSize = row->sizeHint();
+    const auto snapshot = [&](int toolbarScale) {
+        if (snapshotDirectory.isEmpty()) {
+            return;
+        }
+        require(QDir().mkpath(snapshotDirectory), "create stroke rendering snapshot directory");
+        auto* picker = colorPickerWithAccessibleName(palette, "Stroke color");
+        auto* popover = picker->findChild<adqt::widgets::AdPopover*>();
+        require(popover != nullptr && popover->contentWidget() != nullptr,
+                "stroke rendering snapshot should capture the actual color picker popup");
+        QWidget* surface = popover->contentWidget();
+        while (surface != nullptr && surface->objectName() != QStringLiteral("adpopover-surface")) {
+            surface = surface->parentWidget();
+        }
+        require(surface != nullptr, "stroke rendering snapshot should include the popup surface");
+        const QStringList names{QStringLiteral("architect"), QStringLiteral("artist"),
+                                QStringLiteral("cartoonist")};
+        for (int index = 0; index < buttons.size(); ++index) {
+            buttons.at(index)->click();
+            QApplication::processEvents();
+            const QString name = QStringLiteral("stroke-popup-toolbar-%1-%2.png")
+                                     .arg(toolbarScale)
+                                     .arg(names.at(index));
+            require(surface->grab().save(QDir(snapshotDirectory).filePath(name)),
+                    "save actual stroke rendering color picker popup");
+        }
+    };
+    const QImage architect = renderButton(*buttons.at(0));
+    require(architect != renderButton(*buttons.at(1)) &&
+                architect != renderButton(*buttons.at(2)) &&
+                renderButton(*buttons.at(1)) != renderButton(*buttons.at(2)),
+            "rendering buttons should have distinct visual previews");
+    snapshot(100);
+    require(palette.setPhysicalScale(1.5), "change toolbar physical scale for rendering controls");
+    QApplication::processEvents();
+    require(buttons.at(0)->size() == size && row->sizeHint() == rowSize,
+            "toolbar counter-scaling should not resize stroke rendering popup controls");
+    snapshot(150);
+    for (const auto& locale : {QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
+        require(language.setLanguage(locale), "load translated stroke rendering labels");
+        QApplication::processEvents();
+        const QStringList expected =
+            locale == QStringLiteral("zh_CN")
+                ? QStringList{QStringLiteral("建筑师"), QStringLiteral("艺术家"),
+                              QStringLiteral("漫画家")}
+                : QStringList{QStringLiteral("建築師"), QStringLiteral("藝術家"),
+                              QStringLiteral("漫畫家")};
+        for (int index = 0; index < buttons.size(); ++index) {
+            require(
+                buttons.at(index)->toolTip() == expected.at(index) &&
+                    buttons.at(index)->accessibleName() == expected.at(index),
+                "open rendering style controls should retranslate tooltips and accessible names");
+        }
+    }
+}
+
 void arrowShaftEditorPersistsAcrossReopening() {
     using namespace snow_shot::presentation;
     const auto original = screenshotCanvasToolStyleDefaults();
@@ -19102,6 +19606,20 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--stroke-rendering-only"))) {
+        strokeRenderingControlsPreserveIndependentToolStyles();
+        strokeRenderingMixedSelectionResolvesOneProperty();
+        strokeRenderingPreferencesRoundTripAndRejectUnknownValues();
+        strokeRenderingSelectionEditUsesHistoryAndRemembersOnlyItsProperty();
+        strokeRenderingPopupKeepsDpiAndRetranslates();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--styled-template-storage-only"))) {
+        styledDrawTemplatesPersistNormalizeAndRemainInsertable();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--style-reconcile-only"))) {
         styleToolSwitchesReconcileCompatibleEditorRoots();
         styleToolReuseMapPreservesEveryCompatibleRole();
@@ -19414,6 +19932,12 @@ int main(int argc, char** argv) {
     tableQrEntrySelectionPersistsAcrossPaletteInstances();
     drawingColorsPreserveAlphaAcrossEditsAndToolSwitches();
     canvasToolStylesPersistIndependentlyWithoutGlobalStyles();
+    strokeRenderingControlsPreserveIndependentToolStyles();
+    strokeRenderingMixedSelectionResolvesOneProperty();
+    strokeRenderingPreferencesRoundTripAndRejectUnknownValues();
+    strokeRenderingSelectionEditUsesHistoryAndRemembersOnlyItsProperty();
+    strokeRenderingPopupKeepsDpiAndRetranslates();
+    styledDrawTemplatesPersistNormalizeAndRemainInsertable();
     arrowShaftEditorPersistsAcrossReopening();
     return 0;
 }

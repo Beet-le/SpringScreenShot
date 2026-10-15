@@ -1052,6 +1052,63 @@ void StrokeStylePreviewButton::paintEvent(QPaintEvent* event) {
                            false);
 }
 
+StrokeRenderingStylePreviewButton::StrokeRenderingStylePreviewButton(
+    SnowCanvasStrokeRenderingStyle style, QWidget* parent)
+    : adqt::widgets::AdButton(parent), m_style(style) {}
+
+void StrokeRenderingStylePreviewButton::commitControlScale(
+    const adqt::widgets::AdControlScaleContext& context) {
+    adqt::widgets::AdButton::commitControlScale(context);
+    m_physicalScale = context.logicalScale;
+    update();
+}
+
+void StrokeRenderingStylePreviewButton::paintEvent(QPaintEvent* event) {
+    adqt::widgets::AdButton::paintEvent(event);
+    const auto scheme = snow_shot::presentation::styles::generateThemeColorScheme();
+    const bool active = buttonStyle() != adqt::widgets::AdButton::ButtonStyle::Text &&
+                        accentRole() == adqt::widgets::AdButton::AccentRole::Primary;
+    QColor color = active ? scheme.map.colorPrimary : scheme.map.colorTextSecondary;
+    if (!isEnabled()) {
+        color.setAlphaF(color.alphaF() * 0.45F);
+    }
+    const qreal side = std::min<qreal>(STYLE_PREVIEW_ICON_SIZE * m_physicalScale,
+                                       std::min(width(), height()) - 4.0 * m_physicalScale);
+    if (side <= 0.0) {
+        return;
+    }
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.translate((width() - side) / 2.0, (height() - side) / 2.0);
+    painter.scale(side / 20.0, side / 20.0);
+    painter.setPen(QPen(color, 1.25, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    QPainterPath path;
+    path.moveTo(2.5, 13.0);
+    if (m_style == SnowCanvasStrokeRenderingStyle::Architect) {
+        path.lineTo(10.7, 7.0);
+        path.lineTo(10.7, 12.0);
+        path.lineTo(17.5, 8.5);
+    } else if (m_style == SnowCanvasStrokeRenderingStyle::Artist) {
+        path.cubicTo(5.5, 11.3, 8.5, 7.3, 11.0, 7.2);
+        path.cubicTo(12.0, 7.0, 9.5, 12.1, 11.0, 12.0);
+        path.cubicTo(12.8, 12.0, 15.2, 9.9, 17.5, 8.5);
+        path.moveTo(3.0, 12.3);
+        path.cubicTo(6.0, 11.0, 8.8, 6.5, 10.5, 7.0);
+        path.cubicTo(11.8, 7.3, 9.8, 11.3, 11.5, 11.6);
+        path.cubicTo(13.0, 12.0, 15.5, 9.4, 17.0, 8.2);
+    } else {
+        path.cubicTo(6.0, 12.0, 10.1, 5.6, 12.0, 6.5);
+        path.cubicTo(13.2, 7.1, 9.8, 13.0, 11.4, 12.8);
+        path.cubicTo(13.5, 12.6, 15.4, 9.0, 17.5, 8.5);
+        path.moveTo(2.8, 11.0);
+        path.cubicTo(6.0, 9.7, 8.8, 5.8, 10.2, 6.8);
+        path.cubicTo(11.5, 7.8, 9.4, 10.9, 11.7, 11.5);
+        path.cubicTo(13.8, 12.1, 15.0, 8.3, 17.0, 7.8);
+    }
+    painter.drawPath(path);
+}
+
 FillStylePreviewButton::FillStylePreviewButton(QWidget* parent) : adqt::widgets::AdButton(parent) {}
 
 void FillStylePreviewButton::setFillColor(const QColor& color) {

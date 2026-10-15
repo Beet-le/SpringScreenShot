@@ -120,6 +120,10 @@
             <translation>Arabic numerals</translation>
         </message>
         <message>
+            <source>Architect</source>
+            <translation>Architect</translation>
+        </message>
+        <message>
             <source>Arrow</source>
             <translation>Arrow</translation>
         </message>
@@ -142,6 +146,10 @@
         <message>
             <source>Arrow stroke width %1</source>
             <translation>Arrow stroke width %1</translation>
+        </message>
+        <message>
+            <source>Artist</source>
+            <translation>Artist</translation>
         </message>
         <message>
             <source>Auto Filter</source>
@@ -206,6 +214,10 @@
         <message>
             <source>Capture interface during scrolling screenshot</source>
             <translation>Capture interface during scrolling screenshot</translation>
+        </message>
+        <message>
+            <source>Cartoonist</source>
+            <translation>Cartoonist</translation>
         </message>
         <message>
             <source>Center horizontally</source>

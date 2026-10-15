@@ -98,6 +98,7 @@ pub(crate) struct UiState {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct CreateRectangleState {
+    pub(crate) stroke_rendering_seed: u32,
     pub(crate) pointer_id: u32,
     pub(crate) start_canvas_position: Point<f64>,
 }
@@ -112,6 +113,7 @@ pub(crate) enum ArrowCreationPhase {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct CreateArrowState {
+    pub(crate) stroke_rendering_seed: u32,
     pub(crate) pointer_id: u32,
     pub(crate) committed_points: Vec<Point<f64>>,
     pub(crate) press_view_position: Point<f64>,

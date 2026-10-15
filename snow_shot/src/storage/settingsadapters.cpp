@@ -2278,23 +2278,17 @@ QVector<DrawTemplate> DrawTemplateSettings::templates() const {
 bool DrawTemplateSettings::setTemplates(const QVector<DrawTemplate>& templates) const {
     QJsonArray array;
     for (const DrawTemplate& drawTemplate : templates) {
-        const QString name = drawTemplate.name.trimmed();
-        QJsonParseError error;
-        const QJsonDocument document = QJsonDocument::fromJson(drawTemplate.payload, &error);
-        const QJsonObject payload = document.object();
-        if (name.isEmpty() || drawTemplate.payload.isEmpty() ||
-            drawTemplate.payload.size() > 16 * 1024 * 1024 ||
-            error.error != QJsonParseError::NoError ||
-            payload.value(QStringLiteral("schemaVersion")).toInt(-1) != 1 ||
-            payload.value(QStringLiteral("elements")).toArray().isEmpty() ||
-            payload.value(QStringLiteral("selectedIds")).toArray().isEmpty()) {
-            return false;
-        }
         array.push_back(QJsonObject{
-            {QStringLiteral("name"), name},
+            {QStringLiteral("name"), drawTemplate.name.trimmed()},
             {QStringLiteral("payload"), QString::fromLatin1(drawTemplate.payload.toBase64())}});
     }
-    return cache().setValue(QStringLiteral("drawing/draw_templates"), array);
+    const QString key = QStringLiteral("drawing/draw_templates");
+    const auto normalized = ConfigurationSchema::normalize(key, array);
+    // Loading salvages valid entries; an explicit edit must retain every requested template.
+    if (!normalized.valid || normalized.value.toArray().size() != templates.size()) {
+        return false;
+    }
+    return cache().setValue(key, normalized.value);
 }
 
 int PinToScreenSettings::textMaximumWidth() const {

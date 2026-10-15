@@ -400,6 +400,7 @@ class ScreenshotToolPaletteStyleControls final {
     void cycleStrokeWidth();
     void setStrokeColor(const QColor& color);
     void setStrokeStyle(SnowCanvasStrokeStyle strokeStyle);
+    void setStrokeRenderingStyle(SnowCanvasStrokeRenderingStyle style);
     void setBrushMode(SnowCanvasBrushMode brushMode);
     void setFillColor(const QColor& color);
     void setFillStyle(SnowCanvasFillStyle fillStyle);
@@ -411,6 +412,7 @@ class ScreenshotToolPaletteStyleControls final {
     void cycleArrowStrokeWidth();
     void setArrowStrokeColor(const QColor& color);
     void setArrowStrokeStyle(SnowCanvasStrokeStyle strokeStyle);
+    void setArrowStrokeRenderingStyle(SnowCanvasStrokeRenderingStyle style);
     void setArrowType(SnowCanvasArrowType arrowType);
     void setLineType(SnowCanvasArrowType arrowType);
     void setArrowRatio(double ratio);

@@ -98,6 +98,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
           QStringLiteral("border")}},
         {QStringLiteral("stroke_style"),
          {QStringLiteral("solid"), QStringLiteral("dashed"), QStringLiteral("dotted")}},
+        {QStringLiteral("stroke_rendering_style"),
+         {QStringLiteral("architect"), QStringLiteral("artist"), QStringLiteral("cartoonist")}},
         {QStringLiteral("arrow_type"),
          {QStringLiteral("straight"), QStringLiteral("curve"), QStringLiteral("elbow")}},
         {QStringLiteral("arrow_shaft_type"), {QStringLiteral("plain"), QStringLiteral("tapered")}},
@@ -213,6 +215,10 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
         allowed = {QStringLiteral("stroke"), QStringLiteral("stroke_width")};
     else
         return false;
+    if (target == QStringLiteral("rectangle") || target == QStringLiteral("arrow") ||
+        target == QStringLiteral("line")) {
+        allowed.append(QStringLiteral("stroke_rendering_style"));
+    }
     if (patch.contains(QStringLiteral("corner_radius")) &&
         patch.contains(QStringLiteral("corner_radii")))
         return false;
@@ -554,6 +560,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
             enumeration("stroke_style", static_cast<int>(style.strokeStyle)));
         style.startArrowhead = static_cast<SnowCanvasArrowhead>(
             enumeration("start_arrowhead", static_cast<int>(style.startArrowhead)));
+        style.strokeRenderingStyle = static_cast<SnowCanvasStrokeRenderingStyle>(
+            enumeration("stroke_rendering_style", static_cast<int>(style.strokeRenderingStyle)));
         style.endArrowhead = static_cast<SnowCanvasArrowhead>(
             enumeration("end_arrowhead", static_cast<int>(style.endArrowhead)));
         style.arrowType = static_cast<SnowCanvasArrowType>(
@@ -568,6 +576,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
             {QStringLiteral("stroke_width"), SnowCanvasShapeStylePropertyStrokeWidth},
             {QStringLiteral("fill_style"), SnowCanvasShapeStylePropertyFillStyle},
             {QStringLiteral("stroke_style"), SnowCanvasShapeStylePropertyStrokeStyle},
+            {QStringLiteral("stroke_rendering_style"),
+             SnowCanvasShapeStylePropertyStrokeRenderingStyle},
             {QStringLiteral("opacity"), SnowCanvasShapeStylePropertyOpacity},
             {QStringLiteral("corner_radius"), SnowCanvasShapeStylePropertyCornerRadius},
             {QStringLiteral("corner_radii"), SnowCanvasShapeStylePropertyCornerRadius},

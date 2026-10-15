@@ -2070,6 +2070,9 @@ ConfigurationNormalization normalizeWatermarkTemplates(const QJsonValue& value) 
 }
 
 ConfigurationNormalization normalizeDrawTemplates(const QJsonValue& value) {
+    // Matches the engine's DRAW_TEMPLATE_SCHEMA_VERSION; the real serialized-template
+    // storage regression detects future engine format changes at this boundary.
+    constexpr int maximumSupportedTemplateVersion = 6;
     if (!value.isArray()) {
         return {};
     }
@@ -2083,10 +2086,13 @@ ConfigurationNormalization normalizeDrawTemplates(const QJsonValue& value) {
         QJsonParseError error;
         const QJsonDocument document = QJsonDocument::fromJson(bytes, &error);
         const QJsonObject payload = document.object();
+        int version = 0;
         if (!item.isObject() || name.isEmpty() || bytes.isEmpty() ||
             bytes.size() > 16 * 1024 * 1024 || QString::fromLatin1(bytes.toBase64()) != encoded ||
             error.error != QJsonParseError::NoError ||
-            payload.value(QStringLiteral("schemaVersion")).toInt(-1) != 1 ||
+            !ConfigurationSchema::parseIntegerVersion(
+                payload.value(QStringLiteral("schemaVersion")), &version) ||
+            version > maximumSupportedTemplateVersion ||
             payload.value(QStringLiteral("elements")).toArray().isEmpty() ||
             payload.value(QStringLiteral("selectedIds")).toArray().isEmpty()) {
             changed = true;

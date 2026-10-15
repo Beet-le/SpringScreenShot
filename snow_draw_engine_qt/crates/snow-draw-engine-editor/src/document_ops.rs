@@ -1658,6 +1658,8 @@ mod tests {
 
     fn rectangle_with_colors(fill: ColorRgba8, stroke: ColorRgba8) -> RectangleData {
         RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(50.0, 50.0),

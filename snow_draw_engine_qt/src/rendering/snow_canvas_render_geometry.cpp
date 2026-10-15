@@ -1,4 +1,5 @@
 #include "snow_canvas_render_geometry.h"
+#include "snow_canvas_stroke_rendering.h"
 
 #include <QFont>
 #include <QFontMetricsF>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 namespace snow_canvas_render_geometry {
 namespace {
@@ -562,9 +564,18 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDispl
     case SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT:
     case SNOW_SCENE_DISPLAY_ITEM_FILTER: {
         const QPointF center = canvasToView(projection, item.center_x, item.center_y);
-        return rotatedRectBounds(center, item.width * projection.cameraZoom,
-                                 item.height * projection.cameraZoom, item.rotation,
-                                 item.stroke_width * projection.cameraZoom);
+        QRectF bounds = rotatedRectBounds(center, item.width * projection.cameraZoom,
+                                          item.height * projection.cameraZoom, item.rotation,
+                                          item.stroke_width * projection.cameraZoom);
+        if (item.kind == SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT &&
+            item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT &&
+            item.stroke.a != 0 && item.stroke_width > 0) {
+            const double extra = snow_stroke_rendering_outset(item.stroke_rendering_style,
+                                                              std::min(item.width, item.height)) *
+                                 projection.cameraZoom;
+            bounds.adjust(-extra, -extra, extra, extra);
+        }
+        return bounds;
     }
     case SNOW_SCENE_DISPLAY_ITEM_TEXT:
         return textItemBounds(projection, item);
@@ -632,7 +643,14 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDispl
                 snowCanvasNormalizeArrowRatio(item.arrow_ratio) * projection.cameraZoom;
             bounds = bounds.adjusted(-maxHeadSize, -maxHeadSize, maxHeadSize, maxHeadSize);
         }
-        return bounds;
+        const double extra =
+            item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT &&
+                    item.is_free_draw == 0 && item.stroke.a != 0 && item.stroke_width > 0
+                ? snow_stroke_rendering_outset(item.stroke_rendering_style,
+                                               std::numeric_limits<double>::max()) *
+                      projection.cameraZoom
+                : 0.0;
+        return bounds.adjusted(-extra, -extra, extra, extra);
     }
     default:
         return {};
@@ -640,6 +658,17 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDispl
 }
 
 QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowCanvasSceneItem& item) {
+    if (item.kind == SNOW_SCENE_DISPLAY_ITEM_ARROW && item.is_free_draw == 0 &&
+        item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT) {
+        if (const auto* cache = snow_canvas_stroke_rendering::cachedGeometry(item)) {
+            const QRectF canvasBounds = snow_canvas_stroke_rendering::localToCanvas(
+                                            item.center_x, item.center_y, item.rotation)
+                                            .mapRect(cache->paintBounds);
+            const auto projection = sceneProjection(displayInfo);
+            return QRectF(canvasToView(projection, canvasBounds.left(), canvasBounds.top()),
+                          canvasToView(projection, canvasBounds.right(), canvasBounds.bottom()));
+        }
+    }
     QRectF bounds = sceneItemBounds(displayInfo, static_cast<const SnowSceneDisplayItem&>(item));
     if ((item.kind != SNOW_SCENE_DISPLAY_ITEM_ARROW &&
          item.kind != SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE) ||
@@ -659,6 +688,13 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowCanvasScen
     QRectF pathBounds = QRectF(topLeft, bottomRight)
                             .normalized()
                             .adjusted(-halfStroke, -halfStroke, halfStroke, halfStroke);
+    if (item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT &&
+        item.is_free_draw == 0 && item.stroke.a != 0 && item.stroke_width > 0) {
+        const double extra = snow_stroke_rendering_outset(item.stroke_rendering_style,
+                                                          std::numeric_limits<double>::max()) *
+                             projection.cameraZoom;
+        pathBounds.adjust(-extra, -extra, extra, extra);
+    }
     if (pressure && !item.pressurePathChunks().empty()) {
         const QRectF ink = item.pressureCanvasBounds();
         pathBounds = pathBounds.united(QRectF(canvasToView(projection, ink.left(), ink.top()),
@@ -668,12 +704,33 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowCanvasScen
     return bounds.isEmpty() ? pathBounds : bounds.united(pathBounds);
 }
 
+QRectF overlayItemBounds(const OverlayDisplayInfo& displayInfo, const SnowCanvasOverlayItem& item) {
+    if (item.kind == SNOW_OVERLAY_DISPLAY_ITEM_FOCUS_CONNECTION &&
+        item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT) {
+        if (const auto* cache = snow_canvas_stroke_rendering::cachedGeometry(item)) {
+            const QRectF canvasBounds = snow_canvas_stroke_rendering::localToCanvas(
+                                            item.center_x, item.center_y, item.rotation)
+                                            .mapRect(cache->paintBounds);
+            const auto projection = overlayProjection(displayInfo);
+            return QRectF(canvasToView(projection, canvasBounds.left(), canvasBounds.top()),
+                          canvasToView(projection, canvasBounds.right(), canvasBounds.bottom()));
+        }
+    }
+    return overlayItemBounds(displayInfo, static_cast<const SnowOverlayDisplayItem&>(item));
+}
+
 QRectF overlayItemBounds(const OverlayDisplayInfo& displayInfo,
                          const SnowOverlayDisplayItem& item) {
     const ViewProjection projection = overlayProjection(displayInfo);
     switch (item.kind) {
-    case SNOW_OVERLAY_DISPLAY_ITEM_DRAW_RECT:
-        return overlayRectBounds(projection, item);
+    case SNOW_OVERLAY_DISPLAY_ITEM_DRAW_RECT: {
+        if (item.stroke_rendering_style == SNOW_STROKE_RENDERING_STYLE_ARCHITECT)
+            return overlayRectBounds(projection, item);
+        const double extra = snow_stroke_rendering_outset(item.stroke_rendering_style,
+                                                          std::min(item.width, item.height)) *
+                             projection.cameraZoom;
+        return overlayRectBounds(projection, item).adjusted(-extra, -extra, extra, extra);
+    }
     case SNOW_OVERLAY_DISPLAY_ITEM_SNAP_GUIDE:
         return snapGuideBounds(projection, item);
     case SNOW_OVERLAY_DISPLAY_ITEM_FOCUS_CONNECTION: {
@@ -702,7 +759,13 @@ QRectF overlayItemBounds(const OverlayDisplayInfo& displayInfo,
                 snowCanvasNormalizeArrowRatio(item.arrow_ratio) * projection.cameraZoom;
             bounds = bounds.adjusted(-maxHeadSize, -maxHeadSize, maxHeadSize, maxHeadSize);
         }
-        return bounds;
+        const double extra =
+            item.stroke_rendering_style == SNOW_STROKE_RENDERING_STYLE_ARCHITECT
+                ? 0.0
+                : snow_stroke_rendering_outset(item.stroke_rendering_style,
+                                               std::numeric_limits<double>::max()) *
+                      projection.cameraZoom;
+        return bounds.adjusted(-extra, -extra, extra, extra);
     }
     case SNOW_OVERLAY_DISPLAY_ITEM_PEN_FILTER_CONTOUR: {
         const QVector<QPointF> points =

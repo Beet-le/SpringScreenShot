@@ -568,6 +568,9 @@ void finalizeRawEditorRoot(QWidget* root) {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Dashed stroke"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Dotted stroke"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid stroke"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Architect"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Artist"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Cartoonist"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Cross-line fill"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Line fill"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid fill"),
@@ -676,6 +679,7 @@ SnowCanvasShapeStyle shapeStyleFromArrowStyle(const SnowCanvasArrowStyle& arrowS
     style.startArrowhead = arrowStyle.startArrowhead;
     style.endArrowhead = arrowStyle.endArrowhead;
     style.strokeStyle = arrowStyle.strokeStyle;
+    style.strokeRenderingStyle = arrowStyle.strokeRenderingStyle;
     style.arrowType = arrowStyle.arrowType;
     style.arrowShaftType = arrowStyle.arrowShaftType;
     style.arrowRatio = arrowStyle.arrowRatio;
@@ -689,6 +693,7 @@ SnowCanvasArrowStyle arrowStyleFromShapeStyle(const SnowCanvasShapeStyle& shapeS
     style.startArrowhead = shapeStyle.startArrowhead;
     style.endArrowhead = shapeStyle.endArrowhead;
     style.strokeStyle = shapeStyle.strokeStyle;
+    style.strokeRenderingStyle = shapeStyle.strokeRenderingStyle;
     style.arrowType = shapeStyle.arrowType;
     style.arrowShaftType = shapeStyle.arrowShaftType;
     style.arrowRatio = shapeStyle.arrowRatio;
@@ -1632,6 +1637,12 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     strokeConfig.accessibleName = QStringLiteral("Stroke color");
     strokeConfig.popupObjectName = QStringLiteral("screenshotStrokeOptions");
     strokeConfig.styleRowObjectName = QStringLiteral("screenshotStrokeStyles");
+    strokeConfig.renderingStylesEnabled = styleTool == ScreenshotToolPalette::Tool::Shape ||
+                                          styleTool == ScreenshotToolPalette::Tool::Line;
+    strokeConfig.initialRenderingStyle = buildingStyle.strokeRenderingStyle();
+    strokeConfig.setRenderingStyle = [this](SnowCanvasStrokeRenderingStyle style) {
+        setStrokeRenderingStyle(style);
+    };
     strokeConfig.colorValues = buildingStyle.strokeColorValues();
     strokeConfig.presetSource =
         snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Stroke;
@@ -1853,6 +1864,11 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
 
     ScreenshotToolPaletteStrokeEditorConfig arrowStrokeConfig;
     arrowStrokeConfig.accessibleName = QStringLiteral("Arrow stroke color");
+    arrowStrokeConfig.renderingStylesEnabled = true;
+    arrowStrokeConfig.initialRenderingStyle = m_state.m_arrowStyle.strokeRenderingStyle;
+    arrowStrokeConfig.setRenderingStyle = [this](SnowCanvasStrokeRenderingStyle style) {
+        setArrowStrokeRenderingStyle(style);
+    };
     arrowStrokeConfig.colorValues = style_presets::strokeColors();
     arrowStrokeConfig.presetSource =
         snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Stroke;
@@ -4397,6 +4413,9 @@ void ScreenshotToolPaletteStyleControls::registerShapeEntries() {
                  m_shapeStrokeEditor->update(style.strokeColor(), style.strokeStyle(),
                                              mixed(SnowCanvasShapeStylePropertyStrokeColor),
                                              mixed(SnowCanvasShapeStylePropertyStrokeStyle));
+                 m_shapeStrokeEditor->updateRenderingStyle(
+                     style.strokeRenderingStyle(),
+                     mixed(SnowCanvasShapeStylePropertyStrokeRenderingStyle));
              }
          }},
         {ShapeFillRefresh,
@@ -4611,6 +4630,9 @@ void ScreenshotToolPaletteStyleControls::registerArrowEntries() {
                                              m_state.m_arrowStyle.strokeStyle,
                                              mixed(SnowCanvasShapeStylePropertyStrokeColor),
                                              mixed(SnowCanvasShapeStylePropertyStrokeStyle));
+                 m_arrowStrokeEditor->updateRenderingStyle(
+                     m_state.m_arrowStyle.strokeRenderingStyle,
+                     mixed(SnowCanvasShapeStylePropertyStrokeRenderingStyle));
              }
          }},
         {ShapeArrowTypeRefresh,
@@ -5604,6 +5626,7 @@ SnowCanvasStyleDefaults ScreenshotToolPaletteStyleControls::creationStyleDefault
     defaults.arrow.startArrowhead = m_state.m_creationArrowStyle.startArrowhead;
     defaults.arrow.endArrowhead = m_state.m_creationArrowStyle.endArrowhead;
     defaults.arrow.strokeStyle = m_state.m_creationArrowStyle.strokeStyle;
+    defaults.arrow.strokeRenderingStyle = m_state.m_creationArrowStyle.strokeRenderingStyle;
     defaults.arrow.arrowType = m_state.m_creationArrowStyle.arrowType;
     defaults.arrow.arrowShaftType = m_state.m_creationArrowStyle.arrowShaftType;
     defaults.arrow.arrowRatio = m_state.m_creationArrowStyle.arrowRatio;
@@ -6010,6 +6033,14 @@ void ScreenshotToolPaletteStyleControls::setStrokeStyle(SnowCanvasStrokeStyle st
                         });
 }
 
+void ScreenshotToolPaletteStyleControls::setStrokeRenderingStyle(
+    SnowCanvasStrokeRenderingStyle style) {
+    commitShapeProperty(SnowCanvasShapeStylePropertyStrokeRenderingStyle,
+                        [style](ScreenshotToolPaletteRectangleStyleModel& model) {
+                            return model.setStrokeRenderingStyle(style);
+                        });
+}
+
 void ScreenshotToolPaletteStyleControls::setFillColor(const QColor& color) {
     commitShapeProperty(SnowCanvasShapeStylePropertyFillColor,
                         [color](ScreenshotToolPaletteRectangleStyleModel& style) {
@@ -6168,6 +6199,18 @@ void ScreenshotToolPaletteStyleControls::setArrowStrokeStyle(SnowCanvasStrokeSty
                                 return false;
                             }
                             style.strokeStyle = strokeStyle;
+                            return true;
+                        });
+}
+
+void ScreenshotToolPaletteStyleControls::setArrowStrokeRenderingStyle(
+    SnowCanvasStrokeRenderingStyle style) {
+    commitArrowProperty(SnowCanvasShapeStylePropertyStrokeRenderingStyle,
+                        [style](SnowCanvasArrowStyle& arrow) {
+                            if (arrow.strokeRenderingStyle == style) {
+                                return false;
+                            }
+                            arrow.strokeRenderingStyle = style;
                             return true;
                         });
 }
@@ -7135,8 +7178,10 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
                 groups |= ShapeStrokeWidthRefresh;
             if (m_state.m_arrowStyle.stroke != displayedStyle.stroke ||
                 m_state.m_arrowStyle.strokeStyle != displayedStyle.strokeStyle ||
+                m_state.m_arrowStyle.strokeRenderingStyle != displayedStyle.strokeRenderingStyle ||
                 (mixedChanged &
-                 (SnowCanvasShapeStyleMixedStroke | SnowCanvasShapeStyleMixedStrokeStyle)) != 0)
+                 (SnowCanvasShapeStyleMixedStroke | SnowCanvasShapeStyleMixedStrokeStyle |
+                  SnowCanvasShapeStyleMixedStrokeRenderingStyle)) != 0)
                 groups |= ShapeStrokeRefresh;
             if (m_state.m_arrowStyle.arrowRatio != displayedStyle.arrowRatio ||
                 (mixedChanged & SnowCanvasShapeStyleMixedArrowRatio) != 0)
@@ -7290,8 +7335,10 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
             groups |= ShapeBrushModeRefresh;
         if (previous.stroke != displayedStyle.stroke ||
             previous.strokeStyle != displayedStyle.strokeStyle ||
+            previous.strokeRenderingStyle != displayedStyle.strokeRenderingStyle ||
             (mixedChanged &
-             (SnowCanvasShapeStyleMixedStroke | SnowCanvasShapeStyleMixedStrokeStyle)) != 0)
+             (SnowCanvasShapeStyleMixedStroke | SnowCanvasShapeStyleMixedStrokeStyle |
+              SnowCanvasShapeStyleMixedStrokeRenderingStyle)) != 0)
             groups |= ShapeStrokeRefresh;
         if (previous.fill != displayedStyle.fill ||
             previous.fillStyle != displayedStyle.fillStyle ||

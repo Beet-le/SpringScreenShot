@@ -5904,6 +5904,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-mcp-tests)
     add_test(NAME snow-shot-mcp-tests COMMAND snow-shot-mcp-tests -platform offscreen)
+    add_test(NAME snow-shot-stroke-rendering-mcp-tests
+        COMMAND snow-shot-mcp-tests --stroke-rendering-only -platform offscreen)
+    set_tests_properties(snow-shot-stroke-rendering-mcp-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
     add_test(NAME snow-shot-speech-bubble-mcp-capabilities-tests
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_mcp_capabilities.py"
             --speech-bubble-only)
@@ -6240,6 +6244,14 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-pressure-brush-toolbar-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --pressure-brush-only -platform offscreen)
     set_tests_properties(snow-shot-pressure-brush-toolbar-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
+    add_test(NAME snow-shot-stroke-rendering-toolbar-tests
+        COMMAND snow-shot-screenshot-tool-palette-tests --stroke-rendering-only -platform offscreen)
+    set_tests_properties(snow-shot-stroke-rendering-toolbar-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
+    add_test(NAME snow-shot-styled-template-storage-tests
+        COMMAND snow-shot-screenshot-tool-palette-tests --styled-template-storage-only -platform offscreen)
+    set_tests_properties(snow-shot-styled-template-storage-tests PROPERTIES
         LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
     set_tests_properties(snow-shot-toolbar-shared-controls-tests PROPERTIES TIMEOUT 180)
     add_test(

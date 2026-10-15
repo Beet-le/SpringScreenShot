@@ -50,6 +50,8 @@ fn main() {
                         id(index),
                         ElementMeta::default(),
                         RectangleData {
+                            stroke_rendering_style: Default::default(),
+                            stroke_rendering_seed: 0,
                             rectangle_kind: RectangleElementKind::Rectangle,
                             highlight_shape: HighlightShape::Rectangle,
                             center,

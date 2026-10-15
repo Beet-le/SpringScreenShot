@@ -166,6 +166,8 @@ inline void snowCanvasMergeStyle(SnowCanvasShapeStyle& target, const SnowCanvasS
         target.endArrowhead = value.endArrowhead;
     if ((properties & SnowCanvasShapeStylePropertyStrokeStyle) != 0)
         target.strokeStyle = value.strokeStyle;
+    if ((properties & SnowCanvasShapeStylePropertyStrokeRenderingStyle) != 0)
+        target.strokeRenderingStyle = value.strokeRenderingStyle;
     if ((properties & SnowCanvasShapeStylePropertyArrowShaftType) != 0)
         target.arrowShaftType = value.arrowShaftType;
     if ((properties & SnowCanvasShapeStylePropertyArrowRatio) != 0)

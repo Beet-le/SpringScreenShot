@@ -403,6 +403,15 @@ typedef enum SnowStrokeStyle {
     SNOW_STROKE_STYLE_DOTTED = 2
 } SnowStrokeStyle;
 
+typedef enum SnowStrokeRenderingStyle {
+    SNOW_STROKE_RENDERING_STYLE_ARCHITECT = 0,
+    SNOW_STROKE_RENDERING_STYLE_ARTIST = 1,
+    SNOW_STROKE_RENDERING_STYLE_CARTOONIST = 2
+} SnowStrokeRenderingStyle;
+
+// Maximum canvas-space displacement; shared by paint bounds and the host renderer.
+double snow_stroke_rendering_outset(SnowStrokeRenderingStyle style, double primitive_scale);
+
 typedef enum SnowDisplayRectShape {
     SNOW_DISPLAY_RECT_SHAPE_RECTANGLE = 0,
     SNOW_DISPLAY_RECT_SHAPE_ELLIPSE = 1,
@@ -512,6 +521,7 @@ typedef struct SnowShapeStyle {
     SnowArrowhead start_arrowhead;
     SnowArrowhead end_arrowhead;
     SnowStrokeStyle stroke_style;
+    SnowStrokeRenderingStyle stroke_rendering_style;
     SnowArrowType arrow_type;
     SnowArrowShaftType arrow_shaft_type;
     double arrow_ratio;
@@ -549,12 +559,15 @@ typedef enum SnowShapeKind {
 #define SNOW_SHAPE_STYLE_PROPERTY_HIGHLIGHT_SHAPE (1u << 10)
 #define SNOW_SHAPE_STYLE_PROPERTY_SHAPE (1u << 11)
 #define SNOW_SHAPE_STYLE_PROPERTY_BRUSH_MODE (1u << 14)
+#define SNOW_SHAPE_STYLE_PROPERTY_STROKE_RENDERING_STYLE (1u << 15)
+#define SNOW_SHAPE_STYLE_MIXED_STROKE_RENDERING_STYLE                                              \
+    SNOW_SHAPE_STYLE_PROPERTY_STROKE_RENDERING_STYLE
 #define SNOW_SHAPE_STYLE_PROPERTY_LINE                                                             \
     (SNOW_SHAPE_STYLE_PROPERTY_FILL | SNOW_SHAPE_STYLE_PROPERTY_FILL_STYLE |                       \
      SNOW_SHAPE_STYLE_PROPERTY_STROKE | SNOW_SHAPE_STYLE_PROPERTY_STROKE_WIDTH |                   \
      SNOW_SHAPE_STYLE_PROPERTY_ARROW_RATIO | SNOW_SHAPE_STYLE_PROPERTY_ARROW_SHAFT_TYPE |          \
      SNOW_SHAPE_STYLE_PROPERTY_STROKE_STYLE | SNOW_SHAPE_STYLE_PROPERTY_ARROW_TYPE |               \
-     SNOW_SHAPE_STYLE_PROPERTY_OPACITY)
+     SNOW_SHAPE_STYLE_PROPERTY_OPACITY | SNOW_SHAPE_STYLE_PROPERTY_STROKE_RENDERING_STYLE)
 #define SNOW_SHAPE_STYLE_PROPERTY_FREE_DRAW                                                        \
     (SNOW_SHAPE_STYLE_PROPERTY_FILL | SNOW_SHAPE_STYLE_PROPERTY_FILL_STYLE |                       \
      SNOW_SHAPE_STYLE_PROPERTY_STROKE | SNOW_SHAPE_STYLE_PROPERTY_STROKE_WIDTH |                   \
@@ -567,6 +580,7 @@ typedef struct SnowRectangleShapeStyle {
     SnowColorRgba8 stroke;
     double stroke_width;
     SnowStrokeStyle stroke_style;
+    SnowStrokeRenderingStyle stroke_rendering_style;
     SnowCornerRadii corner_radii;
 } SnowRectangleShapeStyle;
 
@@ -576,6 +590,7 @@ typedef struct SnowArrowStyle {
     SnowArrowhead start_arrowhead;
     SnowArrowhead end_arrowhead;
     SnowStrokeStyle stroke_style;
+    SnowStrokeRenderingStyle stroke_rendering_style;
     SnowArrowType arrow_type;
     SnowArrowShaftType arrow_shaft_type;
     double arrow_ratio;
@@ -1232,6 +1247,8 @@ typedef struct SnowArrowheadPrimitive {
     SnowArrowPoint points[SNOW_ARROWHEAD_PRIMITIVE_POINT_CAPACITY];
     SnowArrowPoint center;
     double diameter;
+    // Negative values mean no primitive-specific roughness cap.
+    double roughness_cap;
 } SnowArrowheadPrimitive;
 
 typedef struct SnowArrowPathCommand {
@@ -1327,6 +1344,8 @@ typedef struct SnowSceneDisplayItem {
     SnowColorRgba8 stroke;
     SnowColorRgba8 text_color;
     double stroke_width;
+    SnowStrokeRenderingStyle stroke_rendering_style;
+    uint32_t stroke_rendering_seed;
     SnowCornerRadii corner_radii;
     uint32_t arrow_point_count;
     SnowArrowType arrow_type;
@@ -1413,6 +1432,8 @@ typedef struct SnowOverlayDisplayItem {
     SnowColorRgba8 fill;
     SnowColorRgba8 stroke;
     double stroke_width;
+    SnowStrokeRenderingStyle stroke_rendering_style;
+    uint32_t stroke_rendering_seed;
     SnowCornerRadii corner_radii;
     uint32_t arrow_point_count;
     SnowArrowType arrow_type;

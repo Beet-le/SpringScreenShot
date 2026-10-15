@@ -318,6 +318,20 @@ class StrokeStylePreviewButton final : public adqt::widgets::AdButton {
     qreal m_physicalScale = 1.0;
 };
 
+class StrokeRenderingStylePreviewButton final : public adqt::widgets::AdButton {
+  public:
+    explicit StrokeRenderingStylePreviewButton(SnowCanvasStrokeRenderingStyle style,
+                                               QWidget* parent = nullptr);
+    void commitControlScale(const adqt::widgets::AdControlScaleContext& context) override;
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
+
+  private:
+    SnowCanvasStrokeRenderingStyle m_style;
+    qreal m_physicalScale = 1.0;
+};
+
 class FillStylePreviewButton final : public adqt::widgets::AdButton {
   public:
     explicit FillStylePreviewButton(QWidget* parent = nullptr);

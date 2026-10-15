@@ -205,10 +205,14 @@ struct ScreenshotToolPaletteStrokeEditorConfig {
         ScreenshotToolPaletteColorPresetSource::Fixed;
     std::function<ScreenshotToolPaletteTranslationText(const QColor& color)> colorTooltip;
     std::function<ScreenshotToolPaletteTranslationText(SnowCanvasStrokeStyle style)> styleTooltip;
+    bool renderingStylesEnabled = false;
+    SnowCanvasStrokeRenderingStyle initialRenderingStyle =
+        SnowCanvasStrokeRenderingStyle::Architect;
+    std::function<void(SnowCanvasStrokeRenderingStyle)> setRenderingStyle;
 };
 
-// Stroke color plus stroke style (solid/dashed/dotted). The one stroke editor
-// shared verbatim by the shape/line/free-draw row and the arrow row.
+// Shared stroke color and pattern editor, with optional rendering styles for
+// shape, line, and arrow tools.
 class ScreenshotToolPaletteStrokeEditor final : public ScreenshotToolPaletteStyleEditorComponent {
   public:
     void build(QBoxLayout* layout, QWidget* parent, QObject* receiver,
@@ -222,6 +226,7 @@ class ScreenshotToolPaletteStrokeEditor final : public ScreenshotToolPaletteStyl
                 const std::function<void(const QColor&)>& setColor,
                 const std::function<void(SnowCanvasStrokeStyle)>& setStyle);
     void update(const QColor& color, SnowCanvasStrokeStyle style, bool colorMixed, bool styleMixed);
+    void updateRenderingStyle(SnowCanvasStrokeRenderingStyle style, bool mixed);
     void refreshMetrics(const ScreenshotToolPaletteButtonMetrics& metrics) override;
     [[nodiscard]] bool isInteracting() const override {
         return m_handlingChange != nullptr && *m_handlingChange;
@@ -231,14 +236,21 @@ class ScreenshotToolPaletteStrokeEditor final : public ScreenshotToolPaletteStyl
 
   private:
     void ensurePopupContent(const ScreenshotToolPaletteButtonMetrics& metrics);
+    void updateRenderingStyleRow();
 
     adqt::widgets::AdColorPicker* m_picker = nullptr;
     ColorPickerTrigger* m_trigger = nullptr;
     ScreenshotToolPaletteColorPresets m_colorPresets;
     QVector<StrokeStylePreviewButton*> m_styleButtons;
     QVector<SnowCanvasStrokeStyle> m_styleValues;
+    QWidget* m_renderingStyleRow = nullptr;
+    QVector<StrokeRenderingStylePreviewButton*> m_renderingStyleButtons;
+    SnowCanvasStrokeRenderingStyle m_currentRenderingStyle =
+        SnowCanvasStrokeRenderingStyle::Architect;
+    bool m_renderingStyleMixed = false;
     ScreenshotToolPaletteStrokeEditorConfig m_config;
     SnowCanvasStrokeStyle m_currentStyle = SnowCanvasStrokeStyle::Solid;
+    bool m_colorMixed = false;
     bool m_styleMixed = false;
     std::shared_ptr<std::function<void(const QColor&)>> m_setColor;
     std::shared_ptr<std::function<void(SnowCanvasStrokeStyle)>> m_setStyle;

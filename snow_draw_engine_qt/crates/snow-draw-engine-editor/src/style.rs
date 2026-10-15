@@ -83,6 +83,7 @@ impl ShapeStyle {
             stroke: self.stroke,
             stroke_width: self.stroke_width,
             stroke_style: self.stroke_style,
+            stroke_rendering_style: self.stroke_rendering_style,
             corner_radii: self.corner_radii,
             shape: self.shape,
         }
@@ -95,6 +96,7 @@ impl ShapeStyle {
             start_arrowhead: self.start_arrowhead,
             end_arrowhead: self.end_arrowhead,
             stroke_style: self.stroke_style,
+            stroke_rendering_style: self.stroke_rendering_style,
             arrow_type: self.arrow_type,
             arrow_shaft_type: self.arrow_shaft_type,
             arrow_ratio: self.arrow_ratio,
@@ -107,6 +109,7 @@ impl ShapeStyle {
         self.stroke = style.stroke;
         self.stroke_width = style.stroke_width;
         self.stroke_style = style.stroke_style;
+        self.stroke_rendering_style = style.stroke_rendering_style;
         self.corner_radii = style.corner_radii;
         self.shape = style.shape;
         self
@@ -118,6 +121,7 @@ impl ShapeStyle {
         self.start_arrowhead = style.start_arrowhead;
         self.end_arrowhead = style.end_arrowhead;
         self.stroke_style = style.stroke_style;
+        self.stroke_rendering_style = style.stroke_rendering_style;
         self.arrow_type = style.arrow_type;
         self.arrow_shaft_type = style.arrow_shaft_type;
         self.arrow_ratio = snow_draw_engine_core::arrow::normalize_arrow_ratio(style.arrow_ratio);
@@ -143,6 +147,7 @@ impl ShapeStyle {
             start_arrowhead: None,
             end_arrowhead: None,
             stroke_style: style.stroke_style,
+            stroke_rendering_style: style.stroke_rendering_style,
             arrow_type: ArrowType::Straight,
             arrow_shaft_type: Default::default(),
             arrow_ratio: 1.0,
@@ -191,6 +196,9 @@ impl ShapeStylePatch {
         if properties & SHAPE_STYLE_PROPERTY_STROKE_STYLE != 0 {
             current.stroke_style = self.style.stroke_style;
         }
+        if properties & crate::SHAPE_STYLE_PROPERTY_STROKE_RENDERING_STYLE != 0 {
+            current.stroke_rendering_style = self.style.stroke_rendering_style;
+        }
         if properties & SHAPE_STYLE_PROPERTY_SHAPE != 0 {
             current.shape = self.style.shape;
         }
@@ -213,6 +221,9 @@ impl ShapeStylePatch {
         }
         if properties & SHAPE_STYLE_PROPERTY_STROKE_STYLE != 0 {
             current.stroke_style = self.style.stroke_style;
+        }
+        if properties & crate::SHAPE_STYLE_PROPERTY_STROKE_RENDERING_STYLE != 0 {
+            current.stroke_rendering_style = self.style.stroke_rendering_style;
         }
         if properties & crate::SHAPE_STYLE_PROPERTY_ARROW_RATIO != 0 {
             current.arrow_ratio =
@@ -243,6 +254,9 @@ impl ShapeStylePatch {
         }
         if properties & SHAPE_STYLE_PROPERTY_STROKE_STYLE != 0 {
             current.stroke_style = self.style.stroke_style;
+        }
+        if properties & crate::SHAPE_STYLE_PROPERTY_STROKE_RENDERING_STYLE != 0 {
+            current.stroke_rendering_style = self.style.stroke_rendering_style;
         }
         if properties & SHAPE_STYLE_PROPERTY_OPACITY != 0 {
             current.opacity = self.style.opacity;
@@ -286,6 +300,7 @@ struct ShapeStyleSample {
     stroke_width: Option<f64>,
     corner_radii: Option<CornerRadii>,
     stroke_style: Option<StrokeStyle>,
+    stroke_rendering_style: Option<snow_draw_engine_core::arrow::StrokeRenderingStyle>,
     start_arrowhead: Option<Option<Arrowhead>>,
     end_arrowhead: Option<Option<Arrowhead>>,
     arrow_type: Option<ArrowType>,
@@ -306,6 +321,8 @@ impl ShapeStyleSample {
             stroke_width: Some(rectangle.stroke_width),
             corner_radii: Some(rectangle.corner_radii),
             stroke_style: Some(rectangle.stroke_style),
+            stroke_rendering_style: (!rectangle.is_highlight() && !rectangle.is_spotlight())
+                .then_some(rectangle.stroke_rendering_style),
             start_arrowhead: None,
             end_arrowhead: None,
             arrow_type: None,
@@ -328,6 +345,8 @@ impl ShapeStyleSample {
             stroke_width: Some(arrow.stroke_width),
             corner_radii: None,
             stroke_style: Some(arrow.stroke_style),
+            stroke_rendering_style: (arrow.is_regular_arrow() || arrow.is_line())
+                .then_some(arrow.stroke_rendering_style),
             start_arrowhead: (!arrow.is_line()).then_some(arrow.start_arrowhead),
             end_arrowhead: (!arrow.is_line()).then_some(arrow.end_arrowhead),
             arrow_type: (!arrow.is_pen_highlight()).then_some(arrow.arrow_type),
@@ -348,6 +367,7 @@ impl ShapeStyleSample {
             stroke_width: Some(free_draw.stroke_width),
             corner_radii: None,
             stroke_style: Some(free_draw.stroke_style),
+            stroke_rendering_style: None,
             start_arrowhead: None,
             end_arrowhead: None,
             arrow_type: None,
@@ -368,6 +388,7 @@ impl RectangleShapeStyle {
             stroke: rect.stroke,
             stroke_width: rect.stroke_width,
             stroke_style: rect.stroke_style,
+            stroke_rendering_style: rect.stroke_rendering_style,
             corner_radii: rect.corner_radii,
             shape: rect.highlight_shape,
         }
@@ -382,6 +403,7 @@ impl ArrowStyle {
             start_arrowhead: arrow.start_arrowhead,
             end_arrowhead: arrow.end_arrowhead,
             stroke_style: arrow.stroke_style,
+            stroke_rendering_style: arrow.stroke_rendering_style,
             arrow_type: arrow.arrow_type,
             arrow_shaft_type: arrow.arrow_shaft_type,
             arrow_ratio: arrow.arrow_ratio,
@@ -401,6 +423,7 @@ impl ShapeStyle {
             start_arrowhead: None,
             end_arrowhead: None,
             stroke_style: line.stroke_style,
+            stroke_rendering_style: line.stroke_rendering_style,
             arrow_type: normalized_line_arrow_type(line.arrow_type),
             arrow_shaft_type: Default::default(),
             arrow_ratio: 1.0,
@@ -412,6 +435,7 @@ impl ShapeStyle {
 
     pub(crate) fn from_free_draw(free_draw: &snow_draw_engine_document::FreeDrawData) -> Self {
         Self {
+            stroke_rendering_style: Default::default(),
             brush_mode: free_draw.brush_mode,
             fill: free_draw.fill,
             fill_style: free_draw.fill_style,
@@ -559,6 +583,8 @@ pub(crate) fn rectangle_with_style(
         stroke: style.stroke,
         stroke_width: style.stroke_width,
         stroke_style: style.stroke_style,
+        stroke_rendering_style: style.stroke_rendering_style,
+        stroke_rendering_seed: rect.stroke_rendering_seed,
         corner_radii: snow_draw_engine_document::normalize_shape_corner_radii(
             style.shape,
             rect.width,
@@ -576,6 +602,21 @@ fn speech_bubble_body_with_style(
     let mut body = rectangle_with_style(rect, style);
     body.corner_radii = style.corner_radii;
     body
+}
+
+fn line_with_style(line: &ArrowData, style: ShapeStyle) -> ArrowData {
+    let mut updated = line.clone();
+    updated.fill = style.fill;
+    updated.fill_style = style.fill_style;
+    updated.stroke = style.stroke;
+    updated.stroke_width = style.stroke_width;
+    updated.stroke_style = style.stroke_style;
+    updated.stroke_rendering_style = style.stroke_rendering_style;
+    updated.opacity = style.opacity;
+    updated.start_arrowhead = None;
+    updated.end_arrowhead = None;
+    updated.arrow_type = style.arrow_type;
+    updated
 }
 
 fn text_with_style(
@@ -1487,6 +1528,9 @@ impl Editor {
             if style.stroke_style != first.stroke_style {
                 mixed |= SHAPE_STYLE_MIXED_STROKE_STYLE;
             }
+            if style.stroke_rendering_style != first.stroke_rendering_style {
+                mixed |= crate::SHAPE_STYLE_MIXED_STROKE_RENDERING_STYLE;
+            }
             if style.start_arrowhead != first.start_arrowhead {
                 mixed |= SHAPE_STYLE_MIXED_START_ARROWHEAD;
             }
@@ -1917,6 +1961,19 @@ impl Editor {
             ),
             ShapeKind::Line => {
                 self.state.default_line_style = patch.apply_to_line(self.state.default_line_style);
+                if let Some(ElementCreationPreview::Arrow(preview)) =
+                    self.state.creation_preview.as_mut()
+                    && preview.is_line()
+                {
+                    let updated = line_with_style(
+                        preview,
+                        patch.apply_to_line(ShapeStyle::from_line(preview)),
+                    );
+                    if *preview != updated {
+                        *preview = updated;
+                        self.bump_scene_state_revision();
+                    }
+                }
             }
             ShapeKind::FreeDraw => {
                 self.state.default_free_draw_style =
@@ -2027,6 +2084,8 @@ impl Editor {
                     next_selection_elements.push(SelectionRectState {
                         id,
                         rect: RectangleData {
+                            stroke_rendering_seed: 0,
+                            stroke_rendering_style: Default::default(),
                             rectangle_kind:
                                 snow_draw_engine_document::RectangleElementKind::Rectangle,
                             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
@@ -2065,18 +2124,10 @@ impl Editor {
                         arrow_context,
                     )
                 } else if patch.kind == ShapeKind::Line && current_arrow.is_line() {
-                    let style = patch.apply_to_line(ShapeStyle::from_line(current_arrow));
-                    let mut updated = current_arrow.clone();
-                    updated.fill = style.fill;
-                    updated.fill_style = style.fill_style;
-                    updated.stroke = style.stroke;
-                    updated.stroke_width = style.stroke_width;
-                    updated.stroke_style = style.stroke_style;
-                    updated.opacity = style.opacity;
-                    updated.start_arrowhead = None;
-                    updated.end_arrowhead = None;
-                    updated.arrow_type = style.arrow_type;
-                    updated
+                    line_with_style(
+                        current_arrow,
+                        patch.apply_to_line(ShapeStyle::from_line(current_arrow)),
+                    )
                 } else if patch.kind == ShapeKind::PenHighlight && current_arrow.is_pen_highlight()
                 {
                     let style = patch.apply_to_line(ShapeStyle::from_line(current_arrow));
@@ -2256,6 +2307,8 @@ impl Editor {
                     next_selection_elements.push(SelectionRectState {
                         id,
                         rect: RectangleData {
+                            stroke_rendering_style: Default::default(),
+                            stroke_rendering_seed: 0,
                             rectangle_kind:
                                 snow_draw_engine_document::RectangleElementKind::Rectangle,
                             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
@@ -2478,6 +2531,8 @@ mod tests {
         use snow_draw_engine_document::{HighlightShape, RectangleElementKind};
         let mut document = DocumentModel::new();
         let base = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
             highlight_shape: HighlightShape::Rectangle,
             center: Point::default(),
@@ -2705,6 +2760,8 @@ mod tests {
     #[test]
     fn rectangle_style_preserves_and_updates_fill_style() {
         let rect = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Default::default(),
@@ -2737,6 +2794,7 @@ mod tests {
     #[test]
     fn rectangle_style_patch_preserves_unrequested_properties() {
         let rectangle_style = RectangleShapeStyle {
+            stroke_rendering_style: Default::default(),
             shape: snow_draw_engine_document::HighlightShape::Rectangle,
             fill: ColorRgba8 {
                 r: 10,
@@ -2756,6 +2814,7 @@ mod tests {
             corner_radii: CornerRadii::splat(6.0),
         };
         let arrow_style = ArrowStyle {
+            stroke_rendering_style: Default::default(),
             stroke: ColorRgba8 {
                 r: 90,
                 g: 100,
@@ -2865,6 +2924,8 @@ mod tests {
         let first_id = document.allocate_element_id();
         let second_id = document.allocate_element_id();
         let base = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::default(),
@@ -2951,6 +3012,8 @@ mod tests {
         let mut document = DocumentModel::new();
         let rectangle_id = document.peek_next_element_id();
         let rectangle = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Default::default(),
@@ -4203,6 +4266,8 @@ mod tests {
             ..filter
         };
         let rectangle = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::default(),
@@ -4396,5 +4461,149 @@ mod tests {
             editor.serial_number_style_mixed(&document) & SERIAL_NUMBER_STYLE_MIXED_NUMBER,
             0
         );
+    }
+    #[test]
+    fn stroke_rendering_style_patch_preserves_pattern_seed_and_template_appearance() {
+        use snow_draw_engine_core::arrow::StrokeRenderingStyle;
+        let mut document = DocumentModel::new();
+        let mut editor = Editor::new(Default::default()).unwrap();
+        editor.set_active_tool(ActiveTool::Shape).unwrap();
+        let mut first = editor
+            .preview_rectangle_with_snapping(
+                &document,
+                Point::new(10.0, 10.0),
+                Point::new(110.0, 90.0),
+                Modifiers::default(),
+            )
+            .0
+            .unwrap();
+        first.stroke_style = StrokeStyle::Dashed;
+        first.stroke_rendering_seed = 901;
+        let first_id = document.allocate_element_id();
+        let second_id = document.allocate_element_id();
+        let mut second = first;
+        second.center.x += 140.0;
+        second.stroke_rendering_style = StrokeRenderingStyle::Artist;
+        second.stroke_rendering_seed = 0;
+        let mut insert = Transaction::new("stroke rendering fixture");
+        insert.insert_rectangle(first_id, ElementMeta::default(), first);
+        insert.insert_rectangle(second_id, ElementMeta::default(), second);
+        document.apply_transaction(insert).unwrap();
+        editor.set_selection_state_with_document(
+            Some(&document),
+            vec![first_id, second_id],
+            Some(first_id),
+        );
+        let bounds = editor.selection_bounds_snapshot(&document);
+        assert_eq!(
+            editor.shape_style_mixed(&document) & crate::SHAPE_STYLE_MIXED_STROKE_RENDERING_STYLE,
+            crate::SHAPE_STYLE_MIXED_STROKE_RENDERING_STYLE
+        );
+        let mut style = editor.shape_style(&document);
+        style.stroke_rendering_style = StrokeRenderingStyle::Cartoonist;
+        let Some(EditorCommand::ApplyTransaction(command)) = editor
+            .set_shape_style_patch(
+                &document,
+                ShapeStylePatch {
+                    kind: ShapeKind::Rectangle,
+                    style,
+                    properties: crate::SHAPE_STYLE_PROPERTY_STROKE_RENDERING_STYLE,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("style transaction missing");
+        };
+        document.apply_transaction(command.transaction).unwrap();
+        assert_eq!(editor.selection_bounds_snapshot(&document), bounds);
+        for (id, seed) in [(first_id, 901), (second_id, 0)] {
+            let rect = document.rectangle(id).unwrap();
+            assert_eq!(
+                rect.stroke_rendering_style,
+                StrokeRenderingStyle::Cartoonist
+            );
+            assert_eq!(rect.stroke_rendering_seed, seed);
+            assert_eq!(rect.stroke_style, StrokeStyle::Dashed);
+        }
+        let template = editor.selected_draw_template(&document).unwrap();
+        let EditorCommand::ApplyTransaction(command) = editor
+            .insert_draw_template(&document, &template, Point::new(500.0, 400.0))
+            .unwrap()
+        else {
+            panic!("template transaction missing")
+        };
+        let new_id = document.peek_next_element_id();
+        document.apply_transaction(command.transaction).unwrap();
+        let pasted = document.rectangle(new_id).unwrap();
+        assert_ne!(new_id, first_id);
+        assert_eq!(pasted.stroke_rendering_seed, 901);
+        assert_eq!(
+            pasted.stroke_rendering_style,
+            StrokeRenderingStyle::Cartoonist
+        );
+        assert!(
+            editor
+                .set_shape_style_patch(
+                    &document,
+                    ShapeStylePatch {
+                        kind: ShapeKind::FreeDraw,
+                        style,
+                        properties: crate::SHAPE_STYLE_PROPERTY_STROKE_RENDERING_STYLE
+                    }
+                )
+                .is_err()
+        );
+    }
+    #[test]
+    fn stroke_rendering_arrow_and_line_selection_patches_preserve_existing_geometry() {
+        use snow_draw_engine_core::arrow::StrokeRenderingStyle;
+        for kind in [ShapeKind::Arrow, ShapeKind::Line] {
+            let mut document = DocumentModel::new();
+            let id = document.allocate_element_id();
+            let mut arrow = ArrowData::from_global_points(
+                &[Point::new(20.0, 30.0), Point::new(140.0, 70.0)],
+                ColorRgba8 {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 255,
+                },
+                3.0,
+                StrokeStyle::Dotted,
+                ArrowType::Straight,
+                None,
+                Some(Arrowhead::Arrow),
+            )
+            .unwrap();
+            if kind == ShapeKind::Line {
+                arrow = arrow.into_line(ColorRgba8::default(), FillStyle::Solid);
+            }
+            arrow.stroke_rendering_seed = 29;
+            let original = arrow.clone();
+            let mut insert = Transaction::new("styled linear fixture");
+            insert.insert_arrow(id, ElementMeta::default(), arrow);
+            document.apply_transaction(insert).unwrap();
+            let mut editor = Editor::new(Default::default()).unwrap();
+            editor.set_selection_state_with_document(Some(&document), vec![id], Some(id));
+            let mut style = editor.shape_style(&document);
+            style.stroke_rendering_style = StrokeRenderingStyle::Artist;
+            let Some(EditorCommand::ApplyTransaction(command)) = editor
+                .set_shape_style_patch(
+                    &document,
+                    ShapeStylePatch {
+                        kind,
+                        style,
+                        properties: crate::SHAPE_STYLE_PROPERTY_STROKE_RENDERING_STYLE,
+                    },
+                )
+                .unwrap()
+            else {
+                panic!("linear style transaction missing");
+            };
+            document.apply_transaction(command.transaction).unwrap();
+            let mut expected = original;
+            expected.stroke_rendering_style = StrokeRenderingStyle::Artist;
+            assert_eq!(*document.arrow(id).unwrap(), expected);
+        }
     }
 }

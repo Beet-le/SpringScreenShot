@@ -398,6 +398,8 @@ fn append_path_geometry_change(
             && old.stroke == next.stroke
             && old.stroke_width == next.stroke_width
             && old.stroke_style == next.stroke_style
+            && old.stroke_rendering_style == next.stroke_rendering_style
+            && old.stroke_rendering_seed == next.stroke_rendering_seed
             && old.fill == next.fill
             && old.fill_style == next.fill_style
             && old.opacity == next.opacity
@@ -1155,6 +1157,8 @@ fn pressure_geometry_dirty_regions(
         || old.stroke != new.stroke
         || old.stroke_width != new.stroke_width
         || old.stroke_style != new.stroke_style
+        || old.stroke_rendering_style != new.stroke_rendering_style
+        || old.stroke_rendering_seed != new.stroke_rendering_seed
         || old.fill != new.fill
         || old.fill_style != new.fill_style
         || old.opacity != new.opacity
@@ -1209,6 +1213,8 @@ fn path_geometry_dirty_region(
         && old.stroke == new.stroke
         && old.stroke_width == new.stroke_width
         && old.stroke_style == new.stroke_style
+        && old.stroke_rendering_style == new.stroke_rendering_style
+        && old.stroke_rendering_seed == new.stroke_rendering_seed
         && old.fill == new.fill
         && old.fill_style == new.fill_style
         && old.opacity == new.opacity
@@ -1709,6 +1715,8 @@ mod tests {
 
     fn spotlight_rect(center: Point<f64>, width: f64, height: f64) -> RectangleData {
         RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center,
@@ -1796,6 +1804,8 @@ mod tests {
             false,
         ));
         SceneDisplayItem::Arrow(ArrowDisplayItem {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             brush_mode: Default::default(),
             pressure_geometry: None,
             bound_text_id: None,
@@ -2340,6 +2350,8 @@ mod tests {
     fn spotlight_decoration_tracks_first_drag_and_visible_cutouts() {
         let mut model = DocumentModel::new();
         let spotlight = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(100.0, 80.0),
@@ -2745,6 +2757,8 @@ mod tests {
     #[test]
     fn rectangle_creation_preview_updates_only_scene_channel() {
         let patch = patch_for_creation_preview(ElementCreationPreview::Rectangle(RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(20.0, 30.0),

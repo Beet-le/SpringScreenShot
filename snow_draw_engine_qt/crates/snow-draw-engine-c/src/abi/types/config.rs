@@ -250,6 +250,7 @@ pub struct SnowShapeStyle {
     pub start_arrowhead: SnowArrowhead,
     pub end_arrowhead: SnowArrowhead,
     pub stroke_style: SnowStrokeStyle,
+    pub stroke_rendering_style: SnowStrokeRenderingStyle,
     pub arrow_type: SnowArrowType,
     pub arrow_shaft_type: SnowArrowShaftType,
     pub arrow_ratio: f64,
@@ -346,6 +347,7 @@ pub struct SnowRectangleShapeStyle {
     pub stroke: SnowColorRgba8,
     pub stroke_width: f64,
     pub stroke_style: SnowStrokeStyle,
+    pub stroke_rendering_style: SnowStrokeRenderingStyle,
     pub corner_radii: SnowCornerRadii,
 }
 
@@ -370,6 +372,7 @@ pub struct SnowArrowStyle {
     pub start_arrowhead: SnowArrowhead,
     pub end_arrowhead: SnowArrowhead,
     pub stroke_style: SnowStrokeStyle,
+    pub stroke_rendering_style: SnowStrokeRenderingStyle,
     pub arrow_type: SnowArrowType,
     pub arrow_shaft_type: SnowArrowShaftType,
     pub arrow_ratio: f64,
@@ -655,6 +658,8 @@ impl Default for SnowSnapConfig {
 impl Default for SnowShapeStyle {
     fn default() -> Self {
         Self {
+            stroke_rendering_style: SnowStrokeRenderingStyle::Architect,
+
             fill: SnowColorRgba8::default(),
             stroke: SnowColorRgba8::default(),
             stroke_width: 0.0,
@@ -677,6 +682,8 @@ impl Default for SnowShapeStyle {
 impl Default for SnowRectangleShapeStyle {
     fn default() -> Self {
         Self {
+            stroke_rendering_style: SnowStrokeRenderingStyle::Architect,
+
             fill: SnowColorRgba8::default(),
             fill_style: SnowFillStyle::Solid,
             stroke: SnowColorRgba8::default(),
@@ -690,6 +697,8 @@ impl Default for SnowRectangleShapeStyle {
 impl Default for SnowArrowStyle {
     fn default() -> Self {
         Self {
+            stroke_rendering_style: SnowStrokeRenderingStyle::Architect,
+
             stroke: SnowColorRgba8::default(),
             stroke_width: 0.0,
             start_arrowhead: SnowArrowhead::None,

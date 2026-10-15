@@ -628,7 +628,9 @@ pub unsafe extern "C" fn snow_viewport_set_shape_style_patch_ex(
             return SnowError::InvalidArgument;
         }
 
-        if !unsafe { raw_c_enum_is_valid(std::ptr::addr_of!((*style).brush_mode)) } {
+        if !unsafe { raw_c_enum_is_valid(std::ptr::addr_of!((*style).brush_mode)) }
+            || !unsafe { raw_c_enum_is_valid(std::ptr::addr_of!((*style).stroke_rendering_style)) }
+        {
             return SnowError::InvalidArgument;
         }
 
@@ -667,6 +669,9 @@ pub unsafe extern "C" fn snow_viewport_set_rectangle_shape_style_ex(
             return SnowError::InvalidArgument;
         }
 
+        if !unsafe { raw_c_enum_is_valid(std::ptr::addr_of!((*style).stroke_rendering_style)) } {
+            return SnowError::InvalidArgument;
+        }
         ffi_status(with_runtime_impl_mut(runtime, |state| {
             let id = viewport_id(viewport)?;
             let result = state

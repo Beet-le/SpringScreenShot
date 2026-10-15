@@ -1,8 +1,8 @@
 use crate::{
     ElementData, ElementRecord, FillStyle, FilterData, PenFilterData, RectangleData,
     SerialNumberData, SerialNumberTextConnection, SerialNumberType, StrokeStyle, TextData,
-    TextHorizontalAlign, TextLayoutRect, TextLayoutSize, TextVerticalAlign, arrow_bounds,
-    arrow_is_degenerate, validate_arrow, validate_free_draw,
+    TextHorizontalAlign, TextLayoutRect, TextLayoutSize, TextVerticalAlign, arrow_is_degenerate,
+    validate_arrow, validate_free_draw,
 };
 use snow_draw_engine_core::{
     ColorRgba8, CornerRadii, DrawRect, ErrorCode, Point, rotated_rect_extents,
@@ -106,6 +106,26 @@ fn scale_constraint(limit: f64, sum: f64) -> f64 {
     } else {
         (limit.max(0.0) / sum).min(1.0)
     }
+}
+
+/// Conservative ink bounds; logical frames and snapping continue using rect_bounds.
+pub fn rect_paint_bounds(rect: &RectangleData) -> DrawRect {
+    let bounds = rect_bounds(rect);
+    let outset = rectangle_stroke_rendering_outset(rect);
+    DrawRect::new(
+        bounds.min_x - outset,
+        bounds.min_y - outset,
+        bounds.max_x + outset,
+        bounds.max_y + outset,
+    )
+}
+
+fn rectangle_stroke_rendering_outset(rect: &RectangleData) -> f64 {
+    if rect.is_highlight() || rect.is_spotlight() || rect.stroke.a == 0 || rect.stroke_width <= 0.0
+    {
+        return 0.0;
+    }
+    snow_draw_engine_core::arrow::stroke_rendering_outset(rect.stroke_rendering_style, f64::MAX)
 }
 
 pub fn rect_bounds(rect: &RectangleData) -> DrawRect {
@@ -683,6 +703,8 @@ pub fn serial_number_bounds(serial: &SerialNumberData) -> DrawRect {
 
 pub fn serial_number_rect_proxy(serial: &SerialNumberData) -> RectangleData {
     RectangleData {
+        stroke_rendering_seed: 0,
+        stroke_rendering_style: Default::default(),
         rectangle_kind: crate::RectangleElementKind::Rectangle,
         highlight_shape: crate::HighlightShape::Rectangle,
         center: serial.center,
@@ -938,6 +960,7 @@ fn sanitize_positive(value: f64, fallback: f64) -> f64 {
 }
 
 pub fn rectangle_hit_test(rect: &RectangleData, point: Point<f64>, hit_tolerance: f64) -> bool {
+    let hit_tolerance = hit_tolerance.max(0.0) + rectangle_stroke_rendering_outset(rect);
     if rect.highlight_shape == crate::HighlightShape::Diamond
         && !rect.is_highlight()
         && [
@@ -1029,6 +1052,8 @@ pub fn rectangle_hit_test(rect: &RectangleData, point: Point<f64>, hit_tolerance
 
 pub fn filter_rect_proxy(filter: &FilterData) -> RectangleData {
     RectangleData {
+        stroke_rendering_seed: 0,
+        stroke_rendering_style: Default::default(),
         rectangle_kind: crate::RectangleElementKind::Rectangle,
         highlight_shape: crate::HighlightShape::Rectangle,
         center: filter.center,
@@ -1089,6 +1114,8 @@ pub fn pen_filter_bounds(filter: &PenFilterData) -> DrawRect {
 /// the boundary of the painted outer contour, including the stroke width.
 pub fn pen_filter_rect_proxy(filter: &PenFilterData) -> RectangleData {
     RectangleData {
+        stroke_rendering_seed: 0,
+        stroke_rendering_style: Default::default(),
         rectangle_kind: crate::RectangleElementKind::Rectangle,
         highlight_shape: crate::HighlightShape::Rectangle,
         center: filter.center(),
@@ -1338,10 +1365,12 @@ pub(crate) fn element_visible_bounds(element: &ElementRecord) -> Option<DrawRect
 
     match &element.data {
         ElementData::Rectangle(rect) if rect.width > 0.0 && rect.height > 0.0 => {
-            Some(rect_bounds(rect))
+            Some(rect_paint_bounds(rect))
         }
         ElementData::Magnifier(value) => Some(crate::magnifier_bounds(value)),
-        ElementData::Arrow(arrow) if !arrow_is_degenerate(arrow) => Some(arrow_bounds(arrow)),
+        ElementData::Arrow(arrow) if !arrow_is_degenerate(arrow) => {
+            Some(crate::arrow_paint_bounds(arrow))
+        }
         ElementData::FreeDraw(free_draw) => Some(crate::free_draw_bounds(free_draw)),
         ElementData::Text(text) if text.width() > 0.0 && text.height() > 0.0 => {
             Some(text_bounds(text))
@@ -1371,6 +1400,8 @@ mod tests {
         ] {
             for radius in [0.0, 6.0] {
                 let mut rect = RectangleData {
+                    stroke_rendering_style: Default::default(),
+                    stroke_rendering_seed: 0,
                     rectangle_kind: crate::RectangleElementKind::Rectangle,
                     highlight_shape: shape,
                     center: Point::default(),
@@ -2229,6 +2260,8 @@ mod tests {
                 ..SerialNumberData::default()
             },
             RectangleData {
+                stroke_rendering_style: Default::default(),
+                stroke_rendering_seed: 0,
                 rectangle_kind: crate::RectangleElementKind::Rectangle,
                 highlight_shape: crate::HighlightShape::Rectangle,
                 center: Point::default(),
@@ -2258,6 +2291,8 @@ mod tests {
                 ..SerialNumberData::default()
             },
             RectangleData {
+                stroke_rendering_style: Default::default(),
+                stroke_rendering_seed: 0,
                 rectangle_kind: crate::RectangleElementKind::Rectangle,
                 highlight_shape: crate::HighlightShape::Rectangle,
                 center: Point::default(),
@@ -2281,6 +2316,8 @@ mod tests {
     #[test]
     fn transparent_rotated_highlight_interior_is_hittable_for_both_shapes() {
         let base = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: crate::RectangleElementKind::RectangleHighlight,
             highlight_shape: crate::HighlightShape::Rectangle,
             center: Point::new(20.0, 30.0),
@@ -2322,6 +2359,8 @@ mod tests {
     #[test]
     fn spotlight_rounded_corners_hit_test_and_validate_like_shapes() {
         let rect = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: crate::RectangleElementKind::Rectangle,
             highlight_shape: crate::HighlightShape::Rectangle,
             center: Point::new(50.0, 50.0),
@@ -2368,6 +2407,8 @@ mod tests {
             crate::HighlightShape::Diamond,
         ] {
             let rect = RectangleData {
+                stroke_rendering_style: Default::default(),
+                stroke_rendering_seed: 0,
                 rectangle_kind: crate::RectangleElementKind::Rectangle,
                 highlight_shape: shape,
                 center: Point::new(30.0, 40.0),

@@ -158,7 +158,10 @@ pub(crate) fn compose_scene_items(
         if let Some(preview_arrow) = preview_arrows.get(id) {
             emitted_preview_ids.insert(*id, true);
             if !arrow_is_degenerate(preview_arrow)
-                && bounds_visible(arrow_bounds(preview_arrow), viewport)
+                && bounds_visible(
+                    snow_draw_engine_document::arrow_paint_bounds(preview_arrow),
+                    viewport,
+                )
             {
                 items.push(scene_item_from_arrow(*id, preview_arrow.clone()));
             }
@@ -213,7 +216,10 @@ pub(crate) fn compose_scene_items(
             continue;
         }
         if !arrow_is_degenerate(&preview.arrow)
-            && bounds_visible(arrow_bounds(&preview.arrow), viewport)
+            && bounds_visible(
+                snow_draw_engine_document::arrow_paint_bounds(&preview.arrow),
+                viewport,
+            )
         {
             items.push(scene_item_from_arrow(preview.id, preview.arrow.clone()));
         }
@@ -247,7 +253,11 @@ pub(crate) fn compose_scene_items(
                 }
             }
             ElementCreationPreview::Arrow(arrow)
-                if !arrow_is_degenerate(arrow) && bounds_visible(arrow_bounds(arrow), viewport) =>
+                if !arrow_is_degenerate(arrow)
+                    && bounds_visible(
+                        snow_draw_engine_document::arrow_paint_bounds(arrow),
+                        viewport,
+                    ) =>
             {
                 items.push(scene_item_from_arrow(id, arrow.clone()));
             }
@@ -1608,6 +1618,8 @@ mod tests {
             preview_elements: vec![SelectionRectState {
                 id: text_id,
                 rect: RectangleData {
+                    stroke_rendering_style: Default::default(),
+                    stroke_rendering_seed: 0,
                     rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
                     highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
                     center: Point::new(130.0, 10.0),
@@ -1693,6 +1705,8 @@ mod tests {
             preview_elements: vec![SelectionRectState {
                 id: text_id,
                 rect: RectangleData {
+                    stroke_rendering_style: Default::default(),
+                    stroke_rendering_seed: 0,
                     rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
                     highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
                     center: Point::new(120.0, 10.0),
@@ -1805,6 +1819,8 @@ mod tests {
         cache.sync(&model, None);
 
         let preview_rect = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(180.0, 0.0),
@@ -2073,6 +2089,8 @@ mod tests {
         let mut cache = DocumentSceneCache::new();
         cache.sync(&model, None);
         let preview_rect = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(20.0, 30.0),
@@ -2205,6 +2223,8 @@ mod tests {
             preview_elements: vec![SelectionRectState {
                 id: serial_id,
                 rect: RectangleData {
+                    stroke_rendering_style: Default::default(),
+                    stroke_rendering_seed: 0,
                     rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
                     highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
                     center: Point::new(10.0, 20.0),
@@ -2416,6 +2436,8 @@ mod tests {
             generation: 1,
         };
         let committed = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(2000.0, 0.0),

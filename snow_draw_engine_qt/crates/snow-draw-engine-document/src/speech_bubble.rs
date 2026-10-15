@@ -1247,6 +1247,8 @@ mod tests {
 
     fn bubble(shape: HighlightShape) -> SpeechBubbleData {
         SpeechBubbleData::new(RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
             highlight_shape: shape,
             center: Point::new(0.0, 0.0),

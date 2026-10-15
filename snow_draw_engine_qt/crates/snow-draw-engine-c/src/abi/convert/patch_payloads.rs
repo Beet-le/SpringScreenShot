@@ -257,6 +257,9 @@ pub(crate) fn snow_scene_display_item_from_rust(
             out.fill_style = snow_fill_style_from_rust(item.fill_style);
             out.stroke_width = item.stroke_width;
             out.stroke_style = snow_stroke_style_from_rust(item.stroke_style);
+            out.stroke_rendering_style =
+                super::snow_stroke_rendering_style_from_rust(item.stroke_rendering_style);
+            out.stroke_rendering_seed = item.stroke_rendering_seed;
             out.corner_radii = item.corner_radii.into();
             out.opacity = item.opacity;
             out.rect_shape = match item.shape {
@@ -337,6 +340,9 @@ pub(crate) fn snow_scene_display_item_from_rust(
             out.arrow_start_head = snow_arrowhead_from_rust(item.start_arrowhead);
             out.arrow_end_head = snow_arrowhead_from_rust(item.end_arrowhead);
             out.arrow_stroke_style = snow_stroke_style_from_rust(item.stroke_style);
+            out.stroke_rendering_style =
+                super::snow_stroke_rendering_style_from_rust(item.stroke_rendering_style);
+            out.stroke_rendering_seed = item.stroke_rendering_seed;
             out.opacity = item.opacity;
             out.blend_mode = match item.blend_mode {
                 snow_draw_engine::DisplayBlendMode::Normal => SnowBlendMode::Normal,
@@ -913,6 +919,7 @@ mod tests {
     #[test]
     fn arrow_display_view_preserves_dynamic_outer_slices() {
         let primitive = ArrowheadDisplayPrimitive {
+            roughness_cap: Some(0.5),
             kind: ArrowheadDisplayPrimitiveKind::Line,
             points: vec![[1.0, 2.0]; SNOW_ARROWHEAD_PRIMITIVE_POINT_CAPACITY + 1],
             center: [3.0, 4.0],

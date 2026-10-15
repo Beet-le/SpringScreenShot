@@ -993,6 +993,8 @@ mod tests {
 
     fn text_rect(text: &TextData) -> RectangleData {
         RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: text.center,
@@ -1020,6 +1022,8 @@ mod tests {
     fn shift_rotation_snaps_absolute_selection_angle_to_fifteen_degrees() {
         let initial_rotation = 10.0_f64.to_radians();
         let rect = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(0.0, 0.0),
@@ -1121,6 +1125,8 @@ mod tests {
     fn selection_resize_policy_preserves_intrinsic_text_and_serial_geometry() {
         let mut document = DocumentModel::new();
         let rectangle = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(0.0, 0.0),
@@ -1362,6 +1368,8 @@ mod tests {
     fn mixed_serial_resize_preview_matches_committed_selection_geometry() {
         let mut document = DocumentModel::new();
         let rectangle = RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(0.0, 0.0),

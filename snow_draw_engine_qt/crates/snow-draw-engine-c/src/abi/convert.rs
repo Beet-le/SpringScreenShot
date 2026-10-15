@@ -217,6 +217,28 @@ pub(crate) fn snow_stroke_style_to_rust(value: SnowStrokeStyle) -> StrokeStyle {
     }
 }
 
+pub(crate) fn snow_stroke_rendering_style_from_rust(
+    value: snow_draw_engine_core::arrow::StrokeRenderingStyle,
+) -> SnowStrokeRenderingStyle {
+    use snow_draw_engine_core::arrow::StrokeRenderingStyle as Style;
+    match value {
+        Style::Architect => SnowStrokeRenderingStyle::Architect,
+        Style::Artist => SnowStrokeRenderingStyle::Artist,
+        Style::Cartoonist => SnowStrokeRenderingStyle::Cartoonist,
+    }
+}
+
+pub(crate) fn snow_stroke_rendering_style_to_rust(
+    value: SnowStrokeRenderingStyle,
+) -> snow_draw_engine_core::arrow::StrokeRenderingStyle {
+    use snow_draw_engine_core::arrow::StrokeRenderingStyle as Style;
+    match value {
+        SnowStrokeRenderingStyle::Architect => Style::Architect,
+        SnowStrokeRenderingStyle::Artist => Style::Artist,
+        SnowStrokeRenderingStyle::Cartoonist => Style::Cartoonist,
+    }
+}
+
 pub(crate) fn snow_arrow_shaft_type_from_rust(
     value: snow_draw_engine_core::arrow::ArrowShaftType,
 ) -> SnowArrowShaftType {
@@ -375,6 +397,7 @@ fn snow_arrowhead_primitives_from_rust(
                     y: primitive.center[1],
                 },
                 diameter: primitive.diameter,
+                roughness_cap: primitive.roughness_cap.unwrap_or(-1.0),
             }
         })
         .collect()
@@ -741,6 +764,9 @@ impl From<SnowShapeStyle> for ShapeStyle {
             start_arrowhead: snow_arrowhead_to_rust(value.start_arrowhead),
             end_arrowhead: snow_arrowhead_to_rust(value.end_arrowhead),
             stroke_style: snow_stroke_style_to_rust(value.stroke_style),
+            stroke_rendering_style: snow_stroke_rendering_style_to_rust(
+                value.stroke_rendering_style,
+            ),
             arrow_type: snow_arrow_type_to_rust(value.arrow_type),
             arrow_shaft_type: snow_arrow_shaft_type_to_rust(value.arrow_shaft_type),
             arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(value.arrow_ratio),
@@ -806,6 +832,9 @@ impl From<SnowRectangleShapeStyle> for RectangleShapeStyle {
             stroke: value.stroke.into(),
             stroke_width: value.stroke_width,
             stroke_style: snow_stroke_style_to_rust(value.stroke_style),
+            stroke_rendering_style: snow_stroke_rendering_style_to_rust(
+                value.stroke_rendering_style,
+            ),
             corner_radii: value.corner_radii.into(),
             shape: snow_draw_engine::HighlightShape::Rectangle,
         }
@@ -820,6 +849,9 @@ impl From<RectangleShapeStyle> for SnowRectangleShapeStyle {
             stroke: value.stroke.into(),
             stroke_width: value.stroke_width,
             stroke_style: snow_stroke_style_from_rust(value.stroke_style),
+            stroke_rendering_style: snow_stroke_rendering_style_from_rust(
+                value.stroke_rendering_style,
+            ),
             corner_radii: value.corner_radii.into(),
         }
     }
@@ -833,6 +865,9 @@ impl From<SnowArrowStyle> for snow_draw_engine::ArrowStyle {
             start_arrowhead: snow_arrowhead_to_rust(value.start_arrowhead),
             end_arrowhead: snow_arrowhead_to_rust(value.end_arrowhead),
             stroke_style: snow_stroke_style_to_rust(value.stroke_style),
+            stroke_rendering_style: snow_stroke_rendering_style_to_rust(
+                value.stroke_rendering_style,
+            ),
             arrow_type: snow_arrow_type_to_rust(value.arrow_type),
             arrow_shaft_type: snow_arrow_shaft_type_to_rust(value.arrow_shaft_type),
             arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(value.arrow_ratio),
@@ -848,6 +883,9 @@ impl From<snow_draw_engine::ArrowStyle> for SnowArrowStyle {
             start_arrowhead: snow_arrowhead_from_rust(value.start_arrowhead),
             end_arrowhead: snow_arrowhead_from_rust(value.end_arrowhead),
             stroke_style: snow_stroke_style_from_rust(value.stroke_style),
+            stroke_rendering_style: snow_stroke_rendering_style_from_rust(
+                value.stroke_rendering_style,
+            ),
             arrow_type: snow_arrow_type_from_rust(value.arrow_type),
             arrow_shaft_type: snow_arrow_shaft_type_from_rust(value.arrow_shaft_type),
             arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(value.arrow_ratio),
@@ -1012,6 +1050,9 @@ impl From<ShapeStyle> for SnowShapeStyle {
             start_arrowhead: snow_arrowhead_from_rust(value.start_arrowhead),
             end_arrowhead: snow_arrowhead_from_rust(value.end_arrowhead),
             stroke_style: snow_stroke_style_from_rust(value.stroke_style),
+            stroke_rendering_style: snow_stroke_rendering_style_from_rust(
+                value.stroke_rendering_style,
+            ),
             arrow_type: snow_arrow_type_from_rust(value.arrow_type),
             arrow_shaft_type: snow_arrow_shaft_type_from_rust(value.arrow_shaft_type),
             arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(value.arrow_ratio),
@@ -1050,6 +1091,7 @@ pub(crate) unsafe fn raw_c_enum_is_valid<E: crate::abi::raw_enum::SnowRawEnum>(
 unsafe fn runtime_style_default_enums_are_valid(defaults: *const SnowStyleDefaults) -> bool {
     let shapes = [
         unsafe { std::ptr::addr_of!((*defaults).rectangle) },
+        unsafe { std::ptr::addr_of!((*defaults).speech_bubble) },
         unsafe { std::ptr::addr_of!((*defaults).arrow) },
         unsafe { std::ptr::addr_of!((*defaults).line) },
         unsafe { std::ptr::addr_of!((*defaults).free_draw) },
@@ -1062,6 +1104,7 @@ unsafe fn runtime_style_default_enums_are_valid(defaults: *const SnowStyleDefaul
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).start_arrowhead))
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).end_arrowhead))
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).stroke_style))
+                && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).stroke_rendering_style))
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).arrow_type))
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).arrow_shaft_type))
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).highlight_shape))
@@ -2130,6 +2173,86 @@ mod tests {
             style_defaults: &defaults,
         };
 
+        assert_eq!(
+            runtime_config_from_c(Some(&config)),
+            Err(SnowError::InvalidArgument)
+        );
+    }
+}
+
+#[cfg(test)]
+mod stroke_rendering_tests {
+    use super::*;
+    use snow_draw_engine_core::arrow::StrokeRenderingStyle;
+
+    #[test]
+    fn stroke_rendering_style_and_display_round_trip_through_abi() {
+        for style in [
+            SnowStrokeRenderingStyle::Architect,
+            SnowStrokeRenderingStyle::Artist,
+            SnowStrokeRenderingStyle::Cartoonist,
+        ] {
+            let value = SnowShapeStyle {
+                stroke_rendering_style: style,
+                ..Default::default()
+            };
+            let native: ShapeStyle = value.into();
+            assert_eq!(SnowShapeStyle::from(native).stroke_rendering_style, style);
+        }
+        let item = snow_draw_engine::RectangleDisplayItem {
+            stroke_rendering_style: StrokeRenderingStyle::Cartoonist,
+            stroke_rendering_seed: 0x1234_abcd,
+            ..Default::default()
+        };
+        let converted = snow_scene_display_item_from_rust(
+            &snow_draw_engine::SceneDisplayItem::Rectangle(item),
+            false,
+            false,
+        );
+        assert_eq!(
+            converted.view.stroke_rendering_style,
+            SnowStrokeRenderingStyle::Cartoonist
+        );
+        assert_eq!(converted.view.stroke_rendering_seed, 0x1234_abcd);
+        assert_eq!(
+            crate::snow_stroke_rendering_outset(SnowStrokeRenderingStyle::Artist, f64::INFINITY),
+            2.0
+        );
+        let primitives = snow_arrowhead_primitives_from_rust(&[
+            ArrowheadDisplayPrimitive {
+                kind: ArrowheadDisplayPrimitiveKind::Circle,
+                points: Vec::new(),
+                center: [0.0, 0.0],
+                diameter: 10.0,
+                fill_mode: ArrowheadDisplayFillMode::Stroke,
+                dash_mode: ArrowheadDisplayDashMode::Solid,
+                roughness_cap: Some(0.5),
+            },
+            ArrowheadDisplayPrimitive {
+                kind: ArrowheadDisplayPrimitiveKind::Line,
+                points: vec![[0.0, 0.0], [10.0, 5.0]],
+                center: [0.0, 0.0],
+                diameter: 0.0,
+                fill_mode: ArrowheadDisplayFillMode::Stroke,
+                dash_mode: ArrowheadDisplayDashMode::Inherit,
+                roughness_cap: None,
+            },
+        ]);
+        assert_eq!(primitives[0].roughness_cap, 0.5);
+        assert_eq!(primitives[1].roughness_cap, -1.0);
+    }
+
+    #[test]
+    fn stroke_rendering_invalid_default_discriminant_is_rejected_before_typed_read() {
+        let mut defaults: SnowStyleDefaults = StyleDefaults::default().into();
+        unsafe {
+            std::ptr::addr_of_mut!(defaults.rectangle.stroke_rendering_style)
+                .cast::<i32>()
+                .write(17)
+        };
+        let config = SnowRuntimeConfig {
+            style_defaults: &defaults,
+        };
         assert_eq!(
             runtime_config_from_c(Some(&config)),
             Err(SnowError::InvalidArgument)

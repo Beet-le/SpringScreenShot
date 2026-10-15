@@ -105,6 +105,8 @@ impl MagnifierData {
         corner_radii: CornerRadii,
     ) -> RectangleData {
         RectangleData {
+            stroke_rendering_seed: 0,
+            stroke_rendering_style: Default::default(),
             rectangle_kind: RectangleElementKind::Rectangle,
             highlight_shape: self.shape,
             center,

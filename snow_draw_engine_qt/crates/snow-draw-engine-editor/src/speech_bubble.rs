@@ -1194,6 +1194,8 @@ mod tests {
     use snow_draw_engine_document::{FillStyle, RectangleElementKind};
     fn body(shape: HighlightShape) -> RectangleData {
         RectangleData {
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
             highlight_shape: shape,
             center: Point::default(),

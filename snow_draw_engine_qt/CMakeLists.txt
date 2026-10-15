@@ -203,6 +203,14 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_BENCHMARKS)
         snow_draw_engine_qt_canvas
     )
 
+    add_executable(snow-canvas-stroke-rendering-benchmark
+        tests/snow_canvas_stroke_rendering_benchmark.cpp)
+    target_include_directories(snow-canvas-stroke-rendering-benchmark PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-canvas-stroke-rendering-benchmark PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-stroke-rendering-benchmark)
+
     add_executable(snow-canvas-filter-benchmark
         tests/snow_canvas_filter_benchmark.cpp
     )
@@ -362,6 +370,17 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     # Test binaries must report failures as stderr output plus a non-zero
     # exit code instead of blocking on modal dialogs.
     snow_link_test_cli_guard(qt)
+
+    add_executable(snow-canvas-stroke-rendering-tests tests/snow_canvas_stroke_rendering_tests.cpp)
+    target_include_directories(snow-canvas-stroke-rendering-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-canvas-stroke-rendering-tests PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-stroke-rendering-tests)
+    add_test(NAME snow-canvas-stroke-rendering-tests
+        COMMAND snow-canvas-stroke-rendering-tests -platform offscreen)
+    set_tests_properties(snow-canvas-stroke-rendering-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "unit" TIMEOUT 120)
 
     add_executable(snow-canvas-fill-render-tests tests/snow_canvas_fill_render_tests.cpp)
     target_include_directories(snow-canvas-fill-render-tests PRIVATE
@@ -608,6 +627,9 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         snow_draw_engine_qt_canvas
     )
     add_test(NAME snow-canvas-state-tests COMMAND snow-canvas-state-tests)
+    add_test(NAME snow-canvas-stroke-rendering-state-tests
+        COMMAND snow-canvas-state-tests --stroke-rendering-only)
+    set_tests_properties(snow-canvas-stroke-rendering-state-tests PROPERTIES LABELS "unit")
 
     add_executable(snow-canvas-filter-safety-tests
         tests/snow_canvas_filter_safety_tests.cpp
