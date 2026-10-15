@@ -231,6 +231,8 @@ struct CollageWindow::Impl {
         modal->setWindowTaskbarVisible(true);
         modal->setWindowMinimizeButtonVisible(true);
         modal->setWindowMaximizeButtonVisible(true);
+        modal->setWindowAlwaysOnTopButtonVisible(true);
+        modal->setWindowAlwaysOnTop(true);
         modal->setWindowIcon(adqt::icons::makeIcon(icons::custom::app::ApplicationIcon()));
         modal->setClosePolicy(AdModal::ClosePolicy::Manual);
         modal->setCloseOnMaskClick(false);

@@ -26,6 +26,7 @@
 #include <QPainter>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QToolButton>
 #include <atomic>
 #include <algorithm>
 #include <cstdlib>
@@ -75,6 +76,38 @@ adqt::widgets::AdMessageHandle* statusMessage(ImageSplitWindow& window) {
             return handle;
     }
     return nullptr;
+}
+
+void windowPinStartsEnabledAndPreservesEdits() {
+    ImageSplitWindow window;
+    window.presentImage(image());
+    loaded(window);
+    require(window.document()->createLine(true, 200), "create a split before toggling the pin");
+    flush();
+    auto* surface = window.editor()->window();
+    auto* pin = surface->findChild<QToolButton*>(QStringLiteral("ad-modal-always-on-top"));
+    require(pin && pin->isVisible() && pin->isChecked() && window.modal()->windowAlwaysOnTop() &&
+                surface->windowFlags().testFlag(Qt::WindowStaysOnTopHint),
+            "splitting opens pinned with a checked title-bar pin button");
+    const auto pinPosition = pin->mapTo(surface, QPoint());
+    require(pinPosition.x() > surface->width() / 2 &&
+                pinPosition.y() < window.editor()->mapTo(surface, QPoint()).y(),
+            "splitting pin is in the top-right window header");
+    const auto geometry = surface->geometry();
+    const auto state = window.document()->state();
+    for (const bool pinned : {false, true}) {
+        pin->click();
+        window.modal()->present();
+        flush();
+        require(pin->isChecked() == pinned && window.modal()->windowAlwaysOnTop() == pinned &&
+                    surface->windowFlags().testFlag(Qt::WindowStaysOnTopHint) == pinned,
+                "splitting pin toggles always-on-top and survives repeated presentation");
+        require(window.modal()->isOpen() && surface->isVisible() &&
+                    window.editor()->window() == surface && surface->geometry() == geometry &&
+                    window.document()->state() == state && window.document()->canUndo(),
+                "toggling splitting pin preserves the visible window, geometry, and edits");
+    }
+    window.shutdown();
 }
 
 void replacementAndCancellation() {
@@ -820,6 +853,7 @@ int main(int argc, char** argv) {
                       : arguments.contains(QStringLiteral("--dpr1.5")) ? 1.5
                                                                        : 1);
     } else {
+        windowPinStartsEnabledAndPreservesEdits();
         replacementAndCancellation();
         independentHistoryAndSourceWindows();
         savedPinsOpenIndependentSplitWindows(directory.path(), false);
