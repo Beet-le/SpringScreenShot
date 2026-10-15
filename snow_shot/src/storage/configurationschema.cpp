@@ -15,6 +15,7 @@
 #include "snow_shot/storage/capturehistorytypes.h"
 #include "snow_shot/storage/persistedselectioncodec.h"
 #include "snow_shot/shortcuts/shortcutbinding.h"
+#include "snow_shot/shortcuts/menuaccesskey.h"
 #include "snow_shot/presentation/screenshotregiontypeshortcut.h"
 
 #include <QJsonArray>
@@ -1081,6 +1082,12 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      2},
+    {QStringLiteral("context_menu_shortcuts/edit_with_snow_shot"),
+     QJsonArray{},
+     ConfigurationValueKind::ShortcutList,
+     std::nullopt,
+     {},
+     1},
     {QStringLiteral("screen_recording_shortcuts/export"),
      QJsonArray{QStringLiteral("Ctrl+E")},
      ConfigurationValueKind::StringList,
@@ -2610,6 +2617,21 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     const ConfigurationSchemaEntry* schemaEntry = entry(key);
     if (schemaEntry == nullptr) {
         return {};
+    }
+    if (key == QStringLiteral("context_menu_shortcuts/edit_with_snow_shot")) {
+        if (!value.isArray() || value.toArray().size() > 1)
+            return {};
+        QJsonArray normalized;
+        if (!value.toArray().isEmpty()) {
+            bool valid = false;
+            const auto binding =
+                shortcuts::shortcutBindingFromJson(value.toArray().first(), false, &valid);
+            const QString accessKey = shortcuts::canonicalMenuAccessKey(binding.portableText);
+            if (!valid || accessKey.isEmpty())
+                return {};
+            normalized = shortcuts::shortcutBindingsToJson({shortcuts::ShortcutBinding{accessKey}});
+        }
+        return {normalized, true, normalized != value};
     }
     if (key.startsWith(QStringLiteral("collage/pdf_custom_")) ||
         key.startsWith(QStringLiteral("collage/pdf_margin_"))) {

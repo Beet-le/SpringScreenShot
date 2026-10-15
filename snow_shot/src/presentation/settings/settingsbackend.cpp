@@ -26,6 +26,7 @@
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/storage/floatingtoolbarsettings.h"
+#include "snow_shot/shortcuts/menuaccesskey.h"
 #include "snow_shot/presentation/screenshotclipboardservice.h"
 
 #include <QJsonArray>
@@ -48,6 +49,17 @@
 
 namespace snow_shot::presentation::settings {
 namespace {
+const QString kContextMenuModeKey = QStringLiteral("system/context_menu_mode");
+const QString kContextMenuShortcutKey =
+    QStringLiteral("context_menu_shortcuts/edit_with_snow_shot");
+
+#ifdef Q_OS_WIN
+QString contextMenuAccessKey(const QJsonValue& value) {
+    const auto bindings = shortcuts::shortcutBindingsFromJson(value, false);
+    return bindings.isEmpty() ? QString() : bindings.first().portableText;
+}
+#endif
+
 std::optional<SkinSurface> skinSurfaceForFilePath(SettingsFilePathBinding binding) {
     switch (binding) {
     case SettingsFilePathBinding::SkinPath:
@@ -119,6 +131,8 @@ QString localShortcutKey(SettingsLocalShortcutScope scope, const QString& shortc
         : scope == SettingsLocalShortcutScope::Drawing  ? QStringLiteral("drawing_shortcuts/")
         : scope == SettingsLocalShortcutScope::ScreenRecording
             ? QStringLiteral("screen_recording_shortcuts/")
+        : scope == SettingsLocalShortcutScope::WindowsContextMenu
+            ? QStringLiteral("context_menu_shortcuts/")
             : QStringLiteral("pin_to_screen_shortcuts/");
     return prefix + shortcutId;
 }
@@ -744,37 +758,9 @@ bool BuiltInSettingsBackend::applySelectValue(SettingsSelectBinding binding,
         return false;
 #endif
     case SettingsSelectBinding::ContextMenuMode: {
-#ifdef Q_OS_WIN
-        const QString key = QStringLiteral("system/context_menu_mode");
-        const auto requested =
-            storage::ConfigurationSchema::normalize(key, QJsonValue::fromVariant(value));
-        if (!requested.valid || !m_shellContextMenu)
-            return false;
-        auto& configuration = storage::ApplicationStorage::instance().configuration();
-        if (!configuration.isWritable())
-            return false;
-        const auto previous = configuration.value(key);
-        auto result = m_shellContextMenu->changeEnabled(
-            requested.value.toString() == QStringLiteral("image_files"), [&] {
-                return configuration.setValue(key, requested.value) &&
-                       configuration.flushNow().success;
-            });
-        if (!result.success) {
-            if (configuration.value(key) != previous &&
-                (!configuration.setValue(key, previous) || !configuration.flushNow().success)) {
-                result.error += QLatin1Char(' ') +
-                                QCoreApplication::translate(
-                                    "SettingsBackend",
-                                    "Could not restore the Windows context menu preference.");
-            }
-            emit operationMessage(result.error, false);
-        }
-        emit synchronized();
-        return result.success;
-#else
-        Q_UNUSED(value);
-        return false;
-#endif
+        return applyContextMenuSettings(
+            QJsonValue::fromVariant(value),
+            storage::ApplicationStorage::instance().configuration().value(kContextMenuShortcutKey));
     }
     case SettingsSelectBinding::Proxy:
         return storage::NetworkSettings().setProxy(value.toString());
@@ -1003,6 +989,49 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
     return false;
 }
 
+bool BuiltInSettingsBackend::applyContextMenuSettings(const QJsonValue& mode,
+                                                      const QJsonValue& shortcutValue) {
+#ifdef Q_OS_WIN
+    const auto requestedMode = storage::ConfigurationSchema::normalize(kContextMenuModeKey, mode);
+    const auto requestedShortcuts =
+        storage::ConfigurationSchema::normalize(kContextMenuShortcutKey, shortcutValue);
+    auto& configuration = storage::ApplicationStorage::instance().configuration();
+    if (!requestedMode.valid || !requestedShortcuts.valid || !m_shellContextMenu ||
+        !configuration.isWritable())
+        return false;
+    const QMap<QString, QJsonValue> previous{
+        {kContextMenuModeKey, configuration.value(kContextMenuModeKey)},
+        {kContextMenuShortcutKey, configuration.value(kContextMenuShortcutKey)},
+    };
+    const QMap<QString, QJsonValue> requested{
+        {kContextMenuModeKey, requestedMode.value},
+        {kContextMenuShortcutKey, requestedShortcuts.value},
+    };
+    auto result = m_shellContextMenu->changeEnabled(
+        requestedMode.value.toString() == QStringLiteral("image_files"),
+        contextMenuAccessKey(requestedShortcuts.value),
+        [&] { return configuration.setValues(requested) && configuration.flushNow().success; });
+    if (!result.success) {
+        if ((configuration.value(kContextMenuModeKey) != previous.value(kContextMenuModeKey) ||
+             configuration.value(kContextMenuShortcutKey) !=
+                 previous.value(kContextMenuShortcutKey)) &&
+            (!configuration.setValues(previous) || !configuration.flushNow().success)) {
+            result.error +=
+                QLatin1Char(' ') +
+                QCoreApplication::translate(
+                    "SettingsBackend", "Could not restore the Windows context menu preference.");
+        }
+        emit operationMessage(result.error, false);
+    }
+    emit synchronized();
+    return result.success;
+#else
+    Q_UNUSED(mode);
+    Q_UNUSED(shortcutValue);
+    return false;
+#endif
+}
+
 void BuiltInSettingsBackend::refreshPlatformSettings() {
 #ifdef Q_OS_MACOS
     m_loginItems->refresh();
@@ -1010,7 +1039,10 @@ void BuiltInSettingsBackend::refreshPlatformSettings() {
 #ifdef Q_OS_WIN
     if (m_shellContextMenu) {
         QString error;
-        if (!m_shellContextMenu->refreshLabels(&error))
+        if (!m_shellContextMenu->refreshLabels(
+                contextMenuAccessKey(storage::ApplicationStorage::instance().configuration().value(
+                    kContextMenuShortcutKey)),
+                &error))
             qWarning().noquote() << error;
     }
 #endif
@@ -1816,6 +1848,13 @@ bool BuiltInSettingsBackend::applyShortcuts(GlobalShortcutAction action,
 shortcuts::ShortcutBindingList
 BuiltInSettingsBackend::localShortcuts(SettingsLocalShortcutScope scope,
                                        const QString& shortcutId) const {
+    if (scope == SettingsLocalShortcutScope::WindowsContextMenu) {
+        if (shortcutId != QStringLiteral("edit_with_snow_shot"))
+            return {};
+        return shortcuts::shortcutBindingsFromJson(
+            storage::ApplicationStorage::instance().configuration().value(kContextMenuShortcutKey),
+            false);
+    }
     if (scope == SettingsLocalShortcutScope::Screenshot) {
         return storage::ScreenshotShortcutSettings().shortcuts(shortcutId);
     }
@@ -1832,6 +1871,16 @@ GlobalShortcutValidationResult
 BuiltInSettingsBackend::validateLocalShortcut(SettingsLocalShortcutScope scope,
                                               const QString& shortcutId,
                                               const shortcuts::ShortcutBinding& shortcut) const {
+    if (scope == SettingsLocalShortcutScope::WindowsContextMenu) {
+        const shortcuts::ShortcutBinding canonical{
+            shortcuts::canonicalMenuAccessKey(shortcut.portableText)};
+        const bool valid = shortcutId == QStringLiteral("edit_with_snow_shot") &&
+                           !canonical.portableText.isEmpty();
+        return {shortcut.portableText, valid,
+                valid ? GlobalShortcutFailureReason::None
+                      : GlobalShortcutFailureReason::InvalidShortcut,
+                canonical};
+    }
     const QString key = localShortcutKey(scope, shortcutId);
     const bool allowModifierOnlyShift = scope == SettingsLocalShortcutScope::Screenshot;
     const shortcuts::ShortcutBinding canonical =
@@ -1878,6 +1927,16 @@ BuiltInSettingsBackend::validateLocalShortcut(SettingsLocalShortcutScope scope,
 bool BuiltInSettingsBackend::applyLocalShortcuts(SettingsLocalShortcutScope scope,
                                                  const QString& shortcutId,
                                                  const shortcuts::ShortcutBindingList& shortcuts) {
+    if (scope == SettingsLocalShortcutScope::WindowsContextMenu) {
+        if (shortcutId != QStringLiteral("edit_with_snow_shot") || shortcuts.size() > 1)
+            return false;
+        for (const auto& binding : shortcuts)
+            if (!validateLocalShortcut(scope, shortcutId, binding).supported)
+                return false;
+        return applyContextMenuSettings(
+            storage::ApplicationStorage::instance().configuration().value(kContextMenuModeKey),
+            shortcuts::shortcutBindingsToJson(shortcuts));
+    }
     for (const shortcuts::ShortcutBinding& shortcut : shortcuts) {
         const GlobalShortcutValidationResult validation =
             validateLocalShortcut(scope, shortcutId, shortcut);
@@ -2225,6 +2284,7 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
     const auto requestedElevated = importedValue(elevatedKey);
 #ifdef Q_OS_WIN
     const auto requestedContextMenu = importedValue(contextMenuKey);
+    const auto requestedContextMenuShortcuts = importedValue(kContextMenuShortcutKey);
 #endif
     // Startup preferences are committed by the native transaction. Keep its previous
     // configuration baseline intact even if querying the OS during rollback fails.
@@ -2233,6 +2293,7 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
     staged.insert(elevatedKey, previous.value(elevatedKey));
 #ifdef Q_OS_WIN
     staged.insert(contextMenuKey, previous.value(contextMenuKey));
+    staged.insert(kContextMenuShortcutKey, previous.value(kContextMenuShortcutKey));
 #endif
     if (!configuration.applySnapshot(staged, schemaVersion))
         return false;
@@ -2277,9 +2338,9 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
         accepted = accepted && result.success;
     }
 #ifdef Q_OS_WIN
-    if (previous.value(contextMenuKey) != requestedContextMenu)
-        accepted = applySelectValue(SettingsSelectBinding::ContextMenuMode,
-                                    requestedContextMenu.toVariant()) &&
+    if (previous.value(contextMenuKey) != requestedContextMenu ||
+        previous.value(kContextMenuShortcutKey) != requestedContextMenuShortcuts)
+        accepted = applyContextMenuSettings(requestedContextMenu, requestedContextMenuShortcuts) &&
                    accepted;
 #endif
     bool historyChanged = false;
@@ -2336,6 +2397,10 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
         return false;
 #endif
     switch (reset) {
+    case SettingsSectionReset::WindowsContextMenuShortcuts:
+        return applyContextMenuSettings(
+            storage::ApplicationStorage::instance().configuration().value(kContextMenuModeKey),
+            storage::ConfigurationSchema::defaultValue(kContextMenuShortcutKey));
     case SettingsSectionReset::ScreenshotCaptureBehavior:
     case SettingsSectionReset::ScreenshotCaptureCompatibility:
     case SettingsSectionReset::ScreenRecordingVideo:

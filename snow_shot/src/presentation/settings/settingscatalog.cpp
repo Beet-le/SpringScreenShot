@@ -3677,6 +3677,31 @@ QVector<SettingsPageDefinition> builtInPages() {
                  screenshotOtherShortcutItems(),
                  SettingsSectionItemLayout::TwoColumnGrid,
              },
+#ifdef Q_OS_WIN
+             {
+                 QStringLiteral("windows-context-menu-shortcuts"),
+                 settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Windows context menu")),
+                 settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
+                                                "Use one letter (A–Z) or digit (0–9) when the "
+                                                "classic Windows context menu is open")),
+                 SettingsSectionReset::WindowsContextMenuShortcuts,
+                 {{QStringLiteral("windows-context-menu-shortcut.edit_with_snow_shot"),
+                   settingsText(
+                       app::edition::isMini
+                           ? QT_TRANSLATE_NOOP("SettingsCatalog", "Edit with Snow Shot Mini")
+                           : QT_TRANSLATE_NOOP("SettingsCatalog", "Edit with Snow Shot")),
+                   settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
+                                                  "Use one letter (A–Z) or digit (0–9) when the "
+                                                  "classic Windows context menu is open")),
+                   {},
+                   QStringLiteral("context_menu_shortcuts/edit_with_snow_shot"),
+                   SettingsLocalShortcutDefinition{QStringLiteral("edit_with_snow_shot"),
+                                                   []() { return outlined_icons::Edit(); },
+                                                   SettingsLocalShortcutScope::WindowsContextMenu,
+                                                   1}}},
+                 SettingsSectionItemLayout::TwoColumnGrid,
+             },
+#endif
          },
          SettingsPageKind::GeneratedSettings,
          {{settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Global hotkeys")),
@@ -5265,12 +5290,15 @@ QStringList SettingsCatalog::validationErrors() const {
                              ? QStringLiteral("drawing_shortcuts/")
                          : local->scope == SettingsLocalShortcutScope::ScreenRecording
                              ? QStringLiteral("screen_recording_shortcuts/")
+                         : local->scope == SettingsLocalShortcutScope::WindowsContextMenu
+                             ? QStringLiteral("context_menu_shortcuts/")
                              : QStringLiteral("pin_to_screen_shortcuts/")) +
                         local->shortcutId;
                     if (local->shortcutId.isEmpty() || !local->iconFactory ||
                         itemDefinition.configurationKey != expectedKey || schemaEntry == nullptr ||
                         schemaEntry->valueKind != storage::ConfigurationValueKind::ShortcutList ||
-                        schemaEntry->maximumListItems != 2) {
+                        local->maximumShortcutCount < 1 ||
+                        schemaEntry->maximumListItems != local->maximumShortcutCount) {
                         errors.push_back(QStringLiteral("local shortcut item is incomplete: %1")
                                              .arg(itemDefinition.id));
                     }

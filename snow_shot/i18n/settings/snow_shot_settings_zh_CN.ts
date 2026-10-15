@@ -2237,6 +2237,14 @@
             <translation>编辑选区</translation>
         </message>
         <message>
+            <source>Edit with Snow Shot</source>
+            <translation>使用 Snow Shot 编辑</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot Mini</source>
+            <translation>使用 Snow Shot Mini 编辑</translation>
+        </message>
+        <message>
             <source>Enable MCP integration</source>
             <translation>启用 MCP 集成</translation>
         </message>
@@ -4465,6 +4473,10 @@
             <translation>使用全局鼠标手势、选择窗口内的单个元素，以及翻译选中的文本。</translation>
         </message>
         <message>
+            <source>Use one letter (A–Z) or digit (0–9) when the classic Windows context menu is open</source>
+            <translation>在经典 Windows 右键菜单打开时，使用一个字母（A–Z）或数字（0–9）</translation>
+        </message>
+        <message>
             <source>Use regular icon settings</source>
             <translation>沿用常规图标设置</translation>
         </message>
@@ -4677,6 +4689,10 @@
         <message>
             <source>The Windows context menu is only supported on Windows.</source>
             <translation>Windows 右键菜单仅在 Windows 上受支持。</translation>
+        </message>
+        <message>
+            <source>The context menu access key must be one letter (A–Z) or digit (0–9).</source>
+            <translation>右键菜单访问键必须为一个字母（A–Z）或数字（0–9）。</translation>
         </message>
     </context>
     <context>

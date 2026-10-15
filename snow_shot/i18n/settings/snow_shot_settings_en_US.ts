@@ -2237,6 +2237,14 @@
             <translation>Edit selection</translation>
         </message>
         <message>
+            <source>Edit with Snow Shot</source>
+            <translation>Edit with Snow Shot</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot Mini</source>
+            <translation>Edit with Snow Shot Mini</translation>
+        </message>
+        <message>
             <source>Enable MCP integration</source>
             <translation>Enable MCP integration</translation>
         </message>
@@ -4465,6 +4473,10 @@
             <translation>Use global mouse gestures, select individual window elements, and translate selected text.</translation>
         </message>
         <message>
+            <source>Use one letter (A–Z) or digit (0–9) when the classic Windows context menu is open</source>
+            <translation>Use one letter (A–Z) or digit (0–9) when the classic Windows context menu is open</translation>
+        </message>
+        <message>
             <source>Use regular icon settings</source>
             <translation>Use regular icon settings</translation>
         </message>
@@ -4677,6 +4689,10 @@
         <message>
             <source>The Windows context menu is only supported on Windows.</source>
             <translation>The Windows context menu is only supported on Windows.</translation>
+        </message>
+        <message>
+            <source>The context menu access key must be one letter (A–Z) or digit (0–9).</source>
+            <translation>The context menu access key must be one letter (A–Z) or digit (0–9).</translation>
         </message>
     </context>
     <context>

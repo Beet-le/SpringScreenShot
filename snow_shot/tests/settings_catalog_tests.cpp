@@ -552,6 +552,10 @@ void builtInCatalogIsCompleteAndValid() {
     }
 #ifdef Q_OS_MACOS
     require(sectionCount == 52, "macOS includes permissions and merged storage and desktop groups");
+#elif defined(Q_OS_WIN)
+    require(
+        sectionCount == 53,
+        "Windows includes the context menu shortcut category with capture and recording groups");
 #else
     require(sectionCount == 52,
             "catalog includes capture and recording groups with merged storage and desktop groups");
@@ -562,6 +566,7 @@ void builtInCatalogIsCompleteAndValid() {
         QStringLiteral("system.launch-as-administrator"),
         QStringLiteral("system.restart-as-administrator"),
         QStringLiteral("system.context-menu-mode"),
+        QStringLiteral("windows-context-menu-shortcut.edit_with_snow_shot"),
         QStringLiteral("screenshot.api-mode"),
         QStringLiteral("screen-recording.api-mode"),
         QStringLiteral("screenshot.window-element-api"),
@@ -1585,7 +1590,13 @@ void builtInCatalogIsCompleteAndValid() {
                 settings::SettingsLocalShortcutScope::PinToScreen;
     }
     require(
-        applicationShortcutsPage != nullptr && applicationShortcutsPage->sections.size() == 5 &&
+        applicationShortcutsPage != nullptr &&
+            applicationShortcutsPage->sections.size() ==
+#ifdef Q_OS_WIN
+                6 &&
+#else
+                5 &&
+#endif
             everyHotkeySectionUsesTwoColumns && screenshotShortcuts != nullptr &&
             screenshotShortcuts->items.size() == 29 &&
             screenshotShortcuts->itemLayout == settings::SettingsSectionItemLayout::TwoColumnGrid &&

@@ -528,6 +528,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Invalid annotation shortcut</translation>
         </message>
         <message>
+            <source>Invalid context menu access key</source>
+            <translation>Invalid context menu access key</translation>
+        </message>
+        <message>
             <source>Invalid global shortcut</source>
             <translation>Invalid global shortcut</translation>
         </message>
@@ -586,6 +590,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Unsupported key</source>
             <translation>Unsupported key</translation>
+        </message>
+        <message>
+            <source>Use one letter (A–Z) or digit (0–9) without modifier keys</source>
+            <translation>Use one letter (A–Z) or digit (0–9) without modifier keys</translation>
         </message>
     </context>
     <context>

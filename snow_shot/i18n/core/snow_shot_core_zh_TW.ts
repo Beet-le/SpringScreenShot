@@ -528,6 +528,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>無效的標註快速鍵</translation>
         </message>
         <message>
+            <source>Invalid context menu access key</source>
+            <translation>無效的右鍵選單存取鍵</translation>
+        </message>
+        <message>
             <source>Invalid global shortcut</source>
             <translation>無效的全域快速鍵</translation>
         </message>
@@ -586,6 +590,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Unsupported key</source>
             <translation>不支援的按鍵</translation>
+        </message>
+        <message>
+            <source>Use one letter (A–Z) or digit (0–9) without modifier keys</source>
+            <translation>請使用一個字母（A–Z）或數字（0–9），不要使用修飾鍵</translation>
         </message>
     </context>
     <context>

@@ -54,6 +54,46 @@ void commandAndOwnership() {
             "context menu excludes supported text and HTML pinning formats");
 }
 
+void accessKeysAndRollback() {
+    Registry registry;
+    windows::ShellContextMenuRegistration registration(registry.options());
+    const QString baseLabel = snow_shot::app::edition::isMini
+                                  ? QStringLiteral("Edit with Snow Shot Mini")
+                                  : QStringLiteral("Edit with Snow Shot");
+    const auto label = [&] {
+        return stringText(
+            registry.keys.value(Registry::path(QStringLiteral("png"))).values.value({}));
+    };
+    require(registration.setEnabled(true, QStringLiteral("e")) &&
+                label() == baseLabel + QStringLiteral(" (&E)"),
+            "startup registration canonicalizes and displays the configured logical access key");
+    const int writes = registry.writes;
+    require(registration.setEnabled(true, QStringLiteral("E")) && registry.writes == writes,
+            "startup reconciliation with an unchanged access key is idempotent");
+    const auto before = registry.keys;
+    QString error;
+    for (const auto& invalid : {QStringLiteral("Ctrl+E"), QStringLiteral("F1"), QStringLiteral("&"),
+                                QStringLiteral("雪"), QStringLiteral("EE")}) {
+        require(!registration.setEnabled(true, invalid, &error) && !error.isEmpty() &&
+                    !registration.refreshLabels(invalid, &error) && registry.keys == before,
+                "invalid native access keys cannot change registry labels");
+    }
+    registry.writesBeforeFailure = 1;
+    require(!registration.setEnabled(true, QStringLiteral("S")) && registry.keys == before,
+            "partial native access key updates roll back every image verb");
+    require(!registration.changeEnabled(true, QStringLiteral("7"), [] { return false; }).success &&
+                registry.keys == before,
+            "a rejected preference commit restores the previous mnemonic");
+    require(registration.refreshLabels(QStringLiteral("7")) &&
+                label() == baseLabel + QStringLiteral(" (&7)"),
+            "label refresh shares digit mnemonic formatting with registration");
+    require(registration.refreshLabels(QString()) && label() == baseLabel,
+            "clearing a key removes the suffix entirely");
+    require(registration.setEnabled(false, QStringLiteral("E")) && registry.keys.isEmpty() &&
+                registration.refreshLabels(QStringLiteral("S")) && registry.keys.isEmpty(),
+            "refreshing an access key does not create disabled menu entries");
+}
+
 void preservationRelocationAndRollback() {
     Registry registry;
     windows::ShellContextMenuRegistration registration(registry.options());
@@ -196,8 +236,12 @@ void isolatedNativeRegistry() {
         QStringLiteral("C:/Native Snow Shot/雪/") + snow_shot::app::edition::executableName();
     options.imageExtensions = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("bmp")};
     windows::ShellContextMenuRegistration registration(std::move(options));
-    require(registration.setEnabled(true), "native isolated registry can enable the image verbs");
+    require(registration.setEnabled(true, QStringLiteral("E")),
+            "native isolated registry can enable the image verbs with an access key");
     const auto before = registration.snapshot();
+    for (const auto& key : before.keys)
+        require(stringText(key.values.value({})).endsWith(QStringLiteral(" (&E)")),
+                "native registry labels retain the mnemonic marker");
     require(before.valid && before.keys.size() == 3 &&
                 before.keys
                     .value(root + QStringLiteral("\\SystemFileAssociations\\.bmp\\shell\\") +
@@ -230,6 +274,7 @@ void isolatedNativeRegistry() {
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     commandAndOwnership();
+    accessKeysAndRollback();
     preservationRelocationAndRollback();
     foreignOwnerAndLanguageRefresh();
     authoritativeSuffixes();
