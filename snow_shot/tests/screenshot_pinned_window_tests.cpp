@@ -7206,16 +7206,149 @@ void pinnedMiddleClickActions() {
     require(offscreen || removed, "middle-click Close must use the persistence removal lifecycle");
 }
 
+void pinnedDoubleClickResetsZoom() {
+    const snow_shot::storage::PinToScreenSettings settings;
+    const QString previousAction = settings.doubleClickAction();
+    const auto restore = qScopeGuard([&] { settings.setDoubleClickAction(previousAction); });
+    require(settings.setDoubleClickAction(QStringLiteral("reset_zoom")),
+            "configure double-click Reset Zoom");
+    ScreenshotPinnedWindow window;
+    window.setAttribute(Qt::WA_DeleteOnClose, false);
+    require(window.present(cachedOcrPinConfig(nullptr)), "present double-click reset fixture");
+    materializePinnedMenuTree(window);
+    auto* canvas = window.findChild<SnowCanvasWidget*>();
+    auto* thumbnail = window.findChild<QAction*>(QStringLiteral("screenshotPinnedThumbnailAction"));
+    auto* scale = window.findChild<adqt::widgets::AdContextMenu*>(
+        QStringLiteral("screenshotPinnedScaleMenu"));
+    require(canvas && thumbnail && scale, "double-click reset controls exist");
+    auto* halfScale = pinnedMenuPercentAction(*scale, 50);
+    auto* fullScale = pinnedMenuPercentAction(*scale, 100);
+    require(halfScale && fullScale, "double-click reset scale options exist");
+    const QSize originalSize = window.currentNativeGeometry().size();
+    for (const bool canvasReceiver : {false, true}) {
+        for (const bool fromThumbnail : {false, true}) {
+            halfScale->trigger();
+            require(halfScale->isChecked(), "reset fixture starts at 50 percent zoom");
+            if (fromThumbnail) {
+                thumbnail->setChecked(true);
+                waitForUi(300);
+                require(thumbnail->isChecked(), "reset fixture enters thumbnail mode");
+            }
+            QWidget* receiver = canvasReceiver ? static_cast<QWidget*>(canvas) : &window;
+            const QPoint point = receiver->rect().center();
+            QMouseEvent event(QEvent::MouseButtonDblClick, QPointF(point),
+                              QPointF(receiver->mapToGlobal(point)), Qt::LeftButton, Qt::LeftButton,
+                              Qt::NoModifier);
+            QCoreApplication::sendEvent(receiver, &event);
+            require(fullScale->isChecked() && !thumbnail->isChecked() && window.isVisible() &&
+                        window.currentNativeGeometry().size() == originalSize,
+                    "double-click Reset Zoom restores 100 percent and leaves thumbnail mode");
+        }
+    }
+}
+
+void pinnedMouseDestroyActions(Qt::MouseButton button) {
+    const snow_shot::storage::PinToScreenSettings settings;
+    const QString previousDoubleClick = settings.doubleClickAction();
+    const QString previousMiddleClick = settings.middleMouseButtonAction();
+    const bool previousClose = settings.confirmBeforeClosingWindow();
+    const bool previousDestroy = settings.confirmBeforeDestroyingWindow();
+    const auto restore = qScopeGuard([&] {
+        settings.setDoubleClickAction(previousDoubleClick);
+        settings.setMiddleMouseButtonAction(previousMiddleClick);
+        settings.setConfirmBeforeClosingWindow(previousClose);
+        settings.setConfirmBeforeDestroyingWindow(previousDestroy);
+    });
+    require(settings.setDoubleClickAction(QStringLiteral("destroy")) &&
+                settings.setMiddleMouseButtonAction(QStringLiteral("destroy")) &&
+                settings.setConfirmBeforeClosingWindow(true),
+            "configure mouse Destroy independently of Close confirmation");
+    for (const bool canvasReceiver : {false, true}) {
+        for (const bool confirm : {false, true}) {
+            require(settings.setConfirmBeforeDestroyingWindow(confirm),
+                    "configure mouse Destroy confirmation");
+            int closes = 0;
+            int removals = 0;
+            int closeSignals = 0;
+            ScreenshotPinnedWindow window;
+            window.setAttribute(Qt::WA_DeleteOnClose, false);
+            auto config = cachedOcrPinConfig(nullptr);
+            config.persistenceId = QStringLiteral("mouse-destroy-fixture");
+            config.persistenceCloser = [&](const auto&) { ++closes; };
+            config.persistenceRemover = [&](const auto&) { ++removals; };
+            QObject::connect(&window, &ScreenshotPinnedWindow::closingForPersistence,
+                             [&](const auto&, auto intent) {
+                                 ++closeSignals;
+                                 require(intent ==
+                                             snow_shot::storage::PinnedWindowCloseIntent::Destroy,
+                                         "mouse Destroy must retain the permanent removal intent");
+                             });
+            require(window.present(config), "present mouse Destroy fixture");
+            auto* canvas = window.findChild<SnowCanvasWidget*>();
+            require(canvas, "mouse Destroy canvas exists");
+            if (canvasReceiver) {
+                materializePinnedMenuTree(window);
+                auto* thumbnail =
+                    window.findChild<QAction*>(QStringLiteral("screenshotPinnedThumbnailAction"));
+                require(thumbnail, "mouse Destroy thumbnail action exists");
+                thumbnail->setChecked(true);
+                waitForUi(300);
+            }
+            QWidget* receiver = canvasReceiver ? static_cast<QWidget*>(canvas) : &window;
+            const auto press = [&] {
+                const QPoint point = receiver->rect().center();
+                QMouseEvent event(button == Qt::LeftButton ? QEvent::MouseButtonDblClick
+                                                           : QEvent::MouseButtonPress,
+                                  QPointF(point), QPointF(receiver->mapToGlobal(point)), button,
+                                  button, Qt::NoModifier);
+                QCoreApplication::sendEvent(receiver, &event);
+            };
+            const auto confirmation = [&] {
+                return window.findChild<adqt::widgets::AdModal*>(
+                    QStringLiteral("screenshotPinnedDestroyConfirmation"));
+            };
+            press();
+            require(window.isVisible() && !confirmation() && closes == 0 && removals == 0 &&
+                        closeSignals == 0,
+                    "mouse Destroy waits for release before confirmation or removal");
+            releaseCloseGesture(window,
+                                button == Qt::LeftButton ? Qt::MiddleButton : Qt::LeftButton);
+            QCoreApplication::processEvents();
+            require(window.isVisible() && !confirmation() && removals == 0,
+                    "another mouse button release must not execute Destroy");
+            releaseCloseGesture(window, button);
+            waitForUi(30);
+            if (confirm) {
+                auto* modal = confirmation();
+                require(modal && modal->isOpen() && window.isVisible() && removals == 0 &&
+                            closes == 0 && closeSignals == 0,
+                        "mouse Destroy honors its confirmation setting after release");
+                QPointer<adqt::widgets::AdModal> dismissed(modal);
+                modal->reject();
+                require(processUntilDeleted(dismissed, 2000) && window.isVisible() &&
+                            removals == 0 && closes == 0 && closeSignals == 0,
+                        "canceling mouse Destroy preserves the pin and persisted state");
+                press();
+                releaseCloseGesture(window, button);
+                waitForUi(30);
+                modal = confirmation();
+                require(modal && modal->isOpen(), "mouse Destroy can be retried after canceling");
+                modal->accept();
+                waitForUi(30);
+            }
+            require(!window.isVisible() && removals > 0 && closes == 0 && closeSignals == 1,
+                    "mouse Destroy removes persistence and closes exactly once");
+        }
+    }
+}
+
 void pinnedOffscreenDoubleClickActions() {
-    // A fully presented Windows pin requires an HWND. Exercise Qt event routing
-    // and command state on an offscreen widget; native tests cover its geometry.
     const snow_shot::storage::PinToScreenSettings settings;
     const QString previousAction = settings.doubleClickAction();
     const auto restore = qScopeGuard([&] { settings.setDoubleClickAction(previousAction); });
     auto* window = new ScreenshotPinnedWindow();
     QPointer<ScreenshotPinnedWindow> guarded(window);
-    window->resize(600, 400);
-    window->show();
+    require(window->present(cachedOcrPinConfig(nullptr)), "present offscreen double-click fixture");
     waitForUi(30);
     auto* canvas = window->findChild<SnowCanvasWidget*>();
     materializePinnedMenuTree(*window);
@@ -24852,12 +24985,15 @@ int main(int argc, char* argv[]) {
         }
         if (app.arguments().contains(QStringLiteral("--middle-click-only"))) {
             pinnedMiddleClickActions();
+            pinnedMouseDestroyActions(Qt::MiddleButton);
             if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
                 pinnedOcrDoubleClickUsesDragRegion(true);
             }
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--double-click-only"))) {
+            pinnedDoubleClickResetsZoom();
+            pinnedMouseDestroyActions(Qt::LeftButton);
             if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
                 pinnedOffscreenDoubleClickActions();
             } else {

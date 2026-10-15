@@ -745,13 +745,15 @@ int main(int argc, char** argv) {
                     session.state(pinId).enabled,
                 "pinned double-click defaults to the enabled thumbnail selector");
         for (const QString& action :
-             {QStringLiteral("none"), QStringLiteral("thumbnail_mode"), QStringLiteral("close")}) {
+             {QStringLiteral("none"), QStringLiteral("reset_zoom"),
+              QStringLiteral("thumbnail_mode"), QStringLiteral("hide_to_top"),
+              QStringLiteral("close"), QStringLiteral("destroy")}) {
             require(backend.applySelectValue(pinBinding, action) &&
                         backend.selectValue(pinBinding).toString() == action,
                     "pinned double-click backend must apply every option");
         }
         require(!backend.applySelectValue(pinBinding, QStringLiteral("unsupported")) &&
-                    backend.selectValue(pinBinding).toString() == QStringLiteral("close"),
+                    backend.selectValue(pinBinding).toString() == QStringLiteral("destroy"),
                 "pinned double-click backend must reject invalid actions");
         require(backend.resetSection(settings::SettingsSectionReset::PinToScreenBehavior) &&
                     backend.selectValue(pinBinding).toString() == QStringLiteral("thumbnail_mode"),
@@ -761,14 +763,16 @@ int main(int argc, char** argv) {
         require(backend.selectValue(middleBinding).toString() == QStringLiteral("reset_zoom") &&
                     session.state(middleId).enabled,
                 "pinned middle-click defaults to the enabled reset zoom selector");
-        for (const QString& action : {QStringLiteral("none"), QStringLiteral("reset_zoom"),
-                                      QStringLiteral("thumbnail_mode"), QStringLiteral("close")}) {
+        for (const QString& action :
+             {QStringLiteral("none"), QStringLiteral("reset_zoom"),
+              QStringLiteral("thumbnail_mode"), QStringLiteral("hide_to_top"),
+              QStringLiteral("close"), QStringLiteral("destroy")}) {
             require(backend.applySelectValue(middleBinding, action) &&
                         backend.selectValue(middleBinding).toString() == action,
                     "pinned middle-click backend must apply every option");
         }
         require(!backend.applySelectValue(middleBinding, QStringLiteral("unsupported")) &&
-                    backend.selectValue(middleBinding).toString() == QStringLiteral("close"),
+                    backend.selectValue(middleBinding).toString() == QStringLiteral("destroy"),
                 "pinned middle-click backend must reject invalid actions");
         require(backend.resetSection(settings::SettingsSectionReset::PinToScreenBehavior) &&
                     backend.selectValue(middleBinding).toString() == QStringLiteral("reset_zoom"),
@@ -848,9 +852,9 @@ int main(int argc, char** argv) {
                          .toBool(),
                 "reset Text Recognition should restore Small, max scaling, and CPU mode");
     }
-    require(storage::PinToScreenSettings().setDoubleClickAction(QStringLiteral("close")),
+    require(storage::PinToScreenSettings().setDoubleClickAction(QStringLiteral("reset_zoom")),
             "save pinned double-click action before restart");
-    require(storage::PinToScreenSettings().setMiddleMouseButtonAction(QStringLiteral("none")),
+    require(storage::PinToScreenSettings().setMiddleMouseButtonAction(QStringLiteral("destroy")),
             "save pinned middle-click action before restart");
     const snow_shot::shortcuts::ShortcutBindingList selectedTextKeys{
         QStringLiteral("Ctrl+Alt+T"), QStringLiteral("Ctrl+Shift+T")};
@@ -858,13 +862,13 @@ int main(int argc, char** argv) {
             "save selected text shortcut bindings before restart");
     applicationStorage.shutdown();
     require(applicationStorage.initialize({executable, temporary.path(), 60000}).success &&
-                storage::PinToScreenSettings().doubleClickAction() == QStringLiteral("close"),
+                storage::PinToScreenSettings().doubleClickAction() == QStringLiteral("reset_zoom"),
             "pinned double-click action must survive a storage restart");
     require(storage::ExtendedFeaturesSettings().translationPageEnabled(),
             "feature opt-in survives storage restart");
     require(storage::ShortcutSettings().translateSelectedText() == selectedTextKeys,
             "both selected text shortcut bindings survive a storage restart");
-    require(storage::PinToScreenSettings().middleMouseButtonAction() == QStringLiteral("none"),
+    require(storage::PinToScreenSettings().middleMouseButtonAction() == QStringLiteral("destroy"),
             "pinned middle-click action must survive a storage restart");
     applicationStorage.shutdown();
     return 0;

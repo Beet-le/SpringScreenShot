@@ -1114,15 +1114,19 @@ void builtInCatalogIsCompleteAndValid() {
             "Pin to Screen must expose Double-click Action");
     const auto& pinSelect = std::get<settings::SettingsSelectDefinition>(pinDoubleClick->payload);
     require(pinSelect.binding == settings::SettingsSelectBinding::PinDoubleClickAction &&
-                pinSelect.options.size() == 4 &&
+                pinSelect.options.size() == 6 &&
                 pinSelect.options[0].value == QStringLiteral("none") &&
                 pinSelect.options[0].label.translated() == QStringLiteral("None") &&
-                pinSelect.options[1].value == QStringLiteral("thumbnail_mode") &&
-                pinSelect.options[1].label.translated() == QStringLiteral("Thumbnail Mode") &&
-                pinSelect.options[2].value == QStringLiteral("hide_to_top") &&
-                pinSelect.options[2].label.translated() == QStringLiteral("Hide to Top") &&
-                pinSelect.options[3].value == QStringLiteral("close") &&
-                pinSelect.options[3].label.translated() == QStringLiteral("Close"),
+                pinSelect.options[1].value == QStringLiteral("reset_zoom") &&
+                pinSelect.options[1].label.translated() == QStringLiteral("Reset Zoom") &&
+                pinSelect.options[2].value == QStringLiteral("thumbnail_mode") &&
+                pinSelect.options[2].label.translated() == QStringLiteral("Thumbnail Mode") &&
+                pinSelect.options[3].value == QStringLiteral("hide_to_top") &&
+                pinSelect.options[3].label.translated() == QStringLiteral("Hide to Top") &&
+                pinSelect.options[4].value == QStringLiteral("close") &&
+                pinSelect.options[4].label.translated() == QStringLiteral("Close") &&
+                pinSelect.options[5].value == QStringLiteral("destroy") &&
+                pinSelect.options[5].label.translated() == QStringLiteral("Destroy"),
             "pinned double-click options must preserve the specified order, labels and values");
     require(
         catalog.section(QStringLiteral("pinned-windows"), QStringLiteral("pin-to-screen-settings"))
@@ -1139,7 +1143,7 @@ void builtInCatalogIsCompleteAndValid() {
     const auto& middleSelect =
         std::get<settings::SettingsSelectDefinition>(pinMiddleClick->payload);
     require(middleSelect.binding == settings::SettingsSelectBinding::PinMiddleClickAction &&
-                middleSelect.options.size() == 5 &&
+                middleSelect.options.size() == 6 &&
                 middleSelect.options[0].value == QStringLiteral("none") &&
                 middleSelect.options[0].label.translated() == QStringLiteral("None") &&
                 middleSelect.options[1].value == QStringLiteral("reset_zoom") &&
@@ -1149,7 +1153,9 @@ void builtInCatalogIsCompleteAndValid() {
                 middleSelect.options[3].value == QStringLiteral("hide_to_top") &&
                 middleSelect.options[3].label.translated() == QStringLiteral("Hide to Top") &&
                 middleSelect.options[4].value == QStringLiteral("close") &&
-                middleSelect.options[4].label.translated() == QStringLiteral("Close"),
+                middleSelect.options[4].label.translated() == QStringLiteral("Close") &&
+                middleSelect.options[5].value == QStringLiteral("destroy") &&
+                middleSelect.options[5].label.translated() == QStringLiteral("Destroy"),
             "pinned middle-click options must preserve the specified order, labels and values");
     require(
         catalog.section(QStringLiteral("pinned-windows"), QStringLiteral("pin-to-screen-settings"))
@@ -2889,10 +2895,16 @@ void searchIndexIsGeneratedAndRanked() {
                                                QStringLiteral("other"),
                                                QStringLiteral("quick.translate-selected-text")},
             "search navigates directly to the selected text shortcut under Other");
-    const auto middle = index.search(QStringLiteral("Reset Zoom"));
-    require(!middle.isEmpty() && middle.constFirst().location.itemId ==
-                                     QStringLiteral("pin-to-screen.middle-mouse-button-action"),
-            "search must find the pinned middle-click selector by its Reset Zoom option");
+    for (const QString& label : {QStringLiteral("Reset Zoom"), QStringLiteral("Destroy")}) {
+        const auto actions = index.search(label);
+        for (const QString& itemId : {QStringLiteral("pin-to-screen.double-click-action"),
+                                      QStringLiteral("pin-to-screen.middle-mouse-button-action")}) {
+            require(
+                std::any_of(actions.cbegin(), actions.cend(),
+                            [&](const auto& result) { return result.location.itemId == itemId; }),
+                "search must find both pinned mouse selectors by their shared action labels");
+        }
+    }
     const auto translation = index.search(QStringLiteral("original image translation"));
     require(!translation.isEmpty() && translation.constFirst().location.itemId ==
                                           QStringLiteral("translation.original-image"),

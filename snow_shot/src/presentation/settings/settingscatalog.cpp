@@ -1777,11 +1777,15 @@ SettingsItemDefinition pinDoubleClickActionItem() {
         SettingsSelectBinding::PinDoubleClickAction,
         {
             {QStringLiteral("none"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "None"))},
+            {QStringLiteral("reset_zoom"),
+             settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Reset Zoom"))},
             {QStringLiteral("thumbnail_mode"),
              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Thumbnail Mode"))},
             {QStringLiteral("hide_to_top"),
              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Hide to Top"))},
             {QStringLiteral("close"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Close"))},
+            {QStringLiteral("destroy"),
+             settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Destroy"))},
         });
 }
 
@@ -1803,6 +1807,8 @@ SettingsItemDefinition pinMiddleClickActionItem() {
             {QStringLiteral("hide_to_top"),
              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Hide to Top"))},
             {QStringLiteral("close"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Close"))},
+            {QStringLiteral("destroy"),
+             settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Destroy"))},
         });
 }
 

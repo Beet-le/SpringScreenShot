@@ -842,10 +842,10 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
     const QMap<QString, QStringList> allowedStringValues{
         {QStringLiteral("pin_to_screen/middle_mouse_button_action"),
          {QStringLiteral("none"), QStringLiteral("reset_zoom"), QStringLiteral("thumbnail_mode"),
-          QStringLiteral("hide_to_top"), QStringLiteral("close")}},
+          QStringLiteral("hide_to_top"), QStringLiteral("close"), QStringLiteral("destroy")}},
         {QStringLiteral("pin_to_screen/double_click_action"),
-         {QStringLiteral("none"), QStringLiteral("thumbnail_mode"), QStringLiteral("hide_to_top"),
-          QStringLiteral("close")}},
+         {QStringLiteral("none"), QStringLiteral("reset_zoom"), QStringLiteral("thumbnail_mode"),
+          QStringLiteral("hide_to_top"), QStringLiteral("close"), QStringLiteral("destroy")}},
         {QStringLiteral("text_recognition/fill_style"),
          {QStringLiteral("blur"), QStringLiteral("background_fill")}},
         {QStringLiteral("text_recognition/model_type"),
@@ -2176,6 +2176,39 @@ void recordingPostProcessingPreferencesPersistAndValidate() {
     applicationStorage.shutdown();
 }
 
+void pinnedMouseActionSettingsRoundTrip() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "failed to create pinned mouse settings directory");
+    const QString executable = QDir(temporary.path()).filePath(QStringLiteral("bin"));
+    require(QDir().mkpath(executable),
+            "failed to create pinned mouse settings executable directory");
+    auto& applicationStorage = initialize(executable, temporary.path());
+    const storage::PinToScreenSettings pin;
+    require(pin.doubleClickAction() == QStringLiteral("thumbnail_mode") &&
+                pin.middleMouseButtonAction() == QStringLiteral("reset_zoom"),
+            "pinned mouse actions must retain their defaults");
+    for (const QString& action :
+         {QStringLiteral("none"), QStringLiteral("reset_zoom"), QStringLiteral("thumbnail_mode"),
+          QStringLiteral("hide_to_top"), QStringLiteral("close"), QStringLiteral("destroy")}) {
+        require(pin.setDoubleClickAction(action) && pin.doubleClickAction() == action &&
+                    pin.setMiddleMouseButtonAction(action) &&
+                    pin.middleMouseButtonAction() == action,
+                "pinned mouse actions must round-trip through storage");
+    }
+    require(!pin.setDoubleClickAction(QStringLiteral("unsupported")) &&
+                pin.doubleClickAction() == QStringLiteral("destroy") &&
+                !pin.setMiddleMouseButtonAction(QStringLiteral("unsupported")) &&
+                pin.middleMouseButtonAction() == QStringLiteral("destroy"),
+            "invalid pinned mouse actions must preserve the saved choices");
+    require(applicationStorage.flushNow().success, "flush pinned mouse actions");
+    applicationStorage.shutdown();
+    static_cast<void>(initialize(executable, temporary.path()));
+    require(pin.doubleClickAction() == QStringLiteral("destroy") &&
+                pin.middleMouseButtonAction() == QStringLiteral("destroy"),
+            "pinned Destroy actions must survive a storage restart");
+    applicationStorage.shutdown();
+}
+
 void settingsAdaptersRoundTripAndRejectInvalidValues() {
     QTemporaryDir temporary;
     require(temporary.isValid(), "failed to create settings adapter directory");
@@ -2318,27 +2351,6 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
             "drawing exclusion adapter must use schema canonicalization");
 
     const storage::PinToScreenSettings pin;
-    require(pin.doubleClickAction() == QStringLiteral("thumbnail_mode"),
-            "pinned double-click must default to thumbnail mode");
-    for (const QString& action : {QStringLiteral("none"), QStringLiteral("thumbnail_mode"),
-                                  QStringLiteral("hide_to_top"), QStringLiteral("close")}) {
-        require(pin.setDoubleClickAction(action) && pin.doubleClickAction() == action,
-                "pinned double-click actions must round-trip through storage");
-    }
-    require(!pin.setDoubleClickAction(QStringLiteral("unsupported")) &&
-                pin.doubleClickAction() == QStringLiteral("close"),
-            "invalid pinned double-click actions must preserve the saved choice");
-    require(pin.middleMouseButtonAction() == QStringLiteral("reset_zoom"),
-            "pinned middle-click must default to reset zoom");
-    for (const QString& action :
-         {QStringLiteral("none"), QStringLiteral("reset_zoom"), QStringLiteral("thumbnail_mode"),
-          QStringLiteral("hide_to_top"), QStringLiteral("close")}) {
-        require(pin.setMiddleMouseButtonAction(action) && pin.middleMouseButtonAction() == action,
-                "pinned middle-click actions must round-trip through storage");
-    }
-    require(!pin.setMiddleMouseButtonAction(QStringLiteral("unsupported")) &&
-                pin.middleMouseButtonAction() == QStringLiteral("close"),
-            "invalid pinned middle-click actions must preserve the saved choice");
     require(pin.mouseWheelZoomMode() == QStringLiteral("mouse_position") &&
                 pin.automaticTextRecognition() && pin.autoResizeWindow() &&
                 pin.setMouseWheelZoomMode(QStringLiteral("bottom_right")) &&
@@ -3653,6 +3665,7 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--pin-shortcuts-only"))) {
         settingsSchemaDefaultsAndValidationAreComplete();
+        pinnedMouseActionSettingsRoundTrip();
         pinnedDestroyShortcutMigratesPreviousDefault();
         pinToScreenShortcutSettingsRoundTrip();
         obsoleteClickThroughShortcutIsIgnored();
@@ -3685,6 +3698,7 @@ int main(int argc, char** argv) {
     recordingActionToolbarLayoutRepairsAndPersistsIndependently();
     screenshotTranslationSettingsRoundTripSupportedValues();
     settingsAdaptersRoundTripAndRejectInvalidValues();
+    pinnedMouseActionSettingsRoundTrip();
     recordingPostProcessingPreferencesPersistAndValidate();
     invalidCaptureCursorConfigurationFallsBackToDisabled();
     invalidOcrModelConfigurationFallsBackToSmallWithoutAMigration();

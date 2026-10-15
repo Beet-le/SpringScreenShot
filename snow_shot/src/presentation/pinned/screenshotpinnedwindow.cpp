@@ -9229,13 +9229,18 @@ bool ScreenshotPinnedWindow::handleDoubleClick(const QPoint& position) {
     static_cast<void>(finishNativeGeometryInteraction());
     finishWindowMove();
     const QString action = snow_shot::storage::PinToScreenSettings().doubleClickAction();
-    if (action == QStringLiteral("thumbnail_mode")) {
+    if (action == QStringLiteral("reset_zoom")) {
+        applyScale(100);
+    } else if (action == QStringLiteral("thumbnail_mode")) {
         setThumbnailMode(!m_thumbnailMode);
     } else if (action == QStringLiteral("hide_to_top")) {
         toggleHideToTop();
     } else if (action == QStringLiteral("close")) {
         static_cast<void>(
             m_mouseReleaseAction.arm(this, Qt::LeftButton, [this] { requestUserClose(); }));
+    } else if (action == QStringLiteral("destroy")) {
+        static_cast<void>(
+            m_mouseReleaseAction.arm(this, Qt::LeftButton, [this] { confirmDestroy(); }));
     }
     return true;
 }
@@ -9259,6 +9264,9 @@ bool ScreenshotPinnedWindow::handleMiddleClick(const QPoint& position) {
     } else if (action == QStringLiteral("close")) {
         static_cast<void>(
             m_mouseReleaseAction.arm(this, Qt::MiddleButton, [this] { requestUserClose(); }));
+    } else if (action == QStringLiteral("destroy")) {
+        static_cast<void>(
+            m_mouseReleaseAction.arm(this, Qt::MiddleButton, [this] { confirmDestroy(); }));
     }
     return true;
 }
