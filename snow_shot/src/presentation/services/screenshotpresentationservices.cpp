@@ -65,14 +65,14 @@ selectionVisualState(const ScreenshotPresentationServicesContext& context, bool 
     visualState.present = visualState.bounds.isValid() && !visualState.bounds.isEmpty();
     visualState.handlesVisible = !context.interaction.intelligentSelecting() &&
                                  context.interaction.selectionHandlesVisible() &&
-                                 context.selection.rectangular();
+                                 context.selection.resizable();
     visualState.cornerRadius = context.selection.cornerRadius();
     visualState.shadowWidth = context.selection.shadowWidth();
     visualState.shadowColor = context.selection.shadowColor();
     visualState.toolbarHovered = toolbarHovered;
     visualState.effectEditorsVisible =
         context.interaction.movingSelection() && context.interaction.moveToolActive() &&
-        context.selection.rectangular() && context.selection.cornerRadiusApplicable() &&
+        context.selection.resizable() && context.selection.cornerRadiusApplicable() &&
         !toolbarHovered;
     visualState.hoveredEffectHandle = context.interaction.hoveredEffectHandle();
     if (context.interaction.effectGesture())
@@ -81,6 +81,10 @@ selectionVisualState(const ScreenshotPresentationServicesContext& context, bool 
         visualState.effectEditorsVisible &&
         (visualState.hoveredEffectHandle == ScreenshotSelectionEffectHandle::Shadow ||
          visualState.activeEffectHandle == ScreenshotSelectionEffectHandle::Shadow);
+    if (context.interaction.moveToolActive()) {
+        visualState.highlightedRegion = context.selection.highlightedRegion();
+        visualState.stationaryRegions = context.selection.stationaryRegionsDuringMove();
+    }
     visualState.draftPath = context.selection.draftPath();
     visualState.draftVertices = context.selection.draftVertices();
     if (shaped) {
@@ -381,6 +385,9 @@ ScreenshotPresentationServices::Preparation ScreenshotPresentationServices::prep
                                         m_context.quickSelectionDisabledTools};
     hints.configuredShortcuts = m_configuredShortcuts;
     hints.smartSelectionEnabled = m_context.intelligentSelection.smartSelectionEnabled();
+    hints.multiRegionEditing = m_context.selection.multiRegionEditing();
+    hints.regionOperationActive = m_context.selection.regionOperationActive();
+    hints.regionConstructionActive = m_context.selection.constructionActive();
     const bool firstSelection =
         !m_state->toolbar.selectionCanvas.isValid() && toolbar.selectionCanvas.isValid();
     const bool modeChanged =

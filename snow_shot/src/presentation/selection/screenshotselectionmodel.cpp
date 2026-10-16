@@ -27,8 +27,27 @@ class ScreenshotSelectionModel::ChangeRevisionGuard final {
     ScreenshotSelectionModel m_previous;
 };
 
+bool ScreenshotSelectionModel::hasSameCreatedRegions(const ScreenshotSelectionModel& other) const {
+    if (!m_regionMove && !other.m_regionMove)
+        return m_createdRegions == other.m_createdRegions;
+    if (m_createdRegions.size() != other.m_createdRegions.size())
+        return false;
+    for (qsizetype i = 0; i < m_createdRegions.size(); ++i) {
+        const auto& geometry = m_regionMove && m_regionMove->index == i
+                                   ? m_regionMove->preview
+                                   : m_createdRegions[i].geometry;
+        const auto& otherGeometry = other.m_regionMove && other.m_regionMove->index == i
+                                        ? other.m_regionMove->preview
+                                        : other.m_createdRegions[i].geometry;
+        if (m_createdRegions[i].id != other.m_createdRegions[i].id || geometry != otherGeometry)
+            return false;
+    }
+    return true;
+}
+
 bool ScreenshotSelectionModel::hasSameSelectionState(const ScreenshotSelectionModel& other) const {
-    return m_regionType == other.m_regionType && m_draftRegion == other.m_draftRegion &&
+    return m_multiRegionEditing == other.m_multiRegionEditing && hasSameCreatedRegions(other) &&
+           m_regionType == other.m_regionType && m_draftRegion == other.m_draftRegion &&
            m_draftVertices == other.m_draftVertices && m_region == other.m_region &&
            m_confirmedRegion == other.m_confirmedRegion &&
            m_regionOperation == other.m_regionOperation && m_start == other.m_start &&
@@ -45,6 +64,15 @@ ScreenshotSelectionModel::operator=(const ScreenshotSelectionModel& other) {
     if (this == &other)
         return *this;
     const bool changed = !hasSameSelectionState(other);
+    m_regionEditCompositions = other.m_regionEditCompositions;
+    m_createdRegions = other.m_createdRegions;
+    m_multiRegionEditing = other.m_multiRegionEditing;
+    m_multiRegionBeforeOperation = other.m_multiRegionBeforeOperation;
+    m_nextRegionId = other.m_nextRegionId;
+    m_hoveredRegion = other.m_hoveredRegion;
+    m_regionMove = other.m_regionMove;
+    m_moveEntireSelection = other.m_moveEntireSelection;
+    m_regionBeforeEntireMove = other.m_regionBeforeEntireMove;
     m_draftVertices = other.m_draftVertices;
     m_cachedSelectionRegion = other.m_cachedSelectionRegion;
     m_cachedMarqueeRegion = other.m_cachedMarqueeRegion;
@@ -85,6 +113,7 @@ void ScreenshotSelectionModel::setRegionType(ScreenshotRegionType type) {
 
 void ScreenshotSelectionModel::reset() {
     const ChangeRevisionGuard revision(*this);
+    clearCreatedRegions();
     m_cachedSelectionRegion.reset();
     m_cachedMarqueeRegion.reset();
     m_draftVertices.clear();
@@ -121,6 +150,7 @@ bool ScreenshotSelectionModel::hasPixelSelection() const {
 
 void ScreenshotSelectionModel::clearSelection() {
     const ChangeRevisionGuard revision(*this);
+    clearCreatedRegions();
     m_cachedSelectionRegion.reset();
     m_cachedMarqueeRegion.reset();
     m_draftVertices.clear();
@@ -139,13 +169,16 @@ void ScreenshotSelectionModel::clearSelection() {
 
 bool ScreenshotSelectionModel::setSelectionRect(const QRectF& selection) {
     const QRectF normalized = selection.normalized();
+    const bool replacingRegions = m_multiRegionEditing && !regionOperationActive();
+    if (replacingRegions)
+        clearCreatedRegions();
     const bool previouslyDragged = m_selectionFromDrag;
     m_selectionFromDrag = false;
     if (!m_draftRegion && !m_region && m_draftVertices.isEmpty() &&
         m_start == normalized.topLeft() && m_end == normalized.bottomRight()) {
-        if (previouslyDragged)
+        if (previouslyDragged || replacingRegions)
             ++m_changeRevision;
-        return false;
+        return replacingRegions;
     }
     // Subpixel detection/animation targets can change without changing their
     // capture pixels. Only rectangle operands in the same transaction can reuse
@@ -168,14 +201,81 @@ void ScreenshotSelectionModel::setSelectionStartEnd(const QPointF& start, const 
     setSelectionRect(marqueeScreenshotSelectionRect(start, end));
 }
 
-void ScreenshotSelectionModel::beginMoveDrag(const QPointF& startPosition) {
-    m_moveOriginalRegion = selectionRegion();
+void ScreenshotSelectionModel::beginMoveDrag(const QPointF& startPosition, bool entireSelection) {
+    finishMoveDrag();
+    m_moveEntireSelection = entireSelection && m_multiRegionEditing && !regionOperationActive();
+    m_moveOriginalRegion =
+        m_multiRegionEditing && !regionOperationActive() && !m_moveEntireSelection
+            ? ScreenshotRegionGeometry()
+            : selectionRegion();
     m_moveStart = startPosition;
     m_moveOriginalSelection = normalizedSelection();
+    if (!m_multiRegionEditing || regionOperationActive())
+        return;
+    const auto id = regionAt(startPosition);
+    if (!id)
+        return;
+    for (qsizetype i = 0; i < m_createdRegions.size(); ++i) {
+        if (m_createdRegions[i].id != *id)
+            continue;
+        if (m_moveEntireSelection)
+            m_regionBeforeEntireMove = i;
+        else
+            beginRegionMove(i);
+        return;
+    }
 }
 
-void ScreenshotSelectionModel::rebaseMoveDrag(const QPointF& startPosition) {
-    beginMoveDrag(startPosition);
+void ScreenshotSelectionModel::beginRegionMove(qsizetype index) {
+    ScreenshotRegionGeometry stationary;
+    for (qsizetype i = 0; i < m_createdRegions.size(); ++i) {
+        if (i != index) {
+            stationary = stationary.united(m_createdRegions[i].geometry);
+            ++m_regionEditCompositions;
+        }
+    }
+    const auto& region = m_createdRegions[index];
+    m_regionMove = RegionMove{index, region.geometry, stationary, region.geometry, {}};
+    m_moveOriginalSelection = QRectF(region.bounds);
+    m_hoveredRegion = region.id;
+}
+
+void ScreenshotSelectionModel::rebaseMoveDrag(const QPointF& startPosition, bool entireSelection) {
+    if (m_regionMove && !entireSelection) {
+        m_regionMove->original = m_regionMove->preview;
+        m_regionMove->offset = {};
+        m_moveStart = startPosition;
+        m_moveOriginalSelection = QRectF(m_regionMove->preview.boundingRect());
+        return;
+    }
+    // A clamped group drag can leave the pointer outside the grabbed region.
+    // Keep that region as the target when the temporary movement scope ends.
+    const auto previousRegion =
+        m_regionMove ? std::optional(m_regionMove->index) : m_regionBeforeEntireMove;
+    if (m_moveEntireSelection && !entireSelection && previousRegion) {
+        finishMoveDrag();
+        m_moveStart = startPosition;
+        beginRegionMove(*previousRegion);
+        return;
+    }
+    beginMoveDrag(startPosition, entireSelection);
+    if (m_moveEntireSelection && previousRegion)
+        m_regionBeforeEntireMove = previousRegion;
+}
+
+void ScreenshotSelectionModel::finishMoveDrag() {
+    if (m_moveEntireSelection)
+        m_moveOriginalRegion = {};
+    m_moveEntireSelection = false;
+    m_regionBeforeEntireMove.reset();
+    if (!m_regionMove)
+        return;
+    auto& region = m_createdRegions[m_regionMove->index];
+    if (region.geometry != m_regionMove->preview) {
+        region.geometry = m_regionMove->preview;
+        region.bounds = region.geometry.boundingRect();
+    }
+    m_regionMove.reset();
 }
 
 QRectF ScreenshotSelectionModel::moveOriginalSelection() const {
@@ -205,8 +305,26 @@ QRectF ScreenshotSelectionModel::boundedSelectionRect(const QRectF& selection, c
 bool ScreenshotSelectionModel::adjustFromToolbar(int minDx, int minDy, int maxDx, int maxDy,
                                                  const QRectF& bounds, qreal minimumSelectionSize) {
     const ChangeRevisionGuard revision(*this);
-    if (!rectangular() && (minDx != maxDx || minDy != maxDy)) {
+    if (!resizable() && (minDx != maxDx || minDy != maxDy)) {
         return false;
+    }
+    if (m_multiRegionEditing) {
+        if (regionOperationActive() || !hasPixelSelection())
+            return false;
+        finishMoveDrag();
+        const auto original = selectionRegion();
+        const QRect before = original.boundingRect();
+        const QRect after = screenshotPixelRectForSelection(boundedSelectionRect(
+            QRectF(before.translated(minDx, minDy)), bounds, true, minimumSelectionSize));
+        const QPoint delta = after.topLeft() - before.topLeft();
+        if (!delta.isNull()) {
+            for (auto& region : m_createdRegions) {
+                region.geometry.translate(delta);
+                region.bounds.translate(delta);
+            }
+            storeRegionGeometry(original.translated(delta));
+        }
+        return true;
     }
     const ScreenshotRegionGeometry originalRegion = selectionRegion();
     QRectF selection = normalizedSelection();
@@ -361,7 +479,7 @@ bool ScreenshotSelectionModel::setAspectRatioPreset(ScreenshotSelectionAspectRat
     const QRectF current = normalizedSelection();
     QRectF resized = current;
     if (hasPixelSelection()) {
-        if (!rectangular()) {
+        if (!resizable()) {
             return false;
         }
         resized = aspectRatioScreenshotSelectionRect(current, bounds, ratio, minimumSelectionSize);
@@ -400,6 +518,8 @@ bool ScreenshotSelectionModel::setDraggedAspectRatioPreset(
 bool ScreenshotSelectionModel::finalizeAspectRatio(const QRectF& bounds,
                                                    qreal minimumSelectionSize) {
     const ChangeRevisionGuard revision(*this);
+    if (m_multiRegionEditing)
+        return false;
     bool presetCleared = false;
     if (m_selectionFromDrag && m_aspectRatioPreset != ScreenshotSelectionAspectRatioPreset::Free &&
         rectangular()) {
@@ -531,39 +651,202 @@ QRectF ScreenshotSelectionModel::pendingMarquee() const {
 }
 
 void ScreenshotSelectionModel::beginRegionOperation(RegionOperation operation) {
+    if (operation == RegionOperation::Replace)
+        return;
     const ChangeRevisionGuard revision(*this);
-    const ScreenshotRegionGeometry confirmed = confirmedRegion();
-    clearSelection();
+    if (regionOperationActive())
+        cancelRegionOperation();
+    finishMoveDrag();
+    const auto confirmed = selectionRegion();
+    m_multiRegionBeforeOperation = m_multiRegionEditing;
+    if (!m_multiRegionEditing && !confirmed.isEmpty())
+        appendCreatedRegion(confirmed);
+    m_multiRegionEditing = true;
+    storeRegionGeometry({});
     m_confirmedRegion = confirmed;
     m_regionOperation = operation;
+    m_hoveredRegion.reset();
+}
+
+void ScreenshotSelectionModel::clearCreatedRegions() {
+    m_createdRegions.clear();
+    m_multiRegionEditing = false;
+    m_multiRegionBeforeOperation = false;
+    m_nextRegionId = 1;
+    m_hoveredRegion.reset();
+    m_regionMove.reset();
+    m_moveEntireSelection = false;
+    m_regionBeforeEntireMove.reset();
+}
+
+void ScreenshotSelectionModel::appendCreatedRegion(const ScreenshotRegionGeometry& region) {
+    if (!region.isEmpty())
+        m_createdRegions.append({m_nextRegionId++, region, region.boundingRect()});
+}
+
+void ScreenshotSelectionModel::storeRegionGeometry(const ScreenshotRegionGeometry& region) {
+    m_cachedSelectionRegion.reset();
+    m_cachedMarqueeRegion.reset();
+    m_draftRegion.reset();
+    m_draftVertices.clear();
+    const QRectF bounds(region.boundingRect());
+    m_start = bounds.topLeft();
+    m_end = bounds.bottomRight();
+    m_region = region.rectCount() > 1 ? std::optional(region) : std::nullopt;
+    m_selectionFromDrag = false;
 }
 
 void ScreenshotSelectionModel::setSelectionRegion(const ScreenshotRegionGeometry& region) {
     const ChangeRevisionGuard revision(*this);
-    const ScreenshotRegionGeometry snapshot = region;
-    // Replacing the operation/confirmed region changes the composed result even
-    // when its bounding rectangle is the same as the previous marquee.
-    m_cachedSelectionRegion.reset();
-    m_cachedMarqueeRegion.reset();
-    setSelectionRect(QRectF(snapshot.boundingRect()));
+    const auto snapshot = region;
+    clearCreatedRegions();
+    storeRegionGeometry(snapshot);
     m_regionOperation = RegionOperation::Replace;
     m_confirmedRegion = {};
-    if (snapshot.rectCount() > 1)
-        m_region = snapshot;
 }
 
 void ScreenshotSelectionModel::commitRegionOperation() {
-    if (regionOperationActive())
-        setSelectionRegion(selectionRegion());
+    if (!regionOperationActive())
+        return;
+    const ChangeRevisionGuard revision(*this);
+    const auto result = selectionRegion();
+    const auto operand = m_draftRegion.value_or(ScreenshotRegionGeometry(pixelSelection()));
+    if (m_regionOperation == RegionOperation::Add) {
+        appendCreatedRegion(operand);
+    } else if (!operand.isEmpty()) {
+        const QRect operandBounds = operand.boundingRect();
+        for (auto& region : m_createdRegions) {
+            if (!region.bounds.intersects(operandBounds))
+                continue;
+            region.geometry = region.geometry.subtracted(operand);
+            region.bounds = region.geometry.boundingRect();
+        }
+        m_createdRegions.removeIf([](const auto& region) { return region.bounds.isEmpty(); });
+    }
+    storeRegionGeometry(result);
+    m_regionOperation = RegionOperation::Replace;
+    m_confirmedRegion = {};
+    m_multiRegionBeforeOperation = false;
+    m_hoveredRegion.reset();
 }
 
 void ScreenshotSelectionModel::cancelRegionOperation() {
-    if (regionOperationActive())
-        setSelectionRegion(m_confirmedRegion);
+    if (!regionOperationActive())
+        return;
+    const ChangeRevisionGuard revision(*this);
+    storeRegionGeometry(m_confirmedRegion);
+    m_regionOperation = RegionOperation::Replace;
+    m_confirmedRegion = {};
+    if (!m_multiRegionBeforeOperation)
+        clearCreatedRegions();
+    m_multiRegionBeforeOperation = false;
+}
+
+std::optional<quint64> ScreenshotSelectionModel::regionAt(const QPointF& position) const {
+    if (!m_multiRegionEditing || regionOperationActive() || !qIsFinite(position.x()) ||
+        !qIsFinite(position.y()))
+        return std::nullopt;
+    for (qsizetype i = m_createdRegions.size(); i-- > 0;) {
+        const auto& region = m_createdRegions[i];
+        const bool moving = m_regionMove && m_regionMove->index == i;
+        const auto& geometry = moving ? m_regionMove->preview : region.geometry;
+        const QRect bounds = moving ? geometry.boundingRect() : region.bounds;
+        if (QRectF(bounds).contains(position) &&
+            geometry.contains(
+                geometry.custom() ? position : QPointF(qFloor(position.x()), qFloor(position.y()))))
+            return region.id;
+    }
+    return std::nullopt;
+}
+
+bool ScreenshotSelectionModel::setHoveredRegion(const QPointF& position) {
+    const auto id = regionAt(position);
+    if (m_hoveredRegion == id)
+        return false;
+    m_hoveredRegion = id;
+    return true;
+}
+
+std::optional<ScreenshotRegionGeometry> ScreenshotSelectionModel::highlightedRegion() const {
+    if (!m_multiRegionEditing || regionOperationActive())
+        return std::nullopt;
+    if (m_moveEntireSelection)
+        return selectionRegion();
+    if (m_regionMove)
+        return m_regionMove->preview;
+    for (const auto& region : m_createdRegions) {
+        if (m_hoveredRegion == region.id)
+            return region.geometry;
+    }
+    return std::nullopt;
+}
+
+bool ScreenshotSelectionModel::duplicateLatestRegion(const QPointF& center, const QRect& bounds) {
+    if (!m_multiRegionEditing || m_createdRegions.isEmpty() || m_regionMove ||
+        m_moveEntireSelection || constructionActive() || bounds.isEmpty() ||
+        !qIsFinite(center.x()) || !qIsFinite(center.y()))
+        return false;
+    const auto source = m_createdRegions.last();
+    if (source.bounds.width() > bounds.width() || source.bounds.height() > bounds.height())
+        return false;
+    const ChangeRevisionGuard revision(*this);
+    // Quantize the translation, including half-pixel ties across the canvas origin.
+    // Clamping to integer translation limits before rounding also avoids overflow
+    // for pointer positions far outside the capture bounds.
+    const QPoint offset(
+        qRound(std::clamp(center.x() - source.bounds.x() - source.bounds.width() / 2.0,
+                          qreal(bounds.x()) - source.bounds.x(),
+                          qreal(bounds.x()) + bounds.width() - source.bounds.width() -
+                              source.bounds.x())),
+        qRound(std::clamp(center.y() - source.bounds.y() - source.bounds.height() / 2.0,
+                          qreal(bounds.y()) - source.bounds.y(),
+                          qreal(bounds.y()) + bounds.height() - source.bounds.height() -
+                              source.bounds.y())));
+    const auto copy = source.geometry.translated(offset);
+    const auto result = confirmedRegion().united(copy);
+    ++m_regionEditCompositions;
+    appendCreatedRegion(copy);
+    storeRegionGeometry(result);
+    m_regionOperation = RegionOperation::Replace;
+    m_confirmedRegion = {};
+    m_multiRegionBeforeOperation = false;
+    m_hoveredRegion = m_createdRegions.last().id;
+    return true;
 }
 
 void ScreenshotSelectionModel::setDraggedSelectionRect(const QRectF& rect,
                                                        ScreenshotSelectionDragMode mode) {
+    if (m_moveEntireSelection && mode == ScreenshotSelectionDragMode::All) {
+        const QPoint target = screenshotPixelRectForSelection(rect).topLeft();
+        const QPoint delta = target - pixelSelection().topLeft();
+        if (delta.isNull())
+            return;
+        for (auto& region : m_createdRegions) {
+            region.geometry.translate(delta);
+            region.bounds.translate(delta);
+        }
+        storeRegionGeometry(m_moveOriginalRegion.translated(
+            target - screenshotPixelRectForSelection(m_moveOriginalSelection).topLeft()));
+        m_selectionFromDrag = true;
+        ++m_changeRevision;
+        return;
+    }
+    if (m_regionMove && mode == ScreenshotSelectionDragMode::All) {
+        const QPoint offset = screenshotPixelRectForSelection(rect).topLeft() -
+                              m_regionMove->original.boundingRect().topLeft();
+        if (offset == m_regionMove->offset)
+            return;
+        m_regionMove->offset = offset;
+        m_regionMove->preview = m_regionMove->original.translated(offset);
+        storeRegionGeometry(m_regionMove->stationary.united(m_regionMove->preview));
+        ++m_regionEditCompositions;
+        m_selectionFromDrag = true;
+        ++m_changeRevision;
+        return;
+    }
+    if (m_multiRegionEditing && !regionOperationActive() &&
+        mode == ScreenshotSelectionDragMode::All)
+        return; // No region was hit when this move began.
     const ChangeRevisionGuard revision(*this);
     if (!regionOperationActive() && mode == ScreenshotSelectionDragMode::All &&
         m_moveOriginalRegion.rectCount() > 1) {
@@ -610,7 +893,13 @@ void ScreenshotSelectionModel::clearDraftRegion() {
 
 void ScreenshotSelectionModel::commitDraftRegion(const QRect& canvasBounds) {
     if (m_draftRegion) {
-        const auto region = selectionRegion();
-        setSelectionRegion(canvasBounds.isEmpty() ? region : region.intersected(canvasBounds));
+        if (regionOperationActive()) {
+            if (!canvasBounds.isEmpty())
+                setDraftRegion(m_draftRegion->intersected(canvasBounds));
+            commitRegionOperation();
+        } else {
+            const auto region = selectionRegion();
+            setSelectionRegion(canvasBounds.isEmpty() ? region : region.intersected(canvasBounds));
+        }
     }
 }

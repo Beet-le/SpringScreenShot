@@ -677,6 +677,7 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
          QJsonArray{QStringLiteral("Tab")}},
         {QStringLiteral("previous_screenshot_history"), QJsonArray{QStringLiteral(",")}},
         {QStringLiteral("next_screenshot_history"), QJsonArray{QStringLiteral(".")}},
+        {QStringLiteral("duplicate_latest_region"), QJsonArray{QStringLiteral("R")}},
         {QStringLiteral("select_previously_selected_area"), QJsonArray{QStringLiteral("R")}},
         {QStringLiteral("select_next_previously_selected_area"),
          QJsonArray{QStringLiteral("Shift+R")}},
@@ -1923,6 +1924,31 @@ void shortcutSchemaMigrationAndPhysicalMetadataRoundTrip() {
             "structured shortcut bindings must round-trip without losing physical metadata");
 }
 
+void duplicateShortcutDefaultsSurviveUpgrade() {
+    const QString key = QStringLiteral("screenshot_shortcuts/duplicate_latest_region");
+    const auto defaults = storage::ConfigurationSchema::defaultValue(key);
+    for (const bool conflict : {false, true}) {
+        QTemporaryDir temporary;
+        auto document = storage::ConfigurationSchema::completeDefaultDocument();
+        auto screenshot = document.value(QStringLiteral("screenshot_shortcuts")).toObject();
+        screenshot.remove(QStringLiteral("duplicate_latest_region"));
+        if (conflict)
+            screenshot.insert(QStringLiteral("quick_save"), defaults);
+        document.insert(QStringLiteral("screenshot_shortcuts"), screenshot);
+        const QString path = temporary.filePath(QStringLiteral("config.json"));
+        writeBytes(path, QJsonDocument(document).toJson());
+        const QJsonValue expected = conflict ? QJsonValue(QJsonArray{}) : defaults;
+        {
+            storage::ConfigurationStore store(path, true, true, 60000);
+            require(store.value(key) == expected && store.flushNow().success,
+                    "new duplication defaults share history R but yield to unrelated explicit R");
+        }
+        storage::ConfigurationStore reloaded(path, true, true, 60000);
+        require(reloaded.value(key) == expected && !reloaded.isDirty(),
+                "contextual shortcut upgrade survives reload without repeated migration");
+    }
+}
+
 void localShortcutDefaultsPreserveConfiguredBindings() {
     const QString nextKey = QStringLiteral("screenshot_shortcuts/next_selection_type");
     const QString previousKey = QStringLiteral("screenshot_shortcuts/previous_selection_type");
@@ -2482,7 +2508,9 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
     const storage::ScreenshotShortcutSettings screenshotShortcuts;
     const shortcuts::ShortcutBindingMap screenshotDefaults = screenshotShortcuts.allShortcuts();
     require(
-        screenshotDefaults.size() == 35 &&
+        screenshotDefaults.size() == 36 &&
+            portable(screenshotDefaults.value(QStringLiteral("duplicate_latest_region"))) ==
+                QStringList{QStringLiteral("R")} &&
             portable(screenshotShortcuts.moveTool()) ==
                 QStringList{QStringLiteral("M"), QStringLiteral("Ctrl+E")} &&
             portable(screenshotShortcuts.moveCursorUp()) ==
@@ -3627,6 +3655,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--local-shortcut-migration-only"))) {
+        duplicateShortcutDefaultsSurviveUpgrade();
         localShortcutDefaultsPreserveConfiguredBindings();
         previousSelectionStorageIsRetired();
         return 0;

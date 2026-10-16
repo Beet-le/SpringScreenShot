@@ -50,6 +50,38 @@ class ScreenshotSelectionModel final {
     [[nodiscard]] ScreenshotRegionGeometry selectionRegionForMarquee(const QRectF& marquee) const;
     [[nodiscard]] ScreenshotRegionGeometry confirmedRegion() const;
     [[nodiscard]] bool rectangular() const;
+    [[nodiscard]] bool multiRegionEditing() const {
+        return m_multiRegionEditing;
+    }
+    [[nodiscard]] bool resizable() const {
+        return !m_multiRegionEditing && rectangular();
+    }
+    [[nodiscard]] qsizetype createdRegionCount() const {
+        return m_createdRegions.size();
+    }
+    [[nodiscard]] std::optional<quint64> regionAt(const QPointF& position) const;
+    bool setHoveredRegion(const QPointF& position);
+    [[nodiscard]] std::optional<ScreenshotRegionGeometry> highlightedRegion() const;
+    [[nodiscard]] std::optional<ScreenshotRegionGeometry> stationaryRegionsDuringMove() const {
+        return m_regionMove ? std::optional(m_regionMove->stationary) : std::nullopt;
+    }
+    [[nodiscard]] bool duplicateLatestRegion(const QPointF& center, const QRect& bounds);
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    [[nodiscard]] quint64 regionEditCompositionsForTesting() const {
+        return m_regionEditCompositions;
+    }
+    // Conservative estimate: shared immutable storage may be counted more than once.
+    [[nodiscard]] qsizetype regionStorageBytesForTesting() const {
+        qsizetype bytes = m_createdRegions.capacity() * qsizetype(sizeof(CreatedRegion));
+        for (const auto& region : m_createdRegions)
+            bytes += region.geometry.retainedBytesEstimate();
+        if (m_regionMove)
+            bytes += m_regionMove->stationary.retainedBytesEstimate() +
+                     m_regionMove->original.retainedBytesEstimate() +
+                     m_regionMove->preview.retainedBytesEstimate();
+        return bytes;
+    }
+#endif
     [[nodiscard]] bool regionOperationActive() const;
     [[nodiscard]] RegionOperation regionOperation() const;
     [[nodiscard]] QRectF pendingMarquee() const;
@@ -77,11 +109,13 @@ class ScreenshotSelectionModel final {
     // drag, so pointer-seeded state always addresses whole canvas pixels.
     void setSelectionStartEnd(const QPointF& start, const QPointF& end);
 
-    void beginMoveDrag(const QPointF& startPosition);
+    // Multi-region drags normally target the hit region; the movement shortcut targets all.
+    void beginMoveDrag(const QPointF& startPosition, bool entireSelection = false);
     // Rebase a move/resize gesture without changing the visible selection.
     // This is used when a transient modifier switches an active resize into
     // moving the whole selection, avoiding a cursor jump.
-    void rebaseMoveDrag(const QPointF& startPosition);
+    void rebaseMoveDrag(const QPointF& startPosition, bool entireSelection = false);
+    void finishMoveDrag();
     [[nodiscard]] QRectF moveOriginalSelection() const;
     [[nodiscard]] QRectF selectionRectForDrag(ScreenshotSelectionDragMode dragMode,
                                               const QPointF& position, const QRectF& bounds,
@@ -118,6 +152,34 @@ class ScreenshotSelectionModel final {
   private:
     class ChangeRevisionGuard;
     [[nodiscard]] bool hasSameSelectionState(const ScreenshotSelectionModel& other) const;
+    [[nodiscard]] bool hasSameCreatedRegions(const ScreenshotSelectionModel& other) const;
+    // Store derived geometry without replacing the editable region collection.
+    void storeRegionGeometry(const ScreenshotRegionGeometry& region);
+    void beginRegionMove(qsizetype index);
+    void clearCreatedRegions();
+    void appendCreatedRegion(const ScreenshotRegionGeometry& region);
+    struct CreatedRegion {
+        quint64 id;
+        ScreenshotRegionGeometry geometry;
+        QRect bounds;
+        bool operator==(const CreatedRegion&) const = default;
+    };
+    struct RegionMove {
+        qsizetype index;
+        ScreenshotRegionGeometry original;
+        ScreenshotRegionGeometry stationary;
+        ScreenshotRegionGeometry preview;
+        QPoint offset;
+    };
+    quint64 m_regionEditCompositions = 0;
+    QVector<CreatedRegion> m_createdRegions;
+    bool m_multiRegionEditing = false;
+    bool m_multiRegionBeforeOperation = false;
+    quint64 m_nextRegionId = 1;
+    std::optional<quint64> m_hoveredRegion;
+    std::optional<RegionMove> m_regionMove;
+    bool m_moveEntireSelection = false;
+    std::optional<qsizetype> m_regionBeforeEntireMove;
 
     struct MarqueeRegion {
         QRect pixels;

@@ -1564,6 +1564,48 @@ QRegion boundedSelectionDamage(const QRegion& damage, const QRect& viewport) {
     return tiles.intersected(viewport);
 }
 
+QPainterPath exposedSelectionContours(const QPainterPath& path, const QRegion& exposure) {
+    const QRectF area = QRectF(exposure.boundingRect()).adjusted(-2, -2, 2, 2);
+    if (path.elementCount() < 64 ||
+        (exposure.rectCount() == 1 && area.contains(path.controlPointRect())))
+        return path;
+    // Qt strokes all subpaths before clipping. Reject distant contours first,
+    // retaining the exact lines/cubics and every potentially intersecting hole.
+    QPainterPath visible;
+    visible.setFillRule(path.fillRule());
+    for (int first = 0; first < path.elementCount();) {
+        const auto start = path.elementAt(first);
+        qreal left = start.x, right = start.x, top = start.y, bottom = start.y;
+        int end = first + 1;
+        while (end < path.elementCount() && !path.elementAt(end).isMoveTo()) {
+            const auto point = path.elementAt(end++);
+            left = std::min(left, point.x);
+            right = std::max(right, point.x);
+            top = std::min(top, point.y);
+            bottom = std::max(bottom, point.y);
+        }
+        if (right >= area.left() && left <= area.right() && bottom >= area.top() &&
+            top <= area.bottom() &&
+            exposure.intersects(QRectF(QPointF(left, top), QPointF(right, bottom))
+                                    .adjusted(-2, -2, 2, 2)
+                                    .toAlignedRect())) {
+            visible.moveTo(start.x, start.y);
+            for (int i = first + 1; i < end; ++i) {
+                const auto point = path.elementAt(i);
+                if (point.isLineTo()) {
+                    visible.lineTo(point.x, point.y);
+                } else if (point.isCurveTo()) {
+                    const auto control = path.elementAt(++i);
+                    const auto target = path.elementAt(++i);
+                    visible.cubicTo(point.x, point.y, control.x, control.y, target.x, target.y);
+                }
+            }
+        }
+        first = end;
+    }
+    return visible;
+}
+
 } // namespace
 
 QRegion planScreenshotGuideLineDamage(const QRect& viewportRect,
@@ -1584,6 +1626,51 @@ QRegion planScreenshotSelectionDamage(const ScreenshotSelectionVisualState& prev
                                       const QTransform& canvasToViewTransform, bool maskVisible) {
     if (previous == next || viewportRect.isEmpty()) {
         return {};
+    }
+    if (previous.stationaryRegions && next.stationaryRegions && previous.highlightedRegion &&
+        next.highlightedRegion && !previous.toolbarHovered && !next.toolbarHovered &&
+        !previous.effectPreviewVisible && !next.effectPreviewVisible &&
+        canvasToViewTransform.isInvertible()) {
+        auto unchanged = previous;
+        unchanged.bounds = next.bounds;
+        unchanged.region = next.region;
+        unchanged.confirmedRegion = next.confirmedRegion;
+        unchanged.highlightedRegion = next.highlightedRegion;
+        if (unchanged == next) {
+            // Only the moving shape can alter the mask or hide/reveal another contour.
+            // Repaint its two neighborhoods without touching distant stationary regions.
+            const qreal scale =
+                std::max(std::hypot(canvasToViewTransform.m11(), canvasToViewTransform.m12()),
+                         std::hypot(canvasToViewTransform.m21(), canvasToViewTransform.m22()));
+            // Nearby edges can constrain a rounded corner within twice its radius;
+            // include the corner's own extent as well as the antialiased border.
+            const int padding = qCeil(scale * next.cornerRadius * 3) + 3;
+            QRegion damage;
+            for (const auto& region : {*previous.highlightedRegion, *next.highlightedRegion})
+                damage += canvasToViewTransform.mapRect(QRectF(region.boundingRect()))
+                              .toAlignedRect()
+                              .adjusted(-padding, -padding, padding, padding);
+            return boundedSelectionDamage(damage.intersected(viewportRect), viewportRect);
+        }
+    }
+    if (previous.highlightedRegion || next.highlightedRegion) {
+        auto before = previous;
+        auto after = next;
+        before.highlightedRegion.reset();
+        after.highlightedRegion.reset();
+        QRegion damage = planScreenshotSelectionDamage(before, after, viewportRect,
+                                                       canvasToViewTransform, maskVisible);
+        if (previous.highlightedRegion != next.highlightedRegion ||
+            previous.toolbarHovered != next.toolbarHovered ||
+            previous.borderVisible != next.borderVisible) {
+            for (const auto& region : {previous.highlightedRegion, next.highlightedRegion}) {
+                if (region)
+                    damage += canvasToViewTransform.mapRect(QRectF(region->boundingRect()))
+                                  .toAlignedRect()
+                                  .adjusted(-3, -3, 3, 3);
+            }
+        }
+        return boundedSelectionDamage(damage.intersected(viewportRect), viewportRect);
     }
     if (previous.region || next.region) {
         if (!canvasToViewTransform.isInvertible()) {
@@ -2621,6 +2708,8 @@ void ScreenshotCanvasRenderer::setSelection(const QRectF& selection, bool handle
     ScreenshotSelectionVisualState next = m_selectionState;
     next.region.reset();
     next.confirmedRegion = {};
+    next.highlightedRegion.reset();
+    next.stationaryRegions.reset();
     next.marquee = {};
     next.bounds = selection.normalized();
     next.present = next.bounds.isValid() && !next.bounds.isEmpty();
@@ -2636,6 +2725,8 @@ void ScreenshotCanvasRenderer::setSelectionRegion(const ScreenshotRegionGeometry
                                                   const QRectF& marquee, bool subtracting,
                                                   const QColor& danger) {
     auto state = m_selectionState;
+    state.highlightedRegion.reset();
+    state.stationaryRegions.reset();
     state.region = region;
     state.confirmedRegion = confirmed;
     state.marquee = marquee;
@@ -3300,10 +3391,10 @@ ScreenshotCanvasRenderer::selectionViewGeometry(const SnowCanvasRenderContext& c
     }
     // Cache the geometry decisions along with the paths. Cursor motion changes
     // none of these inputs, including potentially large confirmed contours.
-    geometry.maskCacheEligible = shaped && m_selectionState.present &&
-                                 m_selectionState.draftPath.isEmpty() &&
-                                 geometry.effectivePath.elementCount() > 32 &&
-                                 *m_selectionState.region == m_selectionState.confirmedRegion;
+    geometry.maskCacheEligible =
+        shaped && m_selectionState.present && !m_selectionState.stationaryRegions &&
+        m_selectionState.draftPath.isEmpty() && geometry.effectivePath.elementCount() > 32 &&
+        *m_selectionState.region == m_selectionState.confirmedRegion;
     geometry.sharedDraftOutline = !m_selectionState.subtracting && !geometry.draftPath.isEmpty() &&
                                   geometry.draftPath == geometry.outlinePath;
     geometry.valid = true;
@@ -3408,7 +3499,11 @@ void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
                 if (m_selectionState.present)
                     geometry.maskPath.addRect(geometry.effectiveRect);
             }
-            painter.fillPath(geometry.maskPath, m_maskColor);
+            painter.fillPath(
+                m_selectionState.stationaryRegions
+                    ? exposedSelectionContours(geometry.maskPath, context.exposedRegion)
+                    : geometry.maskPath,
+                m_maskColor);
         }
     }
     if (m_renderMode == RenderMode::Standard && m_guideLinesVisible) {
@@ -3507,11 +3602,20 @@ void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
             if (geometry.rectangular) {
                 if (geometry.outlineRect.isValid() && !geometry.outlineRect.isEmpty())
                     painter.drawRect(geometry.outlineRect);
-            } else if (!shaped ||
+            } else if (!shaped || m_selectionState.stationaryRegions ||
                        (m_selectionState.confirmedRegion.isEmpty() && !sharedDraftOutline) ||
                        !m_outlineCache.draw(painter, outlinePath, selectionAccent, false,
                                             context.viewportRect)) {
-                painter.drawPath(outlinePath);
+                painter.drawPath(m_selectionState.stationaryRegions
+                                     ? exposedSelectionContours(outlinePath, context.exposedRegion)
+                                     : outlinePath);
+            }
+            if (m_selectionState.highlightedRegion) {
+                QPen pen(selectionAccent, kSelectionBorderWidth);
+                pen.setStyle(Qt::DashLine);
+                painter.setPen(pen);
+                painter.drawPath(
+                    context.canvasToViewTransform.map(m_selectionState.highlightedRegion->path()));
             }
             if (!m_selectionState.marquee.isEmpty()) {
                 QPen pen(m_selectionState.subtracting ? m_selectionState.dangerColor

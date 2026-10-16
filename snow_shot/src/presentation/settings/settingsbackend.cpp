@@ -1,3 +1,4 @@
+#include "snow_shot/shortcuts/screenshotshortcutcontext.h"
 #include "snow_shot/presentation/globalmousemanager.h"
 #include "snow_shot/presentation/settings/settingsbackend.h"
 #include "snow_shot/app/edition.h"
@@ -1910,6 +1911,8 @@ BuiltInSettingsBackend::validateLocalShortcut(SettingsLocalShortcutScope scope,
                          : storage::PinToScreenShortcutSettings().allShortcuts();
     for (auto it = all.cbegin(); it != all.cend(); ++it) {
         if (it.key() == shortcutId ||
+            (scope == SettingsLocalShortcutScope::Screenshot &&
+             !shortcuts::screenshotShortcutActionsMayConflict(shortcutId, it.key())) ||
             (scope == SettingsLocalShortcutScope::PinToScreen &&
              !storage::PinToScreenShortcutSettings::actionsMayConflict(shortcutId, it.key()))) {
             continue;

@@ -15,7 +15,7 @@ makeScreenshotToolbarPresentationState(const ScreenshotInteractionState& interac
     state.selectionToolbarMode =
         interaction.selectionToolbarMode() && !selection.regionOperationActive();
     state.selectionEditable = interaction.canResizeSelection();
-    state.selectionResizable = selection.rectangular() && state.selectionEditable;
+    state.selectionResizable = selection.resizable() && state.selectionEditable;
     state.intelligentSelecting = interaction.intelligentSelecting();
     state.selectionDragging = interaction.dragging();
     state.editing = interaction.editing();

@@ -2233,6 +2233,10 @@
             <translation>在取樣的中央像素周圍繪製四段輔助線</translation>
         </message>
         <message>
+            <source>Duplicate latest region</source>
+            <translation>複製最新選取區域</translation>
+        </message>
+        <message>
             <source>Edit selection</source>
             <translation>編輯選取範圍</translation>
         </message>

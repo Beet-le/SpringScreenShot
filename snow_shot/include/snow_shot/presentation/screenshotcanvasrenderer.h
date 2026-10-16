@@ -43,6 +43,10 @@ struct ScreenshotSelectionVisualState {
     bool effectPreviewVisible = false;
     std::optional<ScreenshotRegionGeometry> region;
     ScreenshotRegionGeometry confirmedRegion;
+    std::optional<ScreenshotRegionGeometry> highlightedRegion;
+    // Immutable for the duration of an individual-region drag; bounds alone cannot
+    // establish that every other part of a compound mask stayed stationary.
+    std::optional<ScreenshotRegionGeometry> stationaryRegions;
     QRectF marquee;
     bool subtracting = false;
     QColor dangerColor;
@@ -58,7 +62,9 @@ struct ScreenshotSelectionVisualState {
                hoveredEffectHandle == other.hoveredEffectHandle &&
                activeEffectHandle == other.activeEffectHandle &&
                effectPreviewVisible == other.effectPreviewVisible && region == other.region &&
-               confirmedRegion == other.confirmedRegion && marquee == other.marquee &&
+               confirmedRegion == other.confirmedRegion &&
+               highlightedRegion == other.highlightedRegion &&
+               stationaryRegions == other.stationaryRegions && marquee == other.marquee &&
                subtracting == other.subtracting && dangerColor == other.dangerColor &&
                draftPath == other.draftPath && draftVertices == other.draftVertices;
     }

@@ -92,6 +92,133 @@ void enableRedPointerGuides(Fixture& fixture) {
     fixture.enableGuides();
 }
 
+void independentRegionOutlineHasLocalDamage() {
+    Fixture fixture(QSize(800, 600), false);
+    auto& model = fixture.selection;
+    model.setSelectionRect(QRect(100, 100, 400, 300));
+    model.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
+    const QRect inside(200, 200, 40, 30);
+    model.setSelectionRect(inside);
+    model.commitRegionOperation();
+    fixture.interaction.confirmSelection();
+    fixture.services->updateOverlayState();
+    auto* renderer = fixture.overlay.screenshotRendererForTesting();
+    require(!renderer->selectionHandlesVisible(),
+            "a rectangular combined mask must not expose destructive group resize handles");
+    const auto before = decorationImage(fixture);
+    const auto revision = model.changeRevision();
+    require(model.setHoveredRegion({210, 210}),
+            "contained region hover changes its outline target");
+    fixture.services->updateOverlayState();
+    const auto after = decorationImage(fixture);
+    require(before != after && model.changeRevision() == revision,
+            "hover reveals internal boundaries without changing selection semantics");
+    ScreenshotSelectionVisualState previous;
+    previous.present = true;
+    previous.bounds = model.normalizedSelection();
+    previous.handlesVisible = false;
+    auto next = previous;
+    next.highlightedRegion = model.highlightedRegion();
+    const auto damage = planScreenshotSelectionDamage(
+        previous, next, before.rect(), fixture.overlay.canvas()->canvasToViewTransform(), true);
+    require(!damage.isEmpty() && damage.boundingRect().width() < 100 &&
+                damage.boundingRect().height() < 100,
+            "hover outlines must invalidate only the contained region's neighborhood");
+    for (int y = 0; y < before.height(); ++y)
+        for (int x = 0; x < before.width(); ++x)
+            require(before.pixel(x, y) == after.pixel(x, y) || damage.contains({x, y}),
+                    "outline damage must cover every changed rendered pixel");
+    static_cast<void>(model.setHoveredRegion({0, 0}));
+    fixture.services->updateOverlayState();
+    require(decorationImage(fixture) == before,
+            "leaving a region removes its hover outline cleanly");
+}
+
+void independentDragDamageCoversMasksAndContours() {
+    for (const bool curves : {false, true}) {
+        ScreenshotSelectionModel model;
+        model.setSelectionRect(QRect(80, 60, 180, 160));
+        model.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
+        model.setSelectionRect(QRect(450, 300, 50, 50));
+        model.commitRegionOperation();
+        for (int index = 0; index < 16; ++index) {
+            model.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
+            model.setSelectionRect(QRect(420 + (index % 4) * 20, 220 + (index / 4) * 20, 10, 10));
+            model.commitRegionOperation();
+        }
+        model.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
+        QPainterPath ellipse;
+        ellipse.addEllipse(QRectF(50, 50, 80, 60));
+        model.setDraftRegion(
+            curves ? ScreenshotRegionGeometry::fromPath(ellipse, ScreenshotRegionType::Curve)
+                   : ScreenshotRegionGeometry(QRect(50, 50, 80, 60)));
+        model.commitDraftRegion(QRect(0, 0, 600, 400));
+        model.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Subtract);
+        model.setSelectionRect(QRect(85, 70, 10, 10));
+        model.commitRegionOperation();
+        model.beginMoveDrag({70, 80});
+        const auto state = [&] {
+            ScreenshotSelectionVisualState value;
+            value.present = true;
+            value.handlesVisible = false;
+            value.cornerRadius = curves ? 0 : 12;
+            value.bounds = model.normalizedSelection();
+            value.region = model.selectionRegion();
+            value.confirmedRegion = model.confirmedRegion();
+            value.highlightedRegion = model.highlightedRegion();
+            value.stationaryRegions = model.stationaryRegionsDuringMove();
+            return value;
+        };
+        const auto previous = state();
+        model.setDraggedSelectionRect(model.selectionRectForDrag(ScreenshotSelectionDragMode::All,
+                                                                 {145, 110}, QRect(0, 0, 600, 400),
+                                                                 1),
+                                      ScreenshotSelectionDragMode::All);
+        const auto next = state();
+        for (const qreal scale : {1.0, 1.5, 2.0}) {
+            const QRect viewport(0, 0, qRound(600 * scale), qRound(400 * scale));
+            const auto transform = QTransform::fromScale(scale, scale);
+            SnowCanvasWidget canvas;
+            ScreenshotCanvasRenderer renderer(canvas);
+            const auto render = [&](const ScreenshotSelectionVisualState& visual) {
+                renderer.applySelectionState(visual);
+                QImage image(viewport.size(), QImage::Format_ARGB32_Premultiplied);
+                image.fill(Qt::transparent);
+                QPainter painter(&image);
+                renderer.renderAfterCanvas(painter, {viewport, viewport, transform, 1.0});
+                return image;
+            };
+            const auto before = render(previous);
+            const auto after = render(next);
+            const auto damage =
+                planScreenshotSelectionDamage(previous, next, viewport, transform, true);
+            require(!damage.isEmpty() &&
+                        !damage.contains(transform.map(QPointF(475, 325)).toPoint()),
+                    "individual drag damage must leave distant stationary regions alone");
+            require(before != after, "drag fixture must change the mask and outline pixels");
+            for (int y = 0; y < before.height(); ++y)
+                for (int x = 0; x < before.width(); ++x)
+                    require(before.pixel(x, y) == after.pixel(x, y) || damage.contains({x, y}),
+                            "local drag damage must cover changed overlaps, holes, and outlines");
+            QImage incremental = before;
+            {
+                // A separate UI exposure must not make the contours between the
+                // two dirty areas part of the moving region's repaint work.
+                const QRegion exposure =
+                    damage + QRect(viewport.right() - 1, viewport.bottom() - 1, 1, 1);
+                QPainter painter(&incremental);
+                painter.setClipRegion(exposure);
+                painter.setCompositionMode(QPainter::CompositionMode_Source);
+                painter.fillRect(viewport, Qt::transparent);
+                painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                renderer.renderAfterCanvas(painter, {viewport, exposure, transform, 1.0});
+            }
+            require(incremental == after,
+                    "culled drag contours must repaint exactly like a complete frame");
+        }
+    }
+}
+
 void repeatedSelectionLeavesThePresentedUiIdle() {
     Fixture fixture(QSize(1200, 800), false);
     const QRectF initial = fixture.displayedSelection();
@@ -985,6 +1112,62 @@ void imageRebindingKeepsAcceptedPointerPrecisionForUnchangedGeometry() {
             "image-only rebinding must not replace accepted coordinates with rounded global data");
 }
 
+void shortcutHintsFollowRegionOperationTransitions() {
+    for (const auto operation : {ScreenshotSelectionModel::RegionOperation::Add,
+                                 ScreenshotSelectionModel::RegionOperation::Subtract}) {
+        Fixture fixture(QSize(1200, 800), false);
+        fixture.interaction.returnToSelectionMode(false);
+        fixture.selection.setSelectionRect(QRect(700, 100, 200, 150));
+        fixture.services->updateOverlayState();
+        fixture.flushFrame();
+        auto* hints =
+            fixture.overlay.findChild<QWidget*>(QStringLiteral("screenshotShortcutHints"));
+        require(hints != nullptr &&
+                    hints->accessibleName().contains(QStringLiteral("Move entire selection")),
+                "the initial single selection must expose its selection controls");
+
+        fixture.selection.beginRegionOperation(operation);
+        fixture.services->updateOverlayState();
+        fixture.flushFrame();
+        const QString regionHints = hints->accessibleName();
+        require(!regionHints.contains(QStringLiteral("Move entire selection")) &&
+                    !regionHints.contains(QStringLiteral("Selection Aspect Ratio Snap")) &&
+                    !regionHints.contains(QStringLiteral("Copy color")) &&
+                    !regionHints.contains(QStringLiteral("Switch screenshot history")) &&
+                    regionHints.contains(QStringLiteral("Duplicate latest region")),
+                "add and subtract operations must refresh the real widget's blocked shortcuts");
+
+        fixture.selection.setDraftRegion(ScreenshotRegionGeometry(QRect(750, 120, 20, 20)));
+        fixture.services->updateOverlayState();
+        fixture.flushFrame();
+        require(!hints->accessibleName().contains(QStringLiteral("Duplicate latest region")),
+                "starting a custom-region draft must hide the inactive duplicate command");
+        fixture.selection.clearDraftRegion();
+        fixture.services->updateOverlayState();
+        fixture.flushFrame();
+        require(hints->accessibleName() == regionHints,
+                "canceling the draft must restore the region-operation hints in the same mode");
+
+        fixture.selection.setSelectionRect(QRect(750, 120, 20, 20));
+        fixture.selection.commitRegionOperation();
+        fixture.services->updateOverlayState();
+        fixture.flushFrame();
+        require(
+            hints->accessibleName().contains(QStringLiteral("Copy color")) &&
+                hints->accessibleName().contains(QStringLiteral("Move entire selection")) &&
+                !hints->accessibleName().contains(
+                    QStringLiteral("Keep selection width and height consistent")) &&
+                !hints->accessibleName().contains(QStringLiteral("Selection Aspect Ratio Snap")),
+            "committing an operation must restore whole-selection movement without resize hints");
+        fixture.selection.setSelectionRect(QRect(700, 100, 200, 150));
+        fixture.services->updateOverlayState();
+        fixture.flushFrame();
+        require(hints->accessibleName().contains(QStringLiteral("Move entire selection")) &&
+                    !hints->accessibleName().contains(QStringLiteral("Duplicate latest region")),
+                "replacing the multi-region capture must restore the single-selection hints");
+    }
+}
+
 void shortcutContentStillRetranslatesOnLanguageChange() {
     Fixture fixture(QSize(1200, 800), false);
     auto* hints = fixture.overlay.findChild<QWidget*>(QStringLiteral("screenshotShortcutHints"));
@@ -1768,6 +1951,8 @@ int main(int argc, char* argv[]) {
     }
     deferredToolbarRaiseEndsWithItsPresenter();
     nativeToolbarRaiseAllowsPresenterDeletion();
+    independentRegionOutlineHasLocalDamage();
+    independentDragDamageCoversMasksAndContours();
     repeatedSelectionLeavesThePresentedUiIdle();
     multipleRequestsCommitOnlyTheirLatestSelection();
     theFirstResultAfterAnEmptySelectionIsImmediate();
@@ -1796,6 +1981,7 @@ int main(int argc, char* argv[]) {
     displayMovementRecomputesTheAnchoredPointerLocalPosition();
     layoutGenerationChangesRefreshTheAnchoredPointer();
     imageRebindingKeepsAcceptedPointerPrecisionForUnchangedGeometry();
+    shortcutHintsFollowRegionOperationTransitions();
     shortcutContentStillRetranslatesOnLanguageChange();
     queuedPickerInputSurvivesSelectionConfirmation();
     queuedPickerHoverYieldsToSelectionDrag();

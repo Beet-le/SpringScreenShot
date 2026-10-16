@@ -68,7 +68,7 @@ void ScreenshotSelectionEditWorkflow::setSelectionShadowWidthFromToolbar(int sha
 }
 
 void ScreenshotSelectionEditWorkflow::toggleSelectionAspectRatioLockFromToolbar() {
-    if (!m_context.selection.rectangular() || !m_context.interaction.canResizeSelection())
+    if (!m_context.selection.resizable() || !m_context.interaction.canResizeSelection())
         return;
     m_context.selection.toggleAspectRatioLock(
         snow_shot::presentation::kScreenshotSelectionMinimumSize);
@@ -97,7 +97,7 @@ void ScreenshotSelectionEditWorkflow::commitSelectionEffects() {
 
 void ScreenshotSelectionEditWorkflow::setSelectionAspectRatioPresetFromToolbar(
     ScreenshotSelectionAspectRatioPreset preset) {
-    if (!m_context.selection.rectangular() || !m_context.interaction.canResizeSelection() ||
+    if (!m_context.selection.resizable() || !m_context.interaction.canResizeSelection() ||
         (preset != ScreenshotSelectionAspectRatioPreset::Free &&
          screenshotSelectionAspectRatioHeightOverWidth(preset) <= 0.0)) {
         return;
@@ -131,8 +131,8 @@ void ScreenshotSelectionEditWorkflow::setSelectionAspectRatioPresetFromToolbar(
 void ScreenshotSelectionEditWorkflow::openSelectionResizeModalFromToolbar() {
     const QRect bounds = selectionBounds();
     const ScreenshotSelectionParams currentParams = currentSelectionParams();
-    if (bounds.isEmpty() || !m_context.selection.hasPixelSelection() ||
-        !m_context.interaction.canResizeSelection()) {
+    if (bounds.isEmpty() || m_context.selection.multiRegionEditing() ||
+        !m_context.selection.hasPixelSelection() || !m_context.interaction.canResizeSelection()) {
         return;
     }
 

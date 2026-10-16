@@ -2233,6 +2233,10 @@
             <translation>Draw four guide segments around the sampled center pixel</translation>
         </message>
         <message>
+            <source>Duplicate latest region</source>
+            <translation>Duplicate latest region</translation>
+        </message>
+        <message>
             <source>Edit selection</source>
             <translation>Edit selection</translation>
         </message>

@@ -1,3 +1,4 @@
+#include "snow_shot/shortcuts/screenshotshortcutcontext.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/storage/floatingtoolbarsettings.h"
 
@@ -87,6 +88,7 @@ const QStringList& screenshotShortcutActionIds() {
             QStringLiteral("previous_selection_type"),
             QStringLiteral("previous_screenshot_history"),
             QStringLiteral("next_screenshot_history"),
+            QStringLiteral("duplicate_latest_region"),
             QStringLiteral("select_previously_selected_area"),
             QStringLiteral("select_next_previously_selected_area"),
             QStringLiteral("recapture"),
@@ -1389,7 +1391,10 @@ bool setLocalShortcutValuesAtomic(const QMap<QString, QJsonValue>& values) {
                     }
                     if (std::any_of(seen.cbegin(), seen.cend(),
                                     [&binding, &id, &group](const auto& existing) {
-                                        return (group.prefix !=
+                                        return (group.policy != LocalShortcutPolicy::Screenshot ||
+                                                shortcuts::screenshotShortcutActionsMayConflict(
+                                                    existing.first, id)) &&
+                                               (group.prefix !=
                                                     QStringLiteral("pin_to_screen_shortcuts/") ||
                                                 PinToScreenShortcutSettings::actionsMayConflict(
                                                     existing.first, id)) &&

@@ -262,6 +262,10 @@ class ScreenshotOverlayInputHandler final {
     void beginRegionOperation(bool subtract);
     bool cancelRegionOperation();
     [[nodiscard]] bool regionOperationActive() const;
+    [[nodiscard]] bool multiRegionEditing() const;
+    [[nodiscard]] bool canDuplicateLatestRegion() const;
+    bool duplicateLatestRegion();
+    bool duplicateLatestRegionAt(const QPointF& canvasPosition);
 
   private:
     enum class AspectRatioSnapShortcutState { Released, Snapping, Unlocking };

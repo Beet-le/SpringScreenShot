@@ -4185,6 +4185,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
     set_tests_properties(snow-shot-region-overlay-input-tests PROPERTIES LABELS "unit")
+    add_test(NAME snow-shot-independent-region-input-tests
+        COMMAND snow-shot-screenshot-history-tests --independent-regions-only)
+    set_tests_properties(snow-shot-independent-region-input-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "unit")
     add_test(NAME snow-shot-region-shape-input-tests COMMAND snow-shot-screenshot-history-tests --region-shapes-only)
     set_tests_properties(snow-shot-region-shape-input-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "unit")
     set_tests_properties(snow-shot-multi-region-tests PROPERTIES
