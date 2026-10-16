@@ -19,5 +19,8 @@ inline void screenshotClipboardDibDecodeBgrx(const std::uint8_t* source, std::ui
 bool screenshotClipboardDibAvx2Available();
 bool screenshotClipboardDibDecodeBgrxAvx2(const std::uint8_t* source, std::uint32_t* destination,
                                           int pixels);
+bool screenshotClipboardDibSimdAvailable();
+bool screenshotClipboardDibDecodeBgrxSimd(const std::uint8_t* source, std::uint32_t* destination,
+                                          int pixels);
 
 #endif

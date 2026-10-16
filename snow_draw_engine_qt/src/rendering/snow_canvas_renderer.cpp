@@ -3321,6 +3321,10 @@ void renderSceneItemsImpl(const SceneRenderRequest& request) {
             kernelDiagnostics.gaussianDownsampleAvx2Executions;
         g_filterDiagnostics.gaussianReconstructionAvx2Executions =
             kernelDiagnostics.gaussianReconstructionAvx2Executions;
+        g_filterDiagnostics.gaussianDownsampleNeonExecutions =
+            kernelDiagnostics.gaussianDownsampleNeonExecutions;
+        g_filterDiagnostics.gaussianReconstructionNeonExecutions =
+            kernelDiagnostics.gaussianReconstructionNeonExecutions;
         g_filterDiagnostics.downsampleNanoseconds = kernelDiagnostics.downsampleNanoseconds;
         g_filterDiagnostics.reducedBlurNanoseconds = kernelDiagnostics.reducedBlurNanoseconds;
         g_filterDiagnostics.reconstructionNanoseconds = kernelDiagnostics.reconstructionNanoseconds;
@@ -3469,13 +3473,15 @@ void accumulateFilterRenderDiagnostics(FilterRenderDiagnostics& target,
     target.maskConstructionNanoseconds += source.maskConstructionNanoseconds;
     target.pathConstructionNanoseconds += source.pathConstructionNanoseconds;
     target.maskScanNanoseconds += source.maskScanNanoseconds;
+    target.gaussianDownsampleNeonExecutions += source.gaussianDownsampleNeonExecutions;
+    target.gaussianReconstructionNeonExecutions += source.gaussianReconstructionNeonExecutions;
     target.downsampleNanoseconds += source.downsampleNanoseconds;
     target.reducedBlurNanoseconds += source.reducedBlurNanoseconds;
     target.reconstructionNanoseconds += source.reconstructionNanoseconds;
     target.presentationNanoseconds += source.presentationNanoseconds;
     if (source.simdBackend != nullptr &&
-        std::string_view(source.simdBackend) == std::string_view("avx2")) {
-        target.simdBackend = "avx2";
+        std::string_view(source.simdBackend) != std::string_view("scalar")) {
+        target.simdBackend = source.simdBackend;
     }
     target.workingSurfacePixelCount += source.workingSurfacePixelCount;
     target.peakEffectPixelCount =

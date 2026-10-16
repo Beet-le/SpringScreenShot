@@ -38,6 +38,51 @@ Previously published OCR runtime bytes are immutable. A production OCR update
 must use a new runtime version and trusted architecture descriptor before upload;
 local verification assets do not replace the public runtime's pins.
 
+## ARM64 acceleration and focused validation
+
+First-party pixel pipelines select baseline AArch64 NEON for capture channel
+conversion, half-float/HDR conversion and screen-color restoration, GDI dirty-row
+scans, recording area resize, BGRA extraction and keyboard compositing,
+scrolling-image ORB and region analysis, OCR detection preprocessing/postprocessing,
+canvas color effects, Gaussian reduction/reconstruction, pen masks, clipboard DIB
+decoding, and integer alpha classification. Raster-store CRC32C selects hardware
+instructions only after an OS capability check. Optional FP16, dot-product, SVE,
+and SME instructions are not required by these first-party kernels. Existing scalar tails and unsupported
+architecture fallbacks retain the same bounds and rounding contracts.
+
+The x265 overlay enables baseline C++ NEON primitives independently of GAS in
+both 8-bit and Main10 builds. Windows ARM64 assembly remains disabled by default,
+and assembly-only primitives retain their C implementations. An experimental
+GAS-preprocessor/ARMASM64 route is available for native validation; see the
+[x265 overlay instructions](cmake/vcpkg-overlay-ports/x265/README.md). The focused
+`test-support/x265-arm-intrinsics` fixture checks primitive execution, the combined
+8-bit/Main10 API, and complete scalar/NEON bitstream equality for each depth.
+
+OpenCV's MSVC FP16/dot-product variants retain upstream's compiler restrictions.
+FFmpeg's unstable AArch64 scaler backend remains disabled because its host helper
+does not work with the current cross-toolchain setup; current conversions use
+the legacy API, which already has ARM assembly. Baseline OpenCV/FFmpeg NEON and
+ONNX Runtime NEON kernels remain available. These restrictions are separate from
+the first-party backends and the compiler correctness workarounds above.
+
+The rotation, laser, real-time/GPU recording, paired recording comparison, and
+scrolling-image performance runners accept `-Architecture arm64`. They select
+`snow-shot-msvc-arm64-performance`, matching Rust targets and dependency triplets,
+and require a native matching host when executing measurements. The real-time
+runner's `-BuildOnly` mode also supports cross compilation. Runner fixtures can be
+checked without running a benchmark or requiring Windows build tools:
+
+```powershell
+./scripts/test-arm64-performance-runners.ps1
+./scripts/run-capture-rotation-perf.ps1 -Architecture arm64
+./scripts/run-snow-shot-scrolling-image-performance.ps1 -Architecture arm64
+```
+
+SIMD tests assert backend execution as well as output parity; running portable
+reference tests alone does not prove that an ARM kernel was selected. Use only
+the affected tests, such as the canvas filter SIMD selector, the Snow Image alpha
+and CRC selectors, clipboard DIB tests, or the corresponding Rust module filters.
+
 ## Bootstrap Qt and dependencies
 
 From the repository root, install the static dependency graph first:

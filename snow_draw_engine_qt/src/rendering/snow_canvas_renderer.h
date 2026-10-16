@@ -74,6 +74,8 @@ struct FilterRenderDiagnostics {
     std::size_t parallelJobs = 0;
     std::size_t retainedWorkspaceBytes = 0;
     std::size_t gaussianPasses = 0;
+    std::size_t gaussianDownsampleNeonExecutions = 0;
+    std::size_t gaussianReconstructionNeonExecutions = 0;
     std::size_t gaussianDownsampleAvx2Executions = 0;
     std::size_t gaussianReconstructionAvx2Executions = 0;
     std::size_t opaqueRectDispatchCount = 0;

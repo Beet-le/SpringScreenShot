@@ -961,9 +961,9 @@ QImage decodeNativeDib(const ScreenshotClipboardNativeDib& native) {
     const bool standardOpaque = alphaMask == 0 && redMask == 0x00ff0000u &&
                                 greenMask == 0x0000ff00u && blueMask == 0x000000ffu;
 #if defined(Q_OS_WIN) || defined(_WIN32)
-    const bool useAvx2 = standardOpaque && screenshotClipboardDibAvx2Available();
+    const bool useSimd = standardOpaque && screenshotClipboardDibSimdAvailable();
 #else
-    const bool useAvx2 = false;
+    const bool useSimd = false;
 #endif
     QImage image = snowCanvasAllocateImage(native.size, QImage::Format_ARGB32_Premultiplied);
     if (image.isNull())
@@ -976,9 +976,9 @@ QImage decodeNativeDib(const ScreenshotClipboardNativeDib& native) {
             auto* destination = reinterpret_cast<std::uint32_t*>(image.scanLine(y));
             if (standardOpaque) {
 #if defined(Q_OS_WIN) || defined(_WIN32)
-                if (useAvx2) {
+                if (useSimd) {
                     static_cast<void>(
-                        screenshotClipboardDibDecodeBgrxAvx2(source, destination, image.width()));
+                        screenshotClipboardDibDecodeBgrxSimd(source, destination, image.width()));
                     continue;
                 }
 #endif
@@ -998,8 +998,13 @@ QImage decodeNativeDib(const ScreenshotClipboardNativeDib& native) {
         SNOW_SHOT_PIN_PERF_COUNTER("clipboard.dib.fast_path", 1);
     else
         SNOW_SHOT_PIN_PERF_COUNTER("clipboard.dib.generic_path", 1);
-    if (useAvx2)
+    if (useSimd) {
+#if defined(Q_PROCESSOR_ARM_64)
+        SNOW_SHOT_PIN_PERF_COUNTER("clipboard.dib.neon", 1);
+#else
         SNOW_SHOT_PIN_PERF_COUNTER("clipboard.dib.avx2", 1);
+#endif
+    }
     SNOW_SHOT_PIN_PERF_COUNTER("clipboard.dib.decoded_bytes", native.bytes.size());
     const qint64 pixels = static_cast<qint64>(image.width()) * image.height();
     const int workersCount = std::min(8, std::max(1, QThread::idealThreadCount() - 1));

@@ -634,6 +634,7 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     add_executable(snow-canvas-filter-safety-tests
         tests/snow_canvas_filter_safety_tests.cpp
         src/rendering/snow_canvas_filter_avx2.cpp
+        src/rendering/snow_canvas_filter_neon.cpp
         src/rendering/snow_canvas_render_diagnostics.cpp
     )
     target_link_libraries(snow-canvas-filter-safety-tests PRIVATE
@@ -724,6 +725,7 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     )
     snow_shot_import_offscreen_platform(snow-canvas-filter-render-tests)
     add_test(NAME snow-canvas-filter-render-tests COMMAND snow-canvas-filter-render-tests)
+    add_test(NAME snow-canvas-filter-simd-tests COMMAND snow-canvas-filter-render-tests --simd-only)
     add_test(NAME snow-canvas-serial-number-font-tests
         COMMAND snow-canvas-filter-render-tests --serial-number-font-only)
     add_test(NAME snow-canvas-retained-filter-paint-tests
@@ -731,7 +733,7 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     add_test(NAME snow-canvas-sparse-filter-damage-tests
         COMMAND snow-canvas-filter-render-tests --sparse-filter-damage-only)
     set_tests_properties(
-        snow-canvas-filter-render-tests snow-canvas-retained-filter-paint-tests
+        snow-canvas-filter-render-tests snow-canvas-filter-simd-tests snow-canvas-retained-filter-paint-tests
         snow-canvas-sparse-filter-damage-tests snow-canvas-serial-number-font-tests PROPERTIES
         ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>"

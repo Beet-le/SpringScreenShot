@@ -10,6 +10,25 @@
 #include <intrin.h>
 #endif
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <arm_acle.h>
+#endif
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <sys/sysctl.h>
+#elif defined(__linux__)
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#endif
+#endif
+
 namespace snow::image::detail::raster_serialization {
 namespace {
 
@@ -63,13 +82,61 @@ std::uint32_t hardware_crc32c_update(std::uint32_t state, std::span<const std::b
     }
     return state;
 }
+#elif defined(__aarch64__) || defined(_M_ARM64)
+bool hardware_crc32c_available() {
+    static const bool available = [] {
+#if defined(_WIN32)
+        return IsProcessorFeaturePresent(PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE) != FALSE;
+#elif defined(__APPLE__)
+        int supported = 0;
+        std::size_t size = sizeof(supported);
+        return sysctlbyname("hw.optional.armv8_crc32", &supported, &size, nullptr, 0) == 0 &&
+               supported != 0;
+#elif defined(__linux__)
+        return (getauxval(AT_HWCAP) & HWCAP_CRC32) != 0;
+#else
+        return false;
+#endif
+    }();
+    return available;
+}
+
+#if defined(__clang__)
+__attribute__((target("crc")))
+#elif defined(__GNUC__)
+__attribute__((target("arch=armv8-a+crc")))
+#endif
+std::uint32_t hardware_crc32c_update(std::uint32_t state, std::span<const std::byte> bytes) {
+    std::size_t offset = 0;
+    while (bytes.size() - offset >= sizeof(std::uint64_t)) {
+        std::uint64_t block = 0;
+        std::memcpy(&block, bytes.data() + offset, sizeof(block));
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        block = __builtin_bswap64(block);
+#endif
+        state = __crc32cd(state, block);
+        offset += sizeof(block);
+    }
+    while (offset < bytes.size()) {
+        state = __crc32cb(state, std::to_integer<std::uint8_t>(bytes[offset++]));
+    }
+    return state;
+}
 #endif
 
 } // namespace
 
+bool crc32c_uses_hardware() {
+#if (defined(_MSC_VER) && defined(_M_X64)) || defined(__aarch64__) || defined(_M_ARM64)
+    return hardware_crc32c_available();
+#else
+    return false;
+#endif
+}
+
 std::uint32_t crc32c_update(std::uint32_t state, std::span<const std::byte> bytes) {
-#if defined(_MSC_VER) && defined(_M_X64)
-    if (hardware_crc32c_available())
+#if (defined(_MSC_VER) && defined(_M_X64)) || defined(__aarch64__) || defined(_M_ARM64)
+    if (crc32c_uses_hardware())
         return hardware_crc32c_update(state, bytes);
 #endif
     std::size_t offset = 0;

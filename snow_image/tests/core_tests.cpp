@@ -6,6 +6,7 @@
 #include "snow/image/raster.h"
 #include "snow/image/raster_conversion.h"
 #include "heif_fixtures.h"
+#include "../src/raster_serialization.h"
 
 #include <algorithm>
 #include <array>
@@ -3793,6 +3794,86 @@ Document opaque_document(std::uint32_t width = 8, std::uint32_t height = 6) {
     return document;
 }
 
+void test_alpha_vector_boundaries() {
+    const std::array<snow::image::PixelFormat, 4> formats{
+        snow::image::PixelFormat{snow::image::SampleType::unsigned_integer,
+                                 snow::image::ChannelLayout::gray_alpha,
+                                 snow::image::AlphaMode::straight, 8, true},
+        snow::image::kRgba8, snow::image::kBgra8, snow::image::kRgba16};
+    for (auto format : formats) {
+        for (bool little_endian : {false, true}) {
+            format.little_endian = little_endian;
+            const std::size_t sample_bytes = format.bits_per_channel / 8U;
+            const std::size_t pixel_bytes = format.channel_count() * sample_bytes;
+            for (std::uint32_t width : {1U, 3U, 4U, 7U, 8U, 9U, 16U, 17U, 33U}) {
+                for (std::size_t alignment : {0U, 1U, 3U, 7U}) {
+                    const std::size_t stride = width * pixel_bytes + 13;
+                    std::vector<std::byte> pixels(stride * 3 + alignment, std::byte{0});
+                    auto* first = pixels.data() + alignment;
+                    for (std::size_t y = 0; y < 3; ++y) {
+                        for (std::uint32_t x = 0; x < width; ++x) {
+                            std::fill_n(first + y * stride + (x + 1) * pixel_bytes - sample_bytes,
+                                        sample_bytes, std::byte{0xFF});
+                        }
+                    }
+                    const ImageView view{
+                        width, 3, format, stride, {first, pixels.size() - alignment}};
+                    require(take(snow::image::classify_alpha(view), "classify vector alpha") ==
+                                snow::image::AlphaContent::opaque,
+                            "SIMD alpha classification ignores color, padding, and alignment");
+                    for (std::uint32_t x = 0; x < width; ++x) {
+                        auto* alpha = first + stride + (x + 1) * pixel_bytes - sample_bytes;
+                        for (std::size_t byte = 0; byte < sample_bytes; ++byte) {
+                            alpha[byte] = std::byte{0xFE};
+                            require(
+                                take(snow::image::classify_alpha(view), "classify alpha lane") ==
+                                    snow::image::AlphaContent::non_opaque,
+                                "every alpha byte in SIMD batches and scalar tails is checked");
+                            alpha[byte] = std::byte{0xFF};
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void test_crc32c_vector_boundaries() {
+    using namespace snow::image::detail::raster_serialization;
+    const auto reference = [](std::uint32_t state, std::span<const std::byte> bytes) {
+        for (std::byte byte : bytes) {
+            state ^= std::to_integer<std::uint8_t>(byte);
+            for (unsigned bit = 0; bit < 8; ++bit) {
+                state = (state >> 1U) ^ ((0U - (state & 1U)) & 0x82F63B78U);
+            }
+        }
+        return state;
+    };
+    const std::string_view known = "123456789";
+    require(crc32c(std::as_bytes(std::span(known.data(), known.size()))) == 0xE3069283U,
+            "CRC32C matches the standard Castagnoli test vector");
+    std::array<std::byte, 272> storage{};
+    for (std::size_t i = 0; i < storage.size(); ++i) {
+        storage[i] = static_cast<std::byte>((i * 73 + 19) & 255);
+    }
+    for (std::size_t offset = 0; offset < 16; ++offset) {
+        for (std::size_t count = 0; count <= 256; ++count) {
+            const std::span<const std::byte> bytes(storage.data() + offset, count);
+            for (std::uint32_t initial : {0U, 0xFFFFFFFFU, 0x12345678U}) {
+                const auto expected = reference(initial, bytes);
+                require(
+                    crc32c_update(initial, bytes) == expected,
+                    "selected CRC32C backend matches bitwise reference at every alignment/tail");
+                const std::size_t split = count / 2;
+                require(crc32c_update(crc32c_update(initial, bytes.first(split)),
+                                      bytes.subspan(split)) == expected,
+                        "streamed CRC32C preserves arbitrary intermediate state");
+            }
+        }
+    }
+    std::cout << "CRC32C hardware selected: " << crc32c_uses_hardware() << '\n';
+}
+
 void test_alpha_classification_and_composite() {
     Document opaque = opaque_document();
     require(take(snow::image::classify_alpha(opaque.frames[0].image), "classify opaque RGBA8") ==
@@ -4947,6 +5028,15 @@ void test_jxl_opaque_progressive_preview(Service& service) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    if (argc == 2 && std::string_view(argv[1]) == "--alpha-only") {
+        test_alpha_classification_and_composite();
+        test_alpha_vector_boundaries();
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--crc32c-only") {
+        test_crc32c_vector_boundaries();
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--raster-stores-only") {
         test_raster_descriptor_wire_compatibility();
         test_raster_store();
@@ -5042,6 +5132,8 @@ int main(int argc, char* argv[]) {
     }
     test_shared_image_ownership();
     test_alpha_classification_and_composite();
+    test_alpha_vector_boundaries();
+    test_crc32c_vector_boundaries();
     test_persistent_file_input();
     test_raster_descriptor_wire_compatibility();
     test_raster_store();

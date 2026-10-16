@@ -92,3 +92,6 @@ pub fn directml_is_available() -> bool {
         false
     }
 }
+
+#[cfg(all(test, target_arch = "aarch64"))]
+mod neon_benchmark;

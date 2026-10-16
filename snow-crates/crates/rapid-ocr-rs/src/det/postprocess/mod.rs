@@ -473,6 +473,13 @@ fn threshold_chunk_dispatch(src: &[f32], thresh: f32, dst: &mut [u8]) {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        let _vectors = unsafe { threshold_chunk_neon(src, thresh, dst) };
+        #[cfg(test)]
+        NEON_VECTORS[0].fetch_add(_vectors, std::sync::atomic::Ordering::Relaxed);
+        return;
+    }
     threshold_chunk_scalar(src, thresh, dst);
 }
 
@@ -901,6 +908,13 @@ fn dilate_mask_2x2(mask: &[u8], width: usize, height: usize) -> Vec<u8> {
             return;
         }
 
+        #[cfg(target_arch = "aarch64")]
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            let _vectors = unsafe { dilate_row_2x2_neon(cur, prev, row) };
+            #[cfg(test)]
+            NEON_VECTORS[1].fetch_add(_vectors, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
         dilate_row_2x2_scalar(cur, prev, row);
     });
 
@@ -1469,6 +1483,14 @@ unsafe fn sum_f32_slice(ptr: *const f32, len: usize) -> f64 {
     #[cfg(target_arch = "x86_64")]
     if std::arch::is_x86_feature_detected!("avx2") {
         return unsafe { sum_f32_slice_avx2(ptr, len) };
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    if len >= 64 && std::arch::is_aarch64_feature_detected!("neon") {
+        let (sum, _vectors) = unsafe { sum_f32_slice_neon(ptr, len) };
+        #[cfg(test)]
+        NEON_VECTORS[2].fetch_add(_vectors, std::sync::atomic::Ordering::Relaxed);
+        return sum;
     }
 
     let mut sum = 0.0_f64;
@@ -2727,5 +2749,597 @@ mod tests {
         assert!(boxes[0][0][0] <= boxes[1][0][0]);
         assert_eq!(boxes[2][0][0], 100.0);
         assert_eq!(scores.len(), boxes.len());
+    }
+}
+
+#[cfg(all(test, target_arch = "aarch64"))]
+static NEON_VECTORS: [std::sync::atomic::AtomicUsize; 3] =
+    [const { std::sync::atomic::AtomicUsize::new(0) }; 3];
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn threshold_chunk_neon(src: &[f32], thresh: f32, dst: &mut [u8]) -> usize {
+    use std::arch::aarch64::*;
+    unsafe {
+        let threshold = vdupq_n_f32(thresh);
+        let mut x = 0;
+        while x + 16 <= src.len() {
+            let cmp = |offset| vcgtq_f32(vld1q_f32(src.as_ptr().add(x + offset)), threshold);
+            let first = vcombine_u16(vmovn_u32(cmp(0)), vmovn_u32(cmp(4)));
+            let second = vcombine_u16(vmovn_u32(cmp(8)), vmovn_u32(cmp(12)));
+            vst1q_u8(
+                dst.as_mut_ptr().add(x),
+                vcombine_u8(vmovn_u16(first), vmovn_u16(second)),
+            );
+            x += 16;
+        }
+        threshold_chunk_scalar(&src[x..], thresh, &mut dst[x..]);
+        x / 16
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn dilate_row_2x2_neon(cur: &[u8], prev: Option<&[u8]>, out: &mut [u8]) -> usize {
+    use std::arch::aarch64::*;
+    if cur.is_empty() {
+        return 0;
+    }
+    out[0] = cur[0] | prev.map_or(0, |p| p[0]);
+    unsafe {
+        let mut last_cur = vdupq_n_u8(cur[0]);
+        let mut last_prev = vdupq_n_u8(prev.map_or(0, |p| p[0]));
+        let mut x = 1;
+        let mut block = |offset: usize| {
+            let current = vld1q_u8(cur.as_ptr().add(offset));
+            let mut value = vorrq_u8(current, vextq_u8::<15>(last_cur, current));
+            last_cur = current;
+            if let Some(previous) = prev {
+                let above = vld1q_u8(previous.as_ptr().add(offset));
+                value = vorrq_u8(value, vorrq_u8(above, vextq_u8::<15>(last_prev, above)));
+                last_prev = above;
+            }
+            vst1q_u8(out.as_mut_ptr().add(offset), value);
+        };
+        while x + 64 <= cur.len() {
+            block(x);
+            block(x + 16);
+            block(x + 32);
+            block(x + 48);
+            x += 64;
+        }
+        while x + 16 <= cur.len() {
+            block(x);
+            x += 16;
+        }
+        for i in x..cur.len() {
+            out[i] = cur[i] | cur[i - 1] | prev.map_or(0, |p| p[i] | p[i - 1]);
+        }
+        (x - 1) / 16
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn sum_f32_slice_neon(ptr: *const f32, len: usize) -> (f64, usize) {
+    let result = unsafe { sum_f32_slice_neon_with_scan(ptr, len) };
+    (result.sum, result.vectors)
+}
+
+#[cfg(target_arch = "aarch64")]
+struct NeonSumResult {
+    sum: f64,
+    vectors: usize,
+    #[cfg(test)]
+    examined: usize,
+    #[cfg(test)]
+    recomputed: usize,
+    #[cfg(test)]
+    prefix_sum: f64,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl NeonSumResult {
+    #[inline(always)]
+    fn new(
+        sum: f64,
+        vectors: usize,
+        _examined: usize,
+        _recomputed: usize,
+        _prefix_sum: f64,
+    ) -> Self {
+        Self {
+            sum,
+            vectors,
+            #[cfg(test)]
+            examined: _examined,
+            #[cfg(test)]
+            recomputed: _recomputed,
+            #[cfg(test)]
+            prefix_sum: _prefix_sum,
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn sum_f32_slice_neon_with_scan(ptr: *const f32, len: usize) -> NeonSumResult {
+    use std::arch::aarch64::*;
+    if len == 0 {
+        return NeonSumResult::new(0.0, 0, 0, 0, 0.0);
+    }
+    unsafe {
+        // Every snapshot uses the full requested length's bound, never a
+        // smaller prefix length's bound. Once rejected, the span cannot shrink.
+        let growth = usize::BITS - (len - 1).leading_zeros();
+        let rejected = |minimum: u32, maximum: u32| {
+            maximum == 255 || maximum.saturating_sub(minimum) + 24 + growth > 53
+        };
+        let scalar_fallback = |examined, start, prefix_low, prefix_high| {
+            // A saved accepted prefix is exactly the original sequential sum.
+            // Resume from it; do not reduce any of the rejected accumulators.
+            let prefix = if start == 0 {
+                0.0
+            } else {
+                vaddvq_f64(prefix_low) + vaddvq_f64(prefix_high)
+            };
+            let mut sum = prefix;
+            for offset in start..len {
+                sum += f64::from(*ptr.add(offset));
+            }
+            NeonSumResult::new(sum, 0, examined, len - start, prefix)
+        };
+        let mut low = vdupq_n_f64(0.0);
+        let mut high = low;
+        let mut checkpoint_low = low;
+        let mut checkpoint_high = high;
+        let mut checkpoint = 0;
+        let mut minimum = vdupq_n_u32(255);
+        let mut maximum = vdupq_n_u32(0);
+        let mut i = 0;
+        while i + 4 <= len {
+            let values = vld1q_f32(ptr.add(i));
+            low = vaddq_f64(low, vcvt_f64_f32(vget_low_f32(values)));
+            high = vaddq_f64(high, vcvt_f64_f32(vget_high_f32(values)));
+            let absolute = vandq_u32(vreinterpretq_u32_f32(values), vdupq_n_u32(0x7fff_ffff));
+            let effective = vmaxq_u32(vshrq_n_u32::<23>(absolute), vdupq_n_u32(1));
+            minimum = vminq_u32(
+                minimum,
+                vbslq_u32(
+                    vceqq_u32(absolute, vdupq_n_u32(0)),
+                    vdupq_n_u32(255),
+                    effective,
+                ),
+            );
+            maximum = vmaxq_u32(maximum, effective);
+            i += 4;
+            if i.is_multiple_of(64) {
+                if rejected(vminvq_u32(minimum), vmaxvq_u32(maximum)) {
+                    return scalar_fallback(i, checkpoint, checkpoint_low, checkpoint_high);
+                }
+                // Copies retain the last proven prefix without a horizontal
+                // floating-point reduction on the accepted hot path.
+                checkpoint_low = low;
+                checkpoint_high = high;
+                checkpoint = i;
+            }
+        }
+        let mut min_exp = vminvq_u32(minimum);
+        let mut max_exp = vmaxvq_u32(maximum);
+        for tail in i..len {
+            let bits = (*ptr.add(tail)).to_bits() & 0x7fff_ffff;
+            if bits != 0 {
+                let exponent = (bits >> 23).max(1);
+                min_exp = min_exp.min(exponent);
+                max_exp = max_exp.max(exponent);
+            }
+        }
+        // Every finite f32 is a multiple of 2^(min_exponent-150).
+        // If the largest possible partial sum fits 53 significand bits, every
+        // f64 addition is exact in every order, including a saved prefix.
+        if rejected(min_exp, max_exp) {
+            return scalar_fallback(len, checkpoint, checkpoint_low, checkpoint_high);
+        }
+        let mut sum = vaddvq_f64(low) + vaddvq_f64(high);
+        for tail in i..len {
+            sum += f64::from(*ptr.add(tail));
+        }
+        NeonSumResult::new(sum, i / 4, len, 0, sum)
+    }
+}
+
+#[cfg(all(test, target_arch = "aarch64"))]
+mod neon_tests {
+    use super::*;
+
+    #[test]
+    fn neon_postprocess_executes_for_tails_unaligned_inputs_and_special_values() {
+        assert!(std::arch::is_aarch64_feature_detected!("neon"));
+        let special = [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -0.0,
+            0.0,
+            f32::from_bits(1),
+            0.3,
+            f32::from_bits(0.3_f32.to_bits() + 1),
+            1.0,
+        ];
+        let before = NEON_VECTORS
+            .each_ref()
+            .map(|n| n.load(std::sync::atomic::Ordering::Relaxed));
+        for len in 0..81 {
+            let source: Vec<f32> = (0..len + 1).map(|i| special[i % special.len()]).collect();
+            let source = &source[1..];
+            for threshold in [0.0, 0.3, f32::NAN, f32::INFINITY] {
+                let mut expected = vec![0; len + 1];
+                let mut actual = expected.clone();
+                threshold_chunk_scalar(source, threshold, &mut expected[1..]);
+                unsafe { threshold_chunk_neon(source, threshold, &mut actual[1..]) };
+                assert_eq!(actual, expected);
+                threshold_chunk_dispatch(source, threshold, &mut actual[1..]);
+                assert_eq!(actual, expected);
+            }
+            let current: Vec<u8> = (0..len + 1).map(|i| (i * 29) as u8).collect();
+            let previous: Vec<u8> = (0..len + 1).map(|i| (i * 73 + 7) as u8).collect();
+            for prev in [None, Some(&previous[1..])] {
+                let mut expected = vec![0; len + 1];
+                let mut actual = expected.clone();
+                dilate_row_2x2_scalar(&current[1..], prev, &mut expected[1..]);
+                unsafe { dilate_row_2x2_neon(&current[1..], prev, &mut actual[1..]) };
+                assert_eq!(actual, expected);
+            }
+            let finite: Vec<f32> = (0..len + 1)
+                .map(|i| [1e30, 1.0, -1e30, -0.0, f32::from_bits(1), 0.3][i % 6])
+                .collect();
+            let expected = finite[1..]
+                .iter()
+                .fold(0.0_f64, |sum, v| sum + f64::from(*v));
+            assert_eq!(
+                unsafe { sum_f32_slice_neon(finite[1..].as_ptr(), len) }
+                    .0
+                    .to_bits(),
+                expected.to_bits()
+            );
+            assert_eq!(
+                unsafe { sum_f32_slice(finite[1..].as_ptr(), len) }.to_bits(),
+                expected.to_bits()
+            );
+        }
+        let mut seed = 0x1234_5678_u32;
+        for len in [1, 3, 4, 7, 16, 31, 127, 1024, 4097] {
+            for exponent_span in [0, 8, 16, 28, 80, 254] {
+                let values: Vec<f32> = (0..len)
+                    .map(|_| {
+                        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                        let exponent = if exponent_span == 0 {
+                            127
+                        } else {
+                            1 + seed % exponent_span
+                        };
+                        f32::from_bits((seed & 0x807f_ffff) | (exponent << 23))
+                    })
+                    .collect();
+                let expected = values.iter().fold(0.0_f64, |sum, v| sum + f64::from(*v));
+                let actual = unsafe { sum_f32_slice_neon(values.as_ptr(), values.len()).0 };
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "sum len={len}, span={exponent_span}"
+                );
+            }
+        }
+        for values in [
+            [f32::INFINITY, 0.0, -1.0, 1.0],
+            [f32::NAN, 1.0, 2.0, 3.0],
+            [f32::INFINITY, f32::NEG_INFINITY, 0.0, -0.0],
+        ] {
+            let expected = values.iter().fold(0.0_f64, |sum, v| sum + f64::from(*v));
+            let (actual, vectors) = unsafe { sum_f32_slice_neon(values.as_ptr(), values.len()) };
+            assert_eq!(vectors, 0);
+            assert!(actual == expected || actual.is_nan() && expected.is_nan());
+        }
+        let bitmap = vec![255; 33 * 2];
+        assert_eq!(dilate_mask_2x2(&bitmap, 33, 2), bitmap);
+        let probabilities: Vec<f32> = (0..1027).map(|i| (i % 256) as f32 / 255.0).collect();
+        let expected = probabilities
+            .iter()
+            .fold(0.0_f64, |sum, v| sum + f64::from(*v));
+        assert_eq!(
+            unsafe { sum_f32_slice(probabilities.as_ptr(), probabilities.len()) },
+            expected
+        );
+        for (index, count) in NEON_VECTORS.iter().enumerate() {
+            assert!(
+                count.load(std::sync::atomic::Ordering::Relaxed) > before[index],
+                "NEON backend {index} executed no vector blocks"
+            );
+        }
+    }
+    #[test]
+    fn neon_masked_sum_exactness_gate_covers_exponent_boundaries_and_fallback_order() {
+        for len in [4_usize, 32, 4097, 65537] {
+            let growth = usize::BITS - (len - 1).leading_zeros();
+            let min_exp = 100_u32;
+            let first_rejected = (min_exp + 53 - 24 - growth + 1) << 23;
+            for largest in [first_rejected - 1, first_rejected, first_rejected + 1] {
+                let mut values: Vec<f32> = (0..len)
+                    .map(|i| {
+                        let sign = if i % 3 == 0 { 0x8000_0000 } else { 0 };
+                        f32::from_bits(sign | (min_exp << 23) | ((i as u32 * 73) & 0x007f_ffff))
+                    })
+                    .collect();
+                values[0] = f32::from_bits(largest);
+                let expected = values
+                    .iter()
+                    .fold(0.0_f64, |sum, value| sum + f64::from(*value));
+                let (actual, vectors) =
+                    unsafe { sum_f32_slice_neon(values.as_ptr(), values.len()) };
+                assert_eq!(actual.to_bits(), expected.to_bits());
+                assert_eq!(
+                    vectors > 0,
+                    largest < first_rejected,
+                    "len={len}, largest={largest:#x}"
+                );
+            }
+        }
+        let subnormal = [
+            f32::from_bits(1),
+            f32::from_bits(0x007f_ffff),
+            -f32::from_bits(1),
+            -0.0,
+        ];
+        let expected = subnormal.iter().fold(0.0_f64, |sum, v| sum + f64::from(*v));
+        let (actual, vectors) = unsafe { sum_f32_slice_neon(subnormal.as_ptr(), subnormal.len()) };
+        assert_eq!(actual.to_bits(), expected.to_bits());
+        assert!(vectors > 0);
+        for len in [0, 1, 4, 65] {
+            let zeros = vec![-0.0_f32; len];
+            assert_eq!(
+                unsafe { sum_f32_slice_neon(zeros.as_ptr(), len).0 }.to_bits(),
+                0.0_f64.to_bits()
+            );
+        }
+        let cancellation = [1e30_f32, 1.0, -1e30, 0.0];
+        let (sum, vectors) =
+            unsafe { sum_f32_slice_neon(cancellation.as_ptr(), cancellation.len()) };
+        assert_eq!(vectors, 0);
+        assert_eq!(sum, 0.0, "fallback must keep sequential cancellation order");
+    }
+
+    #[test]
+    fn neon_masked_sum_rejects_at_first_periodic_check_or_final_tail() {
+        for len in [
+            1_usize, 3, 4, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 1023, 1027, 4097,
+        ] {
+            let mut positions = vec![
+                0,
+                3,
+                4,
+                14,
+                15,
+                16,
+                31,
+                32,
+                62,
+                63,
+                64,
+                65,
+                126,
+                127,
+                128,
+                len / 2,
+                len - 1,
+            ];
+            positions.retain(|position| *position < len);
+            positions.sort_unstable();
+            positions.dedup();
+            for position in positions {
+                for bad in [
+                    f32::from_bits(1),
+                    1e30_f32,
+                    f32::INFINITY,
+                    f32::NEG_INFINITY,
+                    f32::NAN,
+                ] {
+                    let mut values = vec![0.5_f32; len];
+                    values[position] = bad;
+                    let expected = values.iter().fold(0.0_f64, |sum, v| sum + f64::from(*v));
+                    let actual = unsafe { sum_f32_slice_neon_with_scan(values.as_ptr(), len) };
+                    assert!(
+                        actual.sum.to_bits() == expected.to_bits()
+                            || actual.sum.is_nan() && expected.is_nan(),
+                        "len={len}, position={position}, bad={bad}"
+                    );
+                    assert_eq!(actual.vectors, 0);
+                    let next_check = (position + 1).div_ceil(64) * 64;
+                    let expected_scan = if next_check <= len / 4 * 4 {
+                        next_check
+                    } else {
+                        len
+                    };
+                    assert_eq!(
+                        actual.examined, expected_scan,
+                        "len={len}, position={position}, bad={bad}"
+                    );
+                    let expected_start = if len == 1 && bad.is_finite() {
+                        len
+                    } else {
+                        position / 64 * 64
+                    };
+                    assert_eq!(actual.recomputed, len - expected_start);
+                    let expected_prefix = values[..expected_start]
+                        .iter()
+                        .fold(0.0_f64, |sum, v| sum + f64::from(*v));
+                    assert_eq!(actual.prefix_sum.to_bits(), expected_prefix.to_bits());
+                    assert!(actual.examined.saturating_sub(expected_start) <= 66);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn neon_masked_sum_checkpoints_preserve_zero_cancellation_and_full_length_bound() {
+        let mut zeros = vec![-0.0_f32; 67];
+        zeros[64] = 1e30;
+        zeros[65] = 1e-30;
+        zeros[66] = -1e30;
+        let mut cancellation: Vec<f32> = (0..137).map(|i| [1.0, 0.5, -1.0, -0.5][i % 4]).collect();
+        cancellation[128] = 1e30;
+        cancellation[129] = 1.0;
+        cancellation[136] = -1e30;
+        let mut positive = vec![0.5_f32; 137];
+        positive[128] = 1e30;
+        positive[129] = 1.0;
+        positive[136] = -1e30;
+        let mut large_prefix = vec![1e30_f32; 137];
+        large_prefix[64] = 1.0;
+        for (values, start) in [
+            (zeros, 64),
+            (cancellation, 128),
+            (positive, 128),
+            (large_prefix, 64),
+        ] {
+            let expected_prefix = values[..start]
+                .iter()
+                .fold(0.0_f64, |sum, v| sum + f64::from(*v));
+            let expected = values.iter().fold(0.0_f64, |sum, v| sum + f64::from(*v));
+            let actual = unsafe { sum_f32_slice_neon_with_scan(values.as_ptr(), values.len()) };
+            assert_eq!(actual.prefix_sum.to_bits(), expected_prefix.to_bits());
+            assert_eq!(actual.sum.to_bits(), expected.to_bits());
+            assert_eq!(actual.recomputed, values.len() - start);
+            if expected_prefix == 0.0 {
+                assert_eq!(actual.prefix_sum.to_bits(), 0.0_f64.to_bits());
+            }
+        }
+        // This span fits a64-value bound but fails the full65537-value bound.
+        // The first checkpoint must be rejected instead of saved.
+        let mut values = vec![f32::from_bits(100 << 23); 65537];
+        values[0] = f32::from_bits(113 << 23);
+        let actual = unsafe { sum_f32_slice_neon_with_scan(values.as_ptr(), values.len()) };
+        assert_eq!((actual.examined, actual.recomputed), (64, values.len()));
+        assert_eq!(actual.prefix_sum.to_bits(), 0.0_f64.to_bits());
+        let expected = values.iter().fold(0.0_f64, |sum, v| sum + f64::from(*v));
+        assert_eq!(actual.sum.to_bits(), expected.to_bits());
+    }
+
+    #[test]
+    #[ignore = "paired Release-only ARM64 kernel measurement"]
+    fn neon_release_benchmark_sum_rejection() {
+        use std::hint::black_box;
+        let result = |sum: f64| {
+            if sum.is_nan() {
+                u64::MAX
+            } else {
+                sum.to_bits()
+            }
+        };
+        for len in [1283, 921603] {
+            for (name, outlier) in [
+                ("accepted", None),
+                ("early_wide", Some((0, 1e30_f32))),
+                ("late_wide", Some((len - 4, 1e30_f32))),
+                ("early_nonfinite", Some((0, f32::NAN))),
+                ("tail_nonfinite", Some((len - 1, f32::INFINITY))),
+            ] {
+                let mut values = vec![0.5_f32; len];
+                if let Some((position, value)) = outlier {
+                    values[position] = value;
+                }
+                crate::neon_benchmark::paired(
+                    &format!("ocr_sum_gate_{name}_{len}"),
+                    if len > 4096 { 16 } else { 2048 },
+                    || {
+                        result(
+                            black_box(&values)
+                                .iter()
+                                .fold(0.0_f64, |sum, v| sum + f64::from(*v)),
+                        )
+                    },
+                    || {
+                        result(unsafe {
+                            sum_f32_slice_neon(black_box(values.as_ptr()), values.len()).0
+                        })
+                    },
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "paired Release-only ARM64 kernel measurement"]
+    fn neon_release_benchmark_postprocess() {
+        use std::hint::black_box;
+        let source: Vec<f32> = (0..1280 * 720)
+            .map(|i| ((i * 73 + i / 11 * 29) % 256) as f32 / 255.0)
+            .collect();
+        let mut scalar_output = vec![0; source.len()];
+        let mut neon_output = scalar_output.clone();
+        crate::neon_benchmark::paired(
+            "ocr_threshold",
+            16,
+            || {
+                threshold_chunk_scalar(black_box(&source), 0.3, &mut scalar_output);
+                black_box(&scalar_output);
+                scalar_output[1023]
+            },
+            || {
+                unsafe { threshold_chunk_neon(black_box(&source), 0.3, &mut neon_output) };
+                black_box(&neon_output);
+                neon_output[1023]
+            },
+        );
+        assert_eq!(scalar_output, neon_output);
+        let current: Vec<u8> = (0..1280).map(|i| (i * 73) as u8).collect();
+        let previous: Vec<u8> = (0..1280).map(|i| (i * 37) as u8).collect();
+        crate::neon_benchmark::paired(
+            "ocr_dilation_row",
+            2048,
+            || {
+                dilate_row_2x2_scalar(
+                    black_box(&current),
+                    Some(black_box(&previous)),
+                    &mut scalar_output[..1280],
+                );
+                black_box(&scalar_output[..1280]);
+                scalar_output[1023]
+            },
+            || {
+                unsafe {
+                    dilate_row_2x2_neon(
+                        black_box(&current),
+                        Some(black_box(&previous)),
+                        &mut neon_output[..1280],
+                    )
+                };
+                black_box(&neon_output[..1280]);
+                neon_output[1023]
+            },
+        );
+        assert_eq!(&scalar_output[..1280], &neon_output[..1280]);
+        for len in [31, 1280] {
+            let row = &source[..len];
+            crate::neon_benchmark::paired(
+                &format!("ocr_masked_sum_selected_row_{len}"),
+                4096,
+                || {
+                    black_box(row)
+                        .iter()
+                        .fold(0.0_f64, |sum, v| sum + f64::from(*v))
+                },
+                || unsafe { sum_f32_slice(black_box(row.as_ptr()), row.len()) },
+            );
+        }
+        crate::neon_benchmark::paired(
+            "ocr_masked_sum",
+            32,
+            || {
+                black_box(&source)
+                    .iter()
+                    .fold(0.0_f64, |sum, v| sum + f64::from(*v))
+            },
+            || unsafe { sum_f32_slice_neon(black_box(source.as_ptr()), source.len()).0 },
+        );
     }
 }

@@ -15,8 +15,11 @@ void require(bool condition, const char* message) {
 
 int main() {
     std::cout << "AVX2 available: " << screenshotClipboardDibAvx2Available() << '\n';
+#if defined(__aarch64__) || defined(_M_ARM64)
+    require(screenshotClipboardDibSimdAvailable(), "ARM64 must select the NEON DIB decoder");
+#endif
     constexpr std::uint32_t sentinel = 0xa5a5a5a5u;
-    for (int pixels : {0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33}) {
+    for (int pixels : {0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33}) {
         for (int offset = 0; offset < 8; ++offset) {
             alignas(32) std::array<std::uint8_t, 33 * 4 + 8> input{};
             std::array<std::uint32_t, 35> expected;
@@ -48,6 +51,18 @@ int main() {
                     require(value == sentinel, "unavailable AVX2 leaves the output untouched");
             }
             require(input == original, "DIB decoding never changes the serialized input");
+            output.fill(sentinel);
+            const bool simdDecoded =
+                screenshotClipboardDibDecodeBgrxSimd(source, output.data() + 1, pixels);
+            require(simdDecoded == (pixels > 0 && screenshotClipboardDibSimdAvailable()),
+                    "the selected DIB SIMD backend must execute when available");
+            if (simdDecoded) {
+                require(output == expected, "selected SIMD DIB rows and tails match byte decoding");
+            } else {
+                for (auto value : output)
+                    require(value == sentinel, "unavailable SIMD leaves output untouched");
+            }
+            require(input == original, "SIMD DIB decoding preserves serialized input");
         }
     }
 }

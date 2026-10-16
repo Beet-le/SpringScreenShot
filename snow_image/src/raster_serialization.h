@@ -55,6 +55,7 @@ class BinaryReader final {
 
 std::uint32_t crc32c_update(std::uint32_t state, std::span<const std::byte> bytes);
 std::uint32_t crc32c(std::span<const std::byte> bytes);
+bool crc32c_uses_hardware();
 void write_descriptor(BinaryWriter* writer, const DocumentDescriptor& descriptor);
 bool read_descriptor(BinaryReader* reader, const RasterStoreLimits& limits,
                      DocumentDescriptor* descriptor);

@@ -1582,7 +1582,11 @@ fn extract_bgra_from_frame_into(
                 convert_bgra_row_into_rgba_scalar(dst_row, src_row);
             }
         }
-        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        #[cfg(target_arch = "aarch64")]
+        {
+            snow_media::convert::copy_swap_red_blue(src_row, dst_row);
+        }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
         {
             convert_bgra_row_into_rgba_scalar(dst_row, src_row);
         }
@@ -1591,6 +1595,7 @@ fn extract_bgra_from_frame_into(
 }
 
 #[inline]
+#[cfg(any(test, not(target_arch = "aarch64")))]
 fn convert_bgra_row_into_rgba_scalar(dst_row: &mut [u8], src_row: &[u8]) {
     debug_assert_eq!(dst_row.len(), src_row.len());
     debug_assert_eq!(dst_row.len() % 4, 0);
@@ -6359,6 +6364,49 @@ mod tests {
         LocalRecordingPaths,
     };
     use tempfile::tempdir;
+
+    #[test]
+    fn bgra_extraction_preserves_padded_rows_alpha_and_unaligned_output() {
+        for width in [1, 3, 4, 7, 8, 15, 16, 17, 33] {
+            let height = 3;
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, width, height);
+            let stride = frame.stride(0);
+            frame.data_mut(0).fill(0xcd);
+            let mut expected = vec![0; (width * height * 4) as usize];
+            for y in 0..height as usize {
+                let row = &mut frame.data_mut(0)[y * stride..y * stride + width as usize * 4];
+                for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
+                    pixel.copy_from_slice(&[
+                        (x * 37) as u8,
+                        (x * 71 + y) as u8,
+                        (x * 13 + 5) as u8,
+                        (x * 91 + y) as u8,
+                    ]);
+                }
+                convert_bgra_row_into_rgba_scalar(
+                    &mut expected[y * width as usize * 4..(y + 1) * width as usize * 4],
+                    row,
+                );
+            }
+            for offset in 0..16 {
+                let mut actual = vec![0xa5; expected.len() + offset + 17];
+                extract_bgra_from_frame_into(
+                    &frame,
+                    width,
+                    height,
+                    &mut actual[offset..offset + expected.len()],
+                )
+                .unwrap();
+                assert_eq!(&actual[offset..offset + expected.len()], expected);
+                assert!(
+                    actual[..offset]
+                        .iter()
+                        .chain(&actual[offset + expected.len()..])
+                        .all(|&byte| byte == 0xa5)
+                );
+            }
+        }
+    }
 
     fn test_hardware_decode_state() -> (HardwareDecodeState, *mut ffmpeg::ffi::AVBufferRef) {
         unsafe {

@@ -71,6 +71,8 @@ set(SNOW_CANVAS_QT_SOURCES
     src/rendering/snow_canvas_pen_mask_avx2.cpp
     src/rendering/snow_canvas_pen_mask_avx2.h
     src/rendering/snow_canvas_filter_avx2.cpp
+    src/rendering/snow_canvas_filter_neon.cpp
+    src/rendering/snow_canvas_filter_simd.h
     src/rendering/snow_canvas_filter_avx2.h
     src/rendering/snow_canvas_fill_render.cpp
     src/rendering/snow_canvas_fill_render.h
