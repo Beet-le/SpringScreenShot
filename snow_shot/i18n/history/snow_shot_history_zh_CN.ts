@@ -1602,6 +1602,10 @@ Files:
             <translation>分组：默认</translation>
         </message>
         <message>
+            <source>Hide All Windows to Top</source>
+            <translation>所有窗口顶部隐藏</translation>
+        </message>
+        <message>
             <source>Hide other windows</source>
             <translation>隐藏其他窗口</translation>
         </message>

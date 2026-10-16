@@ -3896,6 +3896,13 @@ void ScreenshotPinnedWindow::createContextMenu() {
             connect(m_showShadowAction, &QAction::triggered, this,
                     &ScreenshotPinnedWindow::toggleShowShadow);
             windowManagementMenu->addSeparator();
+            QAction* hideAllWindowsToTop = windowManagementMenu->addItem(
+                tr("Hide All Windows to Top"), outlined_icons::ArrowUp());
+            setActionTranslationSource(hideAllWindowsToTop, "Hide All Windows to Top");
+            hideAllWindowsToTop->setObjectName(
+                QStringLiteral("screenshotPinnedHideAllWindowsToTopAction"));
+            connect(hideAllWindowsToTop, &QAction::triggered, this,
+                    &ScreenshotPinnedWindow::hideAllPinnedWindowsToTop);
             m_loadContentAction = windowManagementMenu->addLazySubMenu(
                 tr("Load new content"),
                 [this](auto* loadMenu) {
@@ -8727,6 +8734,18 @@ bool ScreenshotPinnedWindow::restoreCommittedNativeGeometry(bool closeOnFailure)
         QTimer::singleShot(0, this, &QWidget::close);
     }
     return false;
+}
+
+void ScreenshotPinnedWindow::hideAllPinnedWindowsToTop() {
+    const auto windows = livePinnedWindows();
+    for (const QPointer<ScreenshotPinnedWindow>& window : windows) {
+        if (window != nullptr && window->m_presented && !window->m_closing &&
+            (window->m_groupManager == nullptr ||
+             window->groupId() == window->m_groupManager->activeGroupId()) &&
+            !window->hideToTopActive()) {
+            window->toggleHideToTop();
+        }
+    }
 }
 
 void ScreenshotPinnedWindow::showAllPinnedWindows() {

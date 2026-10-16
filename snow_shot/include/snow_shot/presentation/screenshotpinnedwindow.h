@@ -485,6 +485,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     bool finishNativeGeometryInteraction();
     bool reconcilePassiveNativeGeometry();
     bool restoreCommittedNativeGeometry(bool closeOnFailure = true);
+    void hideAllPinnedWindowsToTop();
     void showAllPinnedWindows();
     void hideOtherPinnedWindows();
     void closeOtherPinnedWindows();

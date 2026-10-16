@@ -6017,6 +6017,10 @@ void pinnedImageProcessingShortcuts() {
 void pinnedLazyMenuHeadersRetranslate() {
     ScreenshotPinnedWindow window;
     materializePinnedMenuTree(window);
+    auto* hideAll =
+        window.findChild<QAction*>(QStringLiteral("screenshotPinnedHideAllWindowsToTopAction"));
+    require(hideAll && hideAll->text() == QStringLiteral("Hide All Windows to Top"),
+            "the bulk Hide to Top action must use its English source label");
     const QStringList menuNames{QStringLiteral("screenshotPinnedOpacityMenu"),
                                 QStringLiteral("screenshotPinnedScaleMenu"),
                                 QStringLiteral("screenshotPinnedLoadContentMenu")};
@@ -6034,7 +6038,8 @@ void pinnedLazyMenuHeadersRetranslate() {
                           int) const override {
             if (QByteArray(context) == "ScreenshotPinnedWindow" &&
                 (QByteArray(source) == "Opacity" || QByteArray(source) == "Scale" ||
-                 QByteArray(source) == "Load new content")) {
+                 QByteArray(source) == "Load new content" ||
+                 QByteArray(source) == "Hide All Windows to Top")) {
                 return QStringLiteral("Translated ") + QString::fromUtf8(source);
             }
             return {};
@@ -6044,6 +6049,8 @@ void pinnedLazyMenuHeadersRetranslate() {
     auto removeTranslator = qScopeGuard([&]() { QCoreApplication::removeTranslator(&translator); });
     QEvent languageChange(QEvent::LanguageChange);
     QCoreApplication::sendEvent(&window, &languageChange);
+    require(hideAll->text() == QStringLiteral("Translated Hide All Windows to Top"),
+            "an existing bulk Hide to Top action must follow LanguageChange");
     const QStringList translatedLabels{QStringLiteral("Translated Opacity"),
                                        QStringLiteral("Translated Scale"),
                                        QStringLiteral("Translated Load new content")};
@@ -6054,6 +6061,8 @@ void pinnedLazyMenuHeadersRetranslate() {
     QCoreApplication::removeTranslator(&translator);
     removeTranslator.dismiss();
     QCoreApplication::sendEvent(&window, &languageChange);
+    require(hideAll->text() == QStringLiteral("Hide All Windows to Top"),
+            "the bulk Hide to Top action must restore its original language");
     for (int index = 0; index < headers.size(); ++index) {
         require(headers.at(index)->text() == originalLabels.at(index),
                 "lazy submenu headers must restore their original language");
@@ -10140,6 +10149,108 @@ void restoredPinnedWindowIgnoresMonitorDpiChange(SnowCanvasRuntime&) {
             "restored pinned scale menu should derive from the saved physical pixels");
 
     closeRestoredPinnedWindow(restoredWindow, record.id);
+}
+
+void pinnedHideAllWindowsToTop() {
+    IsolatedPinnedStorage isolated;
+    using Access = ScreenshotPinnedWindowTestAccess;
+    auto& repository = snow_shot::storage::ApplicationStorage::instance().pinnedWindows();
+    snow_shot::presentation::PinnedWindowGroupManager groups(&repository);
+    const auto inactiveGroup = groups.createGroup(QStringLiteral("Inactive"));
+    require(inactiveGroup.has_value(), "create an inactive group");
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "bulk Hide to Top requires a screen");
+    const auto monitor = screenshot_pinned_hide_to_top::screenGeometry(screen);
+    ScreenshotPinnedWindow::Config config;
+    config.screen = screen;
+    config.nativeGeometry = QRect(monitor.workArea.topLeft() + QPoint(80, 160), QSize(320, 240));
+    config.canvasSourceRect = QRectF(0, 0, 320, 240);
+    config.initialWindowSize = QSize(320, 240);
+    QImage image(320, 240, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+    config.automaticTextRecognition = false;
+
+    ScreenshotPinnedWindow window;
+    ScreenshotPinnedWindow thumbnail;
+    ScreenshotPinnedWindow locked;
+    ScreenshotPinnedWindow clickThrough;
+    ScreenshotPinnedWindow alreadyHidden;
+    ScreenshotPinnedWindow closing;
+    ScreenshotPinnedWindow inactive;
+    ScreenshotPinnedWindow spare;
+    for (auto* pin :
+         {&window, &thumbnail, &locked, &clickThrough, &alreadyHidden, &closing, &inactive}) {
+        Access::restoreOffscreen(*pin, config);
+        pin->show();
+    }
+    Access::registerLockGroup(window, groups);
+    Access::registerLockGroup(inactive, groups);
+    inactive.setGroupId(*inactiveGroup);
+    require(inactive.groupId() != groups.activeGroupId(), "seed an inactive-group window");
+    closing.close();
+    require(Access::closing(closing), "seed a closing window");
+    Access::thumbnailForHideTest(thumbnail, true);
+    Access::setLock(locked, true);
+    require(Access::setClickThrough(clickThrough, true), "seed a click-through window");
+    require(thumbnail.persistenceSnapshot().thumbnailMode &&
+                locked.persistenceSnapshot().lockedMode &&
+                clickThrough.persistenceSnapshot().clickThroughMode,
+            "bulk mode-transition fixtures must start in their requested modes");
+    auto& existing = Access::hideToTop(alreadyHidden);
+    require(existing.enter(monitor), "seed an existing Hide to Top window");
+    existing.animation().setCurrentTime(existing.animation().duration());
+    const auto existingSnapshot = alreadyHidden.persistenceSnapshot();
+    require(!alreadyHidden.isVisible(), "an existing top handle must count as an open window");
+
+    materializePinnedMenuTree(window);
+    auto* menu = window.findChild<adqt::widgets::AdContextMenu*>(
+        QStringLiteral("screenshotPinnedWindowManagementMenu"));
+    auto* hideAll =
+        window.findChild<QAction*>(QStringLiteral("screenshotPinnedHideAllWindowsToTopAction"));
+    auto* shadow = window.findChild<QAction*>(QStringLiteral("screenshotPinnedShowShadowAction"));
+    auto* load = window.findChild<QAction*>(QStringLiteral("screenshotPinnedLoadContentAction"));
+    require(menu && hideAll && shadow && load && !hideAll->isCheckable(),
+            "Window Management must expose the non-checkable bulk Hide to Top action");
+    const auto actions = menu->actions();
+    const auto shadowIndex = actions.indexOf(shadow);
+    require(shadowIndex >= 0 && actions.indexOf(hideAll) == shadowIndex + 2 &&
+                actions.at(shadowIndex + 1)->isSeparator() &&
+                actions.indexOf(load) == actions.indexOf(hideAll) + 1,
+            "Show shadow must be followed by a separator, bulk Hide to Top, then Load content");
+
+    hideAll->trigger();
+    for (auto* pin : {&window, &thumbnail, &locked, &clickThrough}) {
+        auto& controller = Access::hideToTop(*pin);
+        require(controller.active(), "bulk action must include the initiating pin and other pins");
+        controller.animation().pause();
+        controller.animation().setCurrentTime(100);
+        const auto snapshot = pin->persistenceSnapshot();
+        require(snapshot.hideToTopMode && !snapshot.thumbnailMode && !snapshot.lockedMode &&
+                    !snapshot.clickThroughMode,
+                "bulk Hide to Top must settle incompatible modes through the existing transition");
+    }
+    const auto unchanged = [&] {
+        return existing.state() == ScreenshotPinnedHideToTopController::State::Hidden &&
+               existing.handleGeometry() == existingSnapshot.hideToTopHandleNativeGeometry &&
+               existing.accentIndex() == existingSnapshot.hideToTopAccentIndex &&
+               !alreadyHidden.isVisible();
+    };
+    require(unchanged(), "the bulk action must preserve an existing hidden top handle");
+    const QRect enteringGeometry = window.currentNativeGeometry();
+    hideAll->trigger();
+    require(unchanged() && window.currentNativeGeometry() == enteringGeometry &&
+                Access::hideToTop(window).animation().currentTime() == 100,
+            "repeating the action must preserve hidden windows and in-progress entry");
+    for (auto* pin : {&window, &thumbnail, &locked, &clickThrough}) {
+        require(Access::hideToTop(*pin).active() &&
+                    Access::hideToTop(*pin).animation().currentTime() == 100,
+                "repeating the action must preserve every window's mode and entry animation");
+    }
+    for (auto* pin : {&spare, &closing, &inactive}) {
+        require(!Access::hideToTop(*pin).active(),
+                "bulk Hide to Top must exclude unpresented, closing, and inactive-group windows");
+    }
 }
 
 void pinnedHideToTopIntegration(bool native) {
@@ -17501,8 +17612,8 @@ void pinnedContentReplacement() {
         window.findChild<QAction*>(QStringLiteral("screenshotPinnedShowMainInterfaceAction"));
     require(menu && load && file && clipboard && close && management && showMain &&
                 management->menu() != nullptr &&
-                // Always on Top, Show border, Show shadow, separator, then Load new content.
-                management->menu()->actions().indexOf(load) == 4 && load->isEnabled(),
+                // Always on Top, border, shadow, separator, Hide All to Top, then Load content.
+                management->menu()->actions().indexOf(load) == 5 && load->isEnabled(),
             "replacement submenu must be available after materialization");
     require(menu->actionIcon(clipboard) ==
                 snow_shot::presentation::icons::custom::outlined::PinClipboard(),
@@ -25126,6 +25237,7 @@ int main(int argc, char* argv[]) {
 #endif
         if (app.arguments().contains(QStringLiteral("--hide-to-top-only"))) {
             runPinnedHideToTopControllerTests();
+            pinnedHideAllWindowsToTop();
             pinnedHideToTopIntegration(false);
             return 0;
         }

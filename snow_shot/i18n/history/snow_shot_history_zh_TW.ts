@@ -1602,6 +1602,10 @@ Files:
             <translation>群組：預設</translation>
         </message>
         <message>
+            <source>Hide All Windows to Top</source>
+            <translation>所有視窗頂部隱藏</translation>
+        </message>
+        <message>
             <source>Hide other windows</source>
             <translation>隱藏其他視窗</translation>
         </message>

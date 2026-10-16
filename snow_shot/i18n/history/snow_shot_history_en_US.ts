@@ -1608,6 +1608,10 @@ Files:
             <translation>Group: Default</translation>
         </message>
         <message>
+            <source>Hide All Windows to Top</source>
+            <translation>Hide All Windows to Top</translation>
+        </message>
+        <message>
             <source>Hide other windows</source>
             <translation>Hide other windows</translation>
         </message>
