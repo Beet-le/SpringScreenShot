@@ -205,9 +205,10 @@ records include platform identity; missing identity in a legacy record means x64
 
 New complete Windows releases include both architectures and both editions.
 WinGet and Scoop metadata select the matching architecture; historical x64-only
-releases remain readable. CI builds/packages on native x64 and ARM64 runners and
-aggregates successful artifacts into one draft release. Cross-build reports
-cannot substitute for native execution validation.
+releases remain readable. Build and package locally, then supply the final x64 and
+ARM64 artifacts and matching native validation evidence to
+`scripts/publish-snow-shot-release.ps1`. Cross-build reports cannot substitute for
+native execution validation.
 
 The ARM64 OCR archive must be published separately to the existing ModelScope
 runtime directory before production publication. Production preflight must download

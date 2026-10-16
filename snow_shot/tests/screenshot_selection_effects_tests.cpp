@@ -42,6 +42,16 @@ void selectionEffectsPersistAcrossRestarts() {
     require(settings.selectionTarget() == ScreenshotIntelligentSelectionTarget::WindowSubElement,
             "new installations must default to the existing child-element selection mode");
     require(settings.layoutCompaction() == ScreenshotLayoutCompaction{}, "compaction defaults");
+    settings.setLayoutCompaction({true, 1000});
+    require(settings.layoutCompaction() == ScreenshotLayoutCompaction{true, 100},
+            "saved spacing must clamp to 100 canvas units");
+    require(storage.configuration().setValue(
+                QStringLiteral("screenshot_selection/layout_compaction_spacing"), 500) &&
+                settings.layoutCompaction().spacing == 100,
+            "legacy configuration spacing must clamp to the shared maximum");
+    require(!storage.configuration().setValue(
+                QStringLiteral("screenshot_selection/layout_compaction_spacing"), 1001),
+            "configuration spacing outside the legacy range must be rejected");
     settings.setLayoutCompaction({true, 17});
     require(settings.backgroundOpacityPercent() == 0, "background opacity defaults to zero");
     settings.setBackgroundOpacityPercent(37);
@@ -494,6 +504,13 @@ void compactionSelectionState() {
     auto json = snow_shot::storage::persistedSelectionToJson(persisted);
     require(snow_shot::storage::normalizePersistedSelection(json).value == persisted,
             "compaction history JSON must round trip");
+    json.insert(QStringLiteral("layout_compaction_spacing"), 1000);
+    const auto clamped = snow_shot::storage::normalizePersistedSelection(json);
+    require(clamped.valid && clamped.changed &&
+                clamped.value.layoutCompaction == ScreenshotLayoutCompaction{true, 100} &&
+                clamped.value.rectangle == persisted.rectangle &&
+                clamped.value.region == persisted.region,
+            "legacy spacing above 100 must clamp without discarding the saved selection");
     json.remove(QStringLiteral("layout_compaction_enabled"));
     json.remove(QStringLiteral("layout_compaction_spacing"));
     const auto legacy = snow_shot::storage::normalizePersistedSelection(json);

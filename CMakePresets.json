@@ -15,7 +15,9 @@
       "binaryDir": "${sourceDir}/build/${presetName}",
       "toolchainFile": "${sourceDir}/.tools/vcpkg/scripts/buildsystems/vcpkg.cmake",
       "environment": {
-        "VCPKG_ROOT": "${sourceDir}/.tools/vcpkg"
+        "VCPKG_ROOT": "${sourceDir}/.tools/vcpkg",
+        "VCPKG_FORCE_DOWNLOADED_BINARIES": "1",
+        "VCPKG_FORCE_SYSTEM_BINARIES": null
       },
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
@@ -333,7 +335,9 @@
       "binaryDir": "${sourceDir}/build/${presetName}",
       "toolchainFile": "${sourceDir}/.tools/vcpkg/scripts/buildsystems/vcpkg.cmake",
       "environment": {
-        "VCPKG_ROOT": "${sourceDir}/.tools/vcpkg"
+        "VCPKG_ROOT": "${sourceDir}/.tools/vcpkg",
+        "VCPKG_FORCE_DOWNLOADED_BINARIES": "1",
+        "VCPKG_FORCE_SYSTEM_BINARIES": null
       },
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",

@@ -650,6 +650,14 @@ function Add-SnowMsvcToolsToPath {
     return $msvcBin
 }
 
+function Set-SnowVcpkgEnvironment {
+    $env:VCPKG_ROOT = Join-Path $script:SnowRepoRoot ".tools\vcpkg"
+    # vcpkg includes host-tool versions in package ABIs. Resolve its pinned tools
+    # instead of whichever PowerShell/CMake a terminal or editor puts on PATH.
+    Remove-Item Env:VCPKG_FORCE_SYSTEM_BINARIES -ErrorAction SilentlyContinue
+    $env:VCPKG_FORCE_DOWNLOADED_BINARIES = '1'
+}
+
 function Set-SnowBuildEnvironment {
     param([string]$Preset = "")
 
@@ -657,7 +665,7 @@ function Set-SnowBuildEnvironment {
     $msvcBin = Add-SnowMsvcToolsToPath -Architecture $target.Architecture
     $qtDir = Set-SnowQtEnvironment -Preset $Preset
     $env:PATH = "$msvcBin;$env:PATH"
-    $env:VCPKG_ROOT = Join-Path $script:SnowRepoRoot ".tools\vcpkg"
+    Set-SnowVcpkgEnvironment
     $env:VCPKG_DEFAULT_HOST_TRIPLET = $target.HostTriplet
     $rustVersion = (& rustc -vV | Out-String)
     if ($LASTEXITCODE -ne 0 -or $rustVersion -notmatch '(?m)^host: (x86_64|aarch64)-pc-windows-msvc\s*$') {

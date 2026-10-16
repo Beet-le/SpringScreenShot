@@ -11,7 +11,7 @@
 struct ScreenshotLayoutCompaction {
     bool enabled = false;
     int spacing = 0;
-    static constexpr int maximumSpacing = 1000;
+    static constexpr int maximumSpacing = 100;
     bool operator==(const ScreenshotLayoutCompaction&) const = default;
 
     ScreenshotLayoutCompaction normalized() const {

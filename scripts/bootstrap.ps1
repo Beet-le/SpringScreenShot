@@ -53,7 +53,7 @@ function Require-Command {
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $toolsRoot = Join-Path $repoRoot ".tools"
 $vcpkgRoot = Join-Path $toolsRoot "vcpkg"
-$env:VCPKG_ROOT = $vcpkgRoot
+Set-SnowVcpkgEnvironment
 $vcpkgExe = Join-Path $vcpkgRoot "vcpkg.exe"
 $vcpkgInstalledRoot = Join-Path $vcpkgRoot "installed"
 # Keep this paired with the available vcpkg tool release and CMake 4.2.3:

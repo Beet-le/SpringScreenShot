@@ -38,6 +38,12 @@ release page. The standalone installer races both lists and downloads the chosen
 and checksum, with same-version package fallback. The app does not install macOS
 updates in-app.
 
+Build and package application binaries locally with `scripts/build.ps1`,
+`scripts/stage-snow-shot-release.ps1`, or the macOS build and packaging scripts.
+Pushing a version tag does not start a GitHub Actions build or create a release
+draft. The remaining Actions workflows handle package-manager publication and
+verification.
+
 The local publisher signs and audits all Windows packages, optionally packages a
 macOS DMG and standalone installer, publishes GitHub assets, verifies their bytes,
 then publishes the release. With `-DeployWebsite`, it then runs the separate official
@@ -132,7 +138,7 @@ fallbacks for short and offset names in every requested locale. Numeric timestam
 UTC storage, local conversions, and daylight-saving transitions retain their behavior.
 
 `scripts/qt-toolchain.json` is the version and source-archive SHA256 contract for
-CMake, Windows/macOS provisioning, and release CI. Both source builders verify
+CMake, Windows/macOS provisioning, and local release builds. Both source builders verify
 the archive before extraction. `scripts/build-static-qt.ps1` applies the patch
 idempotently and installs it under the kit's source-license bundle. The build
 stamp fingerprints the feature policy and patch contents. Bootstrap and packaging
@@ -737,9 +743,9 @@ One-time setup:
    Its branch policy must allow the automation to push to `main`.
 3. Include each supported architecture's matching DMG and `.dmg.sha256`
    assets before publishing the GitHub release: Full uses `macos-arm64` and
-   `macos-x86_64`; Mini supports `macos-arm64` only. macOS packaging/upload
-   remains a separate release operation; the existing Windows CI does not build
-   these assets. Do not mark a beta version stable to enable Homebrew.
+   `macos-x86_64`; Mini supports `macos-arm64` only. Build and package these
+   assets locally on macOS, then upload them through the local publisher.
+   Do not mark a beta version stable to enable Homebrew.
 
 The workflow validates release metadata, source version, checksums, and the current
 tap version, then produces one archive per available macOS product/architecture:

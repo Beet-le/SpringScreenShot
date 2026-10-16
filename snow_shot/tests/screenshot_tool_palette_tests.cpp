@@ -19294,8 +19294,12 @@ void layoutCompactionToolbar() {
     bool opacityPreview = false;
     QObject::connect(&palette, &ScreenshotToolPalette::selectionBackgroundPreviewVisibleChanged,
                      [&](bool visible) { opacityPreview = visible; });
-    QObject::connect(&palette, &ScreenshotToolPalette::selectionBackgroundOpacityChanged,
-                     [&](int) { ++opacityEdits; });
+    QObject::connect(
+        &palette, &ScreenshotToolPalette::selectionBackgroundOpacityChanged, [&](int percent) {
+            ++opacityEdits;
+            require(opacity->valueText() == QString::number(percent) + QLatin1Char('%'),
+                    "opacity signal must reflect the displayed state");
+        });
     palette.setSelectionBackgroundOpacityState(0, true);
     QEnterEvent opacityEnter(QPointF(5, 5), QPointF(5, 5),
                              QPointF(opacity->mapToGlobal(QPoint(5, 5))));
@@ -19309,20 +19313,34 @@ void layoutCompactionToolbar() {
                 "opacity consumes wheel input");
     };
     opacityWheel(120);
-    require(opacityEdits == 1 && opacity->valueText() == QStringLiteral("1%"),
-            "opacity adjusts by one percent");
-    palette.setSelectionBackgroundOpacityState(100, true);
-    opacityWheel(120);
-    require(opacityEdits == 1 && opacity->valueText() == QStringLiteral("100%"),
-            "opacity clamps without no-op signals");
-    opacity->click();
+    require(opacityEdits == 1 && opacity->valueText() == QStringLiteral("10%"),
+            "opacity increases by ten percentage points");
     opacityWheel(-120);
     require(opacityEdits == 2 && opacity->valueText() == QStringLiteral("0%"),
+            "opacity decreases by ten percentage points");
+    palette.setSelectionBackgroundOpacityState(95, true);
+    opacityWheel(120);
+    require(opacityEdits == 3 && opacity->valueText() == QStringLiteral("100%"),
+            "opacity wheel clamps a partial step at 100 percent");
+    opacityWheel(120);
+    require(opacityEdits == 3 && opacity->valueText() == QStringLiteral("100%"),
+            "opacity clamps without no-op signals");
+    opacityWheel(-120);
+    require(opacityEdits == 4 && opacity->valueText() == QStringLiteral("90%"),
+            "opacity can decrease from its maximum");
+    palette.setSelectionBackgroundOpacityState(5, true);
+    opacityWheel(-120);
+    require(opacityEdits == 5 && opacity->valueText() == QStringLiteral("0%"),
+            "opacity wheel clamps a partial step at zero");
+    palette.setSelectionBackgroundOpacityState(100, true);
+    opacity->click();
+    opacityWheel(-120);
+    require(opacityEdits == 6 && opacity->valueText() == QStringLiteral("0%"),
             "opacity resets and clamps at zero");
     palette.setSelectionBackgroundOpacityState(37, false);
     require(!opacityPreview, "suspending opacity editing dismisses its preview");
     opacity->click();
-    require(opacityEdits == 2 && opacity->valueText() == QStringLiteral("37%"),
+    require(opacityEdits == 6 && opacity->valueText() == QStringLiteral("37%"),
             "disabled opacity preserves preference");
     palette.setSelectionBackgroundOpacityState(37, true);
     require(editor->width() == 96 && button->x() == group->x() + group->width() &&
@@ -19350,23 +19368,43 @@ void layoutCompactionToolbar() {
                 "spacing wheel must be consumed");
     };
     wheel(120);
-    require(edits == 2 && editor->valueText() == QStringLiteral("1dp"),
-            "spacing wheel changes one canvas unit");
-    palette.setSelectionDisplayUnit(ScreenshotSelectionDisplayUnit::PhysicalPixels);
-    require(editor->valueText() == QStringLiteral("1dp"),
-            "coordinate display mode must not reinterpret effect units");
-    palette.setLayoutCompactionState({true, 1000}, true, false);
+    require(edits == 2 && editor->valueText() == QStringLiteral("5dp"),
+            "spacing wheel increases by five canvas units");
+    wheel(-120);
+    require(edits == 3 && editor->valueText() == QStringLiteral("0dp"),
+            "spacing wheel decreases by five canvas units");
     wheel(120);
-    require(edits == 2 && editor->valueText() == QStringLiteral("1000px"),
+    require(edits == 4 && editor->valueText() == QStringLiteral("5dp"),
+            "spacing wheel can increase again from zero");
+    palette.setSelectionDisplayUnit(ScreenshotSelectionDisplayUnit::PhysicalPixels);
+    require(editor->valueText() == QStringLiteral("5dp"),
+            "coordinate display mode must not reinterpret effect units");
+    palette.setLayoutCompactionState({true, 98}, true, false);
+    wheel(120);
+    require(edits == 5 && editor->valueText() == QStringLiteral("100px"),
+            "spacing wheel clamps a partial step at 100 pixels");
+    wheel(120);
+    require(edits == 5 && editor->valueText() == QStringLiteral("100px"),
             "spacing upper bound must not emit no-op edits");
+    wheel(-120);
+    require(edits == 6 && editor->valueText() == QStringLiteral("95px"),
+            "spacing can decrease from its maximum");
+    palette.setLayoutCompactionState({true, 3}, true, false);
+    wheel(-120);
+    require(edits == 7 && editor->valueText() == QStringLiteral("0px"),
+            "spacing wheel clamps a partial step at zero");
+    palette.setLayoutCompactionState({true, 1000}, true, false);
+    require(editor->valueText() == QStringLiteral("100px") &&
+                palette.layoutCompaction().spacing == 100,
+            "remembered spacing must respect the 100-pixel maximum");
     editor->click();
     wheel(-120);
-    require(edits == 3 && palette.layoutCompaction().spacing == 0,
+    require(edits == 8 && palette.layoutCompaction().spacing == 0,
             "spacing resets and clamps at zero");
     palette.setLayoutCompactionState({true, 7}, false, false);
     button->click();
     editor->click();
-    require(edits == 3 && palette.layoutCompaction() == ScreenshotLayoutCompaction{true, 7},
+    require(edits == 8 && palette.layoutCompaction() == ScreenshotLayoutCompaction{true, 7},
             "disabled controls preserve remembered preferences");
     palette.setLayoutCompactionState({true, 7}, true, true);
     require(palette.setPhysicalScale(1.5), "compaction DPI scale change");

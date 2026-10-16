@@ -1584,7 +1584,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("screenshot_selection/layout_compaction_enabled"), false,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screenshot_selection/layout_compaction_spacing"), 0,
-     ConfigurationValueKind::Integer, ConfigurationIntegerRange{0, 1000, 1}},
+     ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{0, ScreenshotLayoutCompaction::maximumSpacing, 1}},
     {QStringLiteral("screenshot_selection/corner_radius"), 0, ConfigurationValueKind::Integer,
      ConfigurationIntegerRange{0, 256, 1}},
     {QStringLiteral("screenshot_selection/shadow_width"), 0, ConfigurationValueKind::Integer,
@@ -2709,6 +2710,16 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     }
     if (key == QStringLiteral("screenshot_selection/selection_rect_presets")) {
         return normalizePresets(value);
+    }
+    if (key == QStringLiteral("screenshot_selection/layout_compaction_spacing")) {
+        // Migrate the previous spacing range without resetting an existing preference to zero.
+        const auto legacy = normalizeIntegerRange(value, 0, 1000);
+        if (!legacy.valid) {
+            return {};
+        }
+        const int spacing =
+            std::min(legacy.value.toInt(), ScreenshotLayoutCompaction::maximumSpacing);
+        return {spacing, true, spacing != legacy.value.toInt()};
     }
     if (key == QStringLiteral("drawing/watermark_content")) {
         return normalizeWatermarkContent(value);

@@ -27,7 +27,7 @@ ScreenshotRegionGeometry regions(std::initializer_list<QRect> rectangles) {
 
 void bandsPreserveArrangement() {
     const auto grid = regions({{0, 0, 10, 8}, {30, 0, 20, 8}, {0, 25, 10, 12}, {30, 25, 20, 12}});
-    for (int spacing : {0, 1, 40, 1000}) {
+    for (int spacing : {0, 1, 40, 100}) {
         const auto plan = makeScreenshotLayoutCompactionPlan(grid, {50, 37}, 1, {true, spacing});
         require(plan.isValid() && plan.outputSize == QSize(30 + spacing, 20 + spacing),
                 "grid must compact before inserting exact spacing");
@@ -35,6 +35,12 @@ void bandsPreserveArrangement() {
         require(plan.mapPath(grid.path()).contains(QPointF(10 + spacing + 10, 8 + spacing + 6)),
                 "bottom-right region must retain its original dimensions and ordering");
     }
+    require(makeScreenshotLayoutCompactionPlan(grid, {50, 37}, 1, {true, 1000}).outputSize ==
+                QSize(130, 120),
+            "spacing above 100 must clamp before export");
+    require(makeScreenshotLayoutCompactionPlan(grid, {50, 37}, 1, {true, -1}).outputSize ==
+                QSize(30, 20),
+            "negative spacing must clamp to zero before export");
     const auto staircase = regions({{0, 0, 10, 10}, {30, 30, 10, 10}, {60, 60, 10, 10}});
     const auto diagonal = makeScreenshotLayoutCompactionPlan(staircase, {70, 70}, 1, {true, 0});
     require(diagonal.outputSize == QSize(30, 30) && diagonal.tiles.size() == 3,

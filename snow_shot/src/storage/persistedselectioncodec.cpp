@@ -11,6 +11,8 @@ namespace snow_shot::storage {
 namespace {
 constexpr int kMaximumCornerRadius = 256;
 constexpr int kMaximumShadowWidth = 64;
+// Accept the previous spacing range so existing history and presets can be clamped on load.
+constexpr int kLegacyMaximumLayoutSpacing = 1000;
 
 bool integer(const QJsonValue& value, int minimum, int maximum, int* result) {
     if (!value.isDouble() || !std::isfinite(value.toDouble()) ||
@@ -143,10 +145,11 @@ PersistedSelectionNormalization normalizePersistedSelection(const QJsonValue& va
     const auto enabled = object.value(QStringLiteral("layout_compaction_enabled"));
     const auto spacing = object.value(QStringLiteral("layout_compaction_spacing"));
     if ((!enabled.isUndefined() && !enabled.isBool()) ||
-        (!spacing.isUndefined() && !integer(spacing, 0, ScreenshotLayoutCompaction::maximumSpacing,
-                                            &selection.layoutCompaction.spacing)))
+        (!spacing.isUndefined() &&
+         !integer(spacing, 0, kLegacyMaximumLayoutSpacing, &selection.layoutCompaction.spacing)))
         return {};
     selection.layoutCompaction.enabled = enabled.toBool(false);
+    selection.layoutCompaction = selection.layoutCompaction.normalized();
     selection.cornerRadius = cornerRadius;
     selection.shadowWidth = shadowWidth;
     selection.shadowColor = color;

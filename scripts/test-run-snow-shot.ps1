@@ -1,7 +1,12 @@
-# Launcher contracts with a deterministic process fixture; no application launches.
+# Launcher contracts with deterministic process and native-tool fixtures; no application launches.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $fixture = Join-Path ([IO.Path]::GetTempPath()) "snow-shot launch-$([guid]::NewGuid().ToString('N'))"
+$savedEnvironment = @{}
+foreach ($name in @('PATH', 'VCPKG_ROOT', 'VCPKG_DEFAULT_HOST_TRIPLET',
+        'VCPKG_FORCE_SYSTEM_BINARIES', 'VCPKG_FORCE_DOWNLOADED_BINARIES', 'LIBCLANG_PATH')) {
+    $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+}
 function Require($Value, [string]$Message) { if (-not $Value) { throw $Message } }
 Add-Type @'
 public class SnowLaunchProcessFixture {
@@ -21,7 +26,8 @@ try {
     $null = New-Item -ItemType Directory -Path $scripts
     $policy = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'static-qt-features.json') |
         ConvertFrom-Json
-    foreach ($file in @('run-snow-shot.ps1', 'run-snow-shot.bat', 'snow-build-environment.ps1',
+    foreach ($file in @('run-snow-shot.ps1', 'run-snow-shot.bat', 'build.ps1', 'bootstrap.ps1',
+            'snow-build-environment.ps1',
             'qt-toolchain.json', 'static-qt-features.json') + @($policy.windowsSourcePatches)) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $scripts
     }
@@ -97,11 +103,74 @@ try {
         $env:PSModulePath = $originalModulePath
         $ErrorActionPreference = $originalErrorPreference
     }
+
+    # Run the real launcher -> build -> environment path. Only native tools are
+    # stubbed; every CMake invocation must inherit the same vcpkg tool policy.
+    @'
+function Get-SnowWindowsHostArchitecture { return 'x64' }
+function Add-SnowMsvcToolsToPath {
+    param([string]$Architecture)
+    if ($global:SnowLaunchStopBootstrap) { throw 'Bootstrap environment captured.' }
+    return $PSScriptRoot
+}
+function Set-SnowQtEnvironment { param([string]$Preset) return $PSScriptRoot }
+function rustc {
+    $global:LASTEXITCODE = 0
+    return 'host: x86_64-pc-windows-msvc'
+}
+function dumpbin.exe {}
+'@ | Add-Content -LiteralPath (Join-Path $scripts 'snow-build-environment.ps1')
+    function global:cmake {
+        Require ($env:VCPKG_FORCE_DOWNLOADED_BINARIES -ceq '1') `
+            'Builds must use pinned vcpkg tools regardless of the launching shell.'
+        Require (-not (Test-Path Env:VCPKG_FORCE_SYSTEM_BINARIES)) `
+            'An inherited system-tool override must not change dependency ABIs.'
+        Require ($env:VCPKG_ROOT -eq (Join-Path $fixture '.tools\vcpkg')) `
+            'Builds must use repository-local vcpkg.'
+        $global:SnowLaunchBuildCalls += ,@($args)
+        $global:LASTEXITCODE = 0
+    }
+    $vcpkgDirectory = Join-Path $fixture '.tools/vcpkg'
+    $null = New-Item -ItemType Directory -Path $vcpkgDirectory -Force
+    [IO.File]::WriteAllText((Join-Path $vcpkgDirectory 'vcpkg.exe'), 'fixture')
+    $global:SnowLaunchStopBootstrap = $false
+    foreach ($edition in @('Full', 'Mini')) {
+        foreach ($shell in @('terminal tools', 'editor tools')) {
+            $env:PATH = "$(Join-Path $fixture $shell);$originalPath"
+            $env:VCPKG_FORCE_SYSTEM_BINARIES = '1'
+            Remove-Item Env:VCPKG_FORCE_DOWNLOADED_BINARIES -ErrorAction SilentlyContinue
+            $global:SnowLaunchBuildCalls = @()
+            & $launcher -Edition $edition -Detached
+            Require ($global:SnowLaunchBuildCalls.Count -eq 2) `
+                'Each launch must configure and incrementally build the requested target.'
+            $target = if ($edition -eq 'Mini') { 'snow_shot_mini' } else { 'snow_shot' }
+            Require (($global:SnowLaunchBuildCalls[1] -join ' ') -eq
+                "--build --preset build-windows-msvc-debug --parallel --target $target") `
+                'Build only the requested edition without cleaning it.'
+        }
+    }
+
+    # Stop bootstrap before compiler discovery, after its real dependency
+    # environment setup, so this also covers direct bootstrap invocations.
+    $env:VCPKG_FORCE_SYSTEM_BINARIES = '1'
+    Remove-Item Env:VCPKG_FORCE_DOWNLOADED_BINARIES -ErrorAction SilentlyContinue
+    $global:SnowLaunchStopBootstrap = $true
+    $failure = ''
+    try { & (Join-Path $scripts 'bootstrap.ps1') -SkipQtValidation }
+    catch { $failure = $_.Exception.Message }
+    Require ($failure -eq 'Bootstrap environment captured.') 'Capture bootstrap before native work.'
+    Require ($env:VCPKG_FORCE_DOWNLOADED_BINARIES -ceq '1' -and
+        -not (Test-Path Env:VCPKG_FORCE_SYSTEM_BINARIES)) `
+        'Bootstrap and subsequent builds must share the pinned vcpkg tool policy.'
     Write-Output "PASS: launcher contracts and batch PowerShell fallback (PowerShell $($PSVersionTable.PSVersion))."
 }
 finally {
+    foreach ($name in $savedEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+    }
+    Remove-Item Function:\cmake -ErrorAction SilentlyContinue
     Remove-Variable -Scope Global -Name SnowLaunchFixtureExitCode, SnowLaunchFixtureProcess,
-        SnowLaunchPath -ErrorAction SilentlyContinue
+        SnowLaunchPath, SnowLaunchBuildCalls, SnowLaunchStopBootstrap -ErrorAction SilentlyContinue
     $absolute = [IO.Path]::GetFullPath($fixture)
     $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
     if (-not $absolute.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase)) {
