@@ -16,7 +16,22 @@ function Invoke-SnowShotWingetApi([string]$Path) {
     Invoke-RestMethod -Uri "https://api.github.com/$Path" -Headers $headers
 }
 
-function New-SnowShotWingetManifest([string]$Tag, [string]$OutputDirectory, [string]$Edition = 'Full') {
+function Get-SnowShotWingetArchitectures($Release, [string]$Version) {
+    $architectures = @('x64')
+    if (@($Release.assets | Where-Object { $_.name -clike "snow-shot-$Version-windows-arm64-*" }).Count) {
+        $architectures += 'arm64'
+    }
+    foreach ($architecture in $architectures) {
+        $name = "snow-shot-$Version-windows-$architecture-offline.exe"
+        if (@($Release.assets | Where-Object { $_.name -ceq $name }).Count -ne 1) {
+            throw "Expected exactly one release asset named $name."
+        }
+    }
+    return $architectures
+}
+
+function New-SnowShotWingetManifest([string]$Tag, [string]$OutputDirectory,
+    [ValidateSet('Full')][string]$Edition = 'Full') {
     $product = Get-SnowShotEdition $Edition
     $version = Get-SnowShotWingetVersion $Tag
     $repository = 'mg-chao/snow-apps'
@@ -29,13 +44,11 @@ function New-SnowShotWingetManifest([string]$Tag, [string]$OutputDirectory, [str
     }
     # Explicit indentation keeps Markdown, YAML-looking text and leading spaces literal.
     $releaseNotes = ($notes.Split("`n") | ForEach-Object { "  $_" }) -join "`n"
-    $variant = if ($Edition -eq 'Mini') { 'online' } else { 'offline' }
     $null = New-Item -ItemType Directory -Force -Path $OutputDirectory
     $installerEntries = @()
-    foreach ($architecture in @(Get-SnowShotReleaseArchitectures $release $version)) {
-    $name = "$($product.Product)-$version-windows-$architecture-$variant.exe"
+    foreach ($architecture in @(Get-SnowShotWingetArchitectures $release $version)) {
+    $name = "$($product.Product)-$version-windows-$architecture-offline.exe"
     $assets = @($release.assets | Where-Object { $_.name -ceq $name })
-    if ($assets.Count -ne 1) { throw "Expected exactly one release asset named $name." }
     $url = "https://github.com/$repository/releases/download/$Tag/$name"
     if ($assets[0].browser_download_url -cne $url) { throw 'Unexpected installer asset URL.' }
     $download = Join-Path $OutputDirectory "$([guid]::NewGuid().ToString('N')).exe"
@@ -55,11 +68,11 @@ function New-SnowShotWingetManifest([string]$Tag, [string]$OutputDirectory, [str
     $null = New-Item -ItemType Directory -Force -Path $directory
     $common = "PackageIdentifier: $($product.Winget)`nPackageVersion: '$version'"
     $tags = @(
-        if ($Edition -ne 'Mini') { 'chatbot' }
+        'chatbot'
         'screen-capture'
         'screenshot'
         'snowshot'
-        if ($Edition -ne 'Mini') { 'translate' }
+        'translate'
         'annotation'
         'ocr'
     )
@@ -132,7 +145,7 @@ ManifestVersion: 1.12.0
     return [IO.Path]::GetFullPath($directory)
 }
 
-function Get-SnowShotWingetSubmission([string]$Version, [string]$Edition = 'Full') {
+function Get-SnowShotWingetSubmission([string]$Version, [ValidateSet('Full')][string]$Edition = 'Full') {
     $product = Get-SnowShotEdition $Edition
     $path = "manifests/m/mg-chao/$($product.Product)/$Version"
     try {
@@ -160,7 +173,8 @@ function Get-SnowShotWingetSubmission([string]$Version, [string]$Edition = 'Full
     return $null
 }
 
-function Submit-SnowShotWingetManifest([string]$Tag, [string]$ManifestDirectory, [string]$WingetCreate, [string]$Edition = 'Full') {
+function Submit-SnowShotWingetManifest([string]$Tag, [string]$ManifestDirectory, [string]$WingetCreate,
+    [ValidateSet('Full')][string]$Edition = 'Full') {
     $product = Get-SnowShotEdition $Edition
     $version = Get-SnowShotWingetVersion $Tag
     $existing = Get-SnowShotWingetSubmission $version $Edition

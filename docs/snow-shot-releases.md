@@ -431,8 +431,10 @@ functions rather than the complete interactive Scoop CLI.
 
 ### WinGet
 
-The independent **Snow Shot WinGet** GitHub Actions workflow submits the offline
-Windows x64 installer as `mg-chao.snow-shot` to `microsoft/winget-pkgs`. Stable and
+The independent **Snow Shot WinGet** GitHub Actions workflow submits Full's offline
+Windows x64 and ARM64 installers as `mg-chao.snow-shot` to `microsoft/winget-pkgs`.
+Historical x64-only releases remain supported. Mini is not distributed through WinGet;
+its assets are not required for WinGet generation, validation, or submission. Stable and
 beta releases share this identifier; published betas are eligible even when GitHub
 does not mark them as prereleases. Draft releases are never submitted.
 
@@ -532,6 +534,9 @@ preparation-branch pushes and manual runs also perform a read-only check of the
 submission token's scope and fork access; pull requests skip that credential check.
 Both workflows provision WinGet 1.29.380 from Microsoft's signed release bundle when
 the installed client is older, avoiding the incomplete preinstalled runner bundle.
+On disposable GitHub-hosted Windows runners, provisioning closes applications using
+framework dependencies that need updating, including Windows Widgets. Local provisioning
+does not force application shutdown.
 The default installation fixtures are
 `v1.1.5-beta` and `v1.1.4-beta`; select newer published versions when validating later
 releases. Logs and generated manifests are retained in the
