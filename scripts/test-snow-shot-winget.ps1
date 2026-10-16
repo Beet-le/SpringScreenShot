@@ -64,12 +64,49 @@ function Set-FixtureRelease([string]$Tag, [string]$Edition = 'Full') {
     }
 }
 try {
-    Set-FixtureRelease 'v1.2.0_snow-shot' Mini
-    $miniDirectory = New-SnowShotWingetManifest 'v1.2.0_snow-shot' $root Mini
-    $miniInstaller = Get-Content (Join-Path $miniDirectory 'mg-chao.snow-shot-mini.installer.yaml') -Raw
-    Require ($miniInstaller.Contains('ProductCode: SnowShotMini') -and $miniInstaller.Contains('snow-shot-mini-1.2.0-windows-x64-online.exe')) 'Mini WinGet has its own registration and online installer.'
-    $miniLocale = Get-Content (Join-Path $miniDirectory 'mg-chao.snow-shot-mini.locale.en-US.yaml') -Raw
-    Require ($miniLocale.Contains('PackageName: Snow Shot Mini') -and -not $miniLocale.Contains('  - translate')) 'Mini metadata must describe retained features.'
+    # Here-string line endings follow the checkout, while generated YAML must always use LF.
+    $source = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'snow-shot-winget.ps1')).Replace("`r`n", "`n")
+    $expectedManifests = @{}
+    foreach ($checkout in @('LF', 'CRLF')) {
+        $sourceDirectory = Join-Path $root $checkout
+        $null = New-Item -ItemType Directory -Force -Path $sourceDirectory
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'snow-shot-editions.ps1') -Destination $sourceDirectory
+        $newline = if ($checkout -eq 'CRLF') { "`r`n" } else { "`n" }
+        $sourcePath = Join-Path $sourceDirectory 'snow-shot-winget.ps1'
+        [IO.File]::WriteAllText($sourcePath, $source.Replace("`n", $newline), [Text.UTF8Encoding]::new($false))
+        & {
+            . $sourcePath
+            function Invoke-SnowShotWingetApi([string]$Path) { return $script:release }
+            foreach ($edition in @('Mini', 'Full')) {
+                Set-FixtureRelease 'v1.2.0_snow-shot' $edition
+                $product = Get-SnowShotEdition $edition
+                $directory = New-SnowShotWingetManifest 'v1.2.0_snow-shot' $sourceDirectory $edition
+                $locale = Get-Content (Join-Path $directory "$($product.Winget).locale.en-US.yaml") -Raw
+                Require ($locale.Contains("PackageName: $($product.Name)")) "$checkout $edition package name mismatch."
+                foreach ($tag in @('screen-capture', 'screenshot', 'snowshot', 'annotation', 'ocr')) {
+                    Require ($locale.Contains("  - $tag`n")) "$checkout $edition is missing retained tag: $tag"
+                }
+                foreach ($tag in @('chatbot', 'translate')) {
+                    Require ($locale.Contains("  - $tag`n") -eq ($edition -eq 'Full')) "$checkout $edition has incorrect feature tag: $tag"
+                }
+                if ($edition -eq 'Mini') {
+                    $installer = Get-Content (Join-Path $directory "$($product.Winget).installer.yaml") -Raw
+                    Require ($installer.Contains('ProductCode: SnowShotMini') -and $installer.Contains('snow-shot-mini-1.2.0-windows-x64-online.exe')) 'Mini WinGet has its own registration and online installer.'
+                }
+                foreach ($file in Get-ChildItem -LiteralPath $directory -Filter '*.yaml') {
+                    $content = [IO.File]::ReadAllText($file.FullName)
+                    Require (-not $content.Contains("`r")) "$checkout $edition manifests must use LF."
+                    if ($checkout -eq 'LF') { $expectedManifests[$file.Name] = $content }
+                    else { Require ($content -ceq $expectedManifests[$file.Name]) "Checkout line endings changed $($file.Name)." }
+                }
+                # Feature selection must not edit identical text inside published release notes.
+                $script:release.body = "- chatbot`n- translate"
+                $directory = New-SnowShotWingetManifest 'v1.2.0_snow-shot' $sourceDirectory $edition
+                $locale = Get-Content (Join-Path $directory "$($product.Winget).locale.en-US.yaml") -Raw
+                Require ($locale.Contains("ReleaseNotes: |2-`n  - chatbot`n  - translate`nReleaseNotesUrl:")) "$checkout $edition release notes must remain literal."
+            }
+        }
+    }
     foreach ($tag in @('v1.1.5-beta', 'v1.1.5-beta_snow-shot', 'v1.2.0', 'v1.2.0_snow-shot')) {
         Set-FixtureRelease $tag
         $directory = New-SnowShotWingetManifest $tag $root

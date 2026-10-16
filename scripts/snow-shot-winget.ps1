@@ -54,6 +54,16 @@ function New-SnowShotWingetManifest([string]$Tag, [string]$OutputDirectory, [str
     $directory = Join-Path $OutputDirectory "manifests/m/mg-chao/$($product.Product)/$version"
     $null = New-Item -ItemType Directory -Force -Path $directory
     $common = "PackageIdentifier: $($product.Winget)`nPackageVersion: '$version'"
+    $tags = @(
+        if ($Edition -ne 'Mini') { 'chatbot' }
+        'screen-capture'
+        'screenshot'
+        'snowshot'
+        if ($Edition -ne 'Mini') { 'translate' }
+        'annotation'
+        'ocr'
+    )
+    $packageTags = ($tags | ForEach-Object { "  - $_" }) -join "`n"
     $documents = [ordered]@{
         "$($product.Winget).yaml" = @"
 # yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
@@ -107,13 +117,7 @@ LicenseUrl: https://github.com/$repository/blob/$Tag/snow_shot/COPYRIGHT
 ShortDescription: A screenshot utility for capturing, annotating, pinning, and recognizing screen content.
 Moniker: $($product.Scoop)
 Tags:
-  - chatbot
-  - screen-capture
-  - screenshot
-  - snowshot
-  - translate
-  - annotation
-  - ocr
+$packageTags
 ReleaseNotes: |2-
 $releaseNotes
 ReleaseNotesUrl: https://github.com/$repository/releases/tag/$Tag
@@ -122,7 +126,6 @@ ManifestVersion: 1.12.0
 "@
     }
     foreach ($entry in $documents.GetEnumerator()) {
-        if ($Edition -eq 'Mini') { $entry.Value = $entry.Value.Replace("  - chatbot`n", '').Replace("  - translate`n", '') }
         [IO.File]::WriteAllText((Join-Path $directory $entry.Key),
             $entry.Value.Replace("`r`n", "`n") + "`n", [Text.UTF8Encoding]::new($false))
     }
