@@ -55,6 +55,9 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QTemporaryDir>
+#ifdef Q_OS_WIN
+#include "toolbar_capture_exclusion_native_tests.h"
+#endif
 #include <QElapsedTimer>
 #include <QThread>
 #include <QMouseEvent>
@@ -5451,6 +5454,18 @@ int main(int argc, char** argv) {
     require(RecordingSettings().setCaptureToolbarInRecording(true),
             "capture exclusion must be disabled for fake backend");
 #ifdef Q_OS_WIN
+    if (app.arguments().contains(QStringLiteral("--native-capture-exclusion-only")) ||
+        app.arguments().contains(QStringLiteral("--native-capture-exclusion-affinity-only"))) {
+        ScreenRecordingToolbarWindow toolbar;
+        int result = verifyToolbarCaptureExclusionAffinity(*toolbar.autoHideControlWindow(),
+                                                           "recording-edge", false);
+        result |=
+            app.arguments().contains(QStringLiteral("--native-capture-exclusion-affinity-only"))
+                ? verifyToolbarCaptureExclusionAffinity(toolbar, "recording")
+                : verifyToolbarCaptureExclusion(toolbar, "recording");
+        ApplicationStorage::instance().shutdown();
+        return result;
+    }
     if (app.arguments().contains(QStringLiteral("--native-toolbar-display-only")) ||
         app.arguments().contains(QStringLiteral("--native-toolbar-ready-display-only"))) {
         const int result = recordingToolbarAcrossNativeDisplays(

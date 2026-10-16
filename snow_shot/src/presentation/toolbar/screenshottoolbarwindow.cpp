@@ -9,6 +9,9 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationstore.h"
 #include "snow_shot/storage/settingsadapters.h"
+#ifdef Q_OS_WIN
+#include "../../platform/windows/captureexclusioncomposition.h"
+#endif
 
 #include <QJsonValue>
 #include <QScreen>
@@ -56,6 +59,9 @@ ScreenshotToolbarWindow::ScreenshotToolbarWindow(ScreenshotToolbarCommandSink& c
                                                  QWidget* parent)
     : ScreenshotFloatingToolPaletteWindow(screenshotToolbarOptions(), parent),
       m_commands(commands) {
+#ifdef Q_OS_WIN
+    snow_shot::platform::windows::detail::enableCaptureExclusionCompositionFallback(this);
+#endif
     setToolbarSize(snow_shot::storage::ScreenshotUiSettings().toolbarSize());
     const snow_shot::storage::ScreenshotToolbarSettings toolbarSettings;
     setToolbarLayout(

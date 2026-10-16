@@ -9212,6 +9212,16 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-scrolling-hover-geometry-tests -platform offscreen)
     set_tests_properties(snow-shot-scrolling-hover-geometry-tests PROPERTIES LABELS "unit"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    if(WIN32)
+        target_sources(snow-shot-scrolling-hover-geometry-tests PRIVATE
+            src/platform/windows/windowchrome.cpp)
+        target_link_libraries(snow-shot-scrolling-hover-geometry-tests PRIVATE dwmapi user32)
+        add_test(NAME snow-shot-scrolling-thumbnail-capture-composition-tests
+            COMMAND snow-shot-scrolling-hover-geometry-tests --capture-composition-only
+                -platform windows)
+        set_tests_properties(snow-shot-scrolling-thumbnail-capture-composition-tests PROPERTIES
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 60)
+    endif()
 
     add_executable(snow-shot-scrolling-image-replay-tests tests/scrolling_image_replay_tests.cpp)
     snow_shot_configure_scrolling_replay_target(snow-shot-scrolling-image-replay-tests)
@@ -10860,7 +10870,68 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-selection-render-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "unit")
 endif()
 
+if(WIN32)
+    add_library(snow_shot_capture_exclusion_composition STATIC
+        src/platform/windows/captureexclusioncomposition.cpp)
+    target_link_libraries(snow_shot_capture_exclusion_composition
+        PUBLIC Qt6::Widgets PRIVATE Qt6::GuiPrivate user32 gdi32)
+endif()
+
 # Overlay and recording hosts share widget controls and their custom icon pack.
+if(WIN32 AND SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-capture-composition-tests tests/capture_composition_tests.cpp)
+    target_link_libraries(snow-shot-capture-composition-tests PRIVATE
+        snow_shot_capture_exclusion_composition Qt6::GuiPrivate)
+    snow_shot_import_offscreen_platform(snow-shot-capture-composition-tests)
+    add_test(NAME snow-shot-capture-composition-tests
+        COMMAND snow-shot-capture-composition-tests -platform offscreen)
+    set_tests_properties(snow-shot-capture-composition-tests PROPERTIES LABELS "unit;windows")
+    foreach(_scale IN ITEMS 1 1.25 1.5 2)
+        add_test(NAME snow-shot-capture-composition-native-${_scale}-tests
+            COMMAND snow-shot-capture-composition-tests --native -platform windows)
+        set_tests_properties(snow-shot-capture-composition-native-${_scale}-tests PROPERTIES
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 30
+            ENVIRONMENT "QT_SCALE_FACTOR=${_scale}")
+    endforeach()
+    add_test(NAME snow-shot-scrolling-toolbar-capture-composition-tests
+        COMMAND snow-shot-screenshot-toolbar-remembered-tool-tests --scrolling-composition-only
+            -platform windows)
+    set_tests_properties(snow-shot-scrolling-toolbar-capture-composition-tests PROPERTIES
+        LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 30)
+    foreach(_kind IN ITEMS screenshot recording)
+        if(_kind STREQUAL "screenshot")
+            set(_toolbar_test snow-shot-screenshot-toolbar-remembered-tool-tests)
+            target_sources(${_toolbar_test} PRIVATE src/platform/windows/windowchrome.cpp)
+        else()
+            set(_toolbar_test snow-shot-screen-recording-controller-tests)
+        endif()
+        target_sources(${_toolbar_test} PRIVATE tests/toolbar_capture_exclusion_native_tests.cpp)
+        target_link_libraries(${_toolbar_test} PRIVATE snow_capture_c Qt6::GuiPrivate dwmapi user32 psapi)
+        target_include_directories(${_toolbar_test} PRIVATE
+            "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-capture-c/include")
+        add_test(NAME snow-shot-${_kind}-toolbar-capture-exclusion-native-tests
+            COMMAND ${_toolbar_test} --native-capture-exclusion-only -platform windows)
+        set_tests_properties(snow-shot-${_kind}-toolbar-capture-exclusion-native-tests PROPERTIES
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 120)
+        add_test(NAME snow-shot-${_kind}-toolbar-capture-exclusion-affinity-tests
+            COMMAND ${_toolbar_test} --native-capture-exclusion-affinity-only -platform windows)
+        set_tests_properties(snow-shot-${_kind}-toolbar-capture-exclusion-affinity-tests PROPERTIES
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 60)
+        if(SNOW_APPS_BUILD_BENCHMARKS)
+            add_test(NAME snow-shot-${_kind}-toolbar-composition-memory
+                COMMAND ${_toolbar_test} --native-capture-exclusion-affinity-only --measure-memory
+                    -platform windows)
+            set_tests_properties(snow-shot-${_kind}-toolbar-composition-memory PROPERTIES
+                LABELS "benchmark;interactive;windows" RUN_SERIAL TRUE TIMEOUT 180)
+            add_test(NAME snow-shot-${_kind}-toolbar-capture-exclusion-memory
+                COMMAND ${_toolbar_test} --native-capture-exclusion-only --measure-memory
+                    -platform windows)
+            set_tests_properties(snow-shot-${_kind}-toolbar-capture-exclusion-memory PROPERTIES
+                LABELS "benchmark;interactive;windows" RUN_SERIAL TRUE TIMEOUT 300)
+        endif()
+    endforeach()
+endif()
+
 get_property(_overlay_widget_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(_target IN LISTS _overlay_widget_targets)
     get_target_property(_sources ${_target} SOURCES)
@@ -10875,6 +10946,12 @@ foreach(_target IN LISTS _overlay_widget_targets)
        NOT _sources MATCHES "src/platform/windows/windowchrome.cpp")
         target_sources(${_target} PRIVATE src/platform/windows/windowchrome.cpp)
         target_link_libraries(${_target} PRIVATE dwmapi user32)
+    endif()
+    # The platform helper owns composition and native alpha hit-testing for all
+    # opted-in windows; consumers do not depend on Qt's platform headers.
+    get_target_property(_sources ${_target} SOURCES)
+    if(WIN32 AND _sources MATCHES "(windowchrome|window_capture_exclusion_tests)\\.cpp")
+        target_link_libraries(${_target} PRIVATE snow_shot_capture_exclusion_composition)
     endif()
     if(NOT "${_target}" STREQUAL "snow_shot" AND
        _sources MATCHES "(screenshotoverlaywindow|screenrecordingareawindow).cpp" AND
