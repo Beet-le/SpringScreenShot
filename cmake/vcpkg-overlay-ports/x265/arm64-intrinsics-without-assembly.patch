@@ -147,10 +147,12 @@
 +++ b/source/common/aarch64/intrapred-prim.h
 @@ -1,6 +1,6 @@
  #ifndef INTRAPRED_PRIM_H__
-
+-
 -#if defined(__aarch64__)
+-
++
 +#if defined(__aarch64__) || defined(_M_ARM64)
-
++
  namespace X265_NS
  {
 --- /dev/null
