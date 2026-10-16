@@ -6,6 +6,7 @@
 #include <QFont>
 #include <QImage>
 #include <functional>
+#include "snow_draw_engine_qt/snow_canvas_export_types.h"
 
 // Value snapshot: images and line containers use Qt copy-on-write; no session or widget references.
 struct ScreenshotRecognitionImageSnapshot final {
@@ -19,6 +20,7 @@ struct ScreenshotRecognitionImageSnapshot final {
     ScreenshotResultStyle resultStyle;
     ScreenshotLayoutCompaction layoutCompaction = {};
     qreal outputOpacity = 1.0;
+    QList<CanvasExportSource> backgroundSources;
 };
 
 [[nodiscard]] QImage

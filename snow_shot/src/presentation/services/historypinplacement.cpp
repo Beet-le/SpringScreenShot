@@ -48,6 +48,7 @@ historySelectionBorderAppearance(const snow_shot::storage::CaptureHistoryRecord&
                                                               record.selection.shadowColor,
                                                               {},
                                                               1.0});
+    style.backgroundOpacityPercent = record.selection.backgroundOpacityPercent;
     if (record.selection.region)
         style.region = record.selection.region->translated(-record.selection.rectangle.topLeft());
     if (!record.selection.rectangle.size().isEmpty() && record.scrolling != true) {
@@ -102,6 +103,7 @@ historySelectionPinPlacement(const snow_shot::storage::CaptureHistoryRecord& rec
                                 record.selection.shadowColor,
                                 {},
                                 1.0};
+    style.backgroundOpacityPercent = record.selection.backgroundOpacityPercent;
     if (record.selection.region)
         style.region = record.selection.region->translated(-record.selection.rectangle.topLeft());
     return screenshotSelectionPinRequest(displays, geometry, selection, style,

@@ -615,6 +615,7 @@ int main(int argc, char** argv) {
         QStringLiteral("hover-entry-exit"),
         QStringLiteral("shadow-width-sweep"),
         QStringLiteral("rounded-shadow-toggle"),
+        QStringLiteral("background-opacity-sweep"),
         QStringLiteral("cursor-and-monitor-guide-lines"),
         QStringLiteral("cursor-guide-horizontal-move"),
         QStringLiteral("cursor-guide-vertical-move"),
@@ -699,6 +700,8 @@ int main(int argc, char** argv) {
         report.insert(QStringLiteral("outlineCacheRetainedBytes"),
                       renderer.selectionOutlineCacheBytes());
         report.insert(QStringLiteral("maskCacheRetainedBytes"), renderer.selectionMaskCacheBytes());
+        report.insert(QStringLiteral("backgroundCacheRetainedBytes"),
+                      renderer.selectionBackgroundCacheBytes());
         report.insert(QStringLiteral("canvasWidth"), fixture.canvas->width());
         report.insert(QStringLiteral("canvasHeight"), fixture.canvas->height());
         report.insert(QStringLiteral("devicePixelRatio"), fixture.canvas->devicePixelRatioF());
@@ -1066,6 +1069,22 @@ int main(int argc, char** argv) {
     run(QStringLiteral("rounded-shadow-toggle"), [&](int index) {
         renderer.setSelection(baseSelection, false, 18, (index & 1) ? 10 : 0, shadowColor);
         renderer.setSelectionToolbarHovered(true);
+    });
+    run(QStringLiteral("background-opacity-sweep"), [&](int index) {
+        ScreenshotSelectionVisualState state;
+        state.bounds = QRectF(-surfaceSize.width() / 2.0 + 20, -surfaceSize.height() / 2.0 + 20,
+                              surfaceSize.width() - 40, surfaceSize.height() - 40);
+        state.present = true;
+        state.region = QRegion(state.bounds.toRect())
+                           .subtracted(QRect(-surfaceSize.width() / 6, -surfaceSize.height() / 2,
+                                             surfaceSize.width() / 3, surfaceSize.height()));
+        state.cornerRadius = 18;
+        state.shadowWidth = 16;
+        state.shadowColor = shadowColor;
+        state.toolbarHovered = true;
+        state.handlesVisible = false;
+        state.backgroundOpacityPercent = index % 101;
+        renderer.applySelectionState(state);
     });
 
     const QPointF guideLineCenter(surfaceSize.width() / 2.0, surfaceSize.height() / 2.0);

@@ -33,6 +33,7 @@ struct ScreenshotSelectionVisualState {
     bool present = false;
     bool handlesVisible = true;
     bool borderVisible = true;
+    int backgroundOpacityPercent = 0;
     int cornerRadius = 0;
     int shadowWidth = 0;
     QColor shadowColor = QColor(0x33, 0x33, 0x33);
@@ -54,7 +55,8 @@ struct ScreenshotSelectionVisualState {
     QVector<QPointF> draftVertices;
 
     [[nodiscard]] bool operator==(const ScreenshotSelectionVisualState& other) const {
-        return bounds == other.bounds && present == other.present &&
+        return backgroundOpacityPercent == other.backgroundOpacityPercent &&
+               bounds == other.bounds && present == other.present &&
                handlesVisible == other.handlesVisible && borderVisible == other.borderVisible &&
                cornerRadius == other.cornerRadius && shadowWidth == other.shadowWidth &&
                shadowColor == other.shadowColor && toolbarHovered == other.toolbarHovered &&
@@ -142,7 +144,10 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
         return m_outlineCache.bytes();
     }
     qsizetype selectionMaskCacheBytes() const {
-        return m_maskCache.bytes();
+        return m_maskCache.bytes() + m_selectionViewGeometry.previewMask.sizeInBytes();
+    }
+    qsizetype selectionBackgroundCacheBytes() const {
+        return m_selectionBackgroundCache.sizeInBytes();
     }
     qsizetype selectionRegionHoverCacheBytes() const {
         return m_regionHoverCache.sizeInBytes();
@@ -231,6 +236,9 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
         QPainterPath outlinePath;
         QPainterPath draftPath;
         QPainterPath maskPath;
+        QImage previewMask;
+        QRect previewMaskPixels;
+        QTransform previewMaskTransform;
         bool maskCacheEligible = false;
         bool sharedDraftOutline = false;
     };
@@ -252,6 +260,10 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     };
     void invalidateCachedContent(bool originalChanged = true);
     void refreshBaseImageSources();
+    void paintSelectionBackground(QPainter& painter, const SnowCanvasRenderContext& context,
+                                  const QRectF& bounds);
+    void maskSelectionPreview(QPainter& painter, const SnowCanvasRenderContext& context,
+                              const QRectF& bounds);
     void paintBackground(QPainter& painter, const SnowCanvasRenderContext& context,
                          bool originalOnly);
     [[nodiscard]] QRectF pinnedViewportForContext(const SnowCanvasRenderContext& context) const;
@@ -290,6 +302,10 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     PathRasterCache m_maskCache;
     std::optional<ScreenshotRegionGeometry> m_regionHoverCacheRegion;
     QImage m_regionHoverCache;
+    QImage m_selectionBackgroundCache;
+    QRect m_selectionBackgroundCacheBounds;
+    QTransform m_selectionBackgroundCacheTransform;
+    QPainterPath m_selectionBackgroundCachePath;
     int m_regionHoverCacheRadius = 0;
     int m_regionHoverCacheShadowWidth = 0;
     QColor m_regionHoverCacheShadowColor;

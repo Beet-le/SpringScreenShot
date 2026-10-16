@@ -2651,6 +2651,20 @@ void ScreenshotToolPalette::setScreenshotRegionType(ScreenshotRegionType type) {
     }
 }
 
+void ScreenshotToolPalette::setSelectionBackgroundOpacityState(int percent, bool available) {
+    m_backgroundOpacityPercent = std::clamp(percent, 0, 100);
+    m_backgroundOpacityAvailable = available;
+    if (m_backgroundOpacityEditor) {
+        m_backgroundOpacityEditor->setEnabled(available);
+        m_backgroundOpacityEditor->setValue(m_backgroundOpacityPercent);
+        m_backgroundOpacityEditor->setValueSuffix(QStringLiteral("%"));
+        m_backgroundOpacityEditor->setAccessibleName(tr("Selection background opacity"));
+        m_backgroundOpacityEditor->setAccessibleDescription(m_backgroundOpacityEditor->valueText());
+        if (!available)
+            emit selectionBackgroundPreviewVisibleChanged(false);
+    }
+}
+
 void ScreenshotToolPalette::setLayoutCompactionState(ScreenshotLayoutCompaction options,
                                                      bool available, bool canvasUsesPoints) {
     m_layoutCompaction = options.normalized();
@@ -3694,7 +3708,7 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
         for (adqt::widgets::AdButton* button :
              m_selectActionPanel->findChildren<adqt::widgets::AdButton*>()) {
             if (button != nullptr && button != m_scrollingAutoScrollIntervalEditor &&
-                button != m_layoutSpacingEditor) {
+                button != m_layoutSpacingEditor && button != m_backgroundOpacityEditor) {
                 configureScreenshotToolPaletteStyleButton(button, nullptr, metrics);
             }
         }
@@ -3807,6 +3821,10 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
     if (m_recordPreferencesButton != nullptr) {
         configureScreenshotToolPaletteStyleButton(m_recordPreferencesButton, "Recording settings",
                                                   styleButtonMetrics(m_physicalScale));
+    }
+    if (m_backgroundOpacityEditor) {
+        configureScreenshotToolPaletteScrollingIntervalEditor(m_backgroundOpacityEditor,
+                                                              actionButtonMetrics(m_physicalScale));
     }
     if (m_layoutSpacingEditor) {
         configureScreenshotToolPaletteScrollingIntervalEditor(m_layoutSpacingEditor,
@@ -4158,6 +4176,18 @@ bool ScreenshotToolPalette::handleToolbarWheel(QWheelEvent* event) {
         return false;
     }
     const int direction = deltaY > 0 ? 1 : -1;
+    if (m_backgroundOpacityEditor && m_backgroundOpacityEditor->isEnabled() &&
+        m_backgroundOpacityEditor->isVisible() &&
+        m_backgroundOpacityEditor->rect().contains(
+            m_backgroundOpacityEditor->mapFromGlobal(event->globalPosition().toPoint()))) {
+        const int percent = std::clamp(m_backgroundOpacityPercent + direction, 0, 100);
+        if (percent != m_backgroundOpacityPercent) {
+            setSelectionBackgroundOpacityState(percent, m_backgroundOpacityAvailable);
+            emit selectionBackgroundOpacityChanged(percent);
+        }
+        event->accept();
+        return true;
+    }
     if (m_layoutSpacingEditor && m_layoutSpacingEditor->isEnabled() &&
         m_layoutSpacingEditor->isVisible() &&
         m_layoutSpacingEditor->rect().contains(
@@ -4330,6 +4360,12 @@ void ScreenshotToolPalette::finishScrollingSelectionMove() {
 }
 
 bool ScreenshotToolPalette::eventFilter(QObject* watched, QEvent* event) {
+    if (event && watched && watched == m_backgroundOpacityEditor) {
+        if (event->type() == QEvent::Enter)
+            emit selectionBackgroundPreviewVisibleChanged(m_backgroundOpacityEditor->isEnabled());
+        else if (event->type() == QEvent::Leave || event->type() == QEvent::Hide)
+            emit selectionBackgroundPreviewVisibleChanged(false);
+    }
     if (event && watched &&
         (watched == m_scrollingMoveHorizontalButton || watched == m_scrollingMoveVerticalButton)) {
         auto* button = static_cast<adqt::widgets::AdButton*>(watched);
@@ -4463,6 +4499,7 @@ void ScreenshotToolPalette::retranslateUi() {
         m_scrollingAutoScrollIntervalEditor->setValueSuffix(tr("ms", "Auto-scroll interval unit"));
     }
     retranslateScreenshotToolPalette(this);
+    setSelectionBackgroundOpacityState(m_backgroundOpacityPercent, m_backgroundOpacityAvailable);
     setLayoutCompactionState(m_layoutCompaction, m_layoutCompactionAvailable,
                              m_layoutCompactionCanvasUsesPoints);
     refreshRecognitionModelSelect();
@@ -5047,7 +5084,7 @@ bool ScreenshotToolPalette::activateToolFromToolbar(Tool tool, bool toggleVisibl
         toolbar_settings::DrawingSettings().alwaysShowFirstToolbarGroupButton();
     const bool alreadyActive =
         !toggleVisibleButton || fixedGroupButton ? m_activeTool.has_value() && *m_activeTool == tool
-        : requestedButton != nullptr ? m_activeToolButton == requestedButton
+        : requestedButton != nullptr             ? m_activeToolButton == requestedButton
                                      : m_activeTool.has_value() && *m_activeTool == tool;
     const Tool requestedTool = alreadyActive && tool != Tool::Select ? Tool::Select : tool;
     activateDrawingTool(requestedTool);
@@ -7730,6 +7767,8 @@ void ScreenshotToolPalette::clearSecondaryResourceBindings() {
     m_moveActionControls = nullptr;
     m_layoutCompactionButton = nullptr;
     m_layoutSpacingEditor = nullptr;
+    m_backgroundOpacityEditor = nullptr;
+    emit selectionBackgroundPreviewVisibleChanged(false);
     m_selectionDisplayUnitGroup = nullptr;
     m_cursorButton = nullptr;
     m_hideSelectionToolbarButton = nullptr;
@@ -8996,6 +9035,24 @@ void ScreenshotToolPalette::createMoveActionFamily() {
     configureScreenshotToolPaletteScrollingIntervalEditor(m_layoutSpacingEditor,
                                                           actionButtonMetrics(m_physicalScale));
     layout->addWidget(m_layoutSpacingEditor);
+    addStyleToolbarSpacing(layout, STYLE_ITEM_SPACING);
+    m_backgroundOpacityEditor = createScreenshotToolPaletteIconNumericValueButton(
+        m_moveActionControls,
+        QT_TR_NOOP("Selection background opacity (scroll to adjust; click to reset to 0%)"),
+        custom_outlined_icons::SelectionBackgroundOpacity(), m_backgroundOpacityPercent,
+        QStringLiteral("100%"), actionButtonMetrics(m_physicalScale));
+    m_backgroundOpacityEditor->setObjectName(
+        QStringLiteral("screenshotSelectionBackgroundOpacityEditor"));
+    configureScreenshotToolPaletteScrollingIntervalEditor(m_backgroundOpacityEditor,
+                                                          actionButtonMetrics(m_physicalScale));
+    m_backgroundOpacityEditor->installEventFilter(this);
+    layout->addWidget(m_backgroundOpacityEditor);
+    connect(m_backgroundOpacityEditor, &adqt::widgets::AdButton::clicked, this, [this] {
+        if (m_backgroundOpacityPercent == 0)
+            return;
+        setSelectionBackgroundOpacityState(0, m_backgroundOpacityAvailable);
+        emit selectionBackgroundOpacityChanged(0);
+    });
     connect(m_layoutCompactionButton, &adqt::widgets::AdButton::clicked, this, [this] {
         auto options = m_layoutCompaction;
         options.enabled = !options.enabled;
@@ -9012,6 +9069,7 @@ void ScreenshotToolPalette::createMoveActionFamily() {
                                  m_layoutCompactionCanvasUsesPoints);
         emit layoutCompactionChanged(options.enabled, options.spacing);
     });
+    setSelectionBackgroundOpacityState(m_backgroundOpacityPercent, m_backgroundOpacityAvailable);
     setLayoutCompactionState(m_layoutCompaction, m_layoutCompactionAvailable,
                              m_layoutCompactionCanvasUsesPoints);
     addStyleToolbarSpacing(layout, STYLE_GROUP_SPACING * 2);
@@ -9087,12 +9145,13 @@ void ScreenshotToolPalette::createMoveActionFamily() {
     });
     m_selectActionLayout->addWidget(m_moveActionControls);
     stampScreenshotToolbarReferenceWidth(
-        m_moveActionControls, actionButtonMetrics(1.0).buttonSize * 7 +
-                                  screenshotToolbarReferenceWidth(m_layoutSpacingEditor) +
-                                  screenshotToolbarReferenceWidth(regionTypes.container) +
-                                  screenshotToolbarReferenceWidth(units.container) +
-                                  STYLE_ITEM_SPACING * 4 + STYLE_GROUP_SPACING * 10 + 6 +
-                                  TOOLBAR_SEPARATOR_WIDTH * 2);
+        m_moveActionControls,
+        actionButtonMetrics(1.0).buttonSize * 7 +
+            screenshotToolbarReferenceWidth(m_layoutSpacingEditor) +
+            screenshotToolbarReferenceWidth(m_backgroundOpacityEditor) + STYLE_ITEM_SPACING +
+            screenshotToolbarReferenceWidth(regionTypes.container) +
+            screenshotToolbarReferenceWidth(units.container) + STYLE_ITEM_SPACING * 4 +
+            STYLE_GROUP_SPACING * 10 + 6 + TOOLBAR_SEPARATOR_WIDTH * 2);
     setCursorVisible(m_cursorVisible);
     setCursorAvailable(m_cursorAvailable);
     setSelectionToolbarHidden(m_selectionToolbarHidden);

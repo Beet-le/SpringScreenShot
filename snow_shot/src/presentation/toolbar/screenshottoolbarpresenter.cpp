@@ -84,6 +84,8 @@ void ScreenshotToolbarPresenter::repositionForContentChange(
 void ScreenshotToolbarPresenter::updateSelectionToolbarState(
     const ScreenshotToolbarPresentationState& state, bool reposition) {
     if (auto* toolbar = m_overlayCoordinator.toolbar()) {
+        toolbar->setSelectionBackgroundOpacityState(state.backgroundOpacityPercent,
+                                                    state.backgroundOpacityAvailable);
         toolbar->setScreenshotRegionType(state.regionType);
         toolbar->setSelectionDisplayUnit(state.selectionDisplayUnit);
         const auto* display =

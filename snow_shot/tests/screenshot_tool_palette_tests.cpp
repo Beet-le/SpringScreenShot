@@ -19283,6 +19283,48 @@ void layoutCompactionToolbar() {
         palette.findChild<QWidget*>(QStringLiteral("screenshotRegionActionsSeparator"));
     require(button && editor && group && separator && !button->isEnabled() && !editor->isEnabled(),
             "compaction controls must be present but disabled for a single region");
+    auto* opacity = dynamic_cast<IconNumericValuePreviewButton*>(
+        palette.findChild<QWidget*>(QStringLiteral("screenshotSelectionBackgroundOpacityEditor")));
+    require(opacity && !opacity->isEnabled() && opacity->valueText() == QStringLiteral("0%"),
+            "opacity editor defaults to zero and waits for a selection");
+    require(opacity->x() > editor->x() && separator->x() > opacity->x() &&
+                opacity->width() == editor->width(),
+            "opacity editor must match spacing and appear immediately after it");
+    int opacityEdits = 0;
+    bool opacityPreview = false;
+    QObject::connect(&palette, &ScreenshotToolPalette::selectionBackgroundPreviewVisibleChanged,
+                     [&](bool visible) { opacityPreview = visible; });
+    QObject::connect(&palette, &ScreenshotToolPalette::selectionBackgroundOpacityChanged,
+                     [&](int) { ++opacityEdits; });
+    palette.setSelectionBackgroundOpacityState(0, true);
+    QEnterEvent opacityEnter(QPointF(5, 5), QPointF(5, 5),
+                             QPointF(opacity->mapToGlobal(QPoint(5, 5))));
+    QCoreApplication::sendEvent(opacity, &opacityEnter);
+    require(opacityPreview, "hovering opacity activates the effects preview");
+    const auto opacityWheel = [&](int delta) {
+        const auto local = opacity->rect().center();
+        QWheelEvent event(local, opacity->mapToGlobal(local), {}, QPoint(0, delta), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        require(palette.handleToolbarWheel(&event) && event.isAccepted(),
+                "opacity consumes wheel input");
+    };
+    opacityWheel(120);
+    require(opacityEdits == 1 && opacity->valueText() == QStringLiteral("1%"),
+            "opacity adjusts by one percent");
+    palette.setSelectionBackgroundOpacityState(100, true);
+    opacityWheel(120);
+    require(opacityEdits == 1 && opacity->valueText() == QStringLiteral("100%"),
+            "opacity clamps without no-op signals");
+    opacity->click();
+    opacityWheel(-120);
+    require(opacityEdits == 2 && opacity->valueText() == QStringLiteral("0%"),
+            "opacity resets and clamps at zero");
+    palette.setSelectionBackgroundOpacityState(37, false);
+    require(!opacityPreview, "suspending opacity editing dismisses its preview");
+    opacity->click();
+    require(opacityEdits == 2 && opacity->valueText() == QStringLiteral("37%"),
+            "disabled opacity preserves preference");
+    palette.setSelectionBackgroundOpacityState(37, true);
     require(editor->width() == 96 && button->x() == group->x() + group->width() &&
                 editor->x() > button->x() && separator->x() > editor->x(),
             "compaction controls must directly follow region types before the separator");
@@ -19329,7 +19371,7 @@ void layoutCompactionToolbar() {
     palette.setLayoutCompactionState({true, 7}, true, true);
     require(palette.setPhysicalScale(1.5), "compaction DPI scale change");
     QCoreApplication::processEvents();
-    require(editor->width() == 144, "compaction editor scales like the scroll interval editor");
+    require(editor->width() == 144 && opacity->width() == 144, "numeric editors share DPI metrics");
     require(button->x() == group->x() + group->width(),
             "compaction button must remain adjacent to region types at scaled DPI");
     require(palette.setPhysicalScale(1.0), "restore compaction DPI scale");
@@ -19338,6 +19380,11 @@ void layoutCompactionToolbar() {
          {QStringLiteral("zh_CN"), QStringLiteral("zh_TW"), QStringLiteral("en_US")}) {
         require(language.setLanguage(locale), "compaction locale must load");
         QCoreApplication::processEvents();
+        require(opacity->accessibleName() ==
+                        QCoreApplication::translate("ScreenshotToolPalette",
+                                                    "Selection background opacity") &&
+                    opacity->valueText() == QStringLiteral("37%"),
+                "opacity retranslates without changing value");
         require(button->toolTip() ==
                         QCoreApplication::translate("ScreenshotToolPalette", "Compact layout") &&
                     editor->valueText() == QStringLiteral("7dp"),
@@ -19352,10 +19399,11 @@ void layoutCompactionToolbar() {
             theme.setThemeMode(dark ? snow_shot::presentation::styles::ThemeMode::Dark
                                     : snow_shot::presentation::styles::ThemeMode::Light);
             adqt::theme::ThemeManager::instance().applyTo(*qApp);
-            for (qreal scale : {1.0, 2.0}) {
+            for (qreal scale : {1.0, 1.25, 1.5, 2.0}) {
                 static_cast<void>(palette.setPhysicalScale(scale));
                 for (int state : {0, 1, 2}) {
                     palette.setLayoutCompactionState({state != 0, 7}, state != 2, true);
+                    palette.setSelectionBackgroundOpacityState(37, state != 2);
                     QCoreApplication::processEvents();
                     auto* controls = button->parentWidget();
                     const QPixmap capture = controls->grab();

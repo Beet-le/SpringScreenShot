@@ -201,6 +201,8 @@ ScreenshotRegionReduce(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ScrollingScreenshot(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ScrollingVertical(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Select(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef
+SelectionBackgroundOpacity(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef SelectionLockAspect(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef SelectionRadius(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef SelectionShadow(const adqt::icons::IconColors& colors = {});

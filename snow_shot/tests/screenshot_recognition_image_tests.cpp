@@ -115,6 +115,34 @@ void compactionFollowsRecognitionRendering() {
     }
 }
 
+void retainedBackgroundUsesOriginalCapture() {
+    for (bool compact : {false, true}) {
+        auto snapshot = fixture();
+        snapshot.resultStyle = {
+            12, 6, Qt::black,
+            ScreenshotRegionGeometry(QRegion(0, 0, 100, 180) + QRect(220, 0, 100, 180))};
+        snapshot.resultStyle.backgroundOpacityPercent = 50;
+        snapshot.layoutCompaction = {compact, 8};
+        QImage capture(360, 220, QImage::Format_ARGB32_Premultiplied);
+        capture.fill(QColor(80, 140, 220));
+        snapshot.backgroundSources = {{capture, snapshot.canvasRect.adjusted(-20, -20, 20, 20)}};
+        snapshot.filteredImage = snapshot.image;
+        snapshot.filteredImage.fill(Qt::green);
+        snapshot.filteredCanvasRect = snapshot.canvasRect;
+        const auto result = renderScreenshotRecognitionImage(snapshot);
+        require(!result.isNull(), "recognition result with retained background renders");
+        const int gapX = compact ? 116 : 166;
+        const auto gap = result.pixelColor(gapX, 150);
+        require(
+            gap.blue() > gap.green() && gap.alpha() > 0 && gap.alpha() < 200,
+            "recognition export gaps use capture pixels, not recognized text or filtered patches");
+        require(result.pixelColor(50, 150) == QColor(Qt::green),
+                "recognition result inside selected regions keeps full opacity");
+        require(result.pixelColor(0, 0).alpha() > 0,
+                "recognition exports retain captured pixels beyond the selection bounds");
+    }
+}
+
 void layoutModesAndTransformsRenderOnWorkers() {
     for (bool vertical : {false, true}) {
         for (bool paragraph : {false, true}) {
@@ -234,6 +262,7 @@ int main(int argc, char** argv) {
         displayedBackgroundAndEffectsAreAppliedOnce();
         compoundSelectionClipsRecognizedText();
         compactionFollowsRecognitionRendering();
+        retainedBackgroundUsesOriginalCapture();
         layoutModesAndTransformsRenderOnWorkers();
         sourceRowsSurviveImageExportOnWorkers();
         cancellationAndInvalidInputNeverPublishPartialImages();

@@ -408,20 +408,39 @@ void toolbarPresentationTracksSelectionDragLifetime() {
         ScreenshotSelectionModel selection;
         interaction.beginCapture();
         selection.setSelectionRect(QRectF(40, 0, 100, 20));
+        selection.setBackgroundOpacityPercent(37);
+        require(makeScreenshotToolbarPresentationState(interaction, selection)
+                        .backgroundOpacityAvailable &&
+                    makeScreenshotToolbarPresentationState(interaction, selection)
+                            .backgroundOpacityPercent == 37,
+                "a valid single selection enables background opacity");
         require(!makeScreenshotToolbarPresentationState(interaction, selection).selectionDragging,
                 "idle capture must not disable toolbar pointer interaction");
         require(interaction.enterSelectionDrag(mode), "selection drag must begin");
         const auto state = makeScreenshotToolbarPresentationState(interaction, selection);
+        require(!state.backgroundOpacityAvailable,
+                "selection creation, movement and resize suspend background opacity editing");
         require(
             state.selectionToolbarMode && state.selectionDragging,
             "create, move and resize drags must retain the toolbar with pointer input disabled");
         interaction.finishDrag();
+        require(makeScreenshotToolbarPresentationState(interaction, selection)
+                    .backgroundOpacityAvailable,
+                "finishing a drag restores background opacity editing");
         require(!makeScreenshotToolbarPresentationState(interaction, selection).selectionDragging,
                 "release must restore toolbar pointer interaction");
         require(interaction.enterSelectionDrag(mode), "a second drag must begin");
         interaction.cancelDrag();
         require(!makeScreenshotToolbarPresentationState(interaction, selection).selectionDragging,
                 "cancel must restore toolbar pointer interaction");
+        selection.setDraftRegion(ScreenshotRegionGeometry(QRect(10, 10, 40, 40)));
+        require(!makeScreenshotToolbarPresentationState(interaction, selection)
+                     .backgroundOpacityAvailable,
+                "selection construction suspends background opacity editing");
+        selection.commitDraftRegion(QRect(0, 0, 500, 500));
+        require(makeScreenshotToolbarPresentationState(interaction, selection)
+                    .backgroundOpacityAvailable,
+                "ending selection construction restores background opacity editing");
     }
 }
 

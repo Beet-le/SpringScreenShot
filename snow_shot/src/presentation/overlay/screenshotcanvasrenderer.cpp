@@ -1227,29 +1227,20 @@ QRect interiorPixelRect(const QRectF& rect) {
     return QRect(left, top, qFloor(rect.right()) - left, qFloor(rect.bottom()) - top);
 }
 
-void renderSelectionShadow(QPainter& painter, const SnowCanvasRenderContext& context,
-                           const QRectF& selection, int cornerRadius, int shadowWidth,
-                           const QColor& shadowColor, const QWidget* widget) {
-    if (shadowWidth <= 0) {
-        return;
-    }
-
-    const qreal horizontalScale =
-        std::hypot(context.canvasToViewTransform.m11(), context.canvasToViewTransform.m12());
-    const qreal verticalScale =
-        std::hypot(context.canvasToViewTransform.m21(), context.canvasToViewTransform.m22());
-    const qreal scale = std::max<qreal>(1.0e-6, std::min(horizontalScale, verticalScale));
-    const QRectF selectionView = context.canvasToViewTransform.mapRect(selection.normalized());
-    if (!selectionView.isValid() || selectionView.isEmpty()) {
-        return;
-    }
-    ScreenshotSelectionShadowRenderer::renderPreview(
-        painter, selectionView, std::max(0, cornerRadius) * scale, shadowWidth * scale, shadowColor,
-        context.devicePixelRatio, widget);
-}
-
 bool hasSelectionBounds(const ScreenshotSelectionVisualState& state) {
     return state.present && state.bounds.isValid() && !state.bounds.isEmpty();
+}
+
+bool selectionEffectsPreviewVisible(const ScreenshotSelectionVisualState& state) {
+    return hasSelectionBounds(state) && (state.toolbarHovered || state.effectPreviewVisible) &&
+           (state.region || state.cornerRadius > 0 || state.shadowWidth > 0);
+}
+
+QRectF selectionPreviewBounds(const ScreenshotSelectionVisualState& state,
+                              const QTransform& canvasToViewTransform) {
+    const qreal padding = std::max(0, state.shadowWidth);
+    return canvasToViewTransform.mapRect(
+        state.bounds.adjusted(-padding, -padding, padding, padding));
 }
 
 QRectF mappedSelectionBounds(const ScreenshotSelectionVisualState& state,
@@ -1329,9 +1320,8 @@ QRegion selectionStateDecorationRegion(const ScreenshotSelectionVisualState& sta
         return {};
     }
     const qreal scale = viewScale(canvasToViewTransform);
-    const qreal shadow = (state.toolbarHovered || state.effectPreviewVisible)
-                             ? std::max(0, state.shadowWidth) * scale
-                             : 0.0;
+    const qreal shadow =
+        selectionEffectsPreviewVisible(state) ? std::max(0, state.shadowWidth) * scale : 0.0;
     const qreal padding = shadow + kSelectionBorderUpdatePadding;
     QRegion decoration(selectionBounds.adjusted(-padding, -padding, padding, padding)
                            .toAlignedRect()
@@ -1495,20 +1485,15 @@ QRegion mappedRegionPixels(const ScreenshotRegionGeometry& geometry,
     return pixels;
 }
 
-QRegion shapedPreviewCheckerboardPixels(const ScreenshotSelectionVisualState& state,
-                                        const QRegion& selectedPixels,
-                                        const QTransform& canvasToViewTransform,
-                                        const QRect& viewportRect) {
-    if (!state.present || !state.toolbarHovered || !state.region)
+QRegion shapedPreviewBackgroundPixels(const ScreenshotSelectionVisualState& state,
+                                      const QRegion& selectedPixels,
+                                      const QTransform& canvasToViewTransform,
+                                      const QRect& viewportRect) {
+    if (!state.region || !selectionEffectsPreviewVisible(state))
         return {};
-    const QRect bounds = state.region->boundingRect();
-    if (bounds.isEmpty())
-        return {};
-    const int shadow = std::max(0, state.shadowWidth);
-    const QRect preview =
-        canvasToViewTransform.mapRect(QRectF(bounds.adjusted(-shadow, -shadow, shadow, shadow)))
-            .toAlignedRect()
-            .intersected(viewportRect);
+    const QRect preview = selectionPreviewBounds(state, canvasToViewTransform)
+                              .toAlignedRect()
+                              .intersected(viewportRect);
     return QRegion(preview).subtracted(selectedPixels);
 }
 
@@ -1627,6 +1612,23 @@ QRegion planScreenshotSelectionDamage(const ScreenshotSelectionVisualState& prev
     if (previous == next || viewportRect.isEmpty()) {
         return {};
     }
+    if (previous.backgroundOpacityPercent != next.backgroundOpacityPercent) {
+        QRegion damage;
+        for (const auto* state : {&previous, &next}) {
+            if (!state->present)
+                continue;
+            damage += selectionPreviewBounds(*state, canvasToViewTransform)
+                          .toAlignedRect()
+                          .adjusted(-3, -3, 3, 3);
+        }
+        // Presets can change opacity and geometry together. Preserve the damage
+        // for every other state change, including handles outside these bounds.
+        auto previousWithNextOpacity = previous;
+        previousWithNextOpacity.backgroundOpacityPercent = next.backgroundOpacityPercent;
+        damage += planScreenshotSelectionDamage(previousWithNextOpacity, next, viewportRect,
+                                                canvasToViewTransform, maskVisible);
+        return damage.intersected(viewportRect);
+    }
     if (previous.stationaryRegions && next.stationaryRegions && previous.highlightedRegion &&
         next.highlightedRegion && !previous.toolbarHovered && !next.toolbarHovered &&
         !previous.effectPreviewVisible && !next.effectPreviewVisible &&
@@ -1691,18 +1693,28 @@ QRegion planScreenshotSelectionDamage(const ScreenshotSelectionVisualState& prev
             // Rounded contours differ from their integer region only in a band
             // around its edges. Include that band without repainting the gaps.
             const int padding =
-                qCeil(scale * std::max(previous.toolbarHovered ? previous.shadowWidth : 0,
-                                       next.toolbarHovered ? next.shadowWidth : 0)) +
+                qCeil(scale *
+                      std::max(selectionEffectsPreviewVisible(previous) ? previous.shadowWidth : 0,
+                               selectionEffectsPreviewVisible(next) ? next.shadowWidth : 0)) +
                 3;
             const int radius = qCeil(scale * std::max(previous.cornerRadius, next.cornerRadius));
             QRegion dirtyRegion = previousPixels.xored(nextPixels);
             dirtyRegion += regionEdgeDamage(previousPixels, padding, viewportRect, radius);
             dirtyRegion += regionEdgeDamage(nextPixels, padding, viewportRect, radius);
-            if (previous.toolbarHovered || next.toolbarHovered) {
-                dirtyRegion += shapedPreviewCheckerboardPixels(previous, previousPixels,
-                                                               canvasToViewTransform, viewportRect)
-                                   .xored(shapedPreviewCheckerboardPixels(
-                                       next, nextPixels, canvasToViewTransform, viewportRect));
+            // Both preview triggers replace the mask in holes, gaps and shadow
+            // padding. Those pixels can be far from every selected contour.
+            dirtyRegion += shapedPreviewBackgroundPixels(previous, previousPixels,
+                                                         canvasToViewTransform, viewportRect)
+                               .xored(shapedPreviewBackgroundPixels(
+                                   next, nextPixels, canvasToViewTransform, viewportRect));
+            // Integer coverage can overlap while the fractional preview clip
+            // changes edge coverage, especially when shadow padding expands.
+            for (const auto* state : {&previous, &next}) {
+                if (selectionEffectsPreviewVisible(*state))
+                    dirtyRegion += regionEdgeDamage(
+                        QRegion(
+                            selectionPreviewBounds(*state, canvasToViewTransform).toAlignedRect()),
+                        3, viewportRect);
             }
             if (previous.confirmedRegion != next.confirmedRegion ||
                 previous.borderVisible != next.borderVisible ||
@@ -1745,11 +1757,14 @@ QRegion planScreenshotSelectionDamage(const ScreenshotSelectionVisualState& prev
                                     .united(next.draftPath.boundingRect())
                                     .united(QRectF(previous.confirmedRegion.boundingRect()))
                                     .united(QRectF(next.confirmedRegion.boundingRect()));
-        const int padding = std::max(previous.shadowWidth, next.shadowWidth) + 3;
+        QRectF affectedView = canvasToViewTransform.mapRect(affected);
+        for (const auto* state : {&previous, &next}) {
+            if (selectionEffectsPreviewVisible(*state))
+                affectedView =
+                    affectedView.united(selectionPreviewBounds(*state, canvasToViewTransform));
+        }
         QRegion dirtyRegion =
-            QRegion(canvasToViewTransform.mapRect(affected).toAlignedRect().adjusted(
-                        -padding, -padding, padding, padding))
-                .intersected(viewportRect);
+            QRegion(affectedView.toAlignedRect().adjusted(-3, -3, 3, 3)).intersected(viewportRect);
         dirtyRegion += selectionStateHandleRegion(previous, viewportRect, canvasToViewTransform);
         dirtyRegion += selectionStateHandleRegion(next, viewportRect, canvasToViewTransform);
         return dirtyRegion;
@@ -2745,6 +2760,7 @@ void ScreenshotCanvasRenderer::applySelectionState(const ScreenshotSelectionVisu
     next.present = next.present && next.bounds.isValid() && !next.bounds.isEmpty();
     next.cornerRadius = next.present ? std::max(0, next.cornerRadius) : 0;
     next.shadowWidth = next.present ? std::max(0, next.shadowWidth) : 0;
+    next.backgroundOpacityPercent = std::clamp(next.backgroundOpacityPercent, 0, 100);
     if (!next.shadowColor.isValid()) {
         next.shadowColor = QColor(0x33, 0x33, 0x33);
     }
@@ -2753,7 +2769,10 @@ void ScreenshotCanvasRenderer::applySelectionState(const ScreenshotSelectionVisu
     }
     const ScreenshotSelectionVisualState previous = m_selectionState;
     m_selectionState = next;
-    m_selectionViewGeometry = {};
+    auto geometryState = previous;
+    geometryState.backgroundOpacityPercent = next.backgroundOpacityPercent;
+    if (geometryState != next)
+        m_selectionViewGeometry = {};
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
     const QTransform canvasToViewTransform = m_canvas.canvasToViewTransform();
     if (!canvasToViewTransform.isInvertible()) {
@@ -3022,6 +3041,7 @@ void ScreenshotCanvasRenderer::reset() {
 }
 
 void ScreenshotCanvasRenderer::clearRenderState() {
+    m_selectionBackgroundCache = {};
     if (m_selectionState.region)
         m_selectionState.region->clearDerivedCache();
     m_selectionState.confirmedRegion.clearDerivedCache();
@@ -3183,6 +3203,7 @@ quint64 ScreenshotCanvasRenderer::ocrGeometrySynchronizationCountForTesting() co
 void ScreenshotCanvasRenderer::invalidateCachedContent(bool originalChanged) {
     ++m_contentRevision;
     if (originalChanged) {
+        m_selectionBackgroundCache = {};
         ++m_originalBackgroundRevision;
     }
 }
@@ -3215,6 +3236,108 @@ ScreenshotCanvasRenderer::pinnedViewportForContext(const SnowCanvasRenderContext
 void ScreenshotCanvasRenderer::renderOriginalBackground(QPainter& painter,
                                                         const SnowCanvasRenderContext& context) {
     paintBackground(painter, context, true);
+}
+
+void ScreenshotCanvasRenderer::paintSelectionBackground(QPainter& painter,
+                                                        const SnowCanvasRenderContext& context,
+                                                        const QRectF& bounds) {
+    // Flatten overlapping layers (notably the cursor patch) before applying
+    // opacity. Per-layer alpha would otherwise reveal the covered capture twice.
+    const QRect visible = bounds.toAlignedRect().intersected(context.viewportRect);
+    if (visible.isEmpty())
+        return;
+    auto selectionPath = m_selectionViewGeometry.effectivePath;
+    if (m_selectionViewGeometry.rectangular)
+        selectionPath.addRect(m_selectionViewGeometry.effectiveRect);
+    const auto render = [&](const QRect& rect) {
+        const QSize size(qCeil(rect.width() * context.devicePixelRatio),
+                         qCeil(rect.height() * context.devicePixelRatio));
+        auto image = snowCanvasAllocateZeroedImage(size, QImage::Format_ARGB32_Premultiplied);
+        if (image.isNull())
+            return image;
+        image.setDevicePixelRatio(context.devicePixelRatio);
+        QPainter layerPainter(&image);
+        layerPainter.translate(-rect.topLeft());
+        auto full = context;
+        full.exposedRegion = rect;
+        paintBackground(layerPainter, full, true);
+        layerPainter.end();
+        const auto physicalPath =
+            QTransform::fromScale(context.devicePixelRatio, context.devicePixelRatio)
+                .map(selectionPath.translated(-rect.topLeft()));
+        return ScreenshotResultCompositor::maskBackgroundForSelection(image, image, physicalPath);
+    };
+    constexpr qint64 limit = 64 * 1024 * 1024;
+    if (qCeil(visible.width() * context.devicePixelRatio) *
+            qint64(qCeil(visible.height() * context.devicePixelRatio)) * 4 <=
+        limit) {
+        if (m_selectionBackgroundCache.isNull() || m_selectionBackgroundCacheBounds != visible ||
+            m_selectionBackgroundCachePath != selectionPath ||
+            m_selectionBackgroundCacheTransform != context.canvasToViewTransform ||
+            m_selectionBackgroundCache.devicePixelRatio() != context.devicePixelRatio) {
+            m_selectionBackgroundCache = render(visible);
+            m_selectionBackgroundCacheBounds = visible;
+            m_selectionBackgroundCacheTransform = context.canvasToViewTransform;
+            m_selectionBackgroundCachePath = selectionPath;
+        }
+        painter.drawImage(visible.topLeft(), m_selectionBackgroundCache);
+    } else {
+        m_selectionBackgroundCache = {};
+        for (int y = visible.top(); y <= visible.bottom(); y += 256)
+            for (int x = visible.left(); x <= visible.right(); x += 256) {
+                const QRect tile = QRect(x, y, 256, 256).intersected(visible);
+                if (context.exposedRegion.intersects(tile))
+                    painter.drawImage(tile.topLeft(), render(tile));
+            }
+    }
+}
+
+void ScreenshotCanvasRenderer::maskSelectionPreview(QPainter& painter,
+                                                    const SnowCanvasRenderContext& context,
+                                                    const QRectF& bounds) {
+    auto& geometry = m_selectionViewGeometry;
+    const auto device = painter.deviceTransform();
+    const auto inverse = device.inverted();
+    const QRect pixels = device.mapRect(bounds).toAlignedRect().intersected(
+        device.mapRect(QRectF(context.viewportRect)).toAlignedRect());
+    if (pixels.isEmpty())
+        return;
+    auto path = geometry.effectivePath;
+    if (geometry.rectangular)
+        path.addRect(geometry.effectiveRect);
+    const auto render = [&](const QRect& rect) {
+        auto mask = snowCanvasAllocateZeroedImage(rect.size(), QImage::Format_Alpha8);
+        if (mask.isNull())
+            return mask;
+        QPainter raster(&mask);
+        raster.setRenderHint(QPainter::Antialiasing);
+        raster.translate(-rect.topLeft());
+        raster.setTransform(device, true);
+        raster.fillPath(path, Qt::white);
+        return mask;
+    };
+    painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+    // Rasterize positive coverage exactly as the result compositor does.
+    // Filling an inverse path rounds antialiased edge coverage differently.
+    constexpr qint64 limit = 16 * 1024 * 1024;
+    if (qint64(pixels.width()) * pixels.height() <= limit) {
+        if (geometry.previewMask.isNull() || geometry.previewMaskPixels != pixels ||
+            geometry.previewMaskTransform != device) {
+            geometry.previewMask = render(pixels);
+            geometry.previewMaskPixels = pixels;
+            geometry.previewMaskTransform = device;
+        }
+        painter.drawImage(inverse.mapRect(QRectF(pixels)), geometry.previewMask);
+    } else {
+        geometry.previewMask = {};
+        for (int y = pixels.top(); y <= pixels.bottom(); y += 512)
+            for (int x = pixels.left(); x <= pixels.right(); x += 512) {
+                const QRect tile = QRect(x, y, 512, 512).intersected(pixels);
+                const auto destination = inverse.mapRect(QRectF(tile));
+                if (context.exposedRegion.intersects(destination.toAlignedRect()))
+                    painter.drawImage(destination, render(tile));
+            }
+    }
 }
 
 void ScreenshotCanvasRenderer::paintBackground(QPainter& painter,
@@ -3482,6 +3605,19 @@ void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
         painter.setRenderHint(QPainter::Antialiasing, true);
     }
 
+    const bool effectsPreview =
+        m_renderMode == RenderMode::Standard && selectionEffectsPreviewVisible(m_selectionState);
+    const QRectF previewBounds =
+        selectionPreviewBounds(m_selectionState, context.canvasToViewTransform);
+    painter.save();
+    if (effectsPreview) {
+        // Preserve the source at curve edges: the preview supplies its own matte.
+        QPainterPath outside;
+        outside.addRect(context.viewportRect);
+        outside.addRect(previewBounds);
+        outside.setFillRule(Qt::OddEvenFill);
+        painter.setClipPath(outside, Qt::IntersectClip);
+    }
     const bool cachedMask =
         m_maskVisible && geometry.maskCacheEligible &&
         // Small masks are cheaper to fill than to fetch from a selection-sized
@@ -3506,6 +3642,7 @@ void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
                 m_maskColor);
         }
     }
+    painter.restore();
     if (m_renderMode == RenderMode::Standard && m_guideLinesVisible) {
         const QRectF viewport(context.viewportRect);
         paintScreenshotGuideLines(painter, viewport, QPointF(m_guideLineCursorPosition),
@@ -3537,20 +3674,13 @@ void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
     if (m_renderMode == RenderMode::Standard && m_selectionState.present) {
         const QColor selectionAccent = m_selectionBorderColor;
         const QRectF selectionView = context.canvasToViewTransform.mapRect(m_selectionState.bounds);
-        if (m_selectionState.toolbarHovered || m_selectionState.effectPreviewVisible) {
+        if (effectsPreview) {
+            painter.save();
+            painter.setClipRect(previewBounds, Qt::IntersectClip);
+            maskSelectionPreview(painter, context, previewBounds);
+            painter.setCompositionMode(QPainter::CompositionMode_DestinationOver);
             if (shaped) {
                 const QRect bounds = m_selectionState.region->boundingRect();
-                if (!bounds.isEmpty()) {
-                    const int padding = m_selectionState.shadowWidth;
-                    const QRectF previewBounds = context.canvasToViewTransform.mapRect(
-                        QRectF(bounds.adjusted(-padding, -padding, padding, padding)));
-                    // Compound results are transparent between regions and in holes,
-                    // even when no shadow is configured.
-                    QPainterPath previewArea;
-                    previewArea.addRect(previewBounds);
-                    painter.fillPath(previewArea.subtracted(effectivePath),
-                                     adqt::widgets::themedCheckerboardBrush(&m_canvas));
-                }
                 if (!bounds.isEmpty() && m_selectionState.shadowWidth > 0) {
                     const ScreenshotRegionGeometry localRegion =
                         m_selectionState.region->translated(-bounds.topLeft());
@@ -3583,16 +3713,30 @@ void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
                             m_regionHoverCache = {};
                         }
                     }
-                    const int padding = m_selectionState.shadowWidth;
-                    painter.drawImage(context.canvasToViewTransform.mapRect(QRectF(
-                                          bounds.adjusted(-padding, -padding, padding, padding))),
-                                      cacheHit ? m_regionHoverCache : uncachedShadow);
+                    painter.drawImage(
+                        context.canvasToViewTransform.mapRect(QRectF(bounds.adjusted(
+                            -m_selectionState.shadowWidth, -m_selectionState.shadowWidth,
+                            m_selectionState.shadowWidth, m_selectionState.shadowWidth))),
+                        cacheHit ? m_regionHoverCache : uncachedShadow);
                 }
             } else {
-                renderSelectionShadow(painter, context, m_selectionState.bounds,
-                                      visibleCornerRadius, m_selectionState.shadowWidth,
-                                      m_selectionState.shadowColor, &m_canvas);
+                const qreal scale = std::max<qreal>(
+                    1.0e-6, std::min(std::hypot(context.canvasToViewTransform.m11(),
+                                                context.canvasToViewTransform.m12()),
+                                     std::hypot(context.canvasToViewTransform.m21(),
+                                                context.canvasToViewTransform.m22())));
+                ScreenshotSelectionShadowRenderer::renderResultShadow(
+                    painter, selectionView, visibleCornerRadius * scale,
+                    m_selectionState.shadowWidth * scale, m_selectionState.shadowColor,
+                    context.devicePixelRatio);
             }
+            if (m_selectionState.backgroundOpacityPercent > 0) {
+                painter.setOpacity(m_selectionState.backgroundOpacityPercent / 100.0);
+                paintSelectionBackground(painter, context, previewBounds);
+                painter.setOpacity(1.0);
+            }
+            painter.fillRect(previewBounds, adqt::widgets::themedCheckerboardBrush(&m_canvas));
+            painter.restore();
         }
         if (!m_selectionState.toolbarHovered && m_selectionState.borderVisible) {
             painter.setPen(QPen(selectionAccent, kSelectionBorderWidth));

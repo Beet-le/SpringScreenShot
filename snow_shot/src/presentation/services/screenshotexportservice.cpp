@@ -9,6 +9,7 @@
 #include "snow_shot/presentation/screenshotclipboardservice.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/presentation/screenshotresultcompositor.h"
+#include "snow_shot/presentation/screenshotselectionbackground.h"
 #include "snow_shot/presentation/screenshotselectionpin.h"
 #include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
 
@@ -120,7 +121,11 @@ QImage composeSelectionResultFromRuntime(SnowCanvasRuntime& runtime, const QRect
         screenshotSelectionRenderedShadowPixels(style.shadowWidth, spec.scale);
     if (plan && plan->changed)
         outputStyle = compactedScreenshotResultStyle(outputStyle, *plan);
-    QImage result = ScreenshotResultCompositor::compose(content, outputStyle);
+    const QImage background =
+        renderScreenshotSelectionBackground(sources, selection, pixelSize, outputStyle, plan.get());
+    if (outputStyle.backgroundOpacityPercent > 0 && background.isNull())
+        return {};
+    QImage result = ScreenshotResultCompositor::compose(content, outputStyle, 1.0, 1.0, background);
     if (result.isNull()) {
         qWarning("Screenshot selection export failed: stage=compose_result width=%d height=%d",
                  content.width(), content.height());

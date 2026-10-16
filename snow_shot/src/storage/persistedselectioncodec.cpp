@@ -64,6 +64,7 @@ QJsonObject persistedSelectionToJson(const PersistedSelection& selection) {
         {QStringLiteral("lock_aspect_ratio"), selection.lockAspectRatio},
         {QStringLiteral("lock_drag_aspect_ratio"), selection.lockDragAspectRatio},
     };
+    result.insert(QStringLiteral("background_opacity_percent"), selection.backgroundOpacityPercent);
     result.insert(QStringLiteral("layout_compaction_enabled"), selection.layoutCompaction.enabled);
     result.insert(QStringLiteral("layout_compaction_spacing"), selection.layoutCompaction.spacing);
     if (selection.region && selection.region->custom()) {
@@ -136,6 +137,9 @@ PersistedSelectionNormalization normalizePersistedSelection(const QJsonValue& va
         selection.region = region;
         selection.rectangle = bounds;
     }
+    const auto opacity = object.value(QStringLiteral("background_opacity_percent"));
+    if (!opacity.isUndefined() && !integer(opacity, 0, 100, &selection.backgroundOpacityPercent))
+        return {};
     const auto enabled = object.value(QStringLiteral("layout_compaction_enabled"));
     const auto spacing = object.value(QStringLiteral("layout_compaction_spacing"));
     if ((!enabled.isUndefined() && !enabled.isBool()) ||

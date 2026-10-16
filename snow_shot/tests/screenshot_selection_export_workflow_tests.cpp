@@ -66,11 +66,12 @@ class FakeComposer final : public ScreenshotSelectionImageComposerPort {
         return false;
     }
 
-    bool requestSelectionClipboard(const QRect&, const ScreenshotResultStyle&, QObject*,
+    bool requestSelectionClipboard(const QRect&, const ScreenshotResultStyle& style, QObject*,
                                    ClipboardCallback callback,
                                    ScreenshotLayoutCompaction compaction) override {
         ++requestCount;
         requestedCompaction = compaction;
+        requestedStyle = style;
         if (!scheduleSucceeds) {
             return false;
         }
@@ -99,6 +100,7 @@ class FakeComposer final : public ScreenshotSelectionImageComposerPort {
     bool produceValidPayload = true;
     int requestCount = 0;
     ScreenshotLayoutCompaction requestedCompaction;
+    ScreenshotResultStyle requestedStyle;
 };
 
 class FakeDestination final : public ScreenshotSelectionExportDestinationPort {
@@ -183,8 +185,11 @@ void publicationSuccessCompletes() {
 void clipboardCarriesEligibleCompaction() {
     Fixture fixture;
     fixture.selection.setLayoutCompaction({true, 7});
+    fixture.selection.setBackgroundOpacityPercent(37);
     require(fixture.workflow.copySelectionToClipboard([] { return true; }, [](bool, QImage) {}),
             "single-region clipboard request schedules");
+    require(fixture.composer.requestedStyle.backgroundOpacityPercent == 37,
+            "clipboard workflow must retain background opacity for single-region selections");
     require(!fixture.composer.requestedCompaction.enabled,
             "single-region output must not apply remembered compaction");
     fixture.selection.setSelectionRegion(QRegion(10, 12, 10, 24).united(QRegion(50, 12, 20, 24)));

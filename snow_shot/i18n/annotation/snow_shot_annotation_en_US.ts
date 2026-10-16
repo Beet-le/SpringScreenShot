@@ -1076,6 +1076,14 @@
             <translation>Selected model (%1)</translation>
         </message>
         <message>
+            <source>Selection background opacity</source>
+            <translation>Selection background opacity</translation>
+        </message>
+        <message>
+            <source>Selection background opacity (scroll to adjust; click to reset to 0%)</source>
+            <translation>Selection background opacity (scroll to adjust; click to reset to 0%)</translation>
+        </message>
+        <message>
             <source>Send backward</source>
             <translation>Send backward</translation>
         </message>

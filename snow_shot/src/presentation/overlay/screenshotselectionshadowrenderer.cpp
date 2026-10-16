@@ -738,11 +738,80 @@ QImage composeRegion(const QImage& content, const ScreenshotResultStyle& style,
     painter.end();
     return applyOutputOpacity(std::move(output), opacity);
 }
+
+// Destination-over naturally fills the uncovered part of an opaque selection.
+// For translucent source pixels it would also fill *inside* the selection. Reduce
+// the background there by geometric coverage, keeping antialiased edges intact.
+// The usual opaque-capture path neither copies the background nor builds a mask.
+QImage backgroundOutsideSelection(QImage background, const QImage& content,
+                                  const QPainterPath& path, const QPoint& contentOffset) {
+    constexpr int side = 512;
+    bool detached = false;
+    for (int top = 0; top < content.height(); top += side) {
+        for (int left = 0; left < content.width(); left += side) {
+            const QRect tile = QRect(left, top, side, side).intersected(content.rect());
+            const QRect outputTile = tile.translated(contentOffset);
+            if (!path.intersects(QRectF(outputTile)))
+                continue;
+            const bool interior = path.contains(QRectF(outputTile));
+            QImage mask;
+            QPoint maskOffset;
+            for (int y = tile.top(); y <= tile.bottom(); ++y) {
+                const auto* source = reinterpret_cast<const QRgb*>(content.constScanLine(y));
+                const int outputY = y + contentOffset.y();
+                auto* row = const_cast<QRgb*>(
+                    reinterpret_cast<const QRgb*>(background.constScanLine(outputY)));
+                for (int x = tile.left(); x <= tile.right(); ++x) {
+                    const int alpha = qAlpha(source[x]);
+                    const int outputX = x + contentOffset.x();
+                    if (alpha == 255 || qAlpha(row[outputX]) == 0)
+                        continue;
+                    int coverage = 255;
+                    if (!interior) {
+                        if (mask.isNull()) {
+                            const auto& cache = g_regionCompositionCache;
+                            if (cache.path == path && cache.size == background.size() &&
+                                !cache.mask.isNull()) {
+                                mask = cache.mask;
+                            } else {
+                                mask = regionMask(outputTile.size(),
+                                                  path.translated(-outputTile.topLeft()));
+                                maskOffset = outputTile.topLeft();
+                            }
+                            if (mask.isNull())
+                                return {};
+                        }
+                        coverage =
+                            mask.constScanLine(outputY - maskOffset.y())[outputX - maskOffset.x()];
+                    }
+                    if (coverage == 0)
+                        continue;
+                    if (!detached) {
+                        if (!snowCanvasDetachImage(background))
+                            return {};
+                        row = reinterpret_cast<QRgb*>(background.scanLine(outputY));
+                        detached = true;
+                    }
+                    const int denominator = 255 - (alpha * coverage + 127) / 255;
+                    const int numerator = 255 - coverage;
+                    const QRgb pixel = row[outputX];
+                    const auto scale = [=](int component) {
+                        return (component * numerator + denominator / 2) / denominator;
+                    };
+                    row[outputX] = qRgba(scale(qRed(pixel)), scale(qGreen(pixel)),
+                                         scale(qBlue(pixel)), scale(qAlpha(pixel)));
+                }
+            }
+        }
+    }
+    return background;
+}
 } // namespace
 
 ScreenshotResultStyle
 ScreenshotResultCompositor::normalizedStyle(const ScreenshotResultStyle& style) {
     ScreenshotResultStyle normalized = style;
+    normalized.backgroundOpacityPercent = std::clamp(normalized.backgroundOpacityPercent, 0, 100);
     normalized.cornerRadius = std::clamp(
         normalized.cornerRadius, 0, snow_shot::presentation::kScreenshotSelectionCornerRadiusMax);
     if (normalized.region && normalized.region->custom())
@@ -788,14 +857,60 @@ QImage ScreenshotResultCompositor::normalizeImage(const QImage& image) {
     return normalized;
 }
 
+QImage ScreenshotResultCompositor::maskBackgroundForSelection(QImage background,
+                                                              const QImage& content,
+                                                              const QPainterPath& selectionPath,
+                                                              const QPoint& contentOffset) {
+    if (background.format() != QImage::Format_ARGB32_Premultiplied ||
+        content.format() != QImage::Format_ARGB32_Premultiplied ||
+        !background.rect().contains(QRect(contentOffset, content.size())))
+        return {};
+    return backgroundOutsideSelection(std::move(background), content, selectionPath, contentOffset);
+}
+
 QImage ScreenshotResultCompositor::compose(const QImage& content,
                                            const ScreenshotResultStyle& style,
-                                           qreal devicePixelRatio, qreal outputOpacity) {
+                                           qreal devicePixelRatio, qreal outputOpacity,
+                                           const QImage& background) {
     QImage normalizedContent = normalizeImage(content);
     if (normalizedContent.isNull()) {
         return {};
     }
     const ScreenshotResultStyle normalized = normalizedStyle(style);
+    if (normalized.backgroundOpacityPercent > 0 && !background.isNull()) {
+        auto selectedStyle = normalized;
+        selectedStyle.backgroundOpacityPercent = 0;
+        QImage result = compose(normalizedContent, selectedStyle, devicePixelRatio);
+        if (result.isNull() || result.size() != background.size())
+            return {};
+        const auto layout =
+            layoutForContent(normalizedContent.size(), normalized, devicePixelRatio);
+        QPainterPath path;
+        if (normalized.region) {
+            QTransform transform;
+            transform.translate(layout.contentRect.x(), layout.contentRect.y());
+            transform.scale(normalized.regionScale, normalized.regionScale);
+            path = transform.map(
+                normalized.region->custom()
+                    ? normalized.region->path(normalized.regionScale)
+                    : screenshotRegionPath(*normalized.region, normalized.cornerRadius *
+                                                                   layout.devicePixelRatio /
+                                                                   normalized.regionScale));
+        } else {
+            path =
+                roundedHole(layout.contentRect, normalized.cornerRadius * layout.devicePixelRatio);
+        }
+        const auto retained = maskBackgroundForSelection(
+            normalizeImage(background), normalizedContent, path, layout.contentRect.topLeft());
+        if (retained.isNull())
+            return {};
+        QPainter painter(&result);
+        painter.setCompositionMode(QPainter::CompositionMode_DestinationOver);
+        painter.setOpacity(normalized.backgroundOpacityPercent / 100.0);
+        painter.drawImage(QPoint(), retained);
+        painter.end();
+        return applyOutputOpacity(std::move(result), outputOpacity);
+    }
     if (normalized.region) {
         return composeRegion(normalizedContent, normalized, devicePixelRatio, outputOpacity);
     }

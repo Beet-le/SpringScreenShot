@@ -8,6 +8,7 @@
 #include "snow_shot/app/mcp/mcpstylepatch.h"
 #include "snow_shot/app/mcp/mcpimageexportoptions.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
+#include "snow_shot/presentation/screenshotselectionbackground.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotrecognitionsessioncontroller.h"
@@ -264,7 +265,7 @@ LayoutPlan documentLayoutPlan(const Document& document, const QSize& size, qreal
 }
 
 QImage renderDocumentResult(Document& document, const QSize& size, qreal scale,
-                            const LayoutPlan& plan) {
+                            const LayoutPlan& plan, bool includeBackground = true) {
     const auto outputSize = plan ? plan->outputSize : size;
     if (!validSize(outputSize))
         return {};
@@ -280,12 +281,18 @@ QImage renderDocumentResult(Document& document, const QSize& size, qreal scale,
                                                document.sources);
     }
     auto style = document.selection.resultStyle();
+    if (!includeBackground)
+        style.backgroundOpacityPercent = 0;
     style.regionScale *= scale;
     style.cornerRadius = qRound(style.cornerRadius * scale);
     style.shadowWidth = qRound(style.shadowWidth * scale);
     if (plan && plan->changed)
         style = compactedScreenshotResultStyle(style, *plan);
-    return ScreenshotResultCompositor::compose(image, style);
+    const auto background = renderScreenshotSelectionBackground(
+        document.sources, document.selection.pixelSelection(), size, style, plan.get());
+    if (style.backgroundOpacityPercent > 0 && background.isNull())
+        return {};
+    return ScreenshotResultCompositor::compose(image, style, 1.0, 1.0, background);
 }
 
 struct WorkerResult {
@@ -663,7 +670,7 @@ class DocumentWorker final : public QObject {
                 // A changed layout is handed off as a completed image. The original
                 // document remains available for capture editing and recognition.
                 auto background =
-                    plan && plan->changed
+                    ((plan && plan->changed) || document.selection.backgroundOpacityPercent() > 0)
                         ? renderDocumentResult(document, selection.size(), 1, plan)
                         : base.renderToImage(selection, selection.size(), document.sources);
                 if (background.isNull())
@@ -1045,15 +1052,20 @@ class DocumentWorker final : public QObject {
         const auto plan = documentLayoutPlan(document, size, scale, compaction);
         if (!validSize(plan ? plan->outputSize : size))
             return {failure(request, QStringLiteral("output_too_large")), {}};
-        const bool cached = !document.rendered.isNull() && document.renderedScale == scale &&
+        const bool includeBackground = method != QStringLiteral("snow_shot_document_recognize");
+        const bool cacheEligible =
+            includeBackground || document.selection.backgroundOpacityPercent() == 0;
+        const bool cached = cacheEligible && !document.rendered.isNull() &&
+                            document.renderedScale == scale &&
                             document.renderedCompaction == compaction;
         if (!cached && workObserved)
             workObserved(document.id, QStringLiteral("render"));
-        QImage image =
-            cached ? document.rendered : renderDocumentResult(document, size, scale, plan);
+        QImage image = cached
+                           ? document.rendered
+                           : renderDocumentResult(document, size, scale, plan, includeBackground);
         if (image.isNull())
             return {failure(request, QStringLiteral("output_failed")), {}};
-        if (!cached) {
+        if (!cached && cacheEligible) {
             invalidate(document);
             if (image.sizeInBytes() <= kMaximumCacheBytes) {
                 bool retained = admission->reserveCache(image.sizeInBytes());

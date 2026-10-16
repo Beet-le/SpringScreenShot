@@ -1,5 +1,6 @@
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_shot/presentation/screenshotrecognitionimage.h"
+#include "snow_shot/presentation/screenshotselectionbackground.h"
 #include "snow_shot/presentation/screenshotocrtextlayout.h"
 #include <QPainter>
 #include <cmath>
@@ -52,10 +53,13 @@ QImage renderScreenshotRecognitionImage(const ScreenshotRecognitionImageSnapshot
         style.cornerRadius = qRound(style.cornerRadius * scale);
         style.shadowWidth = qRound(style.shadowWidth * scale);
     }
+    std::shared_ptr<const ScreenshotLayoutCompactionPlan> backgroundPlan;
+    const QSize sourcePixelSize = image.size();
     if (snapshot.layoutCompaction.enabled && style.region) {
         const auto plan = screenshotLayoutCompactionPlan(
             *style.region, image.size(), style.regionScale, snapshot.layoutCompaction,
             ScreenshotResultCompositor::normalizedStyle(style).shadowWidth);
+        backgroundPlan = plan;
         if (!plan->isValid())
             return {};
         if (plan->changed) {
@@ -71,7 +75,16 @@ QImage renderScreenshotRecognitionImage(const ScreenshotRecognitionImageSnapshot
             style = compactedScreenshotResultStyle(style, *plan);
         }
     }
-    return stopped()
-               ? QImage{}
-               : ScreenshotResultCompositor::compose(image, style, 1.0, snapshot.outputOpacity);
+    const auto background = style.backgroundOpacityPercent > 0
+                                ? renderScreenshotSelectionBackground(
+                                      snapshot.backgroundSources.isEmpty()
+                                          ? QList<CanvasExportSource>{{snapshot.image, rect}}
+                                          : snapshot.backgroundSources,
+                                      rect, sourcePixelSize, style, backgroundPlan.get(), cancelled)
+                                : QImage{};
+    if (style.backgroundOpacityPercent > 0 && background.isNull())
+        return {};
+    return stopped() ? QImage{}
+                     : ScreenshotResultCompositor::compose(image, style, 1.0,
+                                                           snapshot.outputOpacity, background);
 }

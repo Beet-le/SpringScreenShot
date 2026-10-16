@@ -357,6 +357,22 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void undoCanvasEdit() override;
     void redoCanvasEdit() override;
     void requestRecapture() override;
+    void setSelectionBackgroundOpacityPercent(int percent) override {
+        if (!m_selection.hasPixelSelection() || m_interaction.dragging() ||
+            m_selection.constructionActive() || m_selection.regionOperationActive())
+            return;
+        if (m_selection.setBackgroundOpacityPercent(percent)) {
+            m_selectionSettings->setBackgroundOpacityPercent(
+                m_selection.backgroundOpacityPercent());
+            m_presentationServices->updateOverlayState();
+        }
+    }
+    void setSelectionBackgroundPreviewVisible(bool visible) override {
+        if (m_interaction.selectionBackgroundPreviewVisible() == visible)
+            return;
+        m_interaction.setSelectionBackgroundPreviewVisible(visible);
+        m_presentationServices->updateOverlayState();
+    }
     void setLayoutCompaction(bool enabled, int spacing) override {
         if (!m_selection.layoutCompactionAvailable() || m_interaction.dragging())
             return;
@@ -1692,6 +1708,8 @@ void ScreenshotController::Impl::createCaptureWorkflow() {
             },
             [this]() {
                 m_selection.setLayoutCompaction(m_selectionSettings->layoutCompaction());
+                m_selection.setBackgroundOpacityPercent(
+                    m_selectionSettings->backgroundOpacityPercent());
                 m_selection.setRegionType(m_selectionSettings->regionType());
                 static_cast<void>(m_selection.setCornerRadius(m_selectionSettings->cornerRadius()));
                 static_cast<void>(m_selection.setShadowWidth(m_selectionSettings->shadowWidth()));
@@ -4160,8 +4178,17 @@ ScreenshotController::Impl::recognitionFileSaveArtifact() const {
         return {};
     const ScreenshotResultStyle style = m_selection.resultStyle();
     auto snapshot = m_ocrController->imageSnapshot(style);
-    if (snapshot)
+    if (snapshot) {
         snapshot->layoutCompaction = m_selection.exportLayoutCompaction();
+        if (style.backgroundOpacityPercent > 0) {
+            m_displaySession.forEachImageSource([&](qsizetype,
+                                                    const CapturedDisplayModel& display) {
+                for (const auto& layer :
+                     screenshotDisplayImageLayers(display, m_displaySession.cursorVisible))
+                    snapshot->backgroundSources.append({layer.image, layer.destinationCanvasRect});
+            });
+        }
+    }
     return snapshot ? std::make_shared<ScreenshotExportArtifact>(
                           ScreenshotExportSource::fromRecognitionImage(std::move(*snapshot)))
                     : nullptr;
@@ -4457,7 +4484,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer ? QStringLiteral("service_destroyed")
+                                           : !printer         ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
@@ -7087,6 +7114,7 @@ bool ScreenshotController::mcpPinDocument(ScreenshotHistoryEntry entry, QImage b
     const auto& selection = entry.selection;
     ScreenshotResultStyle style{selection.radius, selection.shadowWidth, selection.shadowColor,
                                 selection.region};
+    style.backgroundOpacityPercent = selection.backgroundOpacityPercent;
     if (style.region)
         style.region = style.region->translated(-selection.selection.topLeft());
     const auto plan =
@@ -7095,7 +7123,7 @@ bool ScreenshotController::mcpPinDocument(ScreenshotHistoryEntry entry, QImage b
                   *style.region, selection.selection.size(), 1, selection.layoutCompaction,
                   ScreenshotResultCompositor::normalizedStyle(style).shadowWidth)
             : nullptr;
-    if (plan && plan->changed) {
+    if ((plan && plan->changed) || style.backgroundOpacityPercent > 0) {
         // The document worker has already composed this raster. Preserve its
         // outline and start fresh recognition in the compacted image coordinates.
         const auto appearance = screenshotSelectionBorderAppearance(

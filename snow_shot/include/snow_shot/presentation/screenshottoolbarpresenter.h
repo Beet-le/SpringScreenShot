@@ -33,6 +33,8 @@ struct ScreenshotToolbarPresentationState {
     bool selectionResizable = true;
     bool cornerRadiusApplicable = true;
     bool layoutCompactionAvailable = false;
+    int backgroundOpacityPercent = 0;
+    bool backgroundOpacityAvailable = false;
     ScreenshotLayoutCompaction layoutCompaction = {};
     bool aspectRatioLocked = false;
     ScreenshotSelectionAspectRatioPreset aspectRatioPreset =

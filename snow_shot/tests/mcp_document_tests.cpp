@@ -556,7 +556,7 @@ void documentReservations(const QString& directory) {
         service.shutdown();
     }
 }
-void compactedDocumentsKeepEditingCoordinates(const QString& directory) {
+void compactedDocumentsKeepEditingCoordinates(const QString& directory, int opacity = 0) {
     FixtureOcr ocr;
     McpJobRegistry jobs;
     McpDocumentService::Ports ports;
@@ -570,6 +570,7 @@ void compactedDocumentsKeepEditingCoordinates(const QString& directory) {
     selection.radius = 4;
     selection.shadowWidth = 2;
     selection.layoutCompaction = {true, 5};
+    selection.backgroundOpacityPercent = opacity;
     ports.resolveSource = [selection](const ScreenshotMcpRequest&, auto done, auto budget) {
         require(budget(80 * 60 * 4), "compacted document source reservation");
         McpDocumentService::Source source;
@@ -615,11 +616,14 @@ void compactedDocumentsKeepEditingCoordinates(const QString& directory) {
     id = opened.result.value(QStringLiteral("document_id")).toString();
     const auto rendered = call(QStringLiteral("render"));
     const auto pixels = QImage::fromData(rendered.attachment);
+    require(std::abs(pixels.pixelColor(26, 20).alpha() - qRound(opacity * 2.55)) <= 1,
+            "document render must retain background opacity in compressed gaps");
     require(pixels.size() == QSize(53, 44),
             "document render reserves each region's shadow footprint during compaction");
     call(QStringLiteral("copy"));
     require(QImage::fromData(clipboard->png) == pixels, "document copy matches rendered pixels");
-    const auto path = QDir(directory).filePath(QStringLiteral("compacted-document.png"));
+    const auto path =
+        QDir(directory).filePath(QStringLiteral("compacted-document-%1.png").arg(opacity));
     call(QStringLiteral("save"), {{QStringLiteral("path"), path}});
     require(QImage(path) == pixels, "document save matches rendered pixels");
     call(QStringLiteral("pin"));
@@ -2749,6 +2753,7 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--compaction-only"))) {
         compactedDocumentsKeepEditingCoordinates(temporary.path());
+        compactedDocumentsKeepEditingCoordinates(temporary.path(), 50);
         documentCacheWork(temporary.path());
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;

@@ -46,7 +46,8 @@ bool ScreenshotSelectionModel::hasSameCreatedRegions(const ScreenshotSelectionMo
 }
 
 bool ScreenshotSelectionModel::hasSameSelectionState(const ScreenshotSelectionModel& other) const {
-    return m_layoutCompaction == other.m_layoutCompaction &&
+    return m_backgroundOpacityPercent == other.m_backgroundOpacityPercent &&
+           m_layoutCompaction == other.m_layoutCompaction &&
            m_multiRegionEditing == other.m_multiRegionEditing && hasSameCreatedRegions(other) &&
            m_regionType == other.m_regionType && m_draftRegion == other.m_draftRegion &&
            m_draftVertices == other.m_draftVertices && m_region == other.m_region &&
@@ -88,6 +89,7 @@ ScreenshotSelectionModel::operator=(const ScreenshotSelectionModel& other) {
     m_moveStart = other.m_moveStart;
     m_moveOriginalSelection = other.m_moveOriginalSelection;
     m_layoutCompaction = other.m_layoutCompaction;
+    m_backgroundOpacityPercent = other.m_backgroundOpacityPercent;
     m_componentGeometry.reset();
     m_cornerRadius = other.m_cornerRadius;
     m_shadowWidth = other.m_shadowWidth;
@@ -130,6 +132,7 @@ void ScreenshotSelectionModel::reset() {
     m_moveStart = QPointF();
     m_moveOriginalSelection = QRectF();
     m_layoutCompaction = {};
+    m_backgroundOpacityPercent = 0;
     m_componentGeometry.reset();
     m_cornerRadius = 0;
     m_shadowWidth = 0;
@@ -407,6 +410,15 @@ bool ScreenshotSelectionModel::setLayoutCompaction(ScreenshotLayoutCompaction op
     return true;
 }
 
+bool ScreenshotSelectionModel::setBackgroundOpacityPercent(int percent) {
+    percent = std::clamp(percent, 0, 100);
+    if (m_backgroundOpacityPercent == percent)
+        return false;
+    m_backgroundOpacityPercent = percent;
+    ++m_changeRevision;
+    return true;
+}
+
 int ScreenshotSelectionModel::cornerRadius() const {
     return m_cornerRadius;
 }
@@ -580,6 +592,7 @@ ScreenshotSelectionParams ScreenshotSelectionModel::params(const QRect& bounds) 
     result.selection = pixelSelection();
     result.region = m_region;
     result.layoutCompaction = m_layoutCompaction;
+    result.backgroundOpacityPercent = m_backgroundOpacityPercent;
     result.radius = m_cornerRadius;
     result.shadowWidth = m_shadowWidth;
     result.shadowColor = m_shadowColor;
@@ -607,6 +620,7 @@ bool ScreenshotSelectionModel::applyParams(const ScreenshotSelectionParams& para
         setSelectionRegion(*clamped.region);
     }
     m_layoutCompaction = clamped.layoutCompaction;
+    m_backgroundOpacityPercent = clamped.backgroundOpacityPercent;
     m_cornerRadius = clamped.radius;
     m_shadowWidth = clamped.shadowWidth;
     setShadowColor(clamped.shadowColor);
@@ -891,6 +905,7 @@ void ScreenshotSelectionModel::setDraggedSelectionRect(const QRectF& rect,
 
 ScreenshotResultStyle ScreenshotSelectionModel::resultStyle() const {
     ScreenshotResultStyle style{m_cornerRadius, m_shadowWidth, m_shadowColor, {}, 1.0};
+    style.backgroundOpacityPercent = m_backgroundOpacityPercent;
     if (m_region) {
         style.region = m_region->translated(-pixelSelection().topLeft());
     }

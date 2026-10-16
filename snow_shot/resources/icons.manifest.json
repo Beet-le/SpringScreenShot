@@ -1191,6 +1191,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "SelectionBackgroundOpacity",
+      "name": "selection-background-opacity",
+      "source": "../src/presentation/components/icons/resources/selection-background-opacity.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "SelectionLockAspect",
       "name": "selection-lock-aspect",
       "source": "../src/presentation/components/icons/resources/selection-lock-aspect.svg",

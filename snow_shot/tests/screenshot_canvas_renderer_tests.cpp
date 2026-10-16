@@ -3398,8 +3398,15 @@ void roundedSelectionPreviewKeepsTheSameContentBoundsWithAndWithoutShadow() {
     renderer.setSelectionToolbarHovered(true);
 
     const QImage withoutShadow = renderCanvas(canvas);
-    require(withoutShadow.pixelColor(30, 35).blue() < screenshotColor.blue(),
-            "a hovered rounded selection must retain its corner mask when shadow is disabled");
+    QImage checkerboard(canvas.size(), QImage::Format_RGBA8888);
+    {
+        QPainter painter(&checkerboard);
+        painter.fillRect(canvas.rect(), adqt::widgets::themedCheckerboardBrush(&canvas));
+    }
+    for (const QPoint& point : {QPoint(30, 35), QPoint(89, 84)}) {
+        require(withoutShadow.pixelColor(point) == checkerboard.pixelColor(point),
+                "the zero-shadow rounded preview must show checkerboard in transparent corners");
+    }
     require(withoutShadow.pixelColor(38, 43) == screenshotColor,
             "the zero-shadow rounded preview should preserve content inside the corner curve");
 
@@ -8632,6 +8639,229 @@ void addingShapedRegionRepaintsRectangleHandles() {
     canvas.setCustomRenderer(nullptr);
 }
 
+void selectionBackgroundChangesPreserveDecorationDamage() {
+    SnowCanvasWidget canvas;
+    canvas.resize(220, 180);
+    canvas.setClearBackgroundEnabled(false);
+    require(canvas.setViewportCamera(110, 90, 1), "background damage camera");
+    ScreenshotCanvasRenderer renderer(canvas);
+    canvas.setCustomRenderer(&renderer);
+    QImage capture(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    capture.fill(QColor(40, 100, 180));
+    renderer.setImage(capture, capture.rect());
+    renderer.setMaskVisible(true);
+
+    ScreenshotSelectionVisualState original;
+    original.bounds = QRectF(20, 20, 120, 100);
+    original.present = true;
+    auto moved = original;
+    moved.bounds = QRectF(80, 40, 100, 100);
+    auto changedControls = original;
+    changedControls.handlesVisible = false;
+    changedControls.effectEditorsVisible = true;
+    auto compound = original;
+    compound.handlesVisible = false;
+    compound.region = QRegion(QRect(20, 20, 40, 100)) + QRect(100, 20, 40, 100);
+    compound.confirmedRegion = *compound.region;
+
+    for (auto changed : {moved, changedControls, compound}) {
+        changed.backgroundOpacityPercent = 50;
+        for (const qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+            for (const bool reverse : {false, true}) {
+                const auto& before = reverse ? changed : original;
+                const auto& after = reverse ? original : changed;
+                renderer.applySelectionState(before);
+                const QImage previous = renderCanvas(canvas, dpr);
+                renderer.applySelectionState(after);
+                const QImage next = renderCanvas(canvas, dpr);
+                requireChangedPixelsCoveredByDirtyRegion(
+                    previous, next,
+                    planScreenshotSelectionDamage(before, after, canvas.rect(),
+                                                  canvas.canvasToViewTransform(), true),
+                    "combined opacity and selection changes must repaint every decoration pixel");
+            }
+        }
+    }
+    canvas.setCustomRenderer(nullptr);
+}
+
+void compoundBackgroundPreviewDamageCoversTransitions() {
+    SnowCanvasWidget canvas;
+    canvas.resize(320, 240);
+    canvas.setClearBackgroundEnabled(false);
+    ScreenshotCanvasRenderer renderer(canvas);
+    canvas.setCustomRenderer(&renderer);
+    QImage capture(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    capture.fill(QColor(40, 100, 180));
+    renderer.setImage(capture, QRectF(capture.rect()));
+    renderer.setMaskVisible(true);
+
+    const QRegion islands = QRegion(QRect(60, 50, 60, 140)) + QRect(200, 50, 60, 140);
+    const QRegion hole = QRegion(QRect(60, 50, 200, 140)) - QRect(120, 90, 80, 60);
+    QPainterPath curves;
+    curves.addEllipse(QRectF(60, 50, 60, 140));
+    curves.addEllipse(QRectF(200, 50, 60, 140));
+    const QList<ScreenshotRegionGeometry> regions{
+        islands, hole, ScreenshotRegionGeometry::fromPath(curves, ScreenshotRegionType::Curve)};
+    for (const qreal zoom : {1.0, 1.5}) {
+        require(canvas.setViewportCamera(160.25, 120.25, zoom), "compound preview damage camera");
+        for (const qreal dpr : {1.0, 1.25, 2.0}) {
+            for (const auto& region : regions) {
+                for (const int opacity : {0, 50, 100}) {
+                    ScreenshotSelectionVisualState state;
+                    state.bounds = region.boundingRect();
+                    state.region = region;
+                    state.confirmedRegion = region;
+                    state.present = true;
+                    state.handlesVisible = false;
+                    state.cornerRadius = 12;
+                    state.backgroundOpacityPercent = opacity;
+                    renderer.applySelectionState(state);
+                    auto previous = renderCanvas(canvas, dpr);
+                    const auto change = [&](const ScreenshotSelectionVisualState& next,
+                                            const char* message) {
+                        renderer.applySelectionState(next);
+                        const auto current = renderCanvas(canvas, dpr);
+                        const auto damage = planScreenshotSelectionDamage(
+                            state, next, canvas.rect(), canvas.canvasToViewTransform(), true);
+                        requireChangedPixelsCoveredByDirtyRegion(previous, current, damage,
+                                                                 message);
+                        if (!region.custom())
+                            require(
+                                !damage.contains(
+                                    canvas.canvasToViewTransform().map(QPointF(90, 120)).toPoint()),
+                                "preview transitions must preserve stable selected interiors");
+                        state = next;
+                        previous = current;
+                    };
+                    auto next = state;
+                    next.effectPreviewVisible = true;
+                    change(next, "entering opacity preview must repaint transparent gaps");
+                    next.shadowWidth = 10;
+                    change(next, "opacity preview shadow growth must repaint the expanded matte");
+                    next.shadowWidth = 0;
+                    change(next, "opacity preview shadow shrink must erase the old matte");
+                    next.effectPreviewVisible = false;
+                    change(next, "leaving opacity preview must restore transparent gaps");
+                    next.toolbarHovered = true;
+                    change(next, "toolbar preview must repaint transparent gaps");
+                    next.toolbarHovered = false;
+                    next.effectPreviewVisible = true;
+                    change(next, "switching preview triggers must preserve the same matte");
+                    next.effectPreviewVisible = false;
+                    change(next, "leaving switched opacity preview must restore transparent gaps");
+                }
+            }
+        }
+    }
+    canvas.setCustomRenderer(nullptr);
+}
+
+void selectionBackgroundPreviewMatchesComposition() {
+    SnowCanvasWidget canvas;
+    canvas.resize(160, 140);
+    canvas.setClearBackgroundEnabled(false);
+    require(canvas.setViewportCamera(80, 70, 1), "background preview camera");
+    ScreenshotCanvasRenderer renderer(canvas);
+    canvas.setCustomRenderer(&renderer);
+    QImage capture(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    capture.fill(QColor(40, 100, 180));
+    QImage cursor(8, 8, QImage::Format_ARGB32_Premultiplied);
+    cursor.fill(QColor(230, 40, 80));
+    const auto setSources = [&] {
+        renderer.setImageSource(ScreenshotImageSource::fromLayers(
+            {{capture, QRectF(capture.rect()), QRectF(capture.rect()), true},
+             {cursor, QRectF(76, 66, 8, 8), QRectF(76, 66, 8, 8), false}}));
+    };
+    setSources();
+    renderer.setMaskVisible(true);
+    ScreenshotSelectionVisualState state;
+    state.bounds = QRectF(20, 20, 120, 100);
+    state.present = true;
+    state.handlesVisible = false;
+    state.toolbarHovered = true;
+    state.cornerRadius = 12;
+    const auto checker = adqt::widgets::themedCheckerboardBrush(&canvas);
+    for (const auto fixture : {std::pair{255, 0}, std::pair{255, 12}, std::pair{128, 12}}) {
+        capture.fill(QColor(40, 100, 180, fixture.first));
+        setSources();
+        state.cornerRadius = fixture.second;
+        for (bool compound : {false, true}) {
+            state.region.reset();
+            if (compound)
+                state.region = QRegion(QRect(20, 20, 40, 100)) + QRect(100, 20, 40, 100);
+            for (int shadow : {0, 6}) {
+                state.shadowWidth = shadow;
+                QImage previous;
+                auto before = state;
+                for (int percent : {0, 1, 50, 100}) {
+                    state.backgroundOpacityPercent = percent;
+                    renderer.applySelectionState(state);
+                    const auto actual = renderCanvas(canvas);
+                    QImage original = capture.copy();
+                    QPainter sourcePainter(&original);
+                    sourcePainter.drawImage(QPoint(76, 66), cursor);
+                    sourcePainter.end();
+                    ScreenshotResultStyle style{state.cornerRadius, shadow, state.shadowColor};
+                    style.backgroundOpacityPercent = percent;
+                    if (state.region)
+                        style.region = state.region->translated(-state.bounds.topLeft().toPoint());
+                    const QRect output =
+                        state.bounds.toRect().adjusted(-shadow, -shadow, shadow, shadow);
+                    const auto result = ScreenshotResultCompositor::compose(
+                        original.copy(state.bounds.toRect()), style, 1, 1, original.copy(output));
+                    QImage expected(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+                    expected.fill(Qt::transparent);
+                    QPainter painter(&expected);
+                    painter.fillRect(output, checker);
+                    painter.drawImage(output.topLeft(), result);
+                    painter.end();
+                    QList<QPoint> samples{{20, 20}, {40, 70}, {20 - shadow, 70}};
+                    if (compound)
+                        samples.append({QPoint(80, 70), QPoint(70, 65)});
+                    for (int y = output.top(); y <= output.bottom(); ++y)
+                        for (int x = output.left(); x <= output.right(); ++x)
+                            samples.append(QPoint(x, y));
+                    // QWidget rendering uses RGBA8888; exports use premultiplied ARGB.
+                    // Their integer blend paths can differ by two levels after three layers.
+                    for (const auto& point : samples) {
+                        const auto a = actual.pixelColor(point), e = expected.pixelColor(point);
+                        if (std::abs(a.red() - e.red()) > 2 ||
+                            std::abs(a.green() - e.green()) > 2 ||
+                            std::abs(a.blue() - e.blue()) > 2)
+                            std::cerr << "preview mismatch: alpha=" << fixture.first
+                                      << " radius=" << fixture.second << " compound=" << compound
+                                      << " shadow=" << shadow << " opacity=" << percent << " at "
+                                      << point.x() << ',' << point.y()
+                                      << " actual=" << a.name().toStdString()
+                                      << " expected=" << e.name().toStdString() << '\n';
+                        require(
+                            std::abs(a.red() - e.red()) <= 2 &&
+                                std::abs(a.green() - e.green()) <= 2 &&
+                                std::abs(a.blue() - e.blue()) <= 2,
+                            "preview must match exported opacity at corners, shadow padding, gaps "
+                            "and cursor overlays");
+                    }
+                    if (!previous.isNull())
+                        requireChangedPixelsCoveredByDirtyRegion(
+                            previous, actual,
+                            planScreenshotSelectionDamage(before, state, canvas.rect(),
+                                                          canvas.canvasToViewTransform(), true),
+                            "opacity damage must include every changed background pixel");
+                    previous = actual;
+                    before = state;
+                }
+            }
+        }
+    }
+    const auto old = renderCanvas(canvas);
+    cursor.fill(Qt::green);
+    setSources();
+    require(renderCanvas(canvas).pixelColor(80, 70) != old.pixelColor(80, 70),
+            "capture-source changes must invalidate the flattened preview cache");
+    canvas.setCustomRenderer(nullptr);
+}
+
 void hoveredCompoundSelectionShowsCheckerboardInTransparentGaps() {
     SnowCanvasWidget canvas;
     canvas.resize(120, 120);
@@ -9017,6 +9247,14 @@ void runScreenshotOcrHighlightingBenchmark();
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--background-opacity-only"))) {
+        compoundBackgroundPreviewDamageCoversTransitions();
+        selectionBackgroundChangesPreserveDecorationDamage();
+        selectionBackgroundPreviewMatchesComposition();
+        hoveredSelectionToolbarInvalidatesOnlyPreviewRing();
+        hoveredCompoundSelectionShowsCheckerboardInTransparentGaps();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--ocr-glyph-margins-only"))) {
 #ifdef Q_OS_WIN
         require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
@@ -9347,6 +9585,8 @@ int main(int argc, char** argv) {
     translatedRasterCachesMatchDirectPainting();
     compoundSelectionRendersUnifiedMaskAndOutline();
     addingShapedRegionRepaintsRectangleHandles();
+    compoundBackgroundPreviewDamageCoversTransitions();
+    selectionBackgroundChangesPreserveDecorationDamage();
     hoveredCompoundSelectionShowsCheckerboardInTransparentGaps();
     compoundSelectionDamageCoversChangedPixels();
     nonRectangularSelectionDraftLeavesInteriorUnchanged();

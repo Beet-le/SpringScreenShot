@@ -1076,6 +1076,14 @@
             <translation>已選模型（%1）</translation>
         </message>
         <message>
+            <source>Selection background opacity</source>
+            <translation>選取範圍背景不透明度</translation>
+        </message>
+        <message>
+            <source>Selection background opacity (scroll to adjust; click to reset to 0%)</source>
+            <translation>選取範圍背景不透明度（捲動調整；點擊重設為 0%）</translation>
+        </message>
+        <message>
             <source>Send backward</source>
             <translation>下移一層</translation>
         </message>

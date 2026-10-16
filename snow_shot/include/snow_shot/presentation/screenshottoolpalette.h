@@ -346,6 +346,7 @@ class ScreenshotToolPalette final : public QWidget,
     void setCursorVisible(bool enabled);
     void setCursorAvailable(bool available);
     void setScreenshotRegionType(ScreenshotRegionType type);
+    void setSelectionBackgroundOpacityState(int percent, bool available);
     void setLayoutCompactionState(ScreenshotLayoutCompaction options, bool available,
                                   bool canvasUsesPoints);
     [[nodiscard]] ScreenshotLayoutCompaction layoutCompaction() const {
@@ -486,6 +487,8 @@ class ScreenshotToolPalette final : public QWidget,
     void qrCodeVisibilityRequested(bool visible);
     void screenshotRegionTypeRequested(int type);
     void layoutCompactionChanged(bool enabled, int spacing);
+    void selectionBackgroundOpacityChanged(int percent);
+    void selectionBackgroundPreviewVisibleChanged(bool visible);
     void addScreenshotRegionRequested();
     void subtractScreenshotRegionRequested();
     void selectionDisplayUnitChanged(ScreenshotSelectionDisplayUnit unit);
@@ -1119,6 +1122,9 @@ class ScreenshotToolPalette final : public QWidget,
     bool m_recordingCursorVisible = true;
     bool m_cursorVisible = false;
     bool m_cursorAvailable = true;
+    int m_backgroundOpacityPercent = 0;
+    bool m_backgroundOpacityAvailable = false;
+    IconNumericValuePreviewButton* m_backgroundOpacityEditor = nullptr;
     ScreenshotLayoutCompaction m_layoutCompaction;
     bool m_layoutCompactionAvailable = false;
     bool m_layoutCompactionCanvasUsesPoints = false;

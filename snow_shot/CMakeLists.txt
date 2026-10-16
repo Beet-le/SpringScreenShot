@@ -4986,6 +4986,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         SNOW_SHOT_TEST_HOOKS=1
         SNOW_SHOT_TEST_PINNED_TRANSLATION=1
     )
+    if(MSVC)
+        target_compile_options(snow-shot-pinned-window-tests PRIVATE /bigobj)
+    endif()
     target_link_libraries(snow-shot-pinned-window-tests PRIVATE
         MINIZIP::minizip-ng
         snow_shot_animation_playback
@@ -12269,6 +12272,19 @@ if(SNOW_SHOT_BUILD_TESTS)
 endif()
 
 if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-selection-background-tests
+        tests/screenshot_selection_background_tests.cpp
+        src/presentation/overlay/screenshotselectionshadowrenderer.cpp)
+    target_include_directories(snow-shot-selection-background-tests PRIVATE include)
+    target_link_libraries(snow-shot-selection-background-tests PRIVATE
+        Qt6::Widgets ant_design_qt snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-shot-selection-background-tests)
+    add_test(NAME snow-shot-selection-background-tests COMMAND snow-shot-selection-background-tests)
+    add_test(NAME snow-shot-selection-background-preview-tests
+        COMMAND snow-shot-screenshot-canvas-renderer-tests --background-opacity-only)
+    set_tests_properties(snow-shot-selection-background-tests snow-shot-selection-background-preview-tests
+        PROPERTIES LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 90
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(snow-shot-layout-compaction-tests
         tests/screenshot_layout_compaction_tests.cpp
         src/presentation/overlay/screenshotselectionshadowrenderer.cpp)
@@ -12292,6 +12308,13 @@ if(SNOW_SHOT_BUILD_TESTS)
 endif()
 
 if(SNOW_APPS_BUILD_BENCHMARKS)
+    add_executable(snow-shot-selection-background-benchmark
+        tests/screenshot_selection_background_benchmark.cpp
+        src/presentation/overlay/screenshotselectionshadowrenderer.cpp)
+    target_include_directories(snow-shot-selection-background-benchmark PRIVATE include)
+    target_link_libraries(snow-shot-selection-background-benchmark PRIVATE
+        Qt6::Widgets ant_design_qt snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-shot-selection-background-benchmark)
     add_executable(snow-shot-layout-compaction-benchmark
         tests/screenshot_layout_compaction_benchmark.cpp)
     target_include_directories(snow-shot-layout-compaction-benchmark PRIVATE include

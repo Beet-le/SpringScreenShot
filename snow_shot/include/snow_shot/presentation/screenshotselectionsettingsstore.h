@@ -31,6 +31,9 @@ class ScreenshotSelectionSettingsStore final {
     [[nodiscard]] ScreenshotLayoutCompaction layoutCompaction() const;
     void setLayoutCompaction(ScreenshotLayoutCompaction options);
 
+    [[nodiscard]] int backgroundOpacityPercent() const;
+    void setBackgroundOpacityPercent(int percent);
+
     void clear();
 };
 

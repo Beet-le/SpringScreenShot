@@ -1,3 +1,4 @@
+#include "snow_shot/presentation/screenshotselectionbackground.h"
 #include "snow_shot/presentation/screenshotdisplaysession.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/presentation/screenshotexportservice.h"
@@ -827,8 +828,10 @@ QImage compactedReference(SnowCanvasRuntime& runtime, const QRect& selection, co
     outputStyle.regionScale *= scale;
     outputStyle.cornerRadius = qRound(style.cornerRadius * scale);
     outputStyle.shadowWidth = screenshotSelectionRenderedShadowPixels(style.shadowWidth, scale);
-    return ScreenshotResultCompositor::compose(content,
-                                               compactedScreenshotResultStyle(outputStyle, plan));
+    outputStyle = compactedScreenshotResultStyle(outputStyle, plan);
+    const auto background =
+        renderScreenshotSelectionBackground(sources, selection, pixels, outputStyle, &plan);
+    return ScreenshotResultCompositor::compose(content, outputStyle, 1.0, 1.0, background);
 }
 
 void compactionOutputsAgree() {
@@ -841,66 +844,71 @@ void compactionOutputsAgree() {
         QRegion geometry(QRect(0, 0, 8, 20));
         geometry += QRect(20, 0, 10, 20);
         ScreenshotResultStyle style{3, 2, QColor(0, 0, 0, 160), ScreenshotRegionGeometry(geometry)};
-        for (int spacing : {0, 4, 20}) {
-            const ScreenshotLayoutCompaction options{true, spacing};
-            const auto expected =
-                compactedReference(fixture.runtime(), selection,
-                                   screenshotSelectionRenderedPixelSize(selection.size(), backing),
-                                   sources, style, backing, options);
-            const int shadow = screenshotSelectionRenderedShadowPixels(style.shadowWidth, backing);
-            require(expected.size() == QSize(qRound((18 + spacing) * backing) + 4 * shadow,
-                                             qRound(20 * backing) + 2 * shadow),
-                    "export spacing must separate the full rendered shadow footprints");
-            const auto saved = waitForResult(
-                [&](QObject* receiver, auto callback) {
-                    return fixture.service().requestSelectionResult(selection, style, receiver,
-                                                                    std::move(callback), options);
-                },
-                [](QImage image) { return image; });
-            require(hasSamePixels(saved, expected), "compacted saved output must match reference");
-            const auto request =
-                fixture.service().preparePinnedSelection(selection, style, options);
-            require(request && request->layoutPlan && request->layoutPlan->changed &&
-                        request->initialWindowSize == QSize(26 + spacing, 24) &&
-                        request->contentCanvasRect.topLeft() == selection.topLeft(),
-                    "pin metadata must use compacted bounds at the original selection origin");
-            const auto pinned = waitForPinnedResult(fixture.service(), *request);
-            require(hasSamePixels(pinned, saved),
-                    "pin and save must use identical compacted rasters");
-            const auto copied = waitForResult(
-                [&](QObject* receiver, auto callback) {
-                    return fixture.service().requestSelectionClipboard(
-                        selection, style, receiver, std::move(callback), options);
-                },
-                [&](ScreenshotSelectionClipboardResult result) {
-                    require(result.isValid(), "compacted clipboard payload");
-                    const auto placement =
-                        decodeScreenshotClipboardPlacement(result.payload.placementBytes());
-                    const auto appearance =
-                        decodeScreenshotClipboardAppearance(result.payload.appearanceBytes());
-                    require(placement && appearance &&
-                                placement->windowRect == request->geometry.nativeGeometry &&
-                                appearance->borderAppearance ==
-                                    screenshotSelectionBorderAppearance(selection.size(), style,
-                                                                        options),
-                            "clipboard and pin metadata must agree");
-                    return result.image;
-                });
-            require(hasSamePixels(copied, saved),
-                    "clipboard and save must use identical compacted rasters");
-            const qreal scale = backing * 1.25;
-            const auto scaled = waitForResult(
-                [&](QObject* receiver, auto callback) {
-                    return fixture.service().requestSelectionResultAtScale(
-                        selection, style, 1.25, receiver, std::move(callback), options);
-                },
-                [](QImage image) { return image; });
-            const auto scaledExpected =
-                compactedReference(fixture.runtime(), selection,
-                                   screenshotSelectionRenderedPixelSize(selection.size(), scale),
-                                   sources, style, scale, options);
-            require(hasSamePixels(scaled, scaledExpected),
-                    "scaled compaction must preserve pixel rounding");
+        for (int percent : {0, 50, 100}) {
+            style.backgroundOpacityPercent = percent;
+            for (int spacing : {0, 4, 20}) {
+                const ScreenshotLayoutCompaction options{true, spacing};
+                const auto expected = compactedReference(
+                    fixture.runtime(), selection,
+                    screenshotSelectionRenderedPixelSize(selection.size(), backing), sources, style,
+                    backing, options);
+                const int shadow =
+                    screenshotSelectionRenderedShadowPixels(style.shadowWidth, backing);
+                require(expected.size() == QSize(qRound((18 + spacing) * backing) + 4 * shadow,
+                                                 qRound(20 * backing) + 2 * shadow),
+                        "export spacing must separate the full rendered shadow footprints");
+                const auto saved = waitForResult(
+                    [&](QObject* receiver, auto callback) {
+                        return fixture.service().requestSelectionResult(
+                            selection, style, receiver, std::move(callback), options);
+                    },
+                    [](QImage image) { return image; });
+                require(hasSamePixels(saved, expected),
+                        "compacted saved output must match reference");
+                const auto request =
+                    fixture.service().preparePinnedSelection(selection, style, options);
+                require(request && request->layoutPlan && request->layoutPlan->changed &&
+                            request->initialWindowSize == QSize(26 + spacing, 24) &&
+                            request->contentCanvasRect.topLeft() == selection.topLeft(),
+                        "pin metadata must use compacted bounds at the original selection origin");
+                const auto pinned = waitForPinnedResult(fixture.service(), *request);
+                require(hasSamePixels(pinned, saved),
+                        "pin and save must use identical compacted rasters");
+                const auto copied = waitForResult(
+                    [&](QObject* receiver, auto callback) {
+                        return fixture.service().requestSelectionClipboard(
+                            selection, style, receiver, std::move(callback), options);
+                    },
+                    [&](ScreenshotSelectionClipboardResult result) {
+                        require(result.isValid(), "compacted clipboard payload");
+                        const auto placement =
+                            decodeScreenshotClipboardPlacement(result.payload.placementBytes());
+                        const auto appearance =
+                            decodeScreenshotClipboardAppearance(result.payload.appearanceBytes());
+                        require(placement && appearance &&
+                                    placement->windowRect == request->geometry.nativeGeometry &&
+                                    appearance->borderAppearance ==
+                                        screenshotSelectionBorderAppearance(selection.size(), style,
+                                                                            options),
+                                "clipboard and pin metadata must agree");
+                        return result.image;
+                    });
+                require(hasSamePixels(copied, saved),
+                        "clipboard and save must use identical compacted rasters");
+                const qreal scale = backing * 1.25;
+                const auto scaled = waitForResult(
+                    [&](QObject* receiver, auto callback) {
+                        return fixture.service().requestSelectionResultAtScale(
+                            selection, style, 1.25, receiver, std::move(callback), options);
+                    },
+                    [](QImage image) { return image; });
+                const auto scaledExpected = compactedReference(
+                    fixture.runtime(), selection,
+                    screenshotSelectionRenderedPixelSize(selection.size(), scale), sources, style,
+                    scale, options);
+                require(hasSamePixels(scaled, scaledExpected),
+                        "scaled compaction must preserve pixel rounding");
+            }
         }
     }
 }

@@ -381,6 +381,7 @@ QImage clipRecognitionSelection(QImage image, const ScreenshotSelectionModel& se
     style.regionScale = scale;
     style.cornerRadius = qRound(style.cornerRadius * scale);
     style.shadowWidth = 0;
+    style.backgroundOpacityPercent = 0;
     return ScreenshotResultCompositor::compose(image, style);
 }
 } // namespace

@@ -36,13 +36,15 @@ struct PersistedSelection {
     bool lockDragAspectRatio = false;
     std::optional<ScreenshotRegionGeometry> region;
     ScreenshotLayoutCompaction layoutCompaction = {};
+    int backgroundOpacityPercent = 0;
 
     friend bool operator==(const PersistedSelection& first, const PersistedSelection& second) {
         return first.rectangle == second.rectangle && first.cornerRadius == second.cornerRadius &&
                first.shadowWidth == second.shadowWidth && first.shadowColor == second.shadowColor &&
                first.lockAspectRatio == second.lockAspectRatio &&
                first.lockDragAspectRatio == second.lockDragAspectRatio &&
-               first.region == second.region && first.layoutCompaction == second.layoutCompaction;
+               first.region == second.region && first.layoutCompaction == second.layoutCompaction &&
+               first.backgroundOpacityPercent == second.backgroundOpacityPercent;
     }
 };
 

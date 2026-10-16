@@ -168,6 +168,10 @@ void ScreenshotToolbarWindow::initializePalette() {
     connect(
         toolPalette, &ScreenshotToolPalette::layoutCompactionChanged, this,
         [this](bool enabled, int spacing) { m_commands.setLayoutCompaction(enabled, spacing); });
+    connect(toolPalette, &ScreenshotToolPalette::selectionBackgroundOpacityChanged, this,
+            [this](int percent) { m_commands.setSelectionBackgroundOpacityPercent(percent); });
+    connect(toolPalette, &ScreenshotToolPalette::selectionBackgroundPreviewVisibleChanged, this,
+            [this](bool visible) { m_commands.setSelectionBackgroundPreviewVisible(visible); });
     connect(toolPalette, &ScreenshotToolPalette::addScreenshotRegionRequested, this,
             [this]() { m_commands.addScreenshotRegion(); });
     connect(toolPalette, &ScreenshotToolPalette::subtractScreenshotRegionRequested, this,
@@ -576,6 +580,11 @@ void ScreenshotToolbarWindow::setScreenshotRegionType(ScreenshotRegionType type)
     if (auto* toolPalette = palette()) {
         toolPalette->setScreenshotRegionType(type);
     }
+}
+
+void ScreenshotToolbarWindow::setSelectionBackgroundOpacityState(int percent, bool available) {
+    if (auto* toolPalette = palette())
+        toolPalette->setSelectionBackgroundOpacityState(percent, available);
 }
 
 void ScreenshotToolbarWindow::setLayoutCompactionState(ScreenshotLayoutCompaction options,

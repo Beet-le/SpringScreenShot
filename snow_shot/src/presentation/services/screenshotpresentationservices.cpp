@@ -66,6 +66,7 @@ selectionVisualState(const ScreenshotPresentationServicesContext& context, bool 
     visualState.handlesVisible = !context.interaction.intelligentSelecting() &&
                                  context.interaction.selectionHandlesVisible() &&
                                  context.selection.resizable();
+    visualState.backgroundOpacityPercent = context.selection.backgroundOpacityPercent();
     visualState.cornerRadius = context.selection.cornerRadius();
     visualState.shadowWidth = context.selection.shadowWidth();
     visualState.shadowColor = context.selection.shadowColor();
@@ -78,9 +79,10 @@ selectionVisualState(const ScreenshotPresentationServicesContext& context, bool 
     if (context.interaction.effectGesture())
         visualState.activeEffectHandle = context.interaction.effectGesture()->handle;
     visualState.effectPreviewVisible =
-        visualState.effectEditorsVisible &&
-        (visualState.hoveredEffectHandle == ScreenshotSelectionEffectHandle::Shadow ||
-         visualState.activeEffectHandle == ScreenshotSelectionEffectHandle::Shadow);
+        context.interaction.selectionBackgroundPreviewVisible() ||
+        (visualState.effectEditorsVisible &&
+         (visualState.hoveredEffectHandle == ScreenshotSelectionEffectHandle::Shadow ||
+          visualState.activeEffectHandle == ScreenshotSelectionEffectHandle::Shadow));
     if (context.interaction.moveToolActive()) {
         visualState.highlightedRegion = context.selection.highlightedRegion();
         visualState.stationaryRegions = context.selection.stationaryRegionsDuringMove();

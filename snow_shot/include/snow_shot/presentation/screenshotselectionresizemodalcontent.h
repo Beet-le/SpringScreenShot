@@ -71,6 +71,7 @@ class ScreenshotSelectionResizeModalContent final : public QWidget {
     bool validateNormalFields();
 
     ScreenshotLayoutCompaction m_fieldLayoutCompaction;
+    int m_fieldBackgroundOpacityPercent = 0;
     std::optional<ScreenshotRegionGeometry> m_fieldRegion;
     bool m_canvasUsesPoints = false;
     QRect m_selectionBounds;

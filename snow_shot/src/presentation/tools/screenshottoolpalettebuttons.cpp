@@ -2040,6 +2040,10 @@ void configureScreenshotToolPaletteScrollingIntervalEditor(
         return;
     }
     configureScreenshotToolPaletteStyleButton(button, nullptr, metrics);
+    // These editors use the taller action row and paint their own value labels.
+    QFont valueFont = button->font();
+    valueFont.setPixelSize(15);
+    button->setReferenceFont(valueFont);
     constexpr int referenceWidth = 96;
     button->setFixedWidth(scaledMetric(referenceWidth, metrics.physicalScale));
     stampScreenshotToolbarReferenceWidth(button, referenceWidth);

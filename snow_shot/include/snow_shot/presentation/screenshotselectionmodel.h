@@ -137,6 +137,10 @@ class ScreenshotSelectionModel final {
         return options;
     }
     bool setLayoutCompaction(ScreenshotLayoutCompaction options);
+    [[nodiscard]] int backgroundOpacityPercent() const {
+        return m_backgroundOpacityPercent;
+    }
+    bool setBackgroundOpacityPercent(int percent);
     [[nodiscard]] int cornerRadius() const;
     [[nodiscard]] int shadowWidth() const;
     [[nodiscard]] QColor shadowColor() const;
@@ -213,6 +217,7 @@ class ScreenshotSelectionModel final {
     ScreenshotLayoutCompaction m_layoutCompaction;
     mutable std::optional<ScreenshotRegionGeometry> m_componentGeometry;
     mutable bool m_multipleComponents = false;
+    int m_backgroundOpacityPercent = 0;
     int m_cornerRadius = 0;
     int m_shadowWidth = 0;
     QColor m_shadowColor = QColor(0x33, 0x33, 0x33);

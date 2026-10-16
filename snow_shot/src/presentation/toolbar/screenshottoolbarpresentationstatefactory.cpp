@@ -26,6 +26,10 @@ makeScreenshotToolbarPresentationState(const ScreenshotInteractionState& interac
     state.aspectRatioPreset = selection.aspectRatioPreset();
     state.cornerRadius = selection.cornerRadius();
     state.cornerRadiusApplicable = selection.cornerRadiusApplicable();
+    state.backgroundOpacityPercent = selection.backgroundOpacityPercent();
+    state.backgroundOpacityAvailable = selection.hasPixelSelection() && !state.selectionDragging &&
+                                       !selection.constructionActive() &&
+                                       !selection.regionOperationActive();
     state.layoutCompaction = selection.layoutCompaction();
     state.layoutCompactionAvailable =
         selection.layoutCompactionAvailable() && !state.selectionDragging;

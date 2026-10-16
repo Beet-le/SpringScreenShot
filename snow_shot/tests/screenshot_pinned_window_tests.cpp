@@ -15459,7 +15459,7 @@ void pinnedHiddenTextSelectionDragExportOffscreen() {
     mouse(QEvent::MouseButtonRelease, textEnd, Qt::ControlModifier, Qt::NoButton);
 }
 
-void compactedPinExportsOnceAndRefreshesRecognition() {
+void compactedPinExportsOnceAndRefreshesRecognition(int opacity = 0) {
     IsolatedPinnedStorage storage;
     require(snow_shot::storage::ScreenshotSettings().setImageFormat(QStringLiteral("png")),
             "configure compacted drag format");
@@ -15478,13 +15478,18 @@ void compactedPinExportsOnceAndRefreshesRecognition() {
         6, 4, Qt::black,
         ScreenshotRegionGeometry(QRegion(0, 0, 80, 180).united(QRegion(240, 0, 80, 180)))};
     request.layoutCompaction = {true, 5};
+    request.resultStyle.backgroundOpacityPercent = opacity;
     request.layoutPlan =
         screenshotLayoutCompactionPlan(*request.resultStyle.region, request.selection.size(), 1,
                                        request.layoutCompaction, request.resultStyle.shadowWidth);
     QImage content(request.layoutPlan->outputSize, QImage::Format_ARGB32_Premultiplied);
     content.fill(QColor(42, 84, 126));
-    const QImage image = ScreenshotResultCompositor::compose(
-        content, compactedScreenshotResultStyle(request.resultStyle, *request.layoutPlan));
+    const auto style = compactedScreenshotResultStyle(request.resultStyle, *request.layoutPlan);
+    QImage background(
+        ScreenshotResultCompositor::layoutForContent(content.size(), style).outputRect.size(),
+        QImage::Format_ARGB32_Premultiplied);
+    background.fill(QColor(170, 110, 60));
+    const QImage image = ScreenshotResultCompositor::compose(content, style, 1, 1, background);
     request.initialWindowSize = image.size();
     request.contentCanvasRect = QRectF(request.selection.topLeft(), content.size());
     request.surfaceCanvasRect = request.contentCanvasRect.adjusted(-4, -4, 4, 4);
@@ -15563,6 +15568,28 @@ void compactedPinExportsOnceAndRefreshesRecognition() {
     });
     wait([&] { return dragCompleted; }, "compacted drag export completes");
     require(dragged, "compacted drag reaches the executor");
+    if (opacity > 0) {
+        const auto record = window->persistenceSnapshot();
+        const auto savedStyle = decodeScreenshotResultStyle(record.resultStyle);
+        require(savedStyle && savedStyle->backgroundOpacityPercent == 0,
+                "a composed pin persists a neutral style to avoid applying opacity twice");
+        window->close();
+        require(processUntilDeleted(window, 2000), "close pin before reloading its pixels");
+        window = restoreSeededPinnedWindow(services, record);
+        subsequent = {};
+        artifact = window->automationArtifact();
+        require(artifact && artifact->requestImage(window,
+                                                   [&](ScreenshotExportImageResult result) {
+                                                       require(result.succeeded(),
+                                                               "restored background pin exports");
+                                                       subsequent = std::move(result.image);
+                                                   }),
+                "restored background pin schedules an export");
+        wait([&] { return !subsequent.isNull(); }, "restored background pin export finishes");
+        require(QImage::fromData(ScreenshotClipboardService::prepareImage(subsequent).pngBytes()) ==
+                    expected,
+                "saving and reloading a pin must preserve retained background pixels exactly");
+    }
 }
 
 void pinnedDragExportOffscreen() {
@@ -24972,6 +24999,7 @@ int main(int argc, char* argv[]) {
         }
         if (app.arguments().contains(QStringLiteral("--layout-compaction-only"))) {
             compactedPinExportsOnceAndRefreshesRecognition();
+            compactedPinExportsOnceAndRefreshesRecognition(50);
             ScreenshotExportCoordinator::shared().shutdown();
             return 0;
         }

@@ -29,6 +29,8 @@ class ScreenshotToolbarCommandSink {
     virtual void redoCanvasEdit() {}
     virtual void setScreenshotRegionType(int) {}
     virtual void setLayoutCompaction(bool, int) {}
+    virtual void setSelectionBackgroundOpacityPercent(int) {}
+    virtual void setSelectionBackgroundPreviewVisible(bool) {}
     virtual void addScreenshotRegion() {}
     virtual void subtractScreenshotRegion() {}
     virtual void requestRecapture() {}

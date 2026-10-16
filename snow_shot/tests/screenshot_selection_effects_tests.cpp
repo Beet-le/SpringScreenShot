@@ -43,6 +43,12 @@ void selectionEffectsPersistAcrossRestarts() {
             "new installations must default to the existing child-element selection mode");
     require(settings.layoutCompaction() == ScreenshotLayoutCompaction{}, "compaction defaults");
     settings.setLayoutCompaction({true, 17});
+    require(settings.backgroundOpacityPercent() == 0, "background opacity defaults to zero");
+    settings.setBackgroundOpacityPercent(37);
+    ScreenshotSelectionParams presetParams;
+    presetParams.selection = QRect(10, 20, 80, 60);
+    presetParams.backgroundOpacityPercent = 61;
+    settings.setPresets({{QStringLiteral("Background"), presetParams}});
     settings.setSelectionTarget(ScreenshotIntelligentSelectionTarget::Window);
     require(settings.selectionTarget() == ScreenshotIntelligentSelectionTarget::Window,
             "selection target preference must be writable");
@@ -98,6 +104,11 @@ void selectionEffectsPersistAcrossRestarts() {
     storage.shutdown();
     require(storage.initialize(options).success, "storage must reopen after shutdown");
     ScreenshotSelectionSettingsStore restartedSettings;
+    require(restartedSettings.backgroundOpacityPercent() == 37,
+            "background opacity survives restart");
+    require(restartedSettings.presets().size() == 1 &&
+                restartedSettings.presets().first().params.backgroundOpacityPercent == 61,
+            "named presets preserve their own background opacity across restarts");
     require(restartedSettings.layoutCompaction() == ScreenshotLayoutCompaction{true, 17},
             "compaction settings must survive a restart");
     require(restartedSettings.cornerRadius() == 24 && restartedSettings.shadowWidth() == 12,
@@ -185,6 +196,8 @@ void selectionEffectsPersistAcrossRestarts() {
     settings.setSelectionEffects(20, 10, QColor(12, 34, 56));
     settings.setAspectRatioLocked(true);
     settings.clear();
+    require(settings.backgroundOpacityPercent() == 0,
+            "clearing selection preferences resets background opacity");
     require(settings.cornerRadius() == 0 && settings.shadowWidth() == 0,
             "clearing selection settings must reset the persistent effects");
     require(settings.shadowColor() == QColor(0x33, 0x33, 0x33),
@@ -405,6 +418,47 @@ void selectionAspectRatioWorkflowPersistsOnlyUserPreferences() {
             "clearing selection preferences must reset both the saved preset and lock");
     storage.shutdown();
 }
+void backgroundOpacitySelectionState() {
+    ScreenshotSelectionModel selection;
+    selection.setSelectionRect(QRectF(10, 20, 80, 60));
+    require(selection.backgroundOpacityPercent() == 0, "selection opacity defaults to zero");
+    const auto revision = selection.changeRevision();
+    require(selection.setBackgroundOpacityPercent(37) && selection.changeRevision() == revision + 1,
+            "opacity changes invalidate selection state once");
+    require(!selection.setBackgroundOpacityPercent(37) &&
+                selection.changeRevision() == revision + 1,
+            "identical opacity must not invalidate state");
+    const auto params = selection.params(QRect(0, 0, 200, 200));
+    ScreenshotSelectionModel restored;
+    require(restored.applyParams(params, QRect(0, 0, 200, 200)) &&
+                restored.backgroundOpacityPercent() == 37 &&
+                restored.resultStyle().backgroundOpacityPercent == 37,
+            "history and preset restoration must carry opacity into the result style");
+    snow_shot::storage::PersistedSelection persisted{
+        params.selection,   params.radius,           params.shadowWidth,
+        params.shadowColor, params.lockAspectRatio,  params.lockDragAspectRatio,
+        params.region,      params.layoutCompaction, params.backgroundOpacityPercent};
+    auto json = snow_shot::storage::persistedSelectionToJson(persisted);
+    require(snow_shot::storage::normalizePersistedSelection(json).value == persisted,
+            "persisted selection opacity must round trip");
+    json.remove(QStringLiteral("background_opacity_percent"));
+    require(snow_shot::storage::normalizePersistedSelection(json).value.backgroundOpacityPercent ==
+                0,
+            "legacy selections default to zero background opacity");
+    for (double invalid : {-1.0, .5, 101.0}) {
+        json.insert(QStringLiteral("background_opacity_percent"), invalid);
+        require(!snow_shot::storage::normalizePersistedSelection(json).valid,
+                "invalid persisted opacity must be rejected");
+    }
+    require(restored.setBackgroundOpacityPercent(200) && restored.backgroundOpacityPercent() == 100,
+            "opacity clamps at 100 percent");
+    ScreenshotSelectionModel copied;
+    copied = restored;
+    require(copied.backgroundOpacityPercent() == 100, "selection assignment preserves opacity");
+    copied.reset();
+    require(copied.backgroundOpacityPercent() == 0, "selection reset clears opacity");
+}
+
 void compactionSelectionState() {
     ScreenshotSelectionModel selection;
     selection.setSelectionRect(QRectF(0, 0, 20, 20));
@@ -461,6 +515,7 @@ void compactionSelectionState() {
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    backgroundOpacitySelectionState();
     compactionSelectionState();
     selectionEffectsPersistAcrossRestarts();
     selectionAspectRatioWorkflowPersistsOnlyUserPreferences();
