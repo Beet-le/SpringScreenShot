@@ -5,8 +5,11 @@
 #include "snow_shot/presentation/screenshotimagesource.h"
 #include "snow_shot/presentation/screenshotresultcompositor.h"
 #include "snow_shot/presentation/screenshotselectioneffectgeometry.h"
+#include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
 
 #include <QColor>
+#include <QCache>
+#include <QHash>
 #include <QImage>
 #include <QMetaObject>
 #include <QPoint>
@@ -92,6 +95,9 @@ QRegion planScreenshotGuideLineDamage(const QRect& viewportRect,
 struct ScreenshotSelectionRenderDiagnostics {
     std::size_t requestedDamagePixels = 0;
     std::size_t pathFallbacks = 0;
+    std::size_t backgroundTileBuilds = 0;
+    std::size_t previewMaskBuilds = 0;
+    std::size_t geometryBuilds = 0;
 };
 
 struct ScreenshotGuideLineRenderDiagnostics {
@@ -144,13 +150,14 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
         return m_outlineCache.bytes();
     }
     qsizetype selectionMaskCacheBytes() const {
-        return m_maskCache.bytes() + m_selectionViewGeometry.previewMask.sizeInBytes();
+        return m_maskCache.bytes() + m_selectionCoverage.mask.sizeInBytes() +
+               m_selectionCoverage.tiles.totalCost();
     }
     qsizetype selectionBackgroundCacheBytes() const {
-        return m_selectionBackgroundCache.sizeInBytes();
+        return m_selectionBackgroundTiles.totalCost();
     }
     qsizetype selectionRegionHoverCacheBytes() const {
-        return m_regionHoverCache.sizeInBytes();
+        return static_cast<qsizetype>(m_regionShadowRenderer.retainedBytes());
     }
     void setPinnedCheckerboardEnabled(bool enabled);
     [[nodiscard]] bool pinnedCheckerboardEnabled() const {
@@ -236,11 +243,28 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
         QPainterPath outlinePath;
         QPainterPath draftPath;
         QPainterPath maskPath;
-        QImage previewMask;
-        QRect previewMaskPixels;
-        QTransform previewMaskTransform;
         bool maskCacheEligible = false;
         bool sharedDraftOutline = false;
+    };
+    // Coverage belongs to the effective path, independently of outline/draft geometry.
+    struct SelectionCoverageCache {
+        enum class TileKind { Empty, Interior, Boundary };
+        QPainterPath path;
+        QPainterPath devicePath;
+        QTransform transform;
+        QRect pixels;
+        QImage mask;
+        QCache<QPoint, QImage> tiles{16 * 1024 * 1024};
+        QHash<QPoint, TileKind> tileKinds;
+        void clear() {
+            path = {};
+            devicePath = {};
+            transform = {};
+            pixels = {};
+            mask = {};
+            tiles.clear();
+            tileKinds.clear();
+        }
     };
     struct PathRasterCache {
         struct Entry {
@@ -300,15 +324,15 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     QColor m_pinnedBackgroundColor;
     PathRasterCache m_outlineCache;
     PathRasterCache m_maskCache;
-    std::optional<ScreenshotRegionGeometry> m_regionHoverCacheRegion;
-    QImage m_regionHoverCache;
-    QImage m_selectionBackgroundCache;
-    QRect m_selectionBackgroundCacheBounds;
+    ScreenshotRegionShadowRenderer m_regionShadowRenderer;
+    SelectionCoverageCache m_selectionCoverage;
+    QCache<QPoint, QImage> m_selectionBackgroundTiles{64 * 1024 * 1024};
+    QRect m_selectionBackgroundCacheViewport;
+    qreal m_selectionBackgroundCacheDpr = 0;
     QTransform m_selectionBackgroundCacheTransform;
     QPainterPath m_selectionBackgroundCachePath;
-    int m_regionHoverCacheRadius = 0;
-    int m_regionHoverCacheShadowWidth = 0;
-    QColor m_regionHoverCacheShadowColor;
+    QPainterPath m_selectionBackgroundDevicePath;
+    QHash<QPoint, bool> m_selectionBackgroundInteriorTiles;
     bool m_pinnedCheckerboardEnabled = false;
     ScreenshotSelectionVisualState m_selectionState;
     SelectionViewGeometry m_selectionViewGeometry;

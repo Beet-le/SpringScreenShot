@@ -784,6 +784,77 @@ QJsonObject runCase(const Case& benchmarkCase, const QSize& logicalSize, int ite
              static_cast<double>(canvasDamagePixels) / (viewportPixels * iterations)}};
 }
 
+#if !defined(SNOW_SHOT_SELECTION_PRESENTATION_BASELINE)
+QJsonObject runEffectWheelComparison(const QSize& size, int iterations, int warmup,
+                                     FrameBackend backend) {
+    Fixture fixture(size, false, true, backend);
+    fixture.interaction.confirmSelection();
+    fixture.interaction.setSelectionBackgroundPreviewVisible(true);
+    fixture.services->updateOverlayState();
+    constexpr int requests = 16;
+    std::array<std::vector<double>, 2> submissions, frames;
+    std::array<qint64, 2> notifications{};
+    for (int frame = -warmup; frame < iterations; ++frame) {
+        // Alternate the order so neither arm consistently gets colder caches.
+        for (int order = 0; order < 2; ++order) {
+            const auto arm = static_cast<std::size_t>((frame + warmup + order) % 2);
+            static_cast<void>(fixture.selection.setCornerRadius(20));
+            static_cast<void>(fixture.selection.setShadowWidth(16));
+            static_cast<void>(fixture.selection.setBackgroundOpacityPercent(40));
+            fixture.services->updateOverlayState();
+            fixture.processEvents();
+            fixture.resetCounters();
+            QElapsedTimer timer;
+            timer.start();
+            for (int request = 0; request < requests; ++request) {
+                if (request % 3 == 0)
+                    static_cast<void>(
+                        fixture.selection.setCornerRadius(fixture.selection.cornerRadius() + 1));
+                else if (request % 3 == 1)
+                    static_cast<void>(
+                        fixture.selection.setShadowWidth(fixture.selection.shadowWidth() + 1));
+                else
+                    static_cast<void>(fixture.selection.setBackgroundOpacityPercent(
+                        fixture.selection.backgroundOpacityPercent() + 1));
+                if (arm == 0)
+                    fixture.services->updateOverlayState();
+                else
+                    fixture.services->requestSelectionEffectPresentation();
+            }
+            const double submitted = static_cast<double>(timer.nsecsElapsed()) / 1e6;
+            if (fixture.stateNotifications != (arm == 0 ? requests : 0))
+                throw std::runtime_error("wheel submission must preserve its presentation policy");
+            fixture.flushFrame();
+            fixture.processEvents();
+            const double total = static_cast<double>(timer.nsecsElapsed()) / 1e6;
+            if (fixture.selection.cornerRadius() != 26 || fixture.selection.shadowWidth() != 21 ||
+                fixture.selection.backgroundOpacityPercent() != 45 ||
+                fixture.stateNotifications != (arm == 0 ? requests : 1))
+                throw std::runtime_error("wheel frame must retain every delta and latest state");
+            if (frame >= 0) {
+                submissions[arm].push_back(submitted);
+                frames[arm].push_back(total);
+                notifications[arm] += fixture.stateNotifications;
+            }
+        }
+    }
+    QJsonArray arms;
+    for (std::size_t arm = 0; arm < 2; ++arm)
+        arms.append(QJsonObject{{"policy", arm == 0 ? "immediate" : "coalesced"},
+                                {"submission_ms", distribution(submissions[arm])},
+                                {"frame_total_ms", distribution(frames[arm])},
+                                {"semantic_notifications", notifications[arm]}});
+    return {{"scenario", "effect-wheel"},
+            {"requests_per_frame", requests},
+            {"measurement",
+             "Alternating same-process comparison of identical model deltas through immediate "
+             "and frame-coalesced presentation, using the same renderer. Submission excludes "
+             "frame commit; total includes commit and Qt paint/event processing. Excludes native "
+             "wheel delivery, settings persistence and compositor/input-to-photon latency."},
+            {"arms", arms}};
+}
+#endif
+
 int positiveInteger(const QCommandLineParser& parser, const QString& name) {
     bool valid = false;
     const int value = parser.value(name).toInt(&valid);
@@ -855,6 +926,10 @@ int main(int argc, char* argv[]) {
         for (const bool pickerEnabled : {false, true})
             results.append(runExternalInitializationCase(logicalSize, iterations, warmup,
                                                          pickerEnabled, frameBackend));
+#endif
+    } else if (selected == QStringLiteral("effect-wheel")) {
+#if !defined(SNOW_SHOT_SELECTION_PRESENTATION_BASELINE)
+        results.append(runEffectWheelComparison(logicalSize, iterations, warmup, frameBackend));
 #endif
     } else if (selected == QStringLiteral("independent-regions")) {
 #if !defined(SNOW_SHOT_SELECTION_PRESENTATION_BASELINE)

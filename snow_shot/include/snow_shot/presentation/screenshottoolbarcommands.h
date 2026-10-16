@@ -30,6 +30,7 @@ class ScreenshotToolbarCommandSink {
     virtual void setScreenshotRegionType(int) {}
     virtual void setLayoutCompaction(bool, int) {}
     virtual void setSelectionBackgroundOpacityPercent(int) {}
+    virtual void adjustSelectionBackgroundOpacityFromWheel(int) {}
     virtual void setSelectionBackgroundPreviewVisible(bool) {}
     virtual void addScreenshotRegion() {}
     virtual void subtractScreenshotRegion() {}
@@ -171,6 +172,7 @@ class ScreenshotSelectionToolbarCommandSink {
     virtual void adjustSelectionFromToolbar(int minDx, int minDy, int maxDx, int maxDy) = 0;
     virtual void setSelectionCornerRadiusFromToolbar(int radius) = 0;
     virtual void setSelectionShadowWidthFromToolbar(int shadowWidth) = 0;
+    virtual void adjustSelectionEffectsFromWheel(int radiusDelta, int shadowDelta) = 0;
     virtual void setSelectionToolbarHovered(bool hovered) = 0;
     virtual void setSelectionToolbarPopupVisible(bool) {}
 };

@@ -358,13 +358,23 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void redoCanvasEdit() override;
     void requestRecapture() override;
     void setSelectionBackgroundOpacityPercent(int percent) override {
+        updateSelectionBackgroundOpacity(percent, false);
+    }
+    void adjustSelectionBackgroundOpacityFromWheel(int delta) override {
+        updateSelectionBackgroundOpacity(
+            m_selection.backgroundOpacityPercent() + std::clamp(delta, -100, 100), true);
+    }
+    void updateSelectionBackgroundOpacity(int percent, bool continuous) {
         if (!m_selection.hasPixelSelection() || m_interaction.dragging() ||
             m_selection.constructionActive() || m_selection.regionOperationActive())
             return;
         if (m_selection.setBackgroundOpacityPercent(percent)) {
             m_selectionSettings->setBackgroundOpacityPercent(
                 m_selection.backgroundOpacityPercent());
-            m_presentationServices->updateOverlayState();
+            if (continuous)
+                m_presentationServices->requestSelectionEffectPresentation();
+            else
+                m_presentationServices->updateOverlayState();
         }
     }
     void setSelectionBackgroundPreviewVisible(bool visible) override {
@@ -569,6 +579,9 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void adjustSelectionFromToolbar(int minDx, int minDy, int maxDx, int maxDy) override;
     void setSelectionCornerRadiusFromToolbar(int radius) override;
     void setSelectionShadowWidthFromToolbar(int shadowWidth) override;
+    void adjustSelectionEffectsFromWheel(int radiusDelta, int shadowDelta) override {
+        m_selectionEditWorkflow->adjustSelectionEffectsFromWheel(radiusDelta, shadowDelta);
+    }
     void setSelectionToolbarHovered(bool hovered) override;
     void setSelectionToolbarPopupVisible(bool visible) override;
 
@@ -1470,6 +1483,7 @@ void ScreenshotController::Impl::createSelectionWorkflows() {
                         m_presentationServices->discardColorPickerPresentation();
                     m_colorPickerController->setSuppressed(suppressed);
                 },
+                [this]() { m_presentationServices->requestSelectionEffectPresentation(); },
             },
             [this](int cornerRadius, int shadowWidth, const QColor& shadowColor) {
                 m_selectionSettings->setSelectionEffects(cornerRadius, shadowWidth, shadowColor);

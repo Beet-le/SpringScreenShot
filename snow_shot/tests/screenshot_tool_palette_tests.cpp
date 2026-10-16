@@ -19291,6 +19291,13 @@ void layoutCompactionToolbar() {
                 opacity->width() == editor->width(),
             "opacity editor must match spacing and appear immediately after it");
     int opacityEdits = 0;
+    int opacityWheelDelta = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::selectionBackgroundOpacityWheelAdjusted,
+                     [&](int delta) {
+                         require(delta == 10 || delta == -10,
+                                 "opacity wheel commands must carry ten percentage points");
+                         opacityWheelDelta += delta;
+                     });
     bool opacityPreview = false;
     QObject::connect(&palette, &ScreenshotToolPalette::selectionBackgroundPreviewVisibleChanged,
                      [&](bool visible) { opacityPreview = visible; });
@@ -19313,34 +19320,42 @@ void layoutCompactionToolbar() {
                 "opacity consumes wheel input");
     };
     opacityWheel(120);
-    require(opacityEdits == 1 && opacity->valueText() == QStringLiteral("10%"),
+    require(opacityEdits == 0 && opacityWheelDelta == 10 &&
+                opacity->valueText() == QStringLiteral("10%"),
             "opacity increases by ten percentage points");
     opacityWheel(-120);
-    require(opacityEdits == 2 && opacity->valueText() == QStringLiteral("0%"),
+    require(opacityEdits == 0 && opacityWheelDelta == 0 &&
+                opacity->valueText() == QStringLiteral("0%"),
             "opacity decreases by ten percentage points");
     palette.setSelectionBackgroundOpacityState(95, true);
     opacityWheel(120);
-    require(opacityEdits == 3 && opacity->valueText() == QStringLiteral("100%"),
+    require(opacityEdits == 0 && opacityWheelDelta == 10 &&
+                opacity->valueText() == QStringLiteral("100%"),
             "opacity wheel clamps a partial step at 100 percent");
     opacityWheel(120);
-    require(opacityEdits == 3 && opacity->valueText() == QStringLiteral("100%"),
-            "opacity clamps without no-op signals");
+    require(opacityEdits == 0 && opacityWheelDelta == 20 &&
+                opacity->valueText() == QStringLiteral("100%"),
+            "opacity wheels retain full deltas for authoritative model clamping");
     opacityWheel(-120);
-    require(opacityEdits == 4 && opacity->valueText() == QStringLiteral("90%"),
+    require(opacityEdits == 0 && opacityWheelDelta == 10 &&
+                opacity->valueText() == QStringLiteral("90%"),
             "opacity can decrease from its maximum");
     palette.setSelectionBackgroundOpacityState(5, true);
     opacityWheel(-120);
-    require(opacityEdits == 5 && opacity->valueText() == QStringLiteral("0%"),
+    require(opacityEdits == 0 && opacityWheelDelta == 0 &&
+                opacity->valueText() == QStringLiteral("0%"),
             "opacity wheel clamps a partial step at zero");
     palette.setSelectionBackgroundOpacityState(100, true);
     opacity->click();
     opacityWheel(-120);
-    require(opacityEdits == 6 && opacity->valueText() == QStringLiteral("0%"),
+    require(opacityEdits == 1 && opacityWheelDelta == -10 &&
+                opacity->valueText() == QStringLiteral("0%"),
             "opacity resets and clamps at zero");
     palette.setSelectionBackgroundOpacityState(37, false);
     require(!opacityPreview, "suspending opacity editing dismisses its preview");
     opacity->click();
-    require(opacityEdits == 6 && opacity->valueText() == QStringLiteral("37%"),
+    require(opacityEdits == 1 && opacityWheelDelta == -10 &&
+                opacity->valueText() == QStringLiteral("37%"),
             "disabled opacity preserves preference");
     palette.setSelectionBackgroundOpacityState(37, true);
     require(editor->width() == 96 && button->x() == group->x() + group->width() &&

@@ -129,6 +129,16 @@ class NoopToolbarCommands final : public ScreenshotToolbarCommandSink,
     }
     void openSelectionResizeModalFromToolbar() override {}
     void adjustSelectionFromToolbar(int, int, int, int) override {}
+#if !defined(SNOW_SHOT_SELECTION_PRESENTATION_BASELINE)
+    void adjustSelectionEffectsFromWheel(int radius, int shadow) override {
+        adjustSelectionEffects(radius, shadow);
+    }
+    std::function<void(int, int)> adjustSelectionEffects = [](int, int){};
+    void adjustSelectionBackgroundOpacityFromWheel(int delta) override {
+        adjustBackgroundOpacity(delta);
+    }
+    std::function<void(int)> adjustBackgroundOpacity = [](int){};
+#endif
     void setSelectionCornerRadiusFromToolbar(int) override {}
     void setSelectionShadowWidthFromToolbar(int) override {}
     void setSelectionToolbarHovered(bool) override {}

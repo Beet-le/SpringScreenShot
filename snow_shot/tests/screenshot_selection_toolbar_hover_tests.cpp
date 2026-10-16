@@ -67,6 +67,9 @@ class NoOpSelectionToolbarCommands final : public ScreenshotSelectionToolbarComm
         lastAdjustment = {minDx, minDy, maxDx, maxDy};
         ++interactionCount;
     }
+    void adjustSelectionEffectsFromWheel(int, int) override {
+        ++interactionCount;
+    }
     void setSelectionCornerRadiusFromToolbar(int) override {
         ++interactionCount;
     }

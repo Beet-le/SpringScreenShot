@@ -951,10 +951,10 @@ void ScreenshotSelectionToolbarWidget::handleFieldWheel(Field field, int deltaY)
         m_commands.adjustSelectionFromToolbar(0, 0, 0, direction);
         break;
     case Field::Radius:
-        m_commands.setSelectionCornerRadiusFromToolbar(m_cornerRadius + direction);
+        m_commands.adjustSelectionEffectsFromWheel(direction, 0);
         break;
     case Field::Shadow:
-        m_commands.setSelectionShadowWidthFromToolbar(m_shadowWidth + direction);
+        m_commands.adjustSelectionEffectsFromWheel(0, direction);
         break;
     default:
         break;

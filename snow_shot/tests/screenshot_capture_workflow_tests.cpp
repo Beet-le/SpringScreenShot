@@ -444,6 +444,46 @@ void toolbarPresentationTracksSelectionDragLifetime() {
     }
 }
 
+void manualCustomSelectionHidesEditingToolbar() {
+    for (auto type : {ScreenshotRegionType::Rectangle, ScreenshotRegionType::Polyline,
+                      ScreenshotRegionType::Curve, ScreenshotRegionType::Freehand}) {
+        ScreenshotInteractionState interaction;
+        ScreenshotSelectionModel selection;
+        interaction.beginCapture();
+        selection.setRegionType(type);
+        selection.setSelectionRect(QRectF(10, 20, 100, 80));
+        interaction.returnToSelectionMode(true);
+        require(makeScreenshotToolbarPresentationState(interaction, selection).selectionToolbarMode,
+                "smart selection retains its size toolbar for every area tool");
+
+        interaction.returnToSelectionMode(false);
+        const bool rectangular = type == ScreenshotRegionType::Rectangle;
+        require(
+            makeScreenshotToolbarPresentationState(interaction, selection).selectionToolbarMode ==
+                rectangular,
+            "manual marquee selection only shows the editing toolbar for rectangles");
+        require(interaction.enterSelectionDrag(ScreenshotSelectionDragMode::Marquee),
+                "manual marquee drag must begin");
+        require(
+            makeScreenshotToolbarPresentationState(interaction, selection).selectionToolbarMode ==
+                rectangular,
+            "custom marquee drags keep the editing toolbar hidden");
+        interaction.finishDrag();
+        require(
+            makeScreenshotToolbarPresentationState(interaction, selection).selectionToolbarMode ==
+                rectangular,
+            "custom selection keeps the toolbar hidden between construction clicks");
+
+        interaction.confirmSelection();
+        require(makeScreenshotToolbarPresentationState(interaction, selection).selectionToolbarMode,
+                "confirming any area tool restores the editing toolbar");
+        require(interaction.enterSelectionDrag(ScreenshotSelectionDragMode::All),
+                "moving a confirmed selection must begin");
+        require(makeScreenshotToolbarPresentationState(interaction, selection).selectionToolbarMode,
+                "moving a selection retains the toolbar for every area tool");
+    }
+}
+
 void confirmedSelectionPreservesRegionTypeInToolbarPresentation() {
     for (auto type : {ScreenshotRegionType::Rectangle, ScreenshotRegionType::Polyline,
                       ScreenshotRegionType::Curve, ScreenshotRegionType::Freehand}) {
@@ -2330,6 +2370,7 @@ int main() {
     captureCompletionReleasesHistoryBeforeExportsFinish();
     silentCaptureSuppressesAllPresentationAndRestoresVisibleMode();
     toolbarPresentationTracksSelectionDragLifetime();
+    manualCustomSelectionHidesEditingToolbar();
     confirmedSelectionPreservesRegionTypeInToolbarPresentation();
     customCaptureDoesNotWaitForSelector();
     startupDisplayIdentityMatchesByNameRectOrNativeId();

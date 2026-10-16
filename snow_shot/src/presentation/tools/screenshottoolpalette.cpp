@@ -4180,11 +4180,12 @@ bool ScreenshotToolPalette::handleToolbarWheel(QWheelEvent* event) {
         m_backgroundOpacityEditor->isVisible() &&
         m_backgroundOpacityEditor->rect().contains(
             m_backgroundOpacityEditor->mapFromGlobal(event->globalPosition().toPoint()))) {
-        const int percent = std::clamp(m_backgroundOpacityPercent + direction * 10, 0, 100);
+        const int opacityDelta = direction * 10;
+        const int percent = std::clamp(m_backgroundOpacityPercent + opacityDelta, 0, 100);
         if (percent != m_backgroundOpacityPercent) {
             setSelectionBackgroundOpacityState(percent, m_backgroundOpacityAvailable);
-            emit selectionBackgroundOpacityChanged(percent);
         }
+        emit selectionBackgroundOpacityWheelAdjusted(opacityDelta);
         event->accept();
         return true;
     }

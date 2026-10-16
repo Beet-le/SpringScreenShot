@@ -155,6 +155,7 @@ struct ScreenshotPresentationServices::State {
     bool presentationDirty = false;
     bool semanticDirty = false;
     bool selectionDragDirty = false;
+    bool selectionEffectsDirty = false;
     bool geometryDirty = false;
     bool pointerDirty = false;
     bool pointerKnown = false;
@@ -171,8 +172,8 @@ ScreenshotPresentationServices::ScreenshotPresentationServices(
         [this] {
             const qint64 now = nowNanoseconds();
             if (!m_state->semanticDirty && !m_state->selectionDragDirty &&
-                !m_state->geometryDirty && !m_state->pointerDirty &&
-                m_state->colorPickerSource == ColorPickerSource::None &&
+                !m_state->selectionEffectsDirty && !m_state->geometryDirty &&
+                !m_state->pointerDirty && m_state->colorPickerSource == ColorPickerSource::None &&
                 !m_smartSelectionTransition.isRunning()) {
                 m_state->scheduler->cancelDeadline();
                 return;
@@ -321,6 +322,7 @@ void ScreenshotPresentationServices::resetPresentation() {
     m_state->presentationDirty = false;
     m_state->semanticDirty = false;
     m_state->selectionDragDirty = false;
+    m_state->selectionEffectsDirty = false;
     m_state->geometryDirty = false;
     m_state->pointerDirty = false;
     m_state->pointerKnown = false;
@@ -359,8 +361,24 @@ void ScreenshotPresentationServices::requestSelectionDragPresentation() {
     scheduleFrame();
 }
 
+void ScreenshotPresentationServices::requestSelectionEffectPresentation() {
+    if (!m_state->initialized || m_state->sessionId != m_context.captureState.sessionId ||
+        m_context.interaction.dragging() || m_context.interaction.inactive() ||
+        m_context.interaction.intelligentSelecting() ||
+        m_context.interaction.mode() != m_state->hints.captureMode ||
+        m_context.interaction.dragMode() != m_state->dragMode ||
+        presentationLifecycle(m_context) != m_state->lifecycle || m_state->preferencesDirty ||
+        m_state->presentationDirty) {
+        updateOverlayState();
+        return;
+    }
+    m_state->selectionEffectsDirty = true;
+    scheduleFrame();
+}
+
 ScreenshotPresentationServices::Preparation ScreenshotPresentationServices::prepareOverlayState() {
     m_state->selectionDragDirty = false;
+    m_state->selectionEffectsDirty = false;
     const bool newSession =
         !m_state->initialized || m_state->sessionId != m_context.captureState.sessionId;
     if (newSession)
@@ -536,7 +554,8 @@ void ScreenshotPresentationServices::flushPendingFrame() {
         resetPresentation();
         return;
     }
-    if (m_state->selectionDragDirty || m_state->hints.captureMode != m_context.interaction.mode() ||
+    if (m_state->selectionDragDirty || m_state->selectionEffectsDirty ||
+        m_state->hints.captureMode != m_context.interaction.mode() ||
         m_state->dragMode != m_context.interaction.dragMode() ||
         m_state->lifecycle != presentationLifecycle(m_context)) {
         (void)prepareOverlayState();
@@ -599,8 +618,9 @@ void ScreenshotPresentationServices::flushPendingFrame() {
     m_state->frameClock.advancePast(nowNanoseconds());
     if (m_context.interaction.inactive()) {
         m_state->scheduler->stop();
-    } else if (m_state->semanticDirty || m_state->selectionDragDirty || m_state->geometryDirty ||
-               m_state->pointerDirty || m_state->colorPickerSource != ColorPickerSource::None ||
+    } else if (m_state->semanticDirty || m_state->selectionDragDirty ||
+               m_state->selectionEffectsDirty || m_state->geometryDirty || m_state->pointerDirty ||
+               m_state->colorPickerSource != ColorPickerSource::None ||
                m_smartSelectionTransition.isRunning()) {
         scheduleFrame();
     } else {

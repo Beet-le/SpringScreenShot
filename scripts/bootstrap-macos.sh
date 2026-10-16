@@ -40,7 +40,26 @@ if [[ ! "$cmake_version" =~ ^cmake[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+
     snow_die "CMake 4.2 or newer is required; found: ${cmake_version:-unknown}"
 fi
 cd "$snow_repo_root"
-rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy --target "$snow_rust_target"
+rust_toolchain=1.97.1
+rust_toolchain_is_ready() {
+    local rust_info rust_host installed_components component
+    # `rustup run` checks an existing toolchain without auto-installing it.
+    rust_info="$(rustup run "$rust_toolchain" rustc -vV 2>/dev/null)" || return 1
+    rust_host="$(sed -n 's/^host: //p' <<< "$rust_info")"
+    [[ -n "$rust_host" ]] || return 1
+    installed_components="$(rustup component list --toolchain "$rust_toolchain" --installed)" || return 1
+    for component in cargo rustc rust-std rustfmt clippy; do
+        grep -Fqx "$component-$rust_host" <<< "$installed_components" || return 1
+    done
+    grep -Fqx "rust-std-$snow_rust_target" <<< "$installed_components"
+}
+# Builds call bootstrap too. A complete pinned toolchain needs no distribution sync.
+if rust_toolchain_is_ready; then
+    printf 'Reusing Rust %s with target %s.\n' "$rust_toolchain" "$snow_rust_target"
+else
+    rustup toolchain install "$rust_toolchain" --profile minimal \
+        --component rustfmt --component clippy --target "$snow_rust_target" --no-self-update
+fi
 # Use the same pinned registry baseline and isolated dynamic/static install roots as Windows.
 vcpkg_root="$snow_repo_root/.tools/vcpkg"
 vcpkg_baseline=4497409a47f19db373a410a0efb84eca4747adbf

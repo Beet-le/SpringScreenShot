@@ -170,6 +170,8 @@ void ScreenshotToolbarWindow::initializePalette() {
         [this](bool enabled, int spacing) { m_commands.setLayoutCompaction(enabled, spacing); });
     connect(toolPalette, &ScreenshotToolPalette::selectionBackgroundOpacityChanged, this,
             [this](int percent) { m_commands.setSelectionBackgroundOpacityPercent(percent); });
+    connect(toolPalette, &ScreenshotToolPalette::selectionBackgroundOpacityWheelAdjusted, this,
+            [this](int delta) { m_commands.adjustSelectionBackgroundOpacityFromWheel(delta); });
     connect(toolPalette, &ScreenshotToolPalette::selectionBackgroundPreviewVisibleChanged, this,
             [this](bool visible) { m_commands.setSelectionBackgroundPreviewVisible(visible); });
     connect(toolPalette, &ScreenshotToolPalette::addScreenshotRegionRequested, this,

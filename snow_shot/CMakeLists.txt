@@ -12272,6 +12272,17 @@ if(SNOW_SHOT_BUILD_TESTS)
 endif()
 
 if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-region-shadow-renderer-tests
+        tests/screenshot_region_shadow_renderer_tests.cpp
+        src/presentation/overlay/screenshotselectionshadowrenderer.cpp)
+    target_include_directories(snow-shot-region-shadow-renderer-tests PRIVATE include)
+    target_link_libraries(snow-shot-region-shadow-renderer-tests PRIVATE
+        Qt6::Widgets ant_design_qt snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-shot-region-shadow-renderer-tests)
+    add_test(NAME snow-shot-region-shadow-renderer-tests COMMAND snow-shot-region-shadow-renderer-tests)
+    set_tests_properties(snow-shot-region-shadow-renderer-tests PROPERTIES
+        LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 90
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(snow-shot-selection-background-tests
         tests/screenshot_selection_background_tests.cpp
         src/presentation/overlay/screenshotselectionshadowrenderer.cpp)

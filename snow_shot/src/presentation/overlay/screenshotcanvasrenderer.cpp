@@ -1130,6 +1130,9 @@ QPen ocrSelectionPreviewPen(const QColor& color) {
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
 thread_local QRegion g_selectionDamageRegion;
 thread_local std::size_t g_selectionDamagePathFallbacks = 0;
+thread_local std::size_t g_selectionBackgroundTileBuilds = 0;
+thread_local std::size_t g_selectionPreviewMaskBuilds = 0;
+thread_local std::size_t g_selectionGeometryBuilds = 0;
 thread_local QRegion g_guideLineDamageRegion;
 thread_local std::size_t g_guideLineUpdateRequests = 0;
 
@@ -1615,11 +1618,30 @@ QRegion planScreenshotSelectionDamage(const ScreenshotSelectionVisualState& prev
     if (previous.backgroundOpacityPercent != next.backgroundOpacityPercent) {
         QRegion damage;
         for (const auto* state : {&previous, &next}) {
-            if (!state->present)
+            if (!selectionEffectsPreviewVisible(*state))
                 continue;
-            damage += selectionPreviewBounds(*state, canvasToViewTransform)
-                          .toAlignedRect()
-                          .adjusted(-3, -3, 3, 3);
+            QRegion background(selectionPreviewBounds(*state, canvasToViewTransform)
+                                   .toAlignedRect()
+                                   .adjusted(-3, -3, 3, 3));
+            // Background opacity never changes the selected interior, including
+            // translucent capture pixels. Keep a conservative band for rounded
+            // corners, fractional pixel coverage and concave region edges.
+            if (canvasToViewTransform.type() <= QTransform::TxScale) {
+                const qreal scale = std::max(std::abs(canvasToViewTransform.m11()),
+                                             std::abs(canvasToViewTransform.m22()));
+                const int padding = qCeil(state->cornerRadius * scale) + 3;
+                if (!state->region) {
+                    background -=
+                        interiorPixelRect(canvasToViewTransform.mapRect(state->bounds)
+                                              .adjusted(padding, padding, -padding, -padding));
+                } else if (!state->region->custom() && state->region->rectCount() <= 512) {
+                    for (const QRect& rectangle : state->region->rectangles())
+                        background -=
+                            interiorPixelRect(canvasToViewTransform.mapRect(QRectF(rectangle))
+                                                  .adjusted(padding, padding, -padding, -padding));
+                }
+            }
+            damage += background;
         }
         // Presets can change opacity and geometry together. Preserve the damage
         // for every other state change, including handles outside these bounds.
@@ -2769,9 +2791,12 @@ void ScreenshotCanvasRenderer::applySelectionState(const ScreenshotSelectionVisu
     }
     const ScreenshotSelectionVisualState previous = m_selectionState;
     m_selectionState = next;
-    auto geometryState = previous;
-    geometryState.backgroundOpacityPercent = next.backgroundOpacityPercent;
-    if (geometryState != next)
+    // Appearance and editor decorations do not change the cached selection paths.
+    if (previous.bounds != next.bounds || previous.present != next.present ||
+        previous.cornerRadius != next.cornerRadius || previous.region != next.region ||
+        previous.confirmedRegion != next.confirmedRegion ||
+        previous.stationaryRegions != next.stationaryRegions ||
+        previous.draftPath != next.draftPath || previous.subtracting != next.subtracting)
         m_selectionViewGeometry = {};
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
     const QTransform canvasToViewTransform = m_canvas.canvasToViewTransform();
@@ -2801,12 +2826,18 @@ ScreenshotSelectionRenderDiagnostics selectionRenderDiagnosticsForCurrentThread(
     return ScreenshotSelectionRenderDiagnostics{
         regionPixelCount(g_selectionDamageRegion),
         g_selectionDamagePathFallbacks,
+        g_selectionBackgroundTileBuilds,
+        g_selectionPreviewMaskBuilds,
+        g_selectionGeometryBuilds,
     };
 }
 
 void resetSelectionRenderDiagnosticsForCurrentThread() {
     g_selectionDamageRegion = {};
     g_selectionDamagePathFallbacks = 0;
+    g_selectionBackgroundTileBuilds = 0;
+    g_selectionPreviewMaskBuilds = 0;
+    g_selectionGeometryBuilds = 0;
 }
 
 ScreenshotGuideLineRenderDiagnostics guideLineRenderDiagnosticsForCurrentThread() {
@@ -3041,16 +3072,20 @@ void ScreenshotCanvasRenderer::reset() {
 }
 
 void ScreenshotCanvasRenderer::clearRenderState() {
-    m_selectionBackgroundCache = {};
+    m_selectionBackgroundTiles.clear();
+    m_selectionCoverage.clear();
+    m_selectionBackgroundCachePath = {};
+    m_selectionBackgroundDevicePath = {};
+    m_selectionBackgroundInteriorTiles.clear();
+    m_selectionBackgroundCacheTransform = {};
+    m_selectionBackgroundCacheViewport = {};
+    m_selectionBackgroundCacheDpr = 0;
     if (m_selectionState.region)
         m_selectionState.region->clearDerivedCache();
     m_selectionState.confirmedRegion.clearDerivedCache();
-    if (m_regionHoverCacheRegion)
-        m_regionHoverCacheRegion->clearDerivedCache();
     if (m_pinnedResultStyle.region)
         m_pinnedResultStyle.region->clearDerivedCache();
-    m_regionHoverCacheRegion.reset();
-    m_regionHoverCache = {};
+    m_regionShadowRenderer.reset();
     m_outlineCache = {};
     m_maskCache = {};
     m_selectionViewGeometry = {};
@@ -3203,7 +3238,7 @@ quint64 ScreenshotCanvasRenderer::ocrGeometrySynchronizationCountForTesting() co
 void ScreenshotCanvasRenderer::invalidateCachedContent(bool originalChanged) {
     ++m_contentRevision;
     if (originalChanged) {
-        m_selectionBackgroundCache = {};
+        m_selectionBackgroundTiles.clear();
         ++m_originalBackgroundRevision;
     }
 }
@@ -3249,46 +3284,89 @@ void ScreenshotCanvasRenderer::paintSelectionBackground(QPainter& painter,
     auto selectionPath = m_selectionViewGeometry.effectivePath;
     if (m_selectionViewGeometry.rectangular)
         selectionPath.addRect(m_selectionViewGeometry.effectiveRect);
-    const auto render = [&](const QRect& rect) {
-        const QSize size(qCeil(rect.width() * context.devicePixelRatio),
-                         qCeil(rect.height() * context.devicePixelRatio));
-        auto image = snowCanvasAllocateZeroedImage(size, QImage::Format_ARGB32_Premultiplied);
+    if (m_selectionBackgroundCachePath != selectionPath ||
+        m_selectionBackgroundCacheTransform != context.canvasToViewTransform ||
+        m_selectionBackgroundCacheDpr != context.devicePixelRatio ||
+        m_selectionBackgroundCacheViewport != context.viewportRect) {
+        m_selectionBackgroundTiles.clear();
+        m_selectionBackgroundInteriorTiles.clear();
+        m_selectionBackgroundDevicePath =
+            QTransform::fromScale(context.devicePixelRatio, context.devicePixelRatio)
+                .map(selectionPath);
+        m_selectionBackgroundCachePath = selectionPath;
+        m_selectionBackgroundCacheTransform = context.canvasToViewTransform;
+        m_selectionBackgroundCacheDpr = context.devicePixelRatio;
+        m_selectionBackgroundCacheViewport = context.viewportRect;
+    }
+    const qreal dpr = context.devicePixelRatio;
+    const auto logicalRect = [dpr](const QRect& pixels) {
+        return QRectF(pixels.x() / dpr, pixels.y() / dpr, pixels.width() / dpr,
+                      pixels.height() / dpr);
+    };
+    const auto render = [&](const QRect& pixels) {
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+        ++g_selectionBackgroundTileBuilds;
+#endif
+        auto image =
+            snowCanvasAllocateZeroedImage(pixels.size(), QImage::Format_ARGB32_Premultiplied);
         if (image.isNull())
             return image;
-        image.setDevicePixelRatio(context.devicePixelRatio);
         QPainter layerPainter(&image);
-        layerPainter.translate(-rect.topLeft());
+        const QTransform toTile(dpr, 0, 0, dpr, -pixels.x(), -pixels.y());
+        layerPainter.setTransform(toTile);
         auto full = context;
-        full.exposedRegion = rect;
+        full.exposedRegion = logicalRect(pixels).toAlignedRect();
         paintBackground(layerPainter, full, true);
         layerPainter.end();
-        const auto physicalPath =
-            QTransform::fromScale(context.devicePixelRatio, context.devicePixelRatio)
-                .map(selectionPath.translated(-rect.topLeft()));
-        return ScreenshotResultCompositor::maskBackgroundForSelection(image, image, physicalPath);
+        image = ScreenshotResultCompositor::maskBackgroundForSelection(image, image,
+                                                                       toTile.map(selectionPath));
+        image.setDevicePixelRatio(dpr);
+        return image;
     };
-    constexpr qint64 limit = 64 * 1024 * 1024;
-    if (qCeil(visible.width() * context.devicePixelRatio) *
-            qint64(qCeil(visible.height() * context.devicePixelRatio)) * 4 <=
-        limit) {
-        if (m_selectionBackgroundCache.isNull() || m_selectionBackgroundCacheBounds != visible ||
-            m_selectionBackgroundCachePath != selectionPath ||
-            m_selectionBackgroundCacheTransform != context.canvasToViewTransform ||
-            m_selectionBackgroundCache.devicePixelRatio() != context.devicePixelRatio) {
-            m_selectionBackgroundCache = render(visible);
-            m_selectionBackgroundCacheBounds = visible;
-            m_selectionBackgroundCacheTransform = context.canvasToViewTransform;
-            m_selectionBackgroundCachePath = selectionPath;
-        }
-        painter.drawImage(visible.topLeft(), m_selectionBackgroundCache);
-    } else {
-        m_selectionBackgroundCache = {};
-        for (int y = visible.top(); y <= visible.bottom(); y += 256)
-            for (int x = visible.left(); x <= visible.right(); x += 256) {
-                const QRect tile = QRect(x, y, 256, 256).intersected(visible);
-                if (context.exposedRegion.intersects(tile))
-                    painter.drawImage(tile.topLeft(), render(tile));
+    // A fixed viewport grid survives changes in shadow padding. Cache only
+    // exposed tiles, so large high-DPI previews retain their active working set
+    // instead of disabling reuse when a full preview would exceed the byte cap.
+    // Align tile joins in device pixels, including non-integral display scales.
+    const auto toPixels = QTransform::fromScale(dpr, dpr);
+    const QRect viewportPixels = toPixels.mapRect(QRectF(context.viewportRect)).toAlignedRect();
+    // Larger tiles reduce draw overhead when the entire viewport fits. Otherwise
+    // use smaller tiles to avoid retaining too much unexposed edge padding.
+    const int side = qint64(viewportPixels.width()) * viewportPixels.height() * 4 <=
+                             m_selectionBackgroundTiles.maxCost()
+                         ? 256
+                         : 128;
+    const QRect visiblePixels = toPixels.mapRect(QRectF(visible)).toAlignedRect();
+    const QPoint origin = viewportPixels.topLeft();
+    const int firstX = origin.x() + (visiblePixels.left() - origin.x()) / side * side;
+    const int firstY = origin.y() + (visiblePixels.top() - origin.y()) / side * side;
+    for (int y = firstY; y <= visiblePixels.bottom(); y += side) {
+        for (int x = firstX; x <= visiblePixels.right(); x += side) {
+            const QRect tile = QRect(x, y, side, side).intersected(viewportPixels);
+            const QRectF destination = logicalRect(tile);
+            if (!context.exposedRegion.intersects(destination.toAlignedRect().intersected(visible)))
+                continue;
+            auto interior = m_selectionBackgroundInteriorTiles.constFind(tile.topLeft());
+            if (interior == m_selectionBackgroundInteriorTiles.cend())
+                interior = m_selectionBackgroundInteriorTiles.insert(
+                    tile.topLeft(),
+                    m_selectionBackgroundDevicePath.contains(QRectF(tile).adjusted(-1, -1, 1, 1)));
+            // Background opacity affects only uncovered pixels. Opaque capture
+            // content covers the selected interior; translucent source pixels
+            // have their retained background removed by maskBackgroundForSelection.
+            // Neither case needs an interior backdrop tile.
+            if (*interior)
+                continue;
+            QImage image;
+            if (const auto* cached = m_selectionBackgroundTiles.object(tile.topLeft())) {
+                image = *cached;
+            } else {
+                image = render(tile);
+                if (!image.isNull() && image.sizeInBytes() <= m_selectionBackgroundTiles.maxCost())
+                    m_selectionBackgroundTiles.insert(tile.topLeft(), new QImage(image),
+                                                      image.sizeInBytes());
             }
+            painter.drawImage(destination.topLeft(), image);
+        }
     }
 }
 
@@ -3298,14 +3376,31 @@ void ScreenshotCanvasRenderer::maskSelectionPreview(QPainter& painter,
     auto& geometry = m_selectionViewGeometry;
     const auto device = painter.deviceTransform();
     const auto inverse = device.inverted();
-    const QRect pixels = device.mapRect(bounds).toAlignedRect().intersected(
+    const QRect previewPixels = device.mapRect(bounds).toAlignedRect().intersected(
         device.mapRect(QRectF(context.viewportRect)).toAlignedRect());
-    if (pixels.isEmpty())
+    if (previewPixels.isEmpty())
         return;
     auto path = geometry.effectivePath;
     if (geometry.rectangular)
         path.addRect(geometry.effectiveRect);
+    // Coverage depends on the selection, not on its shadow padding. Clear the
+    // outside separately so width sweeps reuse the same positive-coverage mask.
+    const QRect pixels =
+        device.mapRect(path.boundingRect())
+            .toAlignedRect()
+            .intersected(device.mapRect(QRectF(context.viewportRect)).toAlignedRect());
+    painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    for (const QRect& outside : QRegion(previewPixels).subtracted(pixels))
+        painter.fillRect(inverse.mapRect(QRectF(outside)), Qt::transparent);
+    painter.restore();
+    if (pixels.isEmpty())
+        return;
     const auto render = [&](const QRect& rect) {
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+        ++g_selectionPreviewMaskBuilds;
+#endif
         auto mask = snowCanvasAllocateZeroedImage(rect.size(), QImage::Format_Alpha8);
         if (mask.isNull())
             return mask;
@@ -3319,24 +3414,67 @@ void ScreenshotCanvasRenderer::maskSelectionPreview(QPainter& painter,
     painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
     // Rasterize positive coverage exactly as the result compositor does.
     // Filling an inverse path rounds antialiased edge coverage differently.
+    auto& coverage = m_selectionCoverage;
+    if (coverage.path != path || coverage.pixels != pixels || coverage.transform != device) {
+        coverage.clear();
+        coverage.path = path;
+        coverage.pixels = pixels;
+        coverage.transform = device;
+        coverage.devicePath = device.map(path);
+    }
     constexpr qint64 limit = 16 * 1024 * 1024;
-    if (qint64(pixels.width()) * pixels.height() <= limit) {
-        if (geometry.previewMask.isNull() || geometry.previewMaskPixels != pixels ||
-            geometry.previewMaskTransform != device) {
-            geometry.previewMask = render(pixels);
-            geometry.previewMaskPixels = pixels;
-            geometry.previewMaskTransform = device;
-        }
-        painter.drawImage(inverse.mapRect(QRectF(pixels)), geometry.previewMask);
+    const qint64 alignedRowBytes = (qint64(pixels.width()) + 3) / 4 * 4;
+    if (alignedRowBytes * pixels.height() <= limit) {
+        if (coverage.mask.isNull())
+            coverage.mask = render(pixels);
+        painter.drawImage(inverse.mapRect(QRectF(pixels)), coverage.mask);
     } else {
-        geometry.previewMask = {};
-        for (int y = pixels.top(); y <= pixels.bottom(); y += 512)
-            for (int x = pixels.left(); x <= pixels.right(); x += 512) {
-                const QRect tile = QRect(x, y, 512, 512).intersected(pixels);
+        // Retain only boundary coverage. Interior pixels are already unchanged by
+        // DestinationIn; empty tiles can be cleared directly. Caching either kind
+        // needlessly evicts boundary masks when a large preview spans many tiles.
+        constexpr int side = 256;
+        painter.save();
+        // Coverage is already antialiased in physical pixels. Draw its tiles at
+        // 1:1 device coordinates, without antialiasing their rectangular joins.
+        painter.setWorldTransform(inverse, true);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+        for (int y = pixels.top(); y <= pixels.bottom(); y += side) {
+            for (int x = pixels.left(); x <= pixels.right(); x += side) {
+                const QRect tile = QRect(x, y, side, side).intersected(pixels);
                 const auto destination = inverse.mapRect(QRectF(tile));
-                if (context.exposedRegion.intersects(destination.toAlignedRect()))
-                    painter.drawImage(destination, render(tile));
+                if (!context.exposedRegion.intersects(destination.toAlignedRect()))
+                    continue;
+                auto kind = coverage.tileKinds.constFind(tile.topLeft());
+                if (kind == coverage.tileKinds.cend()) {
+                    const QRectF neighborhood = QRectF(tile).adjusted(-1, -1, 1, 1);
+                    const auto classification = coverage.devicePath.contains(neighborhood)
+                                                    ? SelectionCoverageCache::TileKind::Interior
+                                                : coverage.devicePath.intersects(neighborhood)
+                                                    ? SelectionCoverageCache::TileKind::Boundary
+                                                    : SelectionCoverageCache::TileKind::Empty;
+                    kind = coverage.tileKinds.insert(tile.topLeft(), classification);
+                }
+                if (*kind == SelectionCoverageCache::TileKind::Interior)
+                    continue;
+                if (*kind == SelectionCoverageCache::TileKind::Empty) {
+                    painter.fillRect(tile, Qt::transparent);
+                    continue;
+                }
+                QImage mask;
+                if (const auto* cached = coverage.tiles.object(tile.topLeft())) {
+                    mask = *cached;
+                } else {
+                    mask = render(tile);
+                    // Once a frame's boundary working set exceeds the byte cap,
+                    // keep the admitted tiles instead of evicting them in scan order.
+                    if (!mask.isNull() &&
+                        mask.sizeInBytes() <= coverage.tiles.maxCost() - coverage.tiles.totalCost())
+                        coverage.tiles.insert(tile.topLeft(), new QImage(mask), mask.sizeInBytes());
+                }
+                painter.drawImage(tile.topLeft(), mask);
             }
+        }
+        painter.restore();
     }
 }
 
@@ -3482,6 +3620,10 @@ ScreenshotCanvasRenderer::selectionViewGeometry(const SnowCanvasRenderContext& c
     }
 
     const bool shaped = m_selectionState.region.has_value();
+    geometry = {};
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    ++g_selectionGeometryBuilds;
+#endif
     geometry.canvasToViewTransform = context.canvasToViewTransform;
     geometry.viewportRect = context.viewportRect;
     geometry.cornerRadius = cornerRadius;
@@ -3680,45 +3822,10 @@ void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
             maskSelectionPreview(painter, context, previewBounds);
             painter.setCompositionMode(QPainter::CompositionMode_DestinationOver);
             if (shaped) {
-                const QRect bounds = m_selectionState.region->boundingRect();
-                if (!bounds.isEmpty() && m_selectionState.shadowWidth > 0) {
-                    const ScreenshotRegionGeometry localRegion =
-                        m_selectionState.region->translated(-bounds.topLeft());
-                    const bool cacheHit =
-                        !m_regionHoverCache.isNull() && m_regionHoverCacheRegion == localRegion &&
-                        m_regionHoverCacheRadius == visibleCornerRadius &&
-                        m_regionHoverCacheShadowWidth == m_selectionState.shadowWidth &&
-                        m_regionHoverCacheShadowColor == m_selectionState.shadowColor;
-                    QImage uncachedShadow;
-                    if (!cacheHit) {
-                        ScreenshotResultStyle style{visibleCornerRadius,
-                                                    m_selectionState.shadowWidth,
-                                                    m_selectionState.shadowColor,
-                                                    {},
-                                                    1.0};
-                        style.region = localRegion;
-                        QImage empty = snowCanvasAllocateImage(bounds.size(),
-                                                               QImage::Format_ARGB32_Premultiplied);
-                        empty.fill(Qt::transparent);
-                        uncachedShadow = ScreenshotResultCompositor::compose(empty, style);
-                        constexpr qsizetype kRegionHoverCacheByteLimit = 64 * 1024 * 1024;
-                        if (uncachedShadow.sizeInBytes() <= kRegionHoverCacheByteLimit) {
-                            m_regionHoverCacheRegion = localRegion;
-                            m_regionHoverCacheRadius = visibleCornerRadius;
-                            m_regionHoverCacheShadowWidth = m_selectionState.shadowWidth;
-                            m_regionHoverCacheShadowColor = m_selectionState.shadowColor;
-                            m_regionHoverCache = uncachedShadow;
-                        } else {
-                            m_regionHoverCacheRegion.reset();
-                            m_regionHoverCache = {};
-                        }
-                    }
-                    painter.drawImage(
-                        context.canvasToViewTransform.mapRect(QRectF(bounds.adjusted(
-                            -m_selectionState.shadowWidth, -m_selectionState.shadowWidth,
-                            m_selectionState.shadowWidth, m_selectionState.shadowWidth))),
-                        cacheHit ? m_regionHoverCache : uncachedShadow);
-                }
+                m_regionShadowRenderer.render(painter, *m_selectionState.region,
+                                              visibleCornerRadius, m_selectionState.shadowWidth,
+                                              m_selectionState.shadowColor,
+                                              context.canvasToViewTransform, context.exposedRegion);
             } else {
                 const qreal scale = std::max<qreal>(
                     1.0e-6, std::min(std::hypot(context.canvasToViewTransform.m11(),

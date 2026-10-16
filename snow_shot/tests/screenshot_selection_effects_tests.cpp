@@ -105,6 +105,10 @@ void selectionEffectsPersistAcrossRestarts() {
     workflow.toggleSelectionAspectRatioLockFromToolbar();
     require(settings.cornerRadius() == 24 && settings.shadowWidth() == 12,
             "toolbar edits must persist both effects without exporting a screenshot");
+    workflow.adjustSelectionEffectsFromWheel(3, -2);
+    require(settings.cornerRadius() == 27 && settings.shadowWidth() == 10,
+            "wheel values must persist before their deferred preview is presented");
+    workflow.adjustSelectionEffectsFromWheel(-3, 2);
     require(settings.aspectRatioLocked(),
             "the toolbar aspect-ratio toggle must persist without exporting a screenshot");
     require(storage.captureHistory().records().isEmpty(),

@@ -488,6 +488,7 @@ class ScreenshotToolPalette final : public QWidget,
     void screenshotRegionTypeRequested(int type);
     void layoutCompactionChanged(bool enabled, int spacing);
     void selectionBackgroundOpacityChanged(int percent);
+    void selectionBackgroundOpacityWheelAdjusted(int delta);
     void selectionBackgroundPreviewVisibleChanged(bool visible);
     void addScreenshotRegionRequested();
     void subtractScreenshotRegionRequested();

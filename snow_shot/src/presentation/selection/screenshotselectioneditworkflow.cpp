@@ -8,6 +8,7 @@
 #include "snow_shot/presentation/screenshotselectionmodel.h"
 #include "snow_shot/presentation/screenshotoverlaywindow.h"
 
+#include <algorithm>
 #include <utility>
 
 ScreenshotSelectionEditWorkflow::ScreenshotSelectionEditWorkflow(
@@ -77,6 +78,30 @@ void ScreenshotSelectionEditWorkflow::toggleSelectionAspectRatioLockFromToolbar(
     if (m_context.ui.updateOverlayState) {
         m_context.ui.updateOverlayState();
     }
+}
+
+void ScreenshotSelectionEditWorkflow::adjustSelectionEffectsFromWheel(int radiusDelta,
+                                                                      int shadowDelta) {
+    using namespace snow_shot::presentation;
+    const bool cancelled = m_context.interaction.cancelEffectDrag();
+    const bool radiusChanged = radiusDelta != 0 && m_context.selection.cornerRadiusApplicable() &&
+                               m_context.selection.setCornerRadius(
+                                   m_context.selection.cornerRadius() +
+                                   std::clamp(radiusDelta, -kScreenshotSelectionCornerRadiusMax,
+                                              kScreenshotSelectionCornerRadiusMax));
+    const bool shadowChanged =
+        shadowDelta != 0 && m_context.selection.setShadowWidth(
+                                m_context.selection.shadowWidth() +
+                                std::clamp(shadowDelta, -kScreenshotSelectionShadowWidthMax,
+                                           kScreenshotSelectionShadowWidthMax));
+    if (!radiusChanged && !shadowChanged && !cancelled)
+        return;
+    if (radiusChanged || shadowChanged)
+        commitSelectionEffects();
+    if (!cancelled && m_context.ui.requestSelectionEffectPresentation)
+        m_context.ui.requestSelectionEffectPresentation();
+    else if (m_context.ui.updateOverlayState)
+        m_context.ui.updateOverlayState();
 }
 
 void ScreenshotSelectionEditWorkflow::previewSelectionEffect(ScreenshotSelectionEffectHandle handle,
