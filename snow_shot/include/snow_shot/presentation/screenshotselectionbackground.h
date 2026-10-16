@@ -87,10 +87,10 @@ inline QImage renderScreenshotSelectionBackground(
         for (const auto& column : columns) {
             if (cancelled && cancelled())
                 return {};
-            const QRectF source(selection.x() + column.sourceBegin * sx,
-                                selection.y() + row.sourceBegin * sy,
-                                (column.sourceEnd - column.sourceBegin) * sx,
-                                (row.sourceEnd - row.sourceBegin) * sy);
+            const QRectF source(selection.x() + static_cast<qreal>(column.sourceBegin) * sx,
+                                selection.y() + static_cast<qreal>(row.sourceBegin) * sy,
+                                static_cast<qreal>(column.sourceEnd - column.sourceBegin) * sx,
+                                static_cast<qreal>(row.sourceEnd - row.sourceBegin) * sy);
             const QRectF destination(column.destinationBegin, row.destinationBegin,
                                      column.destinationEnd - column.destinationBegin,
                                      row.destinationEnd - row.destinationBegin);
