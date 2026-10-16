@@ -127,6 +127,16 @@ class ScreenshotSelectionModel final {
     [[nodiscard]] bool adjustFromToolbar(int minDx, int minDy, int maxDx, int maxDy,
                                          const QRectF& bounds, qreal minimumSelectionSize);
 
+    [[nodiscard]] bool layoutCompactionAvailable() const;
+    [[nodiscard]] ScreenshotLayoutCompaction layoutCompaction() const {
+        return m_layoutCompaction;
+    }
+    [[nodiscard]] ScreenshotLayoutCompaction exportLayoutCompaction() const {
+        auto options = m_layoutCompaction;
+        options.enabled = options.enabled && layoutCompactionAvailable();
+        return options;
+    }
+    bool setLayoutCompaction(ScreenshotLayoutCompaction options);
     [[nodiscard]] int cornerRadius() const;
     [[nodiscard]] int shadowWidth() const;
     [[nodiscard]] QColor shadowColor() const;
@@ -200,6 +210,9 @@ class ScreenshotSelectionModel final {
     QPointF m_end;
     QPointF m_moveStart;
     QRectF m_moveOriginalSelection;
+    ScreenshotLayoutCompaction m_layoutCompaction;
+    mutable std::optional<ScreenshotRegionGeometry> m_componentGeometry;
+    mutable bool m_multipleComponents = false;
     int m_cornerRadius = 0;
     int m_shadowWidth = 0;
     QColor m_shadowColor = QColor(0x33, 0x33, 0x33);

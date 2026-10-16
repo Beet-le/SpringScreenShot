@@ -2651,6 +2651,31 @@ void ScreenshotToolPalette::setScreenshotRegionType(ScreenshotRegionType type) {
     }
 }
 
+void ScreenshotToolPalette::setLayoutCompactionState(ScreenshotLayoutCompaction options,
+                                                     bool available, bool canvasUsesPoints) {
+    m_layoutCompaction = options.normalized();
+    m_layoutCompactionAvailable = available;
+    m_layoutCompactionCanvasUsesPoints = canvasUsesPoints;
+    if (m_layoutCompactionButton) {
+        m_layoutCompactionButton->setEnabled(available);
+        setScreenshotToolPaletteButtonActive(m_layoutCompactionButton, m_layoutCompaction.enabled);
+        m_layoutCompactionButton->setAccessibleDescription(
+            !available                   ? tr("Available for multi-region selections")
+            : m_layoutCompaction.enabled ? tr("Layout compaction enabled")
+                                         : tr("Layout compaction disabled"));
+    }
+    if (m_layoutSpacingEditor) {
+        m_layoutSpacingEditor->setEnabled(available);
+        m_layoutSpacingEditor->setValue(m_layoutCompaction.spacing);
+        m_layoutSpacingEditor->setValueSuffix(screenshotSelectionDisplayUnitText(
+            canvasUsesPoints ? ScreenshotSelectionDisplayUnit::LogicalPixels
+                             : ScreenshotSelectionDisplayUnit::PhysicalPixels));
+        m_layoutSpacingEditor->setAccessibleDescription(
+            available ? m_layoutSpacingEditor->valueText()
+                      : tr("Available for multi-region selections"));
+    }
+}
+
 void ScreenshotToolPalette::setScrollingAutoScrollIntervalMs(int milliseconds) {
     m_scrollingAutoScrollIntervalMs =
         std::clamp(milliseconds, kScreenshotScrollingAutoScrollIntervalMinimum,
@@ -3668,7 +3693,8 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
         const auto metrics = actionButtonMetrics(m_physicalScale);
         for (adqt::widgets::AdButton* button :
              m_selectActionPanel->findChildren<adqt::widgets::AdButton*>()) {
-            if (button != nullptr && button != m_scrollingAutoScrollIntervalEditor) {
+            if (button != nullptr && button != m_scrollingAutoScrollIntervalEditor &&
+                button != m_layoutSpacingEditor) {
                 configureScreenshotToolPaletteStyleButton(button, nullptr, metrics);
             }
         }
@@ -3781,6 +3807,10 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
     if (m_recordPreferencesButton != nullptr) {
         configureScreenshotToolPaletteStyleButton(m_recordPreferencesButton, "Recording settings",
                                                   styleButtonMetrics(m_physicalScale));
+    }
+    if (m_layoutSpacingEditor) {
+        configureScreenshotToolPaletteScrollingIntervalEditor(m_layoutSpacingEditor,
+                                                              actionButtonMetrics(m_physicalScale));
     }
     if (m_scrollingAutoScrollIntervalEditor != nullptr) {
         configureScreenshotToolPaletteScrollingIntervalEditor(m_scrollingAutoScrollIntervalEditor,
@@ -4128,6 +4158,21 @@ bool ScreenshotToolPalette::handleToolbarWheel(QWheelEvent* event) {
         return false;
     }
     const int direction = deltaY > 0 ? 1 : -1;
+    if (m_layoutSpacingEditor && m_layoutSpacingEditor->isEnabled() &&
+        m_layoutSpacingEditor->isVisible() &&
+        m_layoutSpacingEditor->rect().contains(
+            m_layoutSpacingEditor->mapFromGlobal(event->globalPosition().toPoint()))) {
+        auto options = m_layoutCompaction;
+        options.spacing =
+            std::clamp(options.spacing + direction, 0, ScreenshotLayoutCompaction::maximumSpacing);
+        if (options != m_layoutCompaction) {
+            setLayoutCompactionState(options, m_layoutCompactionAvailable,
+                                     m_layoutCompactionCanvasUsesPoints);
+            emit layoutCompactionChanged(options.enabled, options.spacing);
+        }
+        event->accept();
+        return true;
+    }
     if (m_scrollingAutoScrollIntervalEditor != nullptr &&
         m_scrollingAutoScrollIntervalEditor->isEnabled() &&
         m_scrollingAutoScrollIntervalEditor->isVisible() &&
@@ -4418,6 +4463,8 @@ void ScreenshotToolPalette::retranslateUi() {
         m_scrollingAutoScrollIntervalEditor->setValueSuffix(tr("ms", "Auto-scroll interval unit"));
     }
     retranslateScreenshotToolPalette(this);
+    setLayoutCompactionState(m_layoutCompaction, m_layoutCompactionAvailable,
+                             m_layoutCompactionCanvasUsesPoints);
     refreshRecognitionModelSelect();
     retranslateDrawTemplateUi();
     if (m_styleControls != nullptr) {
@@ -7681,6 +7728,8 @@ void ScreenshotToolPalette::clearSecondaryResourceBindings() {
     m_rectangleStyleControlsWidget = nullptr;
     m_speechBubbleStyleControlsWidget = nullptr;
     m_moveActionControls = nullptr;
+    m_layoutCompactionButton = nullptr;
+    m_layoutSpacingEditor = nullptr;
     m_selectionDisplayUnitGroup = nullptr;
     m_cursorButton = nullptr;
     m_hideSelectionToolbarButton = nullptr;
@@ -8933,6 +8982,38 @@ void ScreenshotToolPalette::createMoveActionFamily() {
             &ScreenshotToolPalette::addScreenshotRegionRequested);
     connect(m_subtractRegionButton, &adqt::widgets::AdButton::clicked, this,
             &ScreenshotToolPalette::subtractScreenshotRegionRequested);
+    m_layoutCompactionButton = createScreenshotToolPaletteStyleActionButton(
+        m_moveActionControls, QT_TR_NOOP("Compact layout"),
+        custom_outlined_icons::LayoutCompaction(), actionButtonMetrics(m_physicalScale));
+    m_layoutCompactionButton->setObjectName(QStringLiteral("screenshotLayoutCompactionButton"));
+    layout->addWidget(m_layoutCompactionButton);
+    addStyleToolbarSpacing(layout, STYLE_ITEM_SPACING);
+    m_layoutSpacingEditor = createScreenshotToolPaletteIconNumericValueButton(
+        m_moveActionControls, QT_TR_NOOP("Layout spacing (scroll to adjust; click to reset to 0)"),
+        custom_outlined_icons::LayoutSpacing(), m_layoutCompaction.spacing,
+        QStringLiteral("1000dp"), actionButtonMetrics(m_physicalScale));
+    m_layoutSpacingEditor->setObjectName(QStringLiteral("screenshotLayoutSpacingEditor"));
+    configureScreenshotToolPaletteScrollingIntervalEditor(m_layoutSpacingEditor,
+                                                          actionButtonMetrics(m_physicalScale));
+    layout->addWidget(m_layoutSpacingEditor);
+    connect(m_layoutCompactionButton, &adqt::widgets::AdButton::clicked, this, [this] {
+        auto options = m_layoutCompaction;
+        options.enabled = !options.enabled;
+        setLayoutCompactionState(options, m_layoutCompactionAvailable,
+                                 m_layoutCompactionCanvasUsesPoints);
+        emit layoutCompactionChanged(options.enabled, options.spacing);
+    });
+    connect(m_layoutSpacingEditor, &adqt::widgets::AdButton::clicked, this, [this] {
+        if (m_layoutCompaction.spacing == 0)
+            return;
+        auto options = m_layoutCompaction;
+        options.spacing = 0;
+        setLayoutCompactionState(options, m_layoutCompactionAvailable,
+                                 m_layoutCompactionCanvasUsesPoints);
+        emit layoutCompactionChanged(options.enabled, options.spacing);
+    });
+    setLayoutCompactionState(m_layoutCompaction, m_layoutCompactionAvailable,
+                             m_layoutCompactionCanvasUsesPoints);
     addStyleToolbarSpacing(layout, STYLE_GROUP_SPACING * 2);
     auto* regionActionsSeparator = createStyleToolbarSeparator(m_moveActionControls);
     regionActionsSeparator->setObjectName(QStringLiteral("screenshotRegionActionsSeparator"));
@@ -9006,10 +9087,11 @@ void ScreenshotToolPalette::createMoveActionFamily() {
     });
     m_selectActionLayout->addWidget(m_moveActionControls);
     stampScreenshotToolbarReferenceWidth(
-        m_moveActionControls, actionButtonMetrics(1.0).buttonSize * 6 +
+        m_moveActionControls, actionButtonMetrics(1.0).buttonSize * 7 +
+                                  screenshotToolbarReferenceWidth(m_layoutSpacingEditor) +
                                   screenshotToolbarReferenceWidth(regionTypes.container) +
                                   screenshotToolbarReferenceWidth(units.container) +
-                                  STYLE_ITEM_SPACING * 3 + STYLE_GROUP_SPACING * 10 + 6 +
+                                  STYLE_ITEM_SPACING * 4 + STYLE_GROUP_SPACING * 10 + 6 +
                                   TOOLBAR_SEPARATOR_WIDTH * 2);
     setCursorVisible(m_cursorVisible);
     setCursorAvailable(m_cursorAvailable);

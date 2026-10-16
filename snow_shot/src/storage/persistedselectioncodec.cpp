@@ -64,6 +64,8 @@ QJsonObject persistedSelectionToJson(const PersistedSelection& selection) {
         {QStringLiteral("lock_aspect_ratio"), selection.lockAspectRatio},
         {QStringLiteral("lock_drag_aspect_ratio"), selection.lockDragAspectRatio},
     };
+    result.insert(QStringLiteral("layout_compaction_enabled"), selection.layoutCompaction.enabled);
+    result.insert(QStringLiteral("layout_compaction_spacing"), selection.layoutCompaction.spacing);
     if (selection.region && selection.region->custom()) {
         result.insert(QStringLiteral("geometry"), selection.region->toJson());
     } else if (selection.region) {
@@ -134,6 +136,13 @@ PersistedSelectionNormalization normalizePersistedSelection(const QJsonValue& va
         selection.region = region;
         selection.rectangle = bounds;
     }
+    const auto enabled = object.value(QStringLiteral("layout_compaction_enabled"));
+    const auto spacing = object.value(QStringLiteral("layout_compaction_spacing"));
+    if ((!enabled.isUndefined() && !enabled.isBool()) ||
+        (!spacing.isUndefined() && !integer(spacing, 0, ScreenshotLayoutCompaction::maximumSpacing,
+                                            &selection.layoutCompaction.spacing)))
+        return {};
+    selection.layoutCompaction.enabled = enabled.toBool(false);
     selection.cornerRadius = cornerRadius;
     selection.shadowWidth = shadowWidth;
     selection.shadowColor = color;

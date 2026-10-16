@@ -70,6 +70,7 @@ class ScreenshotSelectionResizeModalContent final : public QWidget {
     void syncWidthFromHeight();
     bool validateNormalFields();
 
+    ScreenshotLayoutCompaction m_fieldLayoutCompaction;
     std::optional<ScreenshotRegionGeometry> m_fieldRegion;
     bool m_canvasUsesPoints = false;
     QRect m_selectionBounds;

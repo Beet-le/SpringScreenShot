@@ -6,6 +6,7 @@
 #include "snow_shot/presentation/screenshotselectionmodel.h"
 #include "snow_shot/presentation/screenshotselectionsettingsstore.h"
 #include "snow_shot/storage/capturehistoryrepository.h"
+#include "snow_shot/storage/persistedselectioncodec.h"
 #include "snow_shot/storage/applicationstorage.h"
 
 #include <QCoreApplication>
@@ -40,6 +41,8 @@ void selectionEffectsPersistAcrossRestarts() {
             "new installations must default to an unlocked selection aspect ratio");
     require(settings.selectionTarget() == ScreenshotIntelligentSelectionTarget::WindowSubElement,
             "new installations must default to the existing child-element selection mode");
+    require(settings.layoutCompaction() == ScreenshotLayoutCompaction{}, "compaction defaults");
+    settings.setLayoutCompaction({true, 17});
     settings.setSelectionTarget(ScreenshotIntelligentSelectionTarget::Window);
     require(settings.selectionTarget() == ScreenshotIntelligentSelectionTarget::Window,
             "selection target preference must be writable");
@@ -95,6 +98,8 @@ void selectionEffectsPersistAcrossRestarts() {
     storage.shutdown();
     require(storage.initialize(options).success, "storage must reopen after shutdown");
     ScreenshotSelectionSettingsStore restartedSettings;
+    require(restartedSettings.layoutCompaction() == ScreenshotLayoutCompaction{true, 17},
+            "compaction settings must survive a restart");
     require(restartedSettings.cornerRadius() == 24 && restartedSettings.shadowWidth() == 12,
             "selection effects must survive a storage restart");
     require(restartedSettings.aspectRatioLocked(),
@@ -400,10 +405,63 @@ void selectionAspectRatioWorkflowPersistsOnlyUserPreferences() {
             "clearing selection preferences must reset both the saved preset and lock");
     storage.shutdown();
 }
+void compactionSelectionState() {
+    ScreenshotSelectionModel selection;
+    selection.setSelectionRect(QRectF(0, 0, 20, 20));
+    selection.setLayoutCompaction({true, 8});
+    require(!selection.layoutCompactionAvailable() && !selection.exportLayoutCompaction().enabled,
+            "single rectangles must not compact");
+    selection.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
+    selection.setSelectionRect(QRectF(50, 0, 20, 20));
+    require(!selection.layoutCompactionAvailable(),
+            "unfinished multi-region operations are unavailable");
+    selection.commitRegionOperation();
+    require(selection.layoutCompactionAvailable() && selection.exportLayoutCompaction().enabled,
+            "committed regions enable compaction");
+    auto reduced = selection;
+    reduced.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Subtract);
+    reduced.setSelectionRect(QRectF(50, 0, 20, 20));
+    reduced.commitRegionOperation();
+    require(!reduced.layoutCompactionAvailable(), "removed regions must not retain eligibility");
+    const auto params = selection.params(QRect(0, 0, 100, 100));
+    ScreenshotSelectionModel restored;
+    require(restored.applyParams(params, QRect(0, 0, 100, 100)) &&
+                restored.layoutCompactionAvailable() &&
+                restored.layoutCompaction() == params.layoutCompaction,
+            "history restoration must retain compaction and multi-region eligibility");
+    const auto revision = restored.changeRevision();
+    require(!restored.setLayoutCompaction(params.layoutCompaction) &&
+                restored.changeRevision() == revision,
+            "identical settings must not invalidate selection presentation");
+    snow_shot::storage::PersistedSelection persisted{
+        params.selection,   params.radius,          params.shadowWidth,
+        params.shadowColor, params.lockAspectRatio, params.lockDragAspectRatio,
+        params.region,      params.layoutCompaction};
+    auto json = snow_shot::storage::persistedSelectionToJson(persisted);
+    require(snow_shot::storage::normalizePersistedSelection(json).value == persisted,
+            "compaction history JSON must round trip");
+    json.remove(QStringLiteral("layout_compaction_enabled"));
+    json.remove(QStringLiteral("layout_compaction_spacing"));
+    const auto legacy = snow_shot::storage::normalizePersistedSelection(json);
+    require(legacy.valid && legacy.value.layoutCompaction == ScreenshotLayoutCompaction{},
+            "legacy history must default to disabled compaction");
+    json.insert(QStringLiteral("layout_compaction_spacing"), 1.5);
+    require(!snow_shot::storage::normalizePersistedSelection(json).valid,
+            "fractional persisted spacing rejected");
+    restored.reset();
+    require(restored.layoutCompaction() == ScreenshotLayoutCompaction{},
+            "capture reset clears local settings");
+    QRegion ring(QRect(0, 0, 40, 40));
+    ring -= QRect(10, 10, 20, 20);
+    restored.setSelectionRegion(ring);
+    require(!restored.layoutCompactionAvailable(),
+            "scanline partitions and holes are not multiple selections");
+}
 } // namespace
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    compactionSelectionState();
     selectionEffectsPersistAcrossRestarts();
     selectionAspectRatioWorkflowPersistsOnlyUserPreferences();
     return 0;

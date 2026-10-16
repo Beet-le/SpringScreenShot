@@ -17,6 +17,7 @@ struct ScreenshotRecognitionImageSnapshot final {
     QFont font;
     QColor textColor;
     ScreenshotResultStyle resultStyle;
+    ScreenshotLayoutCompaction layoutCompaction = {};
     qreal outputOpacity = 1.0;
 };
 

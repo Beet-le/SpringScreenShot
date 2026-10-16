@@ -85,6 +85,36 @@ void compoundSelectionClipsRecognizedText() {
             "recognition shape follows image backing scale");
 }
 
+void compactionFollowsRecognitionRendering() {
+    for (int shadow : {0, 3}) {
+        for (qreal scale : {1.0, 1.5, 2.0}) {
+            auto snapshot = fixture();
+            snapshot.image = snapshot.image.scaled(qRound(320 * scale), qRound(180 * scale));
+            snapshot.resultStyle = {6, shadow, Qt::black,
+                                    ScreenshotRegionGeometry(
+                                        QRegion(0, 0, 100, 180).united(QRegion(220, 0, 100, 180)))};
+            const auto reference = renderScreenshotRecognitionImage(snapshot);
+            snapshot.layoutCompaction = {true, 4};
+            const auto originalQuad = snapshot.lines.first().quad;
+            const auto actual = renderScreenshotRecognitionImage(snapshot);
+            const int padding = qRound(shadow * scale);
+            const QSize footprint(qRound(100 * scale) + 2 * padding,
+                                  qRound(180 * scale) + 2 * padding);
+            const int spacing = qRound(4 * scale);
+            QImage expected(2 * footprint.width() + spacing, footprint.height(),
+                            QImage::Format_ARGB32_Premultiplied);
+            expected.fill(Qt::transparent);
+            QPainter painter(&expected);
+            painter.drawImage(QPoint(), reference, QRect(QPoint(), footprint));
+            painter.drawImage(QPoint(footprint.width() + spacing, 0), reference,
+                              QRect(QPoint(qRound(220 * scale), 0), footprint));
+            painter.end();
+            require(actual == expected && snapshot.lines.first().quad == originalQuad,
+                    "recognition compaction must preserve text coordinates and every shadow pixel");
+        }
+    }
+}
+
 void layoutModesAndTransformsRenderOnWorkers() {
     for (bool vertical : {false, true}) {
         for (bool paragraph : {false, true}) {
@@ -203,6 +233,7 @@ int main(int argc, char** argv) {
         rendersNativeCoordinatesAndPreservesSource();
         displayedBackgroundAndEffectsAreAppliedOnce();
         compoundSelectionClipsRecognizedText();
+        compactionFollowsRecognitionRendering();
         layoutModesAndTransformsRenderOnWorkers();
         sourceRowsSurviveImageExportOnWorkers();
         cancellationAndInvalidInputNeverPublishPartialImages();

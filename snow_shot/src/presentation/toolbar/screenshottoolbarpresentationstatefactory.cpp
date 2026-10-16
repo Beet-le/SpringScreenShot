@@ -26,6 +26,9 @@ makeScreenshotToolbarPresentationState(const ScreenshotInteractionState& interac
     state.aspectRatioPreset = selection.aspectRatioPreset();
     state.cornerRadius = selection.cornerRadius();
     state.cornerRadiusApplicable = selection.cornerRadiusApplicable();
+    state.layoutCompaction = selection.layoutCompaction();
+    state.layoutCompactionAvailable =
+        selection.layoutCompactionAvailable() && !state.selectionDragging;
     state.shadowWidth = selection.shadowWidth();
     state.shadowColor = selection.shadowColor();
     return state;

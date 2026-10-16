@@ -164,6 +164,10 @@
             <translation>Auto-scroll interval (scroll to adjust; click to reset to 200 ms)</translation>
         </message>
         <message>
+            <source>Available for multi-region selections</source>
+            <translation>Available for multi-region selections</translation>
+        </message>
+        <message>
             <source>Avatar</source>
             <translation>Avatar</translation>
         </message>
@@ -242,6 +246,10 @@
         <message>
             <source>Close recording</source>
             <translation>Close recording</translation>
+        </message>
+        <message>
+            <source>Compact layout</source>
+            <translation>Compact layout</translation>
         </message>
         <message>
             <source>Confirm edit</source>
@@ -698,6 +706,18 @@
         <message>
             <source>LaTeX-Specific Model</source>
             <translation>LaTeX-Specific Model</translation>
+        </message>
+        <message>
+            <source>Layout compaction disabled</source>
+            <translation>Layout compaction disabled</translation>
+        </message>
+        <message>
+            <source>Layout compaction enabled</source>
+            <translation>Layout compaction enabled</translation>
+        </message>
+        <message>
+            <source>Layout spacing (scroll to adjust; click to reset to 0)</source>
+            <translation>Layout spacing (scroll to adjust; click to reset to 0)</translation>
         </message>
         <message>
             <source>Leader line</source>

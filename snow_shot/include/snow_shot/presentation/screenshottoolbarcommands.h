@@ -28,6 +28,7 @@ class ScreenshotToolbarCommandSink {
     virtual void undoCanvasEdit() {}
     virtual void redoCanvasEdit() {}
     virtual void setScreenshotRegionType(int) {}
+    virtual void setLayoutCompaction(bool, int) {}
     virtual void addScreenshotRegion() {}
     virtual void subtractScreenshotRegion() {}
     virtual void requestRecapture() {}

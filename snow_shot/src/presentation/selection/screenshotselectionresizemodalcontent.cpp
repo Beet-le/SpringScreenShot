@@ -599,6 +599,7 @@ void ScreenshotSelectionResizeModalContent::applyParamsToFields(
     const ScreenshotSelectionParams clamped =
         clampScreenshotSelectionParams(params, m_selectionBounds);
     m_fieldRegion = clamped.region;
+    m_fieldLayoutCompaction = clamped.layoutCompaction;
     m_radiusInput->setEnabled(!m_fieldRegion || !m_fieldRegion->custom());
     if (m_fieldRegion && m_fieldRegion->rectCount() == 1)
         m_fieldRegion.reset();
@@ -647,6 +648,7 @@ ScreenshotSelectionParams ScreenshotSelectionResizeModalContent::paramsFromField
     params.lockAspectRatio = lockAspectRatio;
     params.lockDragAspectRatio = lockAspectRatio;
     params.region = m_fieldRegion;
+    params.layoutCompaction = m_fieldLayoutCompaction;
     return clampScreenshotSelectionParams(params, m_selectionBounds);
 }
 

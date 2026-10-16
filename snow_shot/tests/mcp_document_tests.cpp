@@ -133,8 +133,10 @@ class MemoryClipboard final : public McpDocumentService::Clipboard {
 
 class FixtureOcr final : public ScreenshotOcrRecognitionPort {
   public:
+    QSize lastImageSize;
     RequestToken recognize(ScreenshotOcrRequest request, QObject* receiver,
                            Completion completion) override {
+        lastImageSize = request.image.size();
         const auto token = ++m_next;
         QTimer::singleShot(
             100, receiver,
@@ -554,6 +556,95 @@ void documentReservations(const QString& directory) {
         service.shutdown();
     }
 }
+void compactedDocumentsKeepEditingCoordinates(const QString& directory) {
+    FixtureOcr ocr;
+    McpJobRegistry jobs;
+    McpDocumentService::Ports ports;
+    const auto clipboard = std::make_shared<MemoryClipboard>();
+    ports.clipboard = clipboard;
+    ports.jobs = &jobs;
+    ports.recognition = &ocr;
+    ScreenshotSelectionParams selection;
+    selection.selection = QRect(5, 5, 70, 40);
+    selection.region = QRegion(5, 5, 20, 40).united(QRegion(55, 5, 20, 40));
+    selection.radius = 4;
+    selection.shadowWidth = 2;
+    selection.layoutCompaction = {true, 5};
+    ports.resolveSource = [selection](const ScreenshotMcpRequest&, auto done, auto budget) {
+        require(budget(80 * 60 * 4), "compacted document source reservation");
+        McpDocumentService::Source source;
+        source.image = QImage(80, 60, QImage::Format_ARGB32_Premultiplied);
+        source.image.fill(Qt::white);
+        source.selection = selection;
+        done(std::move(source), {});
+    };
+    QImage pinned;
+    ports.pinDocument = [&](auto source, QImage image, auto done) {
+        require(source.selection && *source.selection == selection,
+                "document pin retains original selection metadata");
+        pinned = std::move(image);
+        done(true);
+        return true;
+    };
+    McpDocumentService service(std::move(ports));
+    quint64 sequence = 0;
+    QString id;
+    const auto call = [&](const QString& method, QJsonObject params = {}) {
+        if (!id.isEmpty())
+            params.insert(QStringLiteral("document_id"), id);
+        ScreenshotMcpRequest request;
+        request.connectionId = 1;
+        request.requestId = QString::number(++sequence);
+        request.idempotencyKey = request.requestId;
+        request.method = QStringLiteral("snow_shot_document_") + method;
+        request.params = std::move(params);
+        request.expectedRevision = 1;
+        std::optional<ScreenshotMcpResponse> response;
+        service.request(request, [&](auto value) { response = std::move(value); });
+        QElapsedTimer timer;
+        timer.start();
+        while (!response && timer.elapsed() < 5000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        require(response.has_value() && response->ok, "compacted document request completes");
+        return *response;
+    };
+    const auto opened =
+        call(QStringLiteral("open"), {{QStringLiteral("source"), QStringLiteral("clipboard")}});
+    id = opened.result.value(QStringLiteral("document_id")).toString();
+    const auto rendered = call(QStringLiteral("render"));
+    const auto pixels = QImage::fromData(rendered.attachment);
+    require(pixels.size() == QSize(53, 44),
+            "document render reserves each region's shadow footprint during compaction");
+    call(QStringLiteral("copy"));
+    require(QImage::fromData(clipboard->png) == pixels, "document copy matches rendered pixels");
+    const auto path = QDir(directory).filePath(QStringLiteral("compacted-document.png"));
+    call(QStringLiteral("save"), {{QStringLiteral("path"), path}});
+    require(QImage(path) == pixels, "document save matches rendered pixels");
+    call(QStringLiteral("pin"));
+    // Compare through the same PNG encoder: straight-alpha PNG conversion can
+    // round translucent shadow colors differently from QImage::pixelColor().
+    const auto pinPayload = ScreenshotClipboardService::prepareImage(pinned);
+    require(QImage::fromData(pinPayload.pngBytes()) == pixels,
+            "compacted document pin is already composed");
+    require(
+        QImage::fromData(call(QStringLiteral("render"), {{QStringLiteral("scale"), 2}}).attachment)
+                .size() == QSize(106, 88),
+        "scaled document compaction uses canvas spacing units");
+    call(QStringLiteral("recognize"), {{QStringLiteral("kind"), QStringLiteral("text")}});
+    QElapsedTimer timer;
+    timer.start();
+    while (ocr.lastImageSize.isEmpty() && timer.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(1);
+    }
+    require(ocr.lastImageSize == QSize(74, 44), "recognition preserves original document layout");
+    require(QImage::fromData(call(QStringLiteral("render")).attachment) == pixels,
+            "recognition must not contaminate the compacted image cache");
+    service.shutdown();
+}
+
 void documentCacheWork(const QString& directory) {
     for (const bool evict : {false, true}) {
         std::atomic_int renders = 0, encodes = 0;
@@ -2655,6 +2746,12 @@ int main(int argc, char** argv) {
         const int result = serve(application, application.arguments().at(serveIndex + 1));
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return result;
+    }
+    if (application.arguments().contains(QStringLiteral("--compaction-only"))) {
+        compactedDocumentsKeepEditingCoordinates(temporary.path());
+        documentCacheWork(temporary.path());
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
     }
     if (application.arguments().contains(QStringLiteral("--translation-only"))) {
         runMcpTranslationTests();

@@ -8,6 +8,7 @@
 #include "snow_draw_engine_qt/snow_canvas_style_edit.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/image/screenshotregiongeometry.h"
+#include "snow_shot/image/screenshotlayoutcompaction.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotscrollingtypes.h"
 #include "snow_shot/presentation/screenshotwheelinput.h"
@@ -345,6 +346,11 @@ class ScreenshotToolPalette final : public QWidget,
     void setCursorVisible(bool enabled);
     void setCursorAvailable(bool available);
     void setScreenshotRegionType(ScreenshotRegionType type);
+    void setLayoutCompactionState(ScreenshotLayoutCompaction options, bool available,
+                                  bool canvasUsesPoints);
+    [[nodiscard]] ScreenshotLayoutCompaction layoutCompaction() const {
+        return m_layoutCompaction;
+    }
     [[nodiscard]] bool cursorVisible() const;
     void setSelectionDisplayUnit(ScreenshotSelectionDisplayUnit unit);
     void setSelectionToolbarHidden(bool hidden);
@@ -479,6 +485,7 @@ class ScreenshotToolPalette final : public QWidget,
     void recaptureRequested();
     void qrCodeVisibilityRequested(bool visible);
     void screenshotRegionTypeRequested(int type);
+    void layoutCompactionChanged(bool enabled, int spacing);
     void addScreenshotRegionRequested();
     void subtractScreenshotRegionRequested();
     void selectionDisplayUnitChanged(ScreenshotSelectionDisplayUnit unit);
@@ -1112,6 +1119,11 @@ class ScreenshotToolPalette final : public QWidget,
     bool m_recordingCursorVisible = true;
     bool m_cursorVisible = false;
     bool m_cursorAvailable = true;
+    ScreenshotLayoutCompaction m_layoutCompaction;
+    bool m_layoutCompactionAvailable = false;
+    bool m_layoutCompactionCanvasUsesPoints = false;
+    adqt::widgets::AdButton* m_layoutCompactionButton = nullptr;
+    IconNumericValuePreviewButton* m_layoutSpacingEditor = nullptr;
     ScreenshotRegionType m_screenshotRegionType = ScreenshotRegionType::Rectangle;
     ScreenshotSelectionDisplayUnit m_selectionDisplayUnit = kDefaultScreenshotSelectionDisplayUnit;
     bool m_selectionToolbarHidden = false;

@@ -62,6 +62,11 @@ class SnowCanvasRuntime {
     void restoreSmartEraseSnapshot(const SnowCanvasSmartEraseSnapshot& snapshot);
     QImage renderToImage(const QRectF& virtualSelectionRect, const QSize& outputSize,
                          const QList<CanvasExportSource>& sources);
+    // Reuse one synchronized scene and the original coordinate frame while painting
+    // disjoint pixel rectangles into a compact destination. Filtering uses bounded halos.
+    QImage renderTilesToImage(const QRectF& sourceFrame, const QSize& sourcePixelSize,
+                              const QSize& outputSize, const QList<CanvasExportTile>& tiles,
+                              const QList<CanvasExportSource>& sources);
 
   private:
     friend struct snow_canvas_runtime::Access;

@@ -1,6 +1,8 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTRESULTCOMPOSITOR_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTRESULTCOMPOSITOR_H
 
+#include "snow_shot/image/screenshotlayoutcompaction.h"
+
 #include <QColor>
 #include <QDataStream>
 #include <QImage>
@@ -98,5 +100,26 @@ class ScreenshotResultCompositor final {
                                   const QRectF& contentBounds, const ScreenshotResultStyle& style,
                                   qreal devicePixelRatio, qreal canvasToViewScale = 1.0);
 };
+
+// The compaction plan operates on pixels; bake the original mask before moving
+// it so newly touching regions do not lose their individually rounded corners.
+inline ScreenshotResultStyle
+compactedScreenshotResultStyle(const ScreenshotResultStyle& style,
+                               const ScreenshotLayoutCompactionPlan& plan) {
+    if (!plan.changed || !style.region)
+        return style;
+    auto result = ScreenshotResultCompositor::normalizedStyle(style);
+    const qreal scale = result.regionScale;
+    const auto mask =
+        QTransform::fromScale(scale, scale)
+            .map(result.region->custom()
+                     ? result.region->path(scale)
+                     : screenshotRegionPath(*result.region, result.cornerRadius / scale));
+    result.region =
+        ScreenshotRegionGeometry::fromPath(plan.mapPath(mask), ScreenshotRegionType::Curve);
+    result.regionScale = 1.0;
+    result.cornerRadius = 0;
+    return result;
+}
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENSHOTRESULTCOMPOSITOR_H

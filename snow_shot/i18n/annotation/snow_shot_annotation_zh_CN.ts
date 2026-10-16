@@ -164,6 +164,10 @@
             <translation>自动滚动间隔（滚轮调整；单击重置为 200 ms）</translation>
         </message>
         <message>
+            <source>Available for multi-region selections</source>
+            <translation>仅适用于多区域选区</translation>
+        </message>
+        <message>
             <source>Avatar</source>
             <translation>头像</translation>
         </message>
@@ -242,6 +246,10 @@
         <message>
             <source>Close recording</source>
             <translation>关闭录制</translation>
+        </message>
+        <message>
+            <source>Compact layout</source>
+            <translation>紧凑布局</translation>
         </message>
         <message>
             <source>Confirm edit</source>
@@ -698,6 +706,18 @@
         <message>
             <source>LaTeX-Specific Model</source>
             <translation>LaTeX 专用模型</translation>
+        </message>
+        <message>
+            <source>Layout compaction disabled</source>
+            <translation>已禁用紧凑布局</translation>
+        </message>
+        <message>
+            <source>Layout compaction enabled</source>
+            <translation>已启用紧凑布局</translation>
+        </message>
+        <message>
+            <source>Layout spacing (scroll to adjust; click to reset to 0)</source>
+            <translation>布局间距（滚动调整；点击重置为 0）</translation>
         </message>
         <message>
             <source>Leader line</source>

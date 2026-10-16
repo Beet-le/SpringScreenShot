@@ -52,6 +52,25 @@ QImage renderScreenshotRecognitionImage(const ScreenshotRecognitionImageSnapshot
         style.cornerRadius = qRound(style.cornerRadius * scale);
         style.shadowWidth = qRound(style.shadowWidth * scale);
     }
+    if (snapshot.layoutCompaction.enabled && style.region) {
+        const auto plan = screenshotLayoutCompactionPlan(
+            *style.region, image.size(), style.regionScale, snapshot.layoutCompaction,
+            ScreenshotResultCompositor::normalizedStyle(style).shadowWidth);
+        if (!plan->isValid())
+            return {};
+        if (plan->changed) {
+            QImage compacted = snowCanvasAllocateZeroedImage(plan->outputSize, image.format());
+            if (compacted.isNull())
+                return {};
+            compacted.setColorSpace(image.colorSpace());
+            QPainter compactPainter(&compacted);
+            for (const auto& tile : plan->tiles)
+                compactPainter.drawImage(tile.destination, image, tile.source);
+            compactPainter.end();
+            image = std::move(compacted);
+            style = compactedScreenshotResultStyle(style, *plan);
+        }
+    }
     return stopped()
                ? QImage{}
                : ScreenshotResultCompositor::compose(image, style, 1.0, snapshot.outputOpacity);

@@ -735,6 +735,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "LayoutCompaction",
+      "name": "layout-compaction",
+      "source": "../src/presentation/components/icons/resources/layout-compaction.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "LayoutSpacing",
+      "name": "layout-spacing",
+      "source": "../src/presentation/components/icons/resources/layout-spacing.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "LineTypeCurved",
       "name": "line-type-curved",
       "source": "../src/presentation/components/icons/resources/line-type-curved.svg",

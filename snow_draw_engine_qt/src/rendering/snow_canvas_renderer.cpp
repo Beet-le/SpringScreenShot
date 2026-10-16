@@ -2683,7 +2683,7 @@ void renderSceneItemsImpl(const SceneRenderRequest& request) {
             return plan.restoration(index).effective &&
                    exposedRegion.intersects(plan.restoration(index).logicalBounds.toAlignedRect());
         });
-    if ((hasFilter || hasRestoration) &&
+    if ((hasFilter || hasRestoration || request.forceBackgroundRaster) &&
         (hasBackgroundContent || sceneItemCount > filterIndices.size())) {
         g_filterDiagnostics.usedFilterPath = true;
         g_filterDiagnostics.recorderCount = 1;
@@ -3301,7 +3301,8 @@ void renderSceneItemsImpl(const SceneRenderRequest& request) {
             scenePainter.end();
             const StageTimer presentationTimer{g_filterDiagnostics.presentationNanoseconds};
             painter.save();
-            painter.setClipRegion(exposedRegion.intersected(QRegion(surfaceBounds)));
+            painter.setClipRegion(exposedRegion.intersected(QRegion(surfaceBounds)),
+                                  Qt::IntersectClip);
             if (!plan.restorationIndices.empty()) {
                 painter.setCompositionMode(QPainter::CompositionMode_Source);
             }

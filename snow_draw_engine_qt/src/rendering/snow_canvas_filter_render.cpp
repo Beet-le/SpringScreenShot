@@ -1333,6 +1333,7 @@ QImage& RenderWorkspace::ensureImage(QImage& image, PoolEntry*& entry, int lease
             }
             m_diagnostics.allocatedBytes += static_cast<std::size_t>(storage.sizeInBytes());
             m_pool.push_back(PoolEntry{std::move(storage), format, ++m_poolClock, lease});
+            m_diagnostics.peakPoolBytes = std::max(m_diagnostics.peakPoolBytes, retainedBytes());
             entry = &m_pool.back();
         } else {
             entry = &*found;
@@ -1384,6 +1385,7 @@ snow::memory::PixelArray<QRgb>& RenderWorkspace::mosaicSampleScratch(std::size_t
         m_mosaicSamples.reserve(count);
         m_diagnostics.allocatedBytes +=
             (m_mosaicSamples.capacity() - previousCapacity) * sizeof(QRgb);
+        m_diagnostics.peakPoolBytes = std::max(m_diagnostics.peakPoolBytes, retainedBytes());
     } else {
         ++m_diagnostics.scratchReuseCount;
     }
@@ -1455,6 +1457,7 @@ const KernelDiagnostics& RenderWorkspace::diagnostics() const {
 }
 void RenderWorkspace::resetDiagnostics() {
     m_diagnostics = {};
+    m_diagnostics.peakPoolBytes = retainedBytes();
 }
 
 std::size_t RenderWorkspace::retainedBytes() const {

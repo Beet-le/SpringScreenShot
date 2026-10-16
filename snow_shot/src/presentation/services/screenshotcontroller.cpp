@@ -357,6 +357,14 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void undoCanvasEdit() override;
     void redoCanvasEdit() override;
     void requestRecapture() override;
+    void setLayoutCompaction(bool enabled, int spacing) override {
+        if (!m_selection.layoutCompactionAvailable() || m_interaction.dragging())
+            return;
+        if (m_selection.setLayoutCompaction({enabled, spacing})) {
+            m_selectionSettings->setLayoutCompaction(m_selection.layoutCompaction());
+            m_presentationServices->updateOverlayState();
+        }
+    }
     void setScreenshotRegionType(int type) override {
         m_overlayInputHandler->setRegionType(ScreenshotRegionType(type));
     }
@@ -1683,6 +1691,7 @@ void ScreenshotController::Impl::createCaptureWorkflow() {
                 }
             },
             [this]() {
+                m_selection.setLayoutCompaction(m_selectionSettings->layoutCompaction());
                 m_selection.setRegionType(m_selectionSettings->regionType());
                 static_cast<void>(m_selection.setCornerRadius(m_selectionSettings->cornerRadius()));
                 static_cast<void>(m_selection.setShadowWidth(m_selectionSettings->shadowWidth()));
@@ -3343,7 +3352,8 @@ void ScreenshotController::Impl::pinSelectionToScreen() {
 
     const ScreenshotResultStyle style = m_selection.resultStyle();
     std::optional<ScreenshotPinnedSelectionRequest> request =
-        m_exportService->preparePinnedSelection(m_selection.pixelSelection(), style);
+        m_exportService->preparePinnedSelection(m_selection.pixelSelection(), style,
+                                                m_selection.exportLayoutCompaction());
     if (!request.has_value()) {
         SNOW_SHOT_PIN_PERF_FINISH(false);
         static_cast<void>(finishImageExport(*exportGeneration));
@@ -4150,6 +4160,8 @@ ScreenshotController::Impl::recognitionFileSaveArtifact() const {
         return {};
     const ScreenshotResultStyle style = m_selection.resultStyle();
     auto snapshot = m_ocrController->imageSnapshot(style);
+    if (snapshot)
+        snapshot->layoutCompaction = m_selection.exportLayoutCompaction();
     return snapshot ? std::make_shared<ScreenshotExportArtifact>(
                           ScreenshotExportSource::fromRecognitionImage(std::move(*snapshot)))
                     : nullptr;
@@ -4246,10 +4258,12 @@ void ScreenshotController::Impl::uploadSelectionToCloud() {
             });
     else
         scheduled = m_exportService->requestSelectionResult(
-            m_selection.pixelSelection(), m_selection.resultStyle(), &owner, [start](QImage image) {
+            m_selection.pixelSelection(), m_selection.resultStyle(), &owner,
+            [start](QImage image) {
                 start(std::make_shared<ScreenshotExportArtifact>(
                     ScreenshotExportSource::fromImage(std::move(image))));
-            });
+            },
+            m_selection.exportLayoutCompaction());
     if (!scheduled) {
         m_cloudUploadPreparing = false;
         if (auto* toolbar = m_overlayCoordinator->toolbar())
@@ -4339,10 +4353,12 @@ void ScreenshotController::Impl::quickSaveSelection() {
     } else {
         const ScreenshotResultStyle style = m_selection.resultStyle();
         scheduled = m_exportService->requestSelectionResult(
-            m_selection.pixelSelection(), style, &owner, [save](QImage image) {
+            m_selection.pixelSelection(), style, &owner,
+            [save](QImage image) {
                 save(std::make_shared<ScreenshotExportArtifact>(
                     ScreenshotExportSource::fromImage(std::move(image))));
-            });
+            },
+            m_selection.exportLayoutCompaction());
     }
     if (!scheduled) {
         completeFileSave(ScreenshotExportTaskResult::failure(
@@ -4567,7 +4583,8 @@ void ScreenshotController::Impl::saveSelectionToFile() {
     } else if (m_selection.hasPixelSelection() && m_exportService != nullptr) {
         const ScreenshotResultStyle style = m_selection.resultStyle();
         scheduled = m_exportService->requestSelectionResult(m_selection.pixelSelection(), style,
-                                                            &owner, std::move(imageReady));
+                                                            &owner, std::move(imageReady),
+                                                            m_selection.exportLayoutCompaction());
     }
     if (!scheduled) {
         static_cast<void>(finishImageExport(*exportGeneration));
@@ -4737,11 +4754,11 @@ void ScreenshotController::Impl::saveSelectionWithSnowDialog() {
         const QRect selection = m_selection.pixelSelection();
         const ScreenshotResultStyle style = m_selection.resultStyle();
         auto source = ScreenshotExportSource::fromImageLoader(
-            [receiver, epoch, selection, style](QObject* target,
-                                                std::function<void(QImage)> completion) {
+            [receiver, epoch, selection, style, compaction = m_selection.exportLayoutCompaction()](
+                QObject* target, std::function<void(QImage)> completion) {
                 return receiver && receiver->m_impl && receiver->m_impl->m_captureEpoch == epoch &&
                        receiver->m_impl->m_exportService->requestSelectionResult(
-                           selection, style, target, std::move(completion));
+                           selection, style, target, std::move(completion), compaction);
             });
         open(std::make_shared<ScreenshotExportArtifact>(std::move(source)));
     } else
@@ -5005,10 +5022,12 @@ void ScreenshotController::Impl::copySelectionToClipboardWithSource(
     const bool shouldSnapshotHistory =
         historyEligible && m_historyService != nullptr && resetCanvasEditingState();
     auto historyCandidate = std::make_shared<std::optional<ScreenshotHistoryEntry>>();
-    const auto placement = m_exportService->prepareClipboardPlacement(m_selection.pixelSelection(),
-                                                                      m_selection.resultStyle());
+    const auto placement = m_exportService->prepareClipboardPlacement(
+        m_selection.pixelSelection(), m_selection.resultStyle(),
+        m_selection.exportLayoutCompaction());
     const auto appearance = screenshotSelectionClipboardAppearance(
-        m_selection.pixelSelection().size(), m_selection.resultStyle());
+        m_selection.pixelSelection().size(), m_selection.resultStyle(),
+        m_selection.exportLayoutCompaction());
     const bool materializeImage = output.autoSave || output.copyFileToClipboard;
     const QPointer<ScreenshotController> receiver(&owner);
     if (materializeImage) {
@@ -5024,7 +5043,8 @@ void ScreenshotController::Impl::copySelectionToClipboardWithSource(
                 receiver->m_impl->saveImageForCopy(std::move(image), generation, output,
                                                    historySource, historyCandidate, false,
                                                    placement, appearance);
-            });
+            },
+            m_selection.exportLayoutCompaction());
         if (!scheduled) {
             static_cast<void>(finishImageExport(*exportGeneration));
             qWarning("Failed to schedule screenshot image export");
@@ -5052,7 +5072,8 @@ void ScreenshotController::Impl::copySelectionToClipboardWithSource(
                 ScreenshotExportSource::fromImage(std::move(image), placement, appearance));
             receiver->m_impl->copyArtifactToClipboard(
                 std::move(artifact), generation, historySource, std::move(historyCandidate), false);
-        });
+        },
+        m_selection.exportLayoutCompaction());
     if (!scheduled) {
         static_cast<void>(finishImageExport(*exportGeneration));
         qWarning("Failed to schedule screenshot clipboard export");
@@ -6946,15 +6967,19 @@ std::shared_ptr<ScreenshotExportArtifact> ScreenshotController::mcpExportArtifac
                 return accepted;
             }));
     }
-    const auto placement = m_impl->m_exportService->prepareClipboardPlacement(selection, style);
+    const auto placement = m_impl->m_exportService->prepareClipboardPlacement(
+        selection, style, m_impl->m_selection.exportLayoutCompaction());
     return std::make_shared<ScreenshotExportArtifact>(ScreenshotExportSource::fromImageLoader(
-        [guard, epoch, selection, style, scale](QObject* receiver,
-                                                std::function<void(QImage)> done) {
+        [guard, epoch, selection, style, scale,
+         compaction = m_impl->m_selection.exportLayoutCompaction()](
+            QObject* receiver, std::function<void(QImage)> done) {
             return guard && guard->m_impl->m_captureEpoch == epoch &&
                    guard->m_impl->m_exportService->requestSelectionResultAtScale(
-                       selection, style, scale, receiver, std::move(done));
+                       selection, style, scale, receiver, std::move(done), compaction);
         },
-        placement, screenshotSelectionClipboardAppearance(selection.size(), style)));
+        placement,
+        screenshotSelectionClipboardAppearance(selection.size(), style,
+                                               m_impl->m_selection.exportLayoutCompaction())));
 }
 bool ScreenshotController::mcpPinArtifact(std::shared_ptr<ScreenshotExportArtifact> artifact,
                                           std::function<void(bool)> completion) {
@@ -6962,7 +6987,8 @@ bool ScreenshotController::mcpPinArtifact(std::shared_ptr<ScreenshotExportArtifa
     if (!m_impl->ensureExportFeature())
         return false;
     const auto request = m_impl->m_exportService->preparePinnedSelection(
-        m_impl->m_selection.pixelSelection(), m_impl->m_selection.resultStyle());
+        m_impl->m_selection.pixelSelection(), m_impl->m_selection.resultStyle(),
+        m_impl->m_selection.exportLayoutCompaction());
     if (!request)
         return false;
     return m_impl->m_selectionExportUiServices->presentPinnedArtifact(
@@ -7059,8 +7085,34 @@ bool ScreenshotController::mcpPinDocument(ScreenshotHistoryEntry entry, QImage b
     if (!screen)
         return false;
     const auto& selection = entry.selection;
-    const ScreenshotResultStyle style{selection.radius, selection.shadowWidth,
-                                      selection.shadowColor, selection.region};
+    ScreenshotResultStyle style{selection.radius, selection.shadowWidth, selection.shadowColor,
+                                selection.region};
+    if (style.region)
+        style.region = style.region->translated(-selection.selection.topLeft());
+    const auto plan =
+        selection.layoutCompaction.enabled && style.region
+            ? screenshotLayoutCompactionPlan(
+                  *style.region, selection.selection.size(), 1, selection.layoutCompaction,
+                  ScreenshotResultCompositor::normalizedStyle(style).shadowWidth)
+            : nullptr;
+    if (plan && plan->changed) {
+        // The document worker has already composed this raster. Preserve its
+        // outline and start fresh recognition in the compacted image coordinates.
+        const auto appearance = screenshotSelectionBorderAppearance(
+            selection.selection.size(), style, selection.layoutCompaction);
+        const auto fit = snow_shot::presentation::fitPinnedImageOnScreen(
+            *screen, background.size(),
+            snow_shot::storage::PinToScreenSettings().autoResizeWindow());
+        return fit.valid && m_impl->m_selectionExportUiServices->presentPinnedImage(
+                                background, screen, fit.nativeGeometry, background.size(), {}, {},
+                                1.0, entry.originalContent, {},
+                                [completion = std::move(completion)](bool ok, QImage) {
+                                    if (completion)
+                                        completion(ok);
+                                },
+                                appearance, screenshotSelectionNeedsCheckerboard(appearance),
+                                snow_shot::storage::PinnedWindowCreationSource::ScreenshotHistory);
+    }
     const auto layout =
         ScreenshotResultCompositor::layoutForContent(selection.selection.size(), style);
     const auto fit = snow_shot::presentation::fitPinnedImageOnScreen(

@@ -12186,3 +12186,36 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-canvas-status-readout-tests PROPERTIES LABELS unit TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
+
+if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-layout-compaction-tests
+        tests/screenshot_layout_compaction_tests.cpp
+        src/presentation/overlay/screenshotselectionshadowrenderer.cpp)
+    target_include_directories(snow-shot-layout-compaction-tests PRIVATE include)
+    target_link_libraries(snow-shot-layout-compaction-tests PRIVATE
+        Qt6::Widgets ant_design_qt snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-shot-layout-compaction-tests)
+    add_test(NAME snow-shot-layout-compaction-tests COMMAND snow-shot-layout-compaction-tests)
+    add_test(NAME snow-shot-layout-compaction-export-tests
+        COMMAND snow-shot-screenshot-export-service-tests --compaction-only)
+    add_test(NAME snow-shot-layout-compaction-document-tests
+        COMMAND snow-shot-mcp-document-tests --compaction-only)
+    add_test(NAME snow-shot-layout-compaction-pin-tests
+        COMMAND snow-shot-pinned-window-tests --layout-compaction-only -platform offscreen)
+    add_test(NAME snow-shot-layout-compaction-toolbar-tests
+        COMMAND snow-shot-screenshot-tool-palette-tests --compaction-only)
+    set_tests_properties(snow-shot-layout-compaction-tests snow-shot-layout-compaction-export-tests
+        snow-shot-layout-compaction-toolbar-tests snow-shot-layout-compaction-document-tests
+        snow-shot-layout-compaction-pin-tests PROPERTIES
+        LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+if(SNOW_APPS_BUILD_BENCHMARKS)
+    add_executable(snow-shot-layout-compaction-benchmark
+        tests/screenshot_layout_compaction_benchmark.cpp)
+    target_include_directories(snow-shot-layout-compaction-benchmark PRIVATE include
+        "${CMAKE_SOURCE_DIR}/snow_draw_engine_qt/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-shot-layout-compaction-benchmark PRIVATE
+        Qt6::Widgets snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-shot-layout-compaction-benchmark)
+endif()

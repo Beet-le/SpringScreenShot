@@ -84,6 +84,7 @@ struct KernelDiagnostics {
     std::uint64_t downsampleNanoseconds = 0;
     std::uint64_t reducedBlurNanoseconds = 0;
     std::uint64_t reconstructionNanoseconds = 0;
+    std::size_t peakPoolBytes = 0;
 };
 
 class RenderWorkspace {

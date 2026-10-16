@@ -61,14 +61,16 @@ void saveDialogOwnerFollowsSelection() {
 
 class FakeComposer final : public ScreenshotSelectionImageComposerPort {
   public:
-    bool requestSelectionResult(const QRect&, const ScreenshotResultStyle&, QObject*,
-                                ImageCallback) override {
+    bool requestSelectionResult(const QRect&, const ScreenshotResultStyle&, QObject*, ImageCallback,
+                                ScreenshotLayoutCompaction) override {
         return false;
     }
 
     bool requestSelectionClipboard(const QRect&, const ScreenshotResultStyle&, QObject*,
-                                   ClipboardCallback callback) override {
+                                   ClipboardCallback callback,
+                                   ScreenshotLayoutCompaction compaction) override {
         ++requestCount;
+        requestedCompaction = compaction;
         if (!scheduleSucceeds) {
             return false;
         }
@@ -83,7 +85,8 @@ class FakeComposer final : public ScreenshotSelectionImageComposerPort {
     }
 
     std::optional<ScreenshotPinnedSelectionRequest>
-    preparePinnedSelection(const QRect&, const ScreenshotResultStyle&) const override {
+    preparePinnedSelection(const QRect&, const ScreenshotResultStyle&,
+                           ScreenshotLayoutCompaction) const override {
         return std::nullopt;
     }
 
@@ -95,6 +98,7 @@ class FakeComposer final : public ScreenshotSelectionImageComposerPort {
     bool scheduleSucceeds = true;
     bool produceValidPayload = true;
     int requestCount = 0;
+    ScreenshotLayoutCompaction requestedCompaction;
 };
 
 class FakeDestination final : public ScreenshotSelectionExportDestinationPort {
@@ -176,6 +180,23 @@ void publicationSuccessCompletes() {
             "successful publication did not return the rendered image");
 }
 
+void clipboardCarriesEligibleCompaction() {
+    Fixture fixture;
+    fixture.selection.setLayoutCompaction({true, 7});
+    require(fixture.workflow.copySelectionToClipboard([] { return true; }, [](bool, QImage) {}),
+            "single-region clipboard request schedules");
+    require(!fixture.composer.requestedCompaction.enabled,
+            "single-region output must not apply remembered compaction");
+    fixture.selection.setSelectionRegion(QRegion(10, 12, 10, 24).united(QRegion(50, 12, 20, 24)));
+    const auto original = fixture.selection.params(QRect(0, 0, 100, 80));
+    require(fixture.workflow.copySelectionToClipboard([] { return true; }, [](bool, QImage) {}),
+            "multi-region clipboard request schedules");
+    require(fixture.composer.requestedCompaction == ScreenshotLayoutCompaction{true, 7},
+            "clipboard composition must receive eligible canvas-unit spacing");
+    require(fixture.selection.params(QRect(0, 0, 100, 80)) == original,
+            "export must preserve the editable selection");
+}
+
 void publicationFailureCompletesWithFailure() {
     Fixture fixture;
     fixture.destination.publicationSucceeds = false;
@@ -227,6 +248,7 @@ int main(int argc, char** argv) {
     try {
         saveDialogOwnerFollowsSelection();
         publicationSuccessCompletes();
+        clipboardCarriesEligibleCompaction();
         publicationFailureCompletesWithFailure();
         invalidPayloadDoesNotPublish();
         staleResultHasNoSideEffects();

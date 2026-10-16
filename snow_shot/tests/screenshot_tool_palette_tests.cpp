@@ -17313,14 +17313,16 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
     quint32 properties = 0;
     SnowCanvasShapeKind kind = SnowCanvasShapeKind::Rectangle;
     int commits = 0;
-    QObject::connect(
-        &palette, &ScreenshotToolPalette::shapeStyleChanged, &palette,
-        [&](const SnowCanvasShapeStyle& style, quint32 changed, SnowCanvasShapeKind changedKind) {
-            emitted = style;
-            properties = changed;
-            kind = changedKind;
-            ++commits;
-        });
+    palette.setStyleEditHandler([&](const SnowCanvasStyleEdit& edit) {
+        const auto* shape = std::get_if<SnowCanvasShapeEdit>(&edit);
+        require(shape != nullptr, "stroke controls must emit shape patches");
+        emitted = shape->style;
+        properties = shape->properties;
+        kind = shape->kind;
+        ++commits;
+        palette.rememberStyleEdit(edit);
+        return true;
+    });
     auto expected = product;
     for (const auto tool : {Tool::Shape, Tool::Arrow, Tool::Line}) {
         QWidget* row = openStrokeRenderingRow(palette, tool);
@@ -17407,11 +17409,14 @@ void strokeRenderingMixedSelectionResolvesOneProperty() {
                              "mixed rendering and colors should preserve a uniform stroke pattern");
         int commits = 0;
         quint32 properties = 0;
-        QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged, &palette,
-                         [&](const SnowCanvasShapeStyle&, quint32 changed, SnowCanvasShapeKind) {
-                             ++commits;
-                             properties = changed;
-                         });
+        palette.setStyleEditHandler([&](const SnowCanvasStyleEdit& edit) {
+            const auto* shape = std::get_if<SnowCanvasShapeEdit>(&edit);
+            require(shape != nullptr, "stroke controls must emit shape patches");
+            ++commits;
+            properties = shape->properties;
+            palette.rememberStyleEdit(edit);
+            return true;
+        });
         buttons.at(1)->click();
         require(commits == 1 && properties == SnowCanvasShapeStylePropertyStrokeRenderingStyle &&
                     buttons.at(1)->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Tonal,
@@ -17448,7 +17453,7 @@ void strokeRenderingPreferencesRoundTripAndRejectUnknownValues() {
     for (const auto& key :
          {QStringLiteral("drawing/shape_style"), QStringLiteral("drawing/arrow_style"),
           QStringLiteral("drawing/line_style")}) {
-        for (const auto value :
+        for (const auto& value :
              {QJsonValue(QJsonValue::Undefined), QJsonValue(), QJsonValue(-1), QJsonValue(3),
               QJsonValue(1.5), QJsonValue(QStringLiteral("artist"))}) {
             QJsonObject object = storage.configuration().value(key).toObject();
@@ -18736,8 +18741,8 @@ void moveToolExposesCaptureCursorAndRecaptureOptions() {
             "Move must materialize and display its dedicated options row");
     require(
         layout->indexOf(addRegion) == 0 && layout->indexOf(subtractRegion) == 2 &&
-            layout->indexOf(regionSeparator) == 6 && layout->indexOf(cursor) == 8 &&
-            layout->indexOf(recapture) == 10 &&
+            layout->indexOf(regionSeparator) == 9 && layout->indexOf(cursor) == 11 &&
+            layout->indexOf(recapture) == 13 &&
             layout->indexOf(hideSelectionToolbar) == layout->count() - 1 &&
             layout->itemAt(layout->indexOf(hideSelectionToolbar) - 4) != nullptr &&
             qobject_cast<QFrame*>(
@@ -19260,6 +19265,119 @@ void runScreenshotSerialNumberRestartTests();
 void runScreenshotStylePersistenceFailureTest();
 void runWatermarkPersistenceTests();
 
+void layoutCompactionToolbar() {
+    ScreenshotToolPalette::Options options;
+    options.showMoveTool = true;
+    options.enableMoveOptionsToolbar = true;
+    ScreenshotToolPalette palette(options);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Move);
+    palette.show();
+    QCoreApplication::processEvents();
+    auto* button = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotLayoutCompactionButton"));
+    auto* editor = dynamic_cast<IconNumericValuePreviewButton*>(
+        palette.findChild<QWidget*>(QStringLiteral("screenshotLayoutSpacingEditor")));
+    auto* group =
+        palette.findChild<QWidget*>(QStringLiteral("screenshotMoveRegionTypeButtonGroup"));
+    auto* separator =
+        palette.findChild<QWidget*>(QStringLiteral("screenshotRegionActionsSeparator"));
+    require(button && editor && group && separator && !button->isEnabled() && !editor->isEnabled(),
+            "compaction controls must be present but disabled for a single region");
+    require(editor->width() == 96 && button->x() == group->x() + group->width() &&
+                editor->x() > button->x() && separator->x() > editor->x(),
+            "compaction controls must directly follow region types before the separator");
+    int edits = 0;
+    QObject::connect(
+        &palette, &ScreenshotToolPalette::layoutCompactionChanged, [&](bool enabled, int spacing) {
+            ++edits;
+            require(palette.layoutCompaction() == ScreenshotLayoutCompaction{enabled, spacing},
+                    "compaction signal must reflect the displayed state");
+        });
+    palette.setLayoutCompactionState({}, true, true);
+    require(editor->isEnabled() && editor->valueText() == QStringLiteral("0dp"),
+            "spacing remains editable with compaction disabled");
+    button->click();
+    require(edits == 1 && palette.layoutCompaction().enabled &&
+                button->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Solid,
+            "compaction toggle must use the palette's active appearance");
+    auto wheel = [&](int delta) {
+        const auto local = editor->rect().center();
+        QWheelEvent event(local, editor->mapToGlobal(local), {}, QPoint(0, delta), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        require(palette.handleToolbarWheel(&event) && event.isAccepted(),
+                "spacing wheel must be consumed");
+    };
+    wheel(120);
+    require(edits == 2 && editor->valueText() == QStringLiteral("1dp"),
+            "spacing wheel changes one canvas unit");
+    palette.setSelectionDisplayUnit(ScreenshotSelectionDisplayUnit::PhysicalPixels);
+    require(editor->valueText() == QStringLiteral("1dp"),
+            "coordinate display mode must not reinterpret effect units");
+    palette.setLayoutCompactionState({true, 1000}, true, false);
+    wheel(120);
+    require(edits == 2 && editor->valueText() == QStringLiteral("1000px"),
+            "spacing upper bound must not emit no-op edits");
+    editor->click();
+    wheel(-120);
+    require(edits == 3 && palette.layoutCompaction().spacing == 0,
+            "spacing resets and clamps at zero");
+    palette.setLayoutCompactionState({true, 7}, false, false);
+    button->click();
+    editor->click();
+    require(edits == 3 && palette.layoutCompaction() == ScreenshotLayoutCompaction{true, 7},
+            "disabled controls preserve remembered preferences");
+    palette.setLayoutCompactionState({true, 7}, true, true);
+    require(palette.setPhysicalScale(1.5), "compaction DPI scale change");
+    QCoreApplication::processEvents();
+    require(editor->width() == 144, "compaction editor scales like the scroll interval editor");
+    require(button->x() == group->x() + group->width(),
+            "compaction button must remain adjacent to region types at scaled DPI");
+    require(palette.setPhysicalScale(1.0), "restore compaction DPI scale");
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    for (const auto& locale :
+         {QStringLiteral("zh_CN"), QStringLiteral("zh_TW"), QStringLiteral("en_US")}) {
+        require(language.setLanguage(locale), "compaction locale must load");
+        QCoreApplication::processEvents();
+        require(button->toolTip() ==
+                        QCoreApplication::translate("ScreenshotToolPalette", "Compact layout") &&
+                    editor->valueText() == QStringLiteral("7dp"),
+                "compaction controls retranslate without changing units");
+    }
+    const QString preview = qEnvironmentVariable("SNOW_LAYOUT_PREVIEW_DIR");
+    if (!preview.isEmpty()) {
+        QDir().mkpath(preview);
+        auto& theme = snow_shot::presentation::styles::ThemeManager::instance();
+        const auto previous = theme.themeMode();
+        for (bool dark : {false, true}) {
+            theme.setThemeMode(dark ? snow_shot::presentation::styles::ThemeMode::Dark
+                                    : snow_shot::presentation::styles::ThemeMode::Light);
+            adqt::theme::ThemeManager::instance().applyTo(*qApp);
+            for (qreal scale : {1.0, 2.0}) {
+                static_cast<void>(palette.setPhysicalScale(scale));
+                for (int state : {0, 1, 2}) {
+                    palette.setLayoutCompactionState({state != 0, 7}, state != 2, true);
+                    QCoreApplication::processEvents();
+                    auto* controls = button->parentWidget();
+                    const QPixmap capture = controls->grab();
+                    QImage previewImage(capture.size(), QImage::Format_ARGB32_Premultiplied);
+                    previewImage.setDevicePixelRatio(capture.devicePixelRatio());
+                    previewImage.fill(dark ? QColor(0x14, 0x14, 0x14) : QColor(Qt::white));
+                    QPainter painter(&previewImage);
+                    painter.drawPixmap(QPoint(), capture);
+                    painter.end();
+                    require(previewImage.save(preview + QStringLiteral("/toolbar-%1-%2-%3.png")
+                                                            .arg(dark)
+                                                            .arg(state)
+                                                            .arg(scale)),
+                            "save toolbar preview");
+                }
+            }
+        }
+        theme.setThemeMode(previous);
+        adqt::theme::ThemeManager::instance().applyTo(*qApp);
+    }
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     const int fixtureFont = QFontDatabase::addApplicationFont(
@@ -19471,6 +19589,11 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--popover-hover-switching-only"))) {
         groupedToolbarHoverSwitchesWithVisibleTooltips();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--compaction-only"))) {
+        layoutCompactionToolbar();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }

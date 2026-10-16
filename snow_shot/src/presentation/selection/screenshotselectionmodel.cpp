@@ -46,7 +46,8 @@ bool ScreenshotSelectionModel::hasSameCreatedRegions(const ScreenshotSelectionMo
 }
 
 bool ScreenshotSelectionModel::hasSameSelectionState(const ScreenshotSelectionModel& other) const {
-    return m_multiRegionEditing == other.m_multiRegionEditing && hasSameCreatedRegions(other) &&
+    return m_layoutCompaction == other.m_layoutCompaction &&
+           m_multiRegionEditing == other.m_multiRegionEditing && hasSameCreatedRegions(other) &&
            m_regionType == other.m_regionType && m_draftRegion == other.m_draftRegion &&
            m_draftVertices == other.m_draftVertices && m_region == other.m_region &&
            m_confirmedRegion == other.m_confirmedRegion &&
@@ -86,6 +87,8 @@ ScreenshotSelectionModel::operator=(const ScreenshotSelectionModel& other) {
     m_end = other.m_end;
     m_moveStart = other.m_moveStart;
     m_moveOriginalSelection = other.m_moveOriginalSelection;
+    m_layoutCompaction = other.m_layoutCompaction;
+    m_componentGeometry.reset();
     m_cornerRadius = other.m_cornerRadius;
     m_shadowWidth = other.m_shadowWidth;
     m_shadowColor = other.m_shadowColor;
@@ -126,6 +129,8 @@ void ScreenshotSelectionModel::reset() {
     m_end = QPointF();
     m_moveStart = QPointF();
     m_moveOriginalSelection = QRectF();
+    m_layoutCompaction = {};
+    m_componentGeometry.reset();
     m_cornerRadius = 0;
     m_shadowWidth = 0;
     m_shadowColor = QColor(0x33, 0x33, 0x33);
@@ -379,6 +384,29 @@ bool ScreenshotSelectionModel::adjustFromToolbar(int minDx, int minDy, int maxDx
     return true;
 }
 
+bool ScreenshotSelectionModel::layoutCompactionAvailable() const {
+    if (regionOperationActive() || constructionActive() || !hasPixelSelection())
+        return false;
+    if (m_createdRegions.size() >= 2)
+        return true;
+    if (!m_region)
+        return false;
+    if (!m_componentGeometry || *m_componentGeometry != *m_region) {
+        m_multipleComponents = screenshot_layout_compaction::hasMultipleComponents(*m_region);
+        m_componentGeometry = m_region;
+    }
+    return m_multipleComponents;
+}
+
+bool ScreenshotSelectionModel::setLayoutCompaction(ScreenshotLayoutCompaction options) {
+    options = options.normalized();
+    if (m_layoutCompaction == options)
+        return false;
+    m_layoutCompaction = options;
+    ++m_changeRevision;
+    return true;
+}
+
 int ScreenshotSelectionModel::cornerRadius() const {
     return m_cornerRadius;
 }
@@ -551,6 +579,7 @@ ScreenshotSelectionParams ScreenshotSelectionModel::params(const QRect& bounds) 
     ScreenshotSelectionParams result;
     result.selection = pixelSelection();
     result.region = m_region;
+    result.layoutCompaction = m_layoutCompaction;
     result.radius = m_cornerRadius;
     result.shadowWidth = m_shadowWidth;
     result.shadowColor = m_shadowColor;
@@ -577,6 +606,7 @@ bool ScreenshotSelectionModel::applyParams(const ScreenshotSelectionParams& para
     if (clamped.region) {
         setSelectionRegion(*clamped.region);
     }
+    m_layoutCompaction = clamped.layoutCompaction;
     m_cornerRadius = clamped.radius;
     m_shadowWidth = clamped.shadowWidth;
     setShadowColor(clamped.shadowColor);

@@ -1565,6 +1565,14 @@ void historyBorderAppearanceDoesNotDependOnPlacement() {
                 appearance->sourceSize == QSize(116, 66) &&
                 appearance->contentRect == QRectF(8, 8, 100, 50),
             "history fallback must retain capture-time appearance and logical-to-raster scale");
+    record.selection.region = QRegion(5000, 5000, 20, 50).united(QRegion(5080, 5000, 20, 50));
+    record.selection.layoutCompaction = {true, 3};
+    const auto compacted = snow_shot::presentation::historySelectionBorderAppearance(record);
+    require(compacted && compacted->sourceSize == QSize(75, 66) &&
+                compacted->contentRect == QRectF(8, 8, 59, 50),
+            "history appearance uses compacted dimensions without altering source selection");
+    record.selection.region.reset();
+    record.selection.layoutCompaction = {};
     record.scrolling = true;
     record.result->imageSize = QSize(232, 1016);
     const auto scrolling = snow_shot::presentation::historySelectionBorderAppearance(record);

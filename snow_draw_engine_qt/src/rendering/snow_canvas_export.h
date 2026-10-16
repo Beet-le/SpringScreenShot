@@ -17,6 +17,9 @@ struct RenderDiagnostics {
     std::size_t directSourceFastPathCount = 0;
     std::size_t fullCompositorPathCount = 0;
     std::size_t unsynchronizedFallbackCount = 0;
+    std::size_t outputRasterBytes = 0;
+    std::size_t peakScratchPoolBytes = 0;
+    std::size_t peakSourceTileBytes = 0;
 };
 
 RenderDiagnostics diagnosticsForCurrentThread();
@@ -25,5 +28,11 @@ void resetDiagnosticsForCurrentThread();
 QImage renderToImage(SnowRuntime runtime, const QRectF& virtualSelectionRect,
                      const QSize& outputSize, const QList<CanvasExportSource>& sources,
                      const SnowCanvasSmartEraseSnapshot& smartErase = {});
+
+QImage renderTilesToImage(SnowRuntime runtime, const QRectF& sourceFrame,
+                          const QSize& sourcePixelSize, const QSize& outputSize,
+                          const QList<CanvasExportTile>& tiles,
+                          const QList<CanvasExportSource>& sources,
+                          const SnowCanvasSmartEraseSnapshot& smartErase = {});
 
 } // namespace snow_canvas_export

@@ -22,7 +22,7 @@ snow_shot::storage::ConfigurationStore& configuration() {
 storage::PersistedSelection persistedSelection(const ScreenshotSelectionParams& params) {
     return {params.selection,   params.radius,          params.shadowWidth,
             params.shadowColor, params.lockAspectRatio, params.lockDragAspectRatio,
-            params.region};
+            params.region,      params.layoutCompaction};
 }
 
 std::optional<ScreenshotSelectionParams> selectionFromJson(const QJsonValue& value) {
@@ -34,7 +34,7 @@ std::optional<ScreenshotSelectionParams> selectionFromJson(const QJsonValue& val
     return ScreenshotSelectionParams{selection.rectangle,       selection.cornerRadius,
                                      selection.shadowWidth,     selection.shadowColor,
                                      selection.lockAspectRatio, selection.lockDragAspectRatio,
-                                     selection.region};
+                                     selection.region,          selection.layoutCompaction};
 }
 } // namespace
 
@@ -133,9 +133,28 @@ void ScreenshotSelectionSettingsStore::setPresets(
         QStringLiteral("screenshot_selection/selection_rect_presets"), array));
 }
 
+ScreenshotLayoutCompaction ScreenshotSelectionSettingsStore::layoutCompaction() const {
+    return {configuration()
+                .value(QStringLiteral("screenshot_selection/layout_compaction_enabled"))
+                .toBool(),
+            configuration()
+                .value(QStringLiteral("screenshot_selection/layout_compaction_spacing"))
+                .toInt()};
+}
+
+void ScreenshotSelectionSettingsStore::setLayoutCompaction(ScreenshotLayoutCompaction options) {
+    options = options.normalized();
+    static_cast<void>(configuration().setValues({
+        {QStringLiteral("screenshot_selection/layout_compaction_enabled"), options.enabled},
+        {QStringLiteral("screenshot_selection/layout_compaction_spacing"), options.spacing},
+    }));
+}
+
 void ScreenshotSelectionSettingsStore::clear() {
     static_cast<void>(configuration().setValues({
         {QStringLiteral("screenshot_selection/selection_rect_presets"), QJsonArray()},
+        {QStringLiteral("screenshot_selection/layout_compaction_enabled"), false},
+        {QStringLiteral("screenshot_selection/layout_compaction_spacing"), 0},
         {QStringLiteral("screenshot_selection/corner_radius"), 0},
         {QStringLiteral("screenshot_selection/shadow_width"), 0},
         {QStringLiteral("screenshot_selection/shadow_color"), QStringLiteral("#333333FF")},

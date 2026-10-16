@@ -15246,6 +15246,112 @@ void pinnedHiddenTextSelectionDragExportOffscreen() {
     mouse(QEvent::MouseButtonRelease, textEnd, Qt::ControlModifier, Qt::NoButton);
 }
 
+void compactedPinExportsOnceAndRefreshesRecognition() {
+    IsolatedPinnedStorage storage;
+    require(snow_shot::storage::ScreenshotSettings().setImageFormat(QStringLiteral("png")),
+            "configure compacted drag format");
+    const auto wait = [](auto predicate, const char* message) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!predicate() && timer.elapsed() < 10000)
+            waitForUi(5);
+        require(predicate(), message);
+    };
+    auto* screen = QGuiApplication::primaryScreen();
+    require(screen, "compacted pin requires an offscreen display");
+    ScreenshotPinnedSelectionRequest request;
+    request.selection = QRect(640, 360, 320, 180);
+    request.resultStyle = {
+        6, 4, Qt::black,
+        ScreenshotRegionGeometry(QRegion(0, 0, 80, 180).united(QRegion(240, 0, 80, 180)))};
+    request.layoutCompaction = {true, 5};
+    request.layoutPlan =
+        screenshotLayoutCompactionPlan(*request.resultStyle.region, request.selection.size(), 1,
+                                       request.layoutCompaction, request.resultStyle.shadowWidth);
+    QImage content(request.layoutPlan->outputSize, QImage::Format_ARGB32_Premultiplied);
+    content.fill(QColor(42, 84, 126));
+    const QImage image = ScreenshotResultCompositor::compose(
+        content, compactedScreenshotResultStyle(request.resultStyle, *request.layoutPlan));
+    request.initialWindowSize = image.size();
+    request.contentCanvasRect = QRectF(request.selection.topLeft(), content.size());
+    request.surfaceCanvasRect = request.contentCanvasRect.adjusted(-4, -4, 4, 4);
+    request.geometry.nativeGeometry = physicalPinGeometry(*screen, QPoint(40, 40), image.size());
+    request.geometry.canvasSourceRect = request.surfaceCanvasRect;
+    request.geometry.initialWindowSize = image.size();
+    request.screen = screen;
+    request.recognitionResults.key = QStringLiteral("original-selection-recognition");
+    request.recognitionResults.text.emplace();
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = request.selection;
+    ScreenshotOcrLine line;
+    line.text = QStringLiteral("Stale coordinates");
+    line.quad = QPolygonF(QRectF(900, 400, 40, 20));
+    presentation->lines.append(line);
+    request.recognitionResults.text->presentation = presentation;
+    request.recognitionVisible = true;
+    request.translationVisible = true;
+    IdleOcrRecognition recognition;
+    ScreenshotSelectionExportUiServices services(&recognition);
+    bool completed = false;
+    require(services.presentPinnedArtifact(request,
+                                           std::make_shared<ScreenshotExportArtifact>(
+                                               ScreenshotExportSource::fromImage(image)),
+                                           [&](bool success, QImage) {
+                                               require(success, "compacted pin materializes");
+                                               completed = true;
+                                           }),
+            "compacted pin schedules");
+    wait([&] { return completed; }, "compacted pin finishes");
+    QPointer<ScreenshotPinnedWindow> window(onlyVisiblePinnedWindow());
+    require(window, "compacted pin is visible");
+    const auto close = qScopeGuard([&] {
+        if (window) {
+            window->close();
+            static_cast<void>(processUntilDeleted(window, 2000));
+        }
+    });
+    const auto recognitionState = window->recognitionSnapshot();
+    require(recognitionState.key != request.recognitionResults.key && !recognitionState.text &&
+                !recognitionState.translatedText,
+            "compacted pin must discard inherited recognition coordinates");
+    auto* action = pinnedMenuActionNamed(*window, QStringLiteral("screenshotPinnedOcrAction"));
+    require(action && action->isEnabled(), "compacted pin supports fresh recognition");
+    if (recognition.requests == 0)
+        action->trigger();
+    wait([&] { return recognition.requests > 0; },
+         "compacted pin invokes its recognition provider");
+    const auto expected =
+        QImage::fromData(ScreenshotClipboardService::prepareImage(image).pngBytes());
+    QImage subsequent;
+    auto artifact = window->automationArtifact();
+    require(artifact && artifact->requestImage(window,
+                                               [&](ScreenshotExportImageResult result) {
+                                                   require(result.succeeded(),
+                                                           "compacted pin exports again");
+                                                   subsequent = std::move(result.image);
+                                               }),
+            "compacted pin export schedules");
+    wait([&] { return !subsequent.isNull(); }, "compacted pin re-export finishes");
+    require(QImage::fromData(ScreenshotClipboardService::prepareImage(subsequent).pngBytes()) ==
+                expected,
+            "subsequent export must not compact or apply masks and shadows twice");
+    ScreenshotPinnedDragExport drag;
+    bool dragged = false, dragCompleted = false;
+    drag.setExecutor([&](QDrag& value) {
+        require(value.mimeData()->urls().size() == 1, "compacted drag provides a file URL");
+        require(QImage(value.mimeData()->urls().first().toLocalFile()) == expected,
+                "drag export preserves compacted dimensions and pixels");
+        dragged = true;
+        return Qt::IgnoreAction;
+    });
+    drag.start(artifact, [&](QString error) {
+        require(error.isEmpty(), "compacted drag export succeeds");
+        dragCompleted = true;
+    });
+    wait([&] { return dragCompleted; }, "compacted drag export completes");
+    require(dragged, "compacted drag reaches the executor");
+}
+
 void pinnedDragExportOffscreen() {
     using Access = ScreenshotPinnedWindowTestAccess;
     IsolatedPinnedStorage storage;
@@ -24648,6 +24754,11 @@ int main(int argc, char* argv[]) {
 #endif
         if (app.arguments().contains(QStringLiteral("--ocr-box-selection-only"))) {
             pinnedOcrBoxSelectionOffscreen();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--layout-compaction-only"))) {
+            compactedPinExportsOnceAndRefreshesRecognition();
+            ScreenshotExportCoordinator::shared().shutdown();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--drag-export-only"))) {

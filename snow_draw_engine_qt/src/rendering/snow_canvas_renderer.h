@@ -129,6 +129,9 @@ struct SceneRenderRequest {
     bool enableOriginalBackgroundCache = false;
     // Canvas-space originals remain independent of viewport/filter scratch rasters.
     const QList<SnowCanvasBaseImageSource>* baseImageSources = nullptr;
+    // Tiled exports must retain the full export's background resampling pass,
+    // including tiles outside filters. Interactive paints leave this disabled.
+    bool forceBackgroundRaster = false;
 };
 
 QColor toQColor(const SnowColorRgba8& color);

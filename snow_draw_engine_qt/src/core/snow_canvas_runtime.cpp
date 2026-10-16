@@ -33,6 +33,9 @@ struct SnowCanvasRuntime::Impl {
     void destroyAsync();
     QImage renderToImage(const QRectF& virtualSelectionRect, const QSize& outputSize,
                          const QList<CanvasExportSource>& sources);
+    QImage renderTilesToImage(const QRectF& sourceFrame, const QSize& sourcePixelSize,
+                              const QSize& outputSize, const QList<CanvasExportTile>& tiles,
+                              const QList<CanvasExportSource>& sources);
 
     snow_canvas_smart_erase::Coordinator& smartErase() {
         return session.smartErase();
@@ -226,6 +229,18 @@ QImage SnowCanvasRuntime::Impl::renderToImage(const QRectF& virtualSelectionRect
                                              sources, session.smartErase().snapshot());
 }
 
+QImage SnowCanvasRuntime::Impl::renderTilesToImage(const QRectF& sourceFrame,
+                                                   const QSize& sourcePixelSize,
+                                                   const QSize& outputSize,
+                                                   const QList<CanvasExportTile>& tiles,
+                                                   const QList<CanvasExportSource>& sources) {
+    if (!hasThreadAccess("renderTilesToImage"))
+        return {};
+    return snow_canvas_export::renderTilesToImage(session.handle(), sourceFrame, sourcePixelSize,
+                                                  outputSize, tiles, sources,
+                                                  session.smartErase().snapshot());
+}
+
 SnowCanvasRuntime::SnowCanvasRuntime() : SnowCanvasRuntime(SnowCanvasRuntimeConfig{}) {}
 
 SnowCanvasRuntime::SnowCanvasRuntime(const SnowCanvasRuntimeConfig& config)
@@ -382,6 +397,13 @@ void SnowCanvasRuntime::clearRenderState() {
 QImage SnowCanvasRuntime::renderToImage(const QRectF& virtualSelectionRect, const QSize& outputSize,
                                         const QList<CanvasExportSource>& sources) {
     return m_impl->renderToImage(virtualSelectionRect, outputSize, sources);
+}
+
+QImage SnowCanvasRuntime::renderTilesToImage(const QRectF& sourceFrame,
+                                             const QSize& sourcePixelSize, const QSize& outputSize,
+                                             const QList<CanvasExportTile>& tiles,
+                                             const QList<CanvasExportSource>& sources) {
+    return m_impl->renderTilesToImage(sourceFrame, sourcePixelSize, outputSize, tiles, sources);
 }
 
 void snow_canvas_runtime::Access::registerClient(SnowCanvasRuntime& runtime, Client& client) {
