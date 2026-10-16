@@ -71,6 +71,15 @@ Synchronized and bundled third-party materials retain their upstream licenses.
 See [Ant Design Qt third-party notices](ant_design_qt/THIRD_PARTY_NOTICES.md)
 and [Snow Shot third-party notices](snow_shot/THIRD_PARTY_NOTICES.md).
 
+## Contributing / 贡献指南
+
+Only fix PRs will be reviewed. Feature PRs are not accepted directly; please start
+a community discussion first if you need a specific feature.
+See the [contribution guidelines](CONTRIBUTING.md) for details.
+
+仅审查修复问题的 PR，不直接接受新增功能或功能增强的 PR。如有功能需求，请先在社区发起讨论。
+详情请阅读[贡献指南](CONTRIBUTING.md)。
+
 ## Community
 
 [![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Community-blue)](https://linux.do)
