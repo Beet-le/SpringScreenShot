@@ -143,6 +143,16 @@
  #endif
  
      p.cu[BLOCK_4x4].intra_pred[DC_IDX] = intra_pred_dc_neon<4>;
+--- a/source/common/aarch64/intrapred-prim.h
++++ b/source/common/aarch64/intrapred-prim.h
+@@ -1,6 +1,6 @@
+ #ifndef INTRAPRED_PRIM_H__
+
+-#if defined(__aarch64__)
++#if defined(__aarch64__) || defined(_M_ARM64)
+
+ namespace X265_NS
+ {
 --- /dev/null
 +++ b/source/common/aarch64/intrinsic-primitives.cpp
 @@ -0,0 +1,53 @@
