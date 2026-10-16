@@ -157,6 +157,7 @@ enum class SettingsSwitchBinding {
     PinShowWindowButtons,
     PinShowBorderByDefault,
     PinShowShadowByDefault,
+    PinExitAnnotationModeBeforeClosing,
     PinConfirmBeforeClosingWindow,
     PinConfirmBeforeDestroyingWindow,
     OriginalImageTranslation,

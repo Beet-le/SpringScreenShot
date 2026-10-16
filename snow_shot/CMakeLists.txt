@@ -4974,6 +4974,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/tools/screenshottoolpalettestylemodel.cpp
         src/presentation/tools/screenshottoolpalettestylepresets.cpp
     )
+    if(MSVC)
+        set_property(SOURCE tests/screenshot_pinned_window_tests.cpp APPEND PROPERTY
+            COMPILE_OPTIONS /bigobj)
+    endif()
     snow_shot_link_macos_window_platform(snow-shot-pinned-window-tests)
     target_include_directories(snow-shot-pinned-window-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"

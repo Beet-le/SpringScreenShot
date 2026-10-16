@@ -925,6 +925,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::PinToScreenSettings().showBorderByDefault();
     case SettingsSwitchBinding::PinShowShadowByDefault:
         return storage::PinToScreenSettings().showShadowByDefault();
+    case SettingsSwitchBinding::PinExitAnnotationModeBeforeClosing:
+        return storage::PinToScreenSettings().exitAnnotationModeBeforeClosing();
     case SettingsSwitchBinding::PinConfirmBeforeClosingWindow:
         return storage::PinToScreenSettings().confirmBeforeClosingWindow();
     case SettingsSwitchBinding::PinConfirmBeforeDestroyingWindow:
@@ -1219,6 +1221,9 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::PinShowShadowByDefault) {
         return storage::PinToScreenSettings().setShowShadowByDefault(value);
     }
+    if (binding == SettingsSwitchBinding::PinExitAnnotationModeBeforeClosing) {
+        return storage::PinToScreenSettings().setExitAnnotationModeBeforeClosing(value);
+    }
     if (binding == SettingsSwitchBinding::PinConfirmBeforeClosingWindow) {
         return storage::PinToScreenSettings().setConfirmBeforeClosingWindow(value);
     }
@@ -1351,6 +1356,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::PinShowWindowButtons:
     case SettingsSwitchBinding::PinShowBorderByDefault:
     case SettingsSwitchBinding::PinShowShadowByDefault:
+    case SettingsSwitchBinding::PinExitAnnotationModeBeforeClosing:
     case SettingsSwitchBinding::PinConfirmBeforeClosingWindow:
     case SettingsSwitchBinding::PinConfirmBeforeDestroyingWindow:
     case SettingsSwitchBinding::TranslationPageEnabled:
@@ -2729,6 +2735,9 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
         });
     case SettingsSectionReset::PinToScreenBehavior:
         return storage::ApplicationStorage::instance().configuration().setValues({
+            {QStringLiteral("pin_to_screen/exit_annotation_mode_before_closing"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("pin_to_screen/exit_annotation_mode_before_closing"))},
             {QStringLiteral("pin_to_screen/confirm_before_closing_window"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("pin_to_screen/confirm_before_closing_window"))},

@@ -621,6 +621,8 @@ class PinToScreenSettings final {
     bool setShowShadowByDefault(bool enabled) const;
     [[nodiscard]] bool showWindowButtons() const;
     bool setShowWindowButtons(bool enabled) const;
+    [[nodiscard]] bool exitAnnotationModeBeforeClosing() const;
+    bool setExitAnnotationModeBeforeClosing(bool enabled) const;
     [[nodiscard]] bool confirmBeforeClosingWindow() const;
     bool setConfirmBeforeClosingWindow(bool enabled) const;
     [[nodiscard]] bool confirmBeforeDestroyingWindow() const;

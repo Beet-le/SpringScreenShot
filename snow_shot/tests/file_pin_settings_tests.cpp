@@ -168,6 +168,62 @@ void windowButtonSettings() {
             "resetting pin behavior must restore visible window buttons");
 }
 
+void exitAnnotationModeBeforeClosingSettings() {
+    const storage::PinToScreenSettings stored;
+    constexpr auto binding = settings::SettingsSwitchBinding::PinExitAnnotationModeBeforeClosing;
+    GlobalShortcutManager manager(std::make_unique<Backend>(), nullptr, [] { return false; });
+    settings::BuiltInSettingsBackend backend(manager);
+    settings::SettingsRuntimeSession session(settings::builtInSettingsRegistry(), backend);
+    const auto* field = settings::builtInSettingsRegistry().fieldForSwitch(binding);
+    require(field && field->pageId == QStringLiteral("pinned-windows") &&
+                field->sectionId == QStringLiteral("pin-to-screen-settings") &&
+                field->id == QStringLiteral("pin-to-screen.exit-annotation-mode-before-closing") &&
+                field->configurationKey ==
+                    QStringLiteral("pin_to_screen/exit_annotation_mode_before_closing") &&
+                field->definition->title.translated() ==
+                    QStringLiteral("Exit annotation mode before closing") &&
+                field->reset == settings::SettingsSectionReset::PinToScreenBehavior &&
+                session.state(field->id).visible && session.state(field->id).enabled,
+            "exit annotation mode switch belongs to available pin behavior settings");
+    const auto* section =
+        settings::builtInSettingsRegistry().catalog().section(field->pageId, field->sectionId);
+    require(section, "pin behavior section exists");
+    int index = -1;
+    for (int i = 0; i < section->items.size(); ++i) {
+        if (section->items[i].id == field->id)
+            index = i;
+    }
+    require(index >= 0 && index + 1 < section->items.size() &&
+                section->items[index + 1].id ==
+                    QStringLiteral("pin-to-screen.confirm-before-closing-window"),
+            "exit annotation mode setting immediately precedes close confirmation");
+    require(!stored.exitAnnotationModeBeforeClosing() && !session.switchValue(binding),
+            "exit annotation mode before closing defaults off");
+    require(
+        !storage::ConfigurationSchema::normalize(field->configurationKey, QStringLiteral("enabled"))
+             .valid,
+        "exit annotation mode preference must reject nonboolean values");
+    require(session.applySwitchValue(binding, true) && stored.exitAnnotationModeBeforeClosing() &&
+                backend.switchValue(binding),
+            "settings session enables exiting annotation mode before closing");
+    auto& applicationStorage = storage::ApplicationStorage::instance();
+    require(applicationStorage.configuration().flushNow().success,
+            "exit annotation mode preference must be flushable");
+    storage::ConfigurationStore reloaded(applicationStorage.configurationDirectory() +
+                                             QStringLiteral("/config.json"),
+                                         true, true, 60000);
+    require(reloaded.value(field->configurationKey).toBool(),
+            "exit annotation mode preference survives configuration reload");
+    require(session.reset(settings::SettingsSectionReset::PinToScreen) &&
+                stored.exitAnnotationModeBeforeClosing(),
+            "appearance reset preserves exit annotation mode preference");
+    require(session.applySwitchValue(binding, false) && !stored.exitAnnotationModeBeforeClosing() &&
+                session.applySwitchValue(binding, true) &&
+                session.reset(settings::SettingsSectionReset::PinToScreenBehavior) &&
+                !stored.exitAnnotationModeBeforeClosing() && !session.switchValue(binding),
+            "pin behavior reset restores exit annotation mode default");
+}
+
 void windowConfirmationSettings() {
     const storage::PinToScreenSettings stored;
     constexpr auto closeBinding = settings::SettingsSwitchBinding::PinConfirmBeforeClosingWindow;
@@ -432,6 +488,7 @@ int main(int argc, char** argv) {
         "temporary storage must initialize");
     pinnedTextStyleSettings();
     windowButtonSettings();
+    exitAnnotationModeBeforeClosingSettings();
     windowConfirmationSettings();
     textSelectionSettings();
     duplicateContentSettings();

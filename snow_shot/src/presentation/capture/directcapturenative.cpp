@@ -62,8 +62,9 @@ DirectCaptureFrame captureDirectTarget(const DirectCaptureRequest& request) {
                 return 0;
             bool accepted = false;
             try {
-                if (width > 0 && height > 0 && width <= std::numeric_limits<int>::max() &&
-                    height <= std::numeric_limits<int>::max()) {
+                if (width > 0 && height > 0 &&
+                    width <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
+                    height <= static_cast<uint32_t>(std::numeric_limits<int>::max())) {
                     accepted = state.request.admitRaster(
                         QSize(static_cast<int>(width), static_cast<int>(height)));
                 }

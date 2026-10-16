@@ -1882,6 +1882,16 @@ SettingsItemDefinition pinShowWindowButtonsItem() {
         SettingsSwitchBinding::PinShowWindowButtons);
 }
 
+SettingsItemDefinition pinExitAnnotationModeBeforeClosingItem() {
+    return switchItem(
+        QStringLiteral("pin-to-screen.exit-annotation-mode-before-closing"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Exit annotation mode before closing"),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "Exit annotation mode and keep the pinned window open when closing."),
+        QStringLiteral("pin_to_screen/exit_annotation_mode_before_closing"),
+        SettingsSwitchBinding::PinExitAnnotationModeBeforeClosing);
+}
+
 SettingsItemDefinition pinConfirmBeforeClosingWindowItem() {
     return switchItem(QStringLiteral("pin-to-screen.confirm-before-closing-window"),
                       QT_TRANSLATE_NOOP("SettingsCatalog", "Confirm before closing window"),
@@ -3413,7 +3423,8 @@ QVector<SettingsPageDefinition> builtInPages() {
                  {pinZoomModeItem(), pinDoubleClickActionItem(), pinMiddleClickActionItem(),
                   pinAutomaticOcrItem(), pinTextSelectionItem(), pinAutoResizeItem(),
                   pinDuplicateContentItem(), pinShowWindowButtonsItem(),
-                  pinConfirmBeforeClosingWindowItem(), pinConfirmBeforeDestroyingWindowItem()},
+                  pinExitAnnotationModeBeforeClosingItem(), pinConfirmBeforeClosingWindowItem(),
+                  pinConfirmBeforeDestroyingWindowItem()},
              },
              {
                  QStringLiteral("pin-to-screen"),
@@ -5086,6 +5097,10 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsSwitchBinding::PinShowShadowByDefault:
                         expectedKey = QStringLiteral("pin_to_screen/show_shadow_by_default");
+                        break;
+                    case SettingsSwitchBinding::PinExitAnnotationModeBeforeClosing:
+                        expectedKey =
+                            QStringLiteral("pin_to_screen/exit_annotation_mode_before_closing");
                         break;
                     case SettingsSwitchBinding::PinConfirmBeforeClosingWindow:
                         expectedKey = QStringLiteral("pin_to_screen/confirm_before_closing_window");

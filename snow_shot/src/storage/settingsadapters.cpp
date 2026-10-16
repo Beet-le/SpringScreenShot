@@ -2360,6 +2360,17 @@ bool PinToScreenSettings::setShowWindowButtons(bool enabled) const {
     return cache().setValue(QStringLiteral("pin_to_screen/show_window_buttons"), enabled);
 }
 
+bool PinToScreenSettings::exitAnnotationModeBeforeClosing() const {
+    return cache()
+        .value(QStringLiteral("pin_to_screen/exit_annotation_mode_before_closing"))
+        .toBool();
+}
+
+bool PinToScreenSettings::setExitAnnotationModeBeforeClosing(bool enabled) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/exit_annotation_mode_before_closing"),
+                            enabled);
+}
+
 bool PinToScreenSettings::confirmBeforeClosingWindow() const {
     return cache().value(QStringLiteral("pin_to_screen/confirm_before_closing_window")).toBool();
 }

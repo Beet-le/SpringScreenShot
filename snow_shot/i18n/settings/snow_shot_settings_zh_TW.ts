@@ -2313,6 +2313,14 @@
             <translation>結束</translation>
         </message>
         <message>
+            <source>Exit annotation mode and keep the pinned window open when closing.</source>
+            <translation>關閉時退出標註模式，並保持貼圖視窗開啟。</translation>
+        </message>
+        <message>
+            <source>Exit annotation mode before closing</source>
+            <translation>關閉前退出標註模式</translation>
+        </message>
+        <message>
             <source>Export</source>
             <translation>匯出</translation>
         </message>

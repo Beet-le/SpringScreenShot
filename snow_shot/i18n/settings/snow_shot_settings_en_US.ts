@@ -2313,6 +2313,14 @@
             <translation>Exit</translation>
         </message>
         <message>
+            <source>Exit annotation mode and keep the pinned window open when closing.</source>
+            <translation>Exit annotation mode and keep the pinned window open when closing.</translation>
+        </message>
+        <message>
+            <source>Exit annotation mode before closing</source>
+            <translation>Exit annotation mode before closing</translation>
+        </message>
+        <message>
             <source>Export</source>
             <translation>Export</translation>
         </message>

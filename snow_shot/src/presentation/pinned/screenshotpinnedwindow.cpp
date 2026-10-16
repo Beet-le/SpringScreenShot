@@ -8821,11 +8821,13 @@ void ScreenshotPinnedWindow::requestUserClose() {
     if (m_closing) {
         return;
     }
-    if (m_editController != nullptr && m_editController->editMode()) {
+    const snow_shot::storage::PinToScreenSettings settings;
+    if (settings.exitAnnotationModeBeforeClosing() && m_editController != nullptr &&
+        m_editController->editMode()) {
         setEditMode(false);
         return;
     }
-    if (!snow_shot::storage::PinToScreenSettings().confirmBeforeClosingWindow()) {
+    if (!settings.confirmBeforeClosingWindow()) {
         closeAfterConfirmation();
         return;
     }
@@ -8887,6 +8889,9 @@ bool ScreenshotPinnedWindow::requestHide() {
 void ScreenshotPinnedWindow::closeAfterConfirmation() {
     if (m_closing) {
         return;
+    }
+    if (m_editController != nullptr && m_editController->editMode()) {
+        setEditMode(false);
     }
     if (m_selectionController)
         m_selectionController->unregisterWindow(this);
