@@ -1,5 +1,6 @@
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/screenshottoolpalette.h"
+#include "snow_shot/presentation/components/pointerhoverevents.h"
 #include "snow_shot/ocrtextoptions.h"
 #include "snow_shot/translation/translationlanguagecatalog.h"
 #include "../recording/recordingaudiogainpopover.h"
@@ -4362,9 +4363,12 @@ void ScreenshotToolPalette::finishScrollingSelectionMove() {
 
 bool ScreenshotToolPalette::eventFilter(QObject* watched, QEvent* event) {
     if (event && watched && watched == m_backgroundOpacityEditor) {
-        if (event->type() == QEvent::Enter)
-            emit selectionBackgroundPreviewVisibleChanged(m_backgroundOpacityEditor->isEnabled());
-        else if (event->type() == QEvent::Leave || event->type() == QEvent::Hide)
+        if (snow_shot::presentation::pointerHoverPositionWithin(m_backgroundOpacityEditor, event))
+            emit selectionBackgroundPreviewVisibleChanged(true);
+        else if (event->type() == QEvent::Leave || event->type() == QEvent::HoverLeave ||
+                 event->type() == QEvent::Hide ||
+                 (event->type() == QEvent::EnabledChange &&
+                  !m_backgroundOpacityEditor->isEnabled()))
             emit selectionBackgroundPreviewVisibleChanged(false);
     }
     if (event && watched &&

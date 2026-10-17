@@ -64,6 +64,7 @@
 #include <QLineEdit>
 #include <QListView>
 #include <QMouseEvent>
+#include <QHoverEvent>
 #include <QKeyEvent>
 #include <QPainter>
 #include <QStandardItem>
@@ -19417,6 +19418,20 @@ void layoutCompactionToolbar() {
                     "opacity signal must reflect the displayed state");
         });
     palette.setSelectionBackgroundOpacityState(0, true);
+    const QPoint opacityPoint(5, 5);
+    QHoverEvent opacityMove(QEvent::HoverMove, opacityPoint, opacity->mapToGlobal(opacityPoint),
+                            QPointF(-1, -1), Qt::NoModifier);
+    QCoreApplication::sendEvent(opacity, &opacityMove);
+    require(opacityPreview, "opacity hover movement without Enter activates the effects preview");
+    QEvent opacityLeave(QEvent::HoverLeave);
+    QCoreApplication::sendEvent(opacity, &opacityLeave);
+    require(!opacityPreview, "hover leave dismisses the opacity effects preview");
+    QCoreApplication::sendEvent(opacity, &opacityMove);
+    opacity->setEnabled(false);
+    require(!opacityPreview, "disabling the hovered opacity editor dismisses its preview");
+    QCoreApplication::sendEvent(opacity, &opacityMove);
+    require(!opacityPreview, "a disabled opacity editor ignores hover movement");
+    opacity->setEnabled(true);
     QEnterEvent opacityEnter(QPointF(5, 5), QPointF(5, 5),
                              QPointF(opacity->mapToGlobal(QPoint(5, 5))));
     QCoreApplication::sendEvent(opacity, &opacityEnter);
