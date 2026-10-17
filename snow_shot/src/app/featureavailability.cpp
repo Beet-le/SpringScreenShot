@@ -9,6 +9,7 @@ std::optional<FeatureFamily> featureFamilyFor(presentation::GlobalShortcutAction
     case Action::Screenshot:
     case Action::ScreenshotDelay:
     case Action::ScreenshotOcr:
+    case Action::ScreenshotOcrCopy:
     case Action::ScreenshotTranslation:
     case Action::ScreenshotCopy:
     case Action::ScreenshotSave:
@@ -50,6 +51,7 @@ FeatureFamily featureFamilyFor(presentation::settings::SettingsGlobalMouseAction
         return FeatureFamily::ScreenRecording;
     case Action::ScreenshotCopy:
     case Action::ScreenshotOcr:
+    case Action::ScreenshotOcrCopy:
     case Action::ScreenshotTranslation:
     case Action::ScreenshotQuickSave:
     case Action::ScreenshotSave:

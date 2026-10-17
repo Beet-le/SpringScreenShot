@@ -37,6 +37,7 @@ enum class GlobalShortcutAction {
     HideShowAllWindows,
     StitchSelectedImages,
     SplitSelectedImages,
+    ScreenshotOcrCopy,
 };
 
 [[nodiscard]] constexpr bool controlsGlobalHotkeyGates(GlobalShortcutAction action) {

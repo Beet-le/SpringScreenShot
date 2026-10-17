@@ -294,7 +294,21 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
     connect(m_session.get(), &ScreenshotRecognitionSessionController::textEditingChanged, this,
             &ScreenshotOcrController::textEditingChanged);
     connect(m_session.get(), &ScreenshotRecognitionSessionController::textResultChanged, this,
-            &ScreenshotOcrController::textResultChanged);
+            [this](bool available) {
+                // This explicit action takes precedence over the configurable OCR follow-up.
+                if (m_copyAndEndCapture) {
+                    if (available && m_active && m_mode == Mode::Text) {
+                        // Let recognition finish publishing its result before ending the session.
+                        QTimer::singleShot(0, this, [this, activation = m_activationId] {
+                            if (activation == m_activationId && m_copyAndEndCapture && m_active &&
+                                m_mode == Mode::Text && hasTextResult())
+                                static_cast<void>(copyRecognitionToClipboard(true));
+                        });
+                    }
+                    return;
+                }
+                emit textResultChanged(available);
+            });
     connect(m_session.get(), &ScreenshotRecognitionSessionController::textDraftChanged, this,
             &ScreenshotOcrController::textDraftChanged);
     connect(m_session.get(), &ScreenshotRecognitionSessionController::workflowStateChanged, this,
@@ -340,6 +354,10 @@ bool ScreenshotOcrController::qrModeActive() const {
 
 void ScreenshotOcrController::activate() {
     activateMode(Mode::Text);
+}
+
+void ScreenshotOcrController::activateAndCopy() {
+    activateMode(Mode::Text, false, true);
 }
 
 void ScreenshotOcrController::activateTextTranslation() {
@@ -401,7 +419,8 @@ QString ScreenshotOcrController::currentCacheKey() const {
             QCryptographicHash::hash(geometry, QCryptographicHash::Sha256).toHex()));
 }
 
-void ScreenshotOcrController::activateMode(Mode mode, bool textTranslation) {
+void ScreenshotOcrController::activateMode(Mode mode, bool textTranslation,
+                                           bool copyAndEndCapture) {
     const int sessionMode = mode == Mode::Text       ? 0
                             : mode == Mode::Table    ? 1
                             : mode == Mode::Qr       ? 2
@@ -419,6 +438,8 @@ void ScreenshotOcrController::activateMode(Mode mode, bool textTranslation) {
         return;
     }
 
+    ++m_activationId;
+    m_copyAndEndCapture = copyAndEndCapture;
     if (!m_active) {
         m_previousTool = m_context.interaction.activeTool();
         m_canvasStates.clear();
@@ -679,6 +700,8 @@ void ScreenshotOcrController::deactivateForSelectionResize() {
 }
 
 void ScreenshotOcrController::deactivateImpl(bool preserveRecognitionWindow) {
+    ++m_activationId;
+    m_copyAndEndCapture = false;
     m_session->deactivate();
     if (!m_active && m_canvasStates.isEmpty() && m_recognitionWindow == nullptr) {
         return;

@@ -690,6 +690,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     bool m_ocrFromQuickOcrAction = false;
     bool m_ocrTranslateAfterRecognition = false;
     bool m_activatingQuickOcr = false;
+    bool m_activatingOcrCopy = false;
     quint64 m_ocrActivationId = 0;
     quint64 m_ocrAutoActionHandledActivationId = 0;
     SnowCanvasRuntime m_canvasRuntime;
@@ -2750,7 +2751,10 @@ void ScreenshotController::Impl::setOcrTool() {
     if (!ensureRecognitionFeature()) {
         return;
     }
-    m_ocrController->activate();
+    if (m_activatingOcrCopy)
+        m_ocrController->activateAndCopy();
+    else
+        m_ocrController->activate();
     m_presentationServices->updateOverlayState();
     restoreToolUiAfterScrollingCapture(scrollingCaptureStopped);
 }
@@ -4510,7 +4514,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer ? QStringLiteral("service_destroyed")
+                                           : !printer         ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
@@ -6075,11 +6079,15 @@ void ScreenshotController::Impl::handleSelectionConfirmed() {
             pinSelectionToScreen();
             break;
         case PendingSelectionAction::RecognizeText:
+        case PendingSelectionAction::RecognizeTextAndCopy: {
+            const QScopedValueRollback<bool> copyGuard(
+                m_activatingOcrCopy, action == PendingSelectionAction::RecognizeTextAndCopy);
             m_activatingQuickOcr = m_pendingOcrFromQuickOcrAction;
             m_pendingOcrFromQuickOcrAction = false;
             setOcrTool();
             m_activatingQuickOcr = false;
             break;
+        }
         case PendingSelectionAction::RecognizeTextTranslation:
             m_pendingOcrFromQuickOcrAction = false;
             setTextTranslationTool();
@@ -6314,6 +6322,9 @@ bool ScreenshotController::beginGlobalMouseCapture(
     case Action::ScreenshotOcr:
         pending = Impl::PendingSelectionAction::RecognizeText;
         break;
+    case Action::ScreenshotOcrCopy:
+        pending = Impl::PendingSelectionAction::RecognizeTextAndCopy;
+        break;
     case Action::ScreenshotTranslation:
         pending = Impl::PendingSelectionAction::RecognizeTextTranslation;
         break;
@@ -6382,6 +6393,11 @@ bool ScreenshotController::handleActiveScreenshotShortcut(
                        !captureAcquisitionActive() &&
                        !m_impl->m_captureState.presentationSuppressed &&
                        m_impl->m_captureWorkflow && !m_impl->m_captureWorkflow->captureSuspended();
+    const QScopedValueRollback<bool> copyGuard(
+        m_impl->m_activatingOcrCopy,
+        action == snow_shot::presentation::GlobalShortcutAction::ScreenshotOcrCopy);
+    if (m_impl->m_activatingOcrCopy)
+        action = snow_shot::presentation::GlobalShortcutAction::ScreenshotOcr;
     return m_impl->m_overlayShortcutController != nullptr &&
            m_impl->m_overlayShortcutController->handleGlobalScreenshotShortcut(action, ready);
 }

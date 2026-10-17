@@ -23,13 +23,14 @@ namespace {
 constexpr int MAX_SHORTCUTS_PER_ACTION = 2;
 constexpr int FIRST_REGISTRATION_ID = 0x2200;
 constexpr int LAST_REGISTRATION_ID = 0xBFFF;
-constexpr std::size_t ACTION_COUNT = 27;
+constexpr std::size_t ACTION_COUNT = 28;
 
 constexpr std::array<GlobalShortcutAction, ACTION_COUNT> ALL_ACTIONS = {
     GlobalShortcutAction::Screenshot,
     GlobalShortcutAction::ScreenshotDelay,
     GlobalShortcutAction::ScreenshotFixed,
     GlobalShortcutAction::ScreenshotOcr,
+    GlobalShortcutAction::ScreenshotOcrCopy,
     GlobalShortcutAction::ScreenshotTranslation,
     GlobalShortcutAction::ScreenshotCopy,
     GlobalShortcutAction::ScreenshotSave,
@@ -140,6 +141,8 @@ shortcuts::ShortcutBindingList persistedShortcuts(const storage::ShortcutSetting
         return settings.screenshotFixed();
     case GlobalShortcutAction::ScreenshotOcr:
         return settings.screenshotOcr();
+    case GlobalShortcutAction::ScreenshotOcrCopy:
+        return settings.screenshotOcrCopy();
     case GlobalShortcutAction::ScreenshotTranslation:
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
         return settings.screenshotTranslation();
@@ -209,6 +212,8 @@ bool persistShortcuts(const storage::ShortcutSettings& settings, GlobalShortcutA
         return settings.setScreenshotFixed(bindings);
     case GlobalShortcutAction::ScreenshotOcr:
         return settings.setScreenshotOcr(bindings);
+    case GlobalShortcutAction::ScreenshotOcrCopy:
+        return settings.setScreenshotOcrCopy(bindings);
     case GlobalShortcutAction::ScreenshotTranslation:
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
         return settings.setScreenshotTranslation(bindings);

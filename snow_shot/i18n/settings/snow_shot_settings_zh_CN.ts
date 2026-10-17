@@ -1877,6 +1877,10 @@
             <translation>控制截图颜色拾取器何时显示</translation>
         </message>
         <message>
+            <source>Copy after text recognition</source>
+            <translation>文字识别后复制</translation>
+        </message>
+        <message>
             <source>Copy application settings as a zip archive to the clipboard</source>
             <translation>将应用设置以 zip 归档形式复制到剪贴板</translation>
         </message>
@@ -3347,6 +3351,10 @@
         <message>
             <source>Recognize text in the confirmed screenshot selection</source>
             <translation>识别确认截图选区中的文本</translation>
+        </message>
+        <message>
+            <source>Recognize text, copy it to the clipboard, and end the screenshot session</source>
+            <translation>识别文字，将识别结果复制到剪贴板并结束截图</translation>
         </message>
         <message>
             <source>Recognized text and language tools</source>

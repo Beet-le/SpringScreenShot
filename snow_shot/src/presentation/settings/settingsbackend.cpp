@@ -146,6 +146,8 @@ QString globalMouseKey(SettingsGlobalMouseAction action) {
         return QStringLiteral("global_mouse/screenshot_fixed");
     case SettingsGlobalMouseAction::ScreenshotOcr:
         return QStringLiteral("global_mouse/screenshot_ocr");
+    case SettingsGlobalMouseAction::ScreenshotOcrCopy:
+        return QStringLiteral("global_mouse/screenshot_ocr_copy");
     case SettingsGlobalMouseAction::ScreenshotTranslation:
         return QStringLiteral("global_mouse/screenshot_translation");
     case SettingsGlobalMouseAction::ScreenshotQuickSave:
@@ -2464,6 +2466,8 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                       QStringLiteral("global_shortcuts/screenshot_fixed"));
         resetShortcut(GlobalShortcutAction::ScreenshotOcr,
                       QStringLiteral("global_shortcuts/screenshot_ocr"));
+        resetShortcut(GlobalShortcutAction::ScreenshotOcrCopy,
+                      QStringLiteral("global_shortcuts/screenshot_ocr_copy"));
         resetShortcut(GlobalShortcutAction::ScreenshotTranslation,
                       QStringLiteral("global_shortcuts/screenshot_translation"));
         resetShortcut(GlobalShortcutAction::ScreenshotCopy,
@@ -2488,6 +2492,7 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
         for (const auto action :
              {SettingsGlobalMouseAction::ScreenshotCopy, SettingsGlobalMouseAction::ScreenshotFixed,
               SettingsGlobalMouseAction::ScreenshotOcr,
+              SettingsGlobalMouseAction::ScreenshotOcrCopy,
               SettingsGlobalMouseAction::ScreenshotTranslation,
               SettingsGlobalMouseAction::ScreenshotSave,
               SettingsGlobalMouseAction::ScreenshotQuickSave,

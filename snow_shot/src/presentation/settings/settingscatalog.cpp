@@ -126,6 +126,18 @@ SettingsItemDefinition screenshotOcrItem() {
         []() { return custom_outlined_icons::TextRecognition(); });
 }
 
+SettingsItemDefinition screenshotOcrCopyItem() {
+    return quickActionItem(
+        QStringLiteral("quick.screenshot-ocr-copy"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Copy after text recognition"),
+        QT_TRANSLATE_NOOP(
+            "SettingsCatalog",
+            "Recognize text, copy it to the clipboard, and end the screenshot session"),
+        {}, GlobalShortcutAction::ScreenshotOcrCopy,
+        QStringLiteral("global_shortcuts/screenshot_ocr_copy"),
+        []() { return custom_outlined_icons::TextRecognition(); });
+}
+
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 SettingsItemDefinition screenshotTranslationItem() {
     return quickActionItem(
@@ -3026,6 +3038,7 @@ QVector<SettingsPageDefinition> builtInPages() {
                         screenshotDelayItem(),
                         screenshotFixedItem(),
                         screenshotOcrItem(),
+                        screenshotOcrCopyItem(),
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
                         screenshotTranslationItem(),
 #endif
@@ -3135,6 +3148,11 @@ QVector<SettingsPageDefinition> builtInPages() {
                                         QT_TRANSLATE_NOOP("SettingsCatalog", "Text recognition"),
                                         SettingsGlobalMouseAction::ScreenshotOcr,
                                         QStringLiteral("global_mouse/screenshot_ocr")),
+                        globalMouseItem(
+                            QStringLiteral("global-mouse.screenshot-ocr-copy"),
+                            QT_TRANSLATE_NOOP("SettingsCatalog", "Copy after text recognition"),
+                            SettingsGlobalMouseAction::ScreenshotOcrCopy,
+                            QStringLiteral("global_mouse/screenshot_ocr_copy")),
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
                         globalMouseItem(QStringLiteral("global-mouse.screenshot-translation"),
                                         QT_TRANSLATE_NOOP("SettingsCatalog", "Text translation"),
@@ -4174,6 +4192,8 @@ QString shortcutConfigurationKey(GlobalShortcutAction action) {
         return QStringLiteral("global_shortcuts/screenshot_fixed");
     case GlobalShortcutAction::ScreenshotOcr:
         return QStringLiteral("global_shortcuts/screenshot_ocr");
+    case GlobalShortcutAction::ScreenshotOcrCopy:
+        return QStringLiteral("global_shortcuts/screenshot_ocr_copy");
     case GlobalShortcutAction::ScreenshotTranslation:
         return QStringLiteral("global_shortcuts/screenshot_translation");
     case GlobalShortcutAction::ScreenshotCopy:
@@ -4232,6 +4252,8 @@ QString globalMouseConfigurationKey(SettingsGlobalMouseAction action) {
         return QStringLiteral("global_mouse/screenshot_fixed");
     case SettingsGlobalMouseAction::ScreenshotOcr:
         return QStringLiteral("global_mouse/screenshot_ocr");
+    case SettingsGlobalMouseAction::ScreenshotOcrCopy:
+        return QStringLiteral("global_mouse/screenshot_ocr_copy");
     case SettingsGlobalMouseAction::ScreenshotTranslation:
         return QStringLiteral("global_mouse/screenshot_translation");
     case SettingsGlobalMouseAction::ScreenshotQuickSave:
@@ -4524,6 +4546,10 @@ TrayCommandManifest buildBuiltInTrayCommandManifest() {
           quick(QStringLiteral("quick.screenshot-ocr"),
                 QT_TRANSLATE_NOOP("SettingsCatalog", "Text recognition"),
                 GlobalShortcutAction::ScreenshotOcr,
+                []() { return custom_outlined_icons::TextRecognition(); }),
+          quick(QStringLiteral("quick.screenshot-ocr-copy"),
+                QT_TRANSLATE_NOOP("SettingsCatalog", "Copy after text recognition"),
+                GlobalShortcutAction::ScreenshotOcrCopy,
                 []() { return custom_outlined_icons::TextRecognition(); }),
           quick(QStringLiteral("quick.screenshot-translation"),
                 QT_TRANSLATE_NOOP("SettingsCatalog", "Text translation"),

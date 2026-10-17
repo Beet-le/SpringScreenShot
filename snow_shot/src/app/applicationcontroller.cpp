@@ -1757,6 +1757,12 @@ class ApplicationController::Impl {
                 controller->captureAndRecognizeText();
             }
             break;
+        case presentation::GlobalShortcutAction::ScreenshotOcrCopy:
+            if (ScreenshotController* controller = ensureScreenshotController()) {
+                static_cast<void>(controller->captureForAction(
+                    ScreenshotController::CaptureAction::RecognizeTextAndCopy));
+            }
+            break;
         case presentation::GlobalShortcutAction::ScreenshotTranslation:
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
             if (ScreenshotController* controller = ensureScreenshotController()) {

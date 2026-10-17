@@ -45,6 +45,7 @@ AppPermissions requiredPermissions(GlobalShortcutAction action, bool /*microphon
     case Action::ScreenshotDelay:
     case Action::ScreenshotFixed:
     case Action::ScreenshotOcr:
+    case Action::ScreenshotOcrCopy:
     case Action::ScreenshotTranslation:
     case Action::ScreenshotCopy:
     case Action::ScreenshotSave:

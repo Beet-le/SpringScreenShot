@@ -1877,6 +1877,10 @@
             <translation>控制截圖色彩選擇器的顯示時機</translation>
         </message>
         <message>
+            <source>Copy after text recognition</source>
+            <translation>文字辨識後複製</translation>
+        </message>
+        <message>
             <source>Copy application settings as a zip archive to the clipboard</source>
             <translation>將應用程式設定以 zip 封存檔形式複製到剪貼簿</translation>
         </message>
@@ -3347,6 +3351,10 @@
         <message>
             <source>Recognize text in the confirmed screenshot selection</source>
             <translation>辨識確認的截圖選取範圍中的文字</translation>
+        </message>
+        <message>
+            <source>Recognize text, copy it to the clipboard, and end the screenshot session</source>
+            <translation>辨識文字，將辨識結果複製到剪貼簿並結束截圖</translation>
         </message>
         <message>
             <source>Recognized text and language tools</source>

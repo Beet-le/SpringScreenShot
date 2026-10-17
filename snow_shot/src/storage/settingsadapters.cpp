@@ -653,6 +653,14 @@ bool ShortcutSettings::setScreenshotOcr(const shortcuts::ShortcutBindingList& bi
     return setShortcutValue(QStringLiteral("global_shortcuts/screenshot_ocr"), bindings);
 }
 
+shortcuts::ShortcutBindingList ShortcutSettings::screenshotOcrCopy() const {
+    return shortcutValue(QStringLiteral("global_shortcuts/screenshot_ocr_copy"));
+}
+
+bool ShortcutSettings::setScreenshotOcrCopy(const shortcuts::ShortcutBindingList& bindings) const {
+    return setShortcutValue(QStringLiteral("global_shortcuts/screenshot_ocr_copy"), bindings);
+}
+
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 shortcuts::ShortcutBindingList ShortcutSettings::screenshotTranslation() const {
     return shortcutValue(QStringLiteral("global_shortcuts/screenshot_translation"));

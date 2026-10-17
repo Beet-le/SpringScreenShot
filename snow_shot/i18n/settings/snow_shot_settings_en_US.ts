@@ -1877,6 +1877,10 @@
             <translation>Control when the screenshot color picker is visible</translation>
         </message>
         <message>
+            <source>Copy after text recognition</source>
+            <translation>Copy after text recognition</translation>
+        </message>
+        <message>
             <source>Copy application settings as a zip archive to the clipboard</source>
             <translation>Copy application settings as a zip archive to the clipboard</translation>
         </message>
@@ -3347,6 +3351,10 @@
         <message>
             <source>Recognize text in the confirmed screenshot selection</source>
             <translation>Recognize text in the confirmed screenshot selection</translation>
+        </message>
+        <message>
+            <source>Recognize text, copy it to the clipboard, and end the screenshot session</source>
+            <translation>Recognize text, copy it to the clipboard, and end the screenshot session</translation>
         </message>
         <message>
             <source>Recognized text and language tools</source>

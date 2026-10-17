@@ -162,6 +162,8 @@ class ShortcutSettings final {
     bool setScreenshotFixed(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList screenshotOcr() const;
     bool setScreenshotOcr(const shortcuts::ShortcutBindingList& bindings) const;
+    [[nodiscard]] shortcuts::ShortcutBindingList screenshotOcrCopy() const;
+    bool setScreenshotOcrCopy(const shortcuts::ShortcutBindingList& bindings) const;
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     [[nodiscard]] shortcuts::ShortcutBindingList screenshotTranslation() const;
     bool setScreenshotTranslation(const shortcuts::ShortcutBindingList& bindings) const;

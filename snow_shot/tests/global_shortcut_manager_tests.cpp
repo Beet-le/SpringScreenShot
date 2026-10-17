@@ -34,6 +34,7 @@ constexpr std::array ALL_ACTIONS{
     GlobalShortcutAction::ScreenshotDelay,
     GlobalShortcutAction::ScreenshotFixed,
     GlobalShortcutAction::ScreenshotOcr,
+    GlobalShortcutAction::ScreenshotOcrCopy,
     GlobalShortcutAction::ScreenshotTranslation,
     GlobalShortcutAction::ScreenshotCopy,
     GlobalShortcutAction::ScreenshotSave,
@@ -361,6 +362,7 @@ void hiddenFloatingToolsPreserveGlobalHotkeys() {
         GlobalShortcutAction::ScreenshotDelay,
         GlobalShortcutAction::ScreenshotFixed,
         GlobalShortcutAction::ScreenshotOcr,
+        GlobalShortcutAction::ScreenshotOcrCopy,
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
         GlobalShortcutAction::ScreenshotTranslation,
 #endif
