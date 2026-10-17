@@ -2468,6 +2468,22 @@ bool PinToScreenSettings::setMouseWheelZoomMode(const QString& mode) const {
     return cache().setValue(QStringLiteral("pin_to_screen/mouse_wheel_zoom_mode"), mode);
 }
 
+int PinToScreenSettings::mouseWheelOpacityStep() const {
+    return cache().value(QStringLiteral("pin_to_screen/mouse_wheel_opacity_step")).toInt();
+}
+
+bool PinToScreenSettings::setMouseWheelOpacityStep(int value) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/mouse_wheel_opacity_step"), value);
+}
+
+int PinToScreenSettings::mouseWheelZoomStep() const {
+    return cache().value(QStringLiteral("pin_to_screen/mouse_wheel_zoom_step")).toInt();
+}
+
+bool PinToScreenSettings::setMouseWheelZoomStep(int value) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/mouse_wheel_zoom_step"), value);
+}
+
 QString PinToScreenSettings::duplicateContentAction() const {
     return cache().value(QStringLiteral("pin_to_screen/duplicate_content_action")).toString();
 }

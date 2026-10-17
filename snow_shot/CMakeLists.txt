@@ -5060,6 +5060,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         LABELS "interactive;e2e;windows" RUN_SERIAL TRUE TIMEOUT 180
         ENVIRONMENT "QT_QPA_PLATFORM=windows")
     snow_shot_import_offscreen_platform(snow-shot-pinned-window-tests)
+    add_test(NAME snow-shot-pinned-wheel-step-tests
+        COMMAND snow-shot-pinned-window-tests --wheel-step-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-wheel-step-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
     add_test(NAME snow-shot-pinned-angle-wheel-tests
         COMMAND snow-shot-pinned-window-tests --angle-wheel-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-angle-wheel-tests PROPERTIES

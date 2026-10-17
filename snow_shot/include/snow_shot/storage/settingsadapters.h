@@ -647,6 +647,10 @@ class PinToScreenSettings final {
     bool setLockedShadowColor(const QColor& color) const;
     [[nodiscard]] QString mouseWheelZoomMode() const;
     bool setMouseWheelZoomMode(const QString& mode) const;
+    [[nodiscard]] int mouseWheelOpacityStep() const;
+    bool setMouseWheelOpacityStep(int value) const;
+    [[nodiscard]] int mouseWheelZoomStep() const;
+    bool setMouseWheelZoomStep(int value) const;
     [[nodiscard]] QString duplicateContentAction() const;
     bool setDuplicateContentAction(const QString& value) const;
     [[nodiscard]] QString textSelectionOnRecognitionResults() const;

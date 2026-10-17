@@ -75,6 +75,11 @@ int main(int argc, char** argv) {
             "source-language catalog compaction must preserve singular and plural forms");
 
     require(manager.setLanguage(QStringLiteral("zh_CN")), "Simplified Chinese should load");
+    require(QCoreApplication::translate("SettingsCatalog", "Mouse wheel opacity step") ==
+                    QString::fromUtf8("鼠标滚轮不透明度步长") &&
+                QCoreApplication::translate("SettingsCatalog", "Mouse wheel zoom step") ==
+                    QString::fromUtf8("鼠标滚轮缩放步长"),
+            "Simplified Chinese translates pinned wheel step labels");
     require(QCoreApplication::translate("CanvasStatusReadout", "Scale: %1%") ==
                     QString::fromUtf8("缩放：%1%") &&
                 QCoreApplication::translate("CanvasStatusReadout", "Locked") ==
@@ -127,6 +132,11 @@ int main(int argc, char** argv) {
                 QCoreApplication::translate("SettingsCatalog", "Repeat Action") ==
                     QString::fromUtf8("重複執行"),
             "language changes translate duplicate pin settings and option labels");
+    require(QCoreApplication::translate("SettingsCatalog", "Mouse wheel opacity step") ==
+                    QString::fromUtf8("滑鼠滾輪不透明度步長") &&
+                QCoreApplication::translate("SettingsCatalog", "Mouse wheel zoom step") ==
+                    QString::fromUtf8("滑鼠滾輪縮放步長"),
+            "Traditional Chinese translates pinned wheel step labels");
     require(QCoreApplication::translate("ScreenshotPinnedWindow", "Decrease 10%") ==
                     QString::fromUtf8("減少 10%") &&
                 QCoreApplication::translate("SettingsCatalog", "Increase scale by 10%") ==

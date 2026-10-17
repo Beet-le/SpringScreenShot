@@ -2921,8 +2921,16 @@
             <translation>Mouse pointer</translation>
         </message>
         <message>
+            <source>Mouse wheel opacity step</source>
+            <translation>Mouse wheel opacity step</translation>
+        </message>
+        <message>
             <source>Mouse wheel zoom mode</source>
             <translation>Mouse wheel zoom mode</translation>
+        </message>
+        <message>
+            <source>Mouse wheel zoom step</source>
+            <translation>Mouse wheel zoom step</translation>
         </message>
         <message>
             <source>Move cursor down</source>
@@ -3801,6 +3809,10 @@
             <translation>Server address</translation>
         </message>
         <message>
+            <source>Set how much Ctrl+mouse wheel changes pinned window opacity</source>
+            <translation>Set how much Ctrl+mouse wheel changes pinned window opacity</translation>
+        </message>
+        <message>
             <source>Set quality for image files saved outside the Snow Shot dialog</source>
             <translation>Set quality for image files saved outside the Snow Shot dialog</translation>
         </message>
@@ -3867,6 +3879,10 @@
         <message>
             <source>Set the shadow color of pinned screenshots while they have focus</source>
             <translation>Set the shadow color of pinned screenshots while they have focus</translation>
+        </message>
+        <message>
+            <source>Set the zoom percentage levels used by the mouse wheel</source>
+            <translation>Set the zoom percentage levels used by the mouse wheel</translation>
         </message>
         <message>
             <source>Set up to two keys for this pinned window action</source>

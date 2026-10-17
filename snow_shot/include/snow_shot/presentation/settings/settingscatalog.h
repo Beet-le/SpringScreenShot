@@ -223,6 +223,8 @@ enum class SettingsSliderBinding {
     SkinOpacity,
     SkinBlurLevel,
     SkinMaskOpacity,
+    PinMouseWheelOpacityStep,
+    PinMouseWheelZoomStep,
 };
 
 struct SettingsSliderDefinition {

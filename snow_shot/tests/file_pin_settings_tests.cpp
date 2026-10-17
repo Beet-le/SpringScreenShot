@@ -12,6 +12,8 @@
 #include "snow_shot/presentation/screenshotclipboardcontent.h"
 #include <QHash>
 #include <QTemporaryDir>
+#include <algorithm>
+#include <iterator>
 #include <cstdlib>
 #include <iostream>
 
@@ -380,6 +382,79 @@ void duplicateContentSettings() {
             "pin behavior reset restores shake policy");
 }
 
+void mouseWheelStepSettings() {
+    const storage::PinToScreenSettings stored;
+    GlobalShortcutManager manager(std::make_unique<Backend>(), nullptr, [] { return false; });
+    settings::BuiltInSettingsBackend backend(manager);
+    const auto& registry = settings::builtInSettingsRegistry();
+    settings::SettingsRuntimeSession session(registry, backend);
+    const auto* page = registry.catalog().page(QStringLiteral("pinned-windows"));
+    require(page != nullptr, "pinned settings page exists");
+    const auto& items = page->sections.at(0).items;
+    const auto duplicate = std::find_if(items.cbegin(), items.cend(), [](const auto& item) {
+        return item.id == QStringLiteral("pin-to-screen.duplicate-content-action");
+    });
+    require(duplicate != items.cend() && std::distance(duplicate, items.cend()) >= 3 &&
+                (duplicate + 1)->id == QStringLiteral("pin-to-screen.mouse-wheel-opacity-step") &&
+                (duplicate + 2)->id == QStringLiteral("pin-to-screen.mouse-wheel-zoom-step"),
+            "opacity and zoom step sliders immediately follow the duplicate content setting");
+    require(stored.mouseWheelOpacityStep() == 5 && stored.mouseWheelZoomStep() == 10,
+            "wheel defaults preserve five-point opacity and ten-point zoom steps");
+    for (const auto binding : {settings::SettingsSliderBinding::PinMouseWheelOpacityStep,
+                               settings::SettingsSliderBinding::PinMouseWheelZoomStep}) {
+        const bool opacity = binding == settings::SettingsSliderBinding::PinMouseWheelOpacityStep;
+        const auto* field = registry.fieldForSlider(binding);
+        const QString key = opacity ? QStringLiteral("pin_to_screen/mouse_wheel_opacity_step")
+                                    : QStringLiteral("pin_to_screen/mouse_wheel_zoom_step");
+        const QString title = opacity ? QStringLiteral("Mouse wheel opacity step")
+                                      : QStringLiteral("Mouse wheel zoom step");
+        const auto* schema = storage::ConfigurationSchema::entry(key);
+        require(field && field->pageId == QStringLiteral("pinned-windows") &&
+                    field->sectionId == QStringLiteral("pin-to-screen-settings") &&
+                    field->reset == settings::SettingsSectionReset::PinToScreenBehavior &&
+                    field->configurationKey == key &&
+                    field->definition->title.translated() == title &&
+                    session.state(field->id).visible && session.state(field->id).enabled,
+                "wheel sliders are available in Pin to screen interaction settings");
+        const auto& slider =
+            std::get<settings::SettingsSliderDefinition>(field->definition->payload);
+        require(slider.suffix.translated() == QStringLiteral("%") && schema &&
+                    schema->integerRange && schema->integerRange->minimum == 1 &&
+                    schema->integerRange->maximum == 20 && schema->integerRange->step == 1,
+                "wheel sliders expose an integer range of one to twenty percent");
+        for (const int value : {1, 7, 20}) {
+            require(session.applySliderValue(binding, value) &&
+                        backend.sliderValue(binding) == value &&
+                        (opacity ? stored.mouseWheelOpacityStep() : stored.mouseWheelZoomStep()) ==
+                            value,
+                    "wheel steps persist through the settings session and adapters");
+        }
+        for (const int value : {0, 21}) {
+            require(
+                !backend.applySliderValue(binding, value) && backend.sliderValue(binding) == 20,
+                "wheel steps outside the allowed range are rejected without changing the value");
+        }
+        require(!storage::ConfigurationSchema::normalize(key, 1.5).valid &&
+                    !storage::ConfigurationSchema::normalize(key, QStringLiteral("7")).valid,
+                "wheel steps must be integer settings");
+    }
+    auto& applicationStorage = storage::ApplicationStorage::instance();
+    require(applicationStorage.configuration().flushNow().success, "wheel preferences flush");
+    storage::ConfigurationStore reloaded(applicationStorage.configurationDirectory() +
+                                             QStringLiteral("/config.json"),
+                                         true, true, 60000);
+    require(reloaded.value(QStringLiteral("pin_to_screen/mouse_wheel_opacity_step")).toInt() ==
+                    20 &&
+                reloaded.value(QStringLiteral("pin_to_screen/mouse_wheel_zoom_step")).toInt() == 20,
+            "wheel preferences survive configuration reload");
+    require(backend.resetSection(settings::SettingsSectionReset::PinToScreen) &&
+                stored.mouseWheelOpacityStep() == 20 && stored.mouseWheelZoomStep() == 20,
+            "window appearance reset preserves wheel steps");
+    require(session.reset(settings::SettingsSectionReset::PinToScreenBehavior) &&
+                stored.mouseWheelOpacityStep() == 5 && stored.mouseWheelZoomStep() == 10,
+            "interaction reset restores both wheel step defaults");
+}
+
 void shortcutSettings() {
     const auto action = GlobalShortcutAction::PinSelectedFiles;
     const QString id = QStringLiteral("quick.pin-selected-files");
@@ -492,6 +567,7 @@ int main(int argc, char** argv) {
     windowConfirmationSettings();
     textSelectionSettings();
     duplicateContentSettings();
+    mouseWheelStepSettings();
     clipboardSourceIdentity();
     shortcutSettings();
     storage.shutdown();

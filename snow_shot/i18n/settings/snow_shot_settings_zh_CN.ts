@@ -2921,8 +2921,16 @@
             <translation>鼠标指针</translation>
         </message>
         <message>
+            <source>Mouse wheel opacity step</source>
+            <translation>鼠标滚轮不透明度步长</translation>
+        </message>
+        <message>
             <source>Mouse wheel zoom mode</source>
             <translation>鼠标滚轮缩放模式</translation>
+        </message>
+        <message>
+            <source>Mouse wheel zoom step</source>
+            <translation>鼠标滚轮缩放步长</translation>
         </message>
         <message>
             <source>Move cursor down</source>
@@ -3801,6 +3809,10 @@
             <translation>服务器地址</translation>
         </message>
         <message>
+            <source>Set how much Ctrl+mouse wheel changes pinned window opacity</source>
+            <translation>设置 Ctrl+鼠标滚轮调整固定窗口不透明度的步长</translation>
+        </message>
+        <message>
             <source>Set quality for image files saved outside the Snow Shot dialog</source>
             <translation>设置在 Snow Shot 对话框以外保存的图像文件质量</translation>
         </message>
@@ -3867,6 +3879,10 @@
         <message>
             <source>Set the shadow color of pinned screenshots while they have focus</source>
             <translation>设置固定到屏幕的截图获得焦点时的阴影颜色</translation>
+        </message>
+        <message>
+            <source>Set the zoom percentage levels used by the mouse wheel</source>
+            <translation>设置鼠标滚轮使用的缩放百分比档位</translation>
         </message>
         <message>
             <source>Set up to two keys for this pinned window action</source>

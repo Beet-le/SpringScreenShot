@@ -1544,6 +1544,10 @@ int BuiltInSettingsBackend::sliderValue(SettingsSliderBinding binding) const {
         return storage::ScreenshotSettings().imageQuality();
     case SettingsSliderBinding::ScreenRecordingVideoQuality:
         return storage::RecordingSettings().videoQuality();
+    case SettingsSliderBinding::PinMouseWheelOpacityStep:
+        return storage::PinToScreenSettings().mouseWheelOpacityStep();
+    case SettingsSliderBinding::PinMouseWheelZoomStep:
+        return storage::PinToScreenSettings().mouseWheelZoomStep();
     }
     return 0;
 }
@@ -1566,6 +1570,10 @@ bool BuiltInSettingsBackend::applySliderValue(SettingsSliderBinding binding, int
         return storage::ScreenshotSettings().setImageQuality(value);
     case SettingsSliderBinding::ScreenRecordingVideoQuality:
         return storage::RecordingSettings().setVideoQuality(value);
+    case SettingsSliderBinding::PinMouseWheelOpacityStep:
+        return storage::PinToScreenSettings().setMouseWheelOpacityStep(value);
+    case SettingsSliderBinding::PinMouseWheelZoomStep:
+        return storage::PinToScreenSettings().setMouseWheelZoomStep(value);
     }
     return false;
 }
@@ -2740,6 +2748,12 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
         });
     case SettingsSectionReset::PinToScreenBehavior:
         return storage::ApplicationStorage::instance().configuration().setValues({
+            {QStringLiteral("pin_to_screen/mouse_wheel_opacity_step"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("pin_to_screen/mouse_wheel_opacity_step"))},
+            {QStringLiteral("pin_to_screen/mouse_wheel_zoom_step"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("pin_to_screen/mouse_wheel_zoom_step"))},
             {QStringLiteral("pin_to_screen/exit_annotation_mode_before_closing"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("pin_to_screen/exit_annotation_mode_before_closing"))},

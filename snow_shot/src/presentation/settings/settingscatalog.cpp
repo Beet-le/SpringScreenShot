@@ -1964,6 +1964,28 @@ SettingsItemDefinition pinDuplicateContentItem() {
           settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Repeat Action"))}});
 }
 
+SettingsItemDefinition pinWheelOpacityStepItem() {
+    return {QStringLiteral("pin-to-screen.mouse-wheel-opacity-step"),
+            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Mouse wheel opacity step")),
+            settingsText(QT_TRANSLATE_NOOP(
+                "SettingsCatalog", "Set how much Ctrl+mouse wheel changes pinned window opacity")),
+            {},
+            QStringLiteral("pin_to_screen/mouse_wheel_opacity_step"),
+            SettingsSliderDefinition{SettingsSliderBinding::PinMouseWheelOpacityStep,
+                                     settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "%"))}};
+}
+
+SettingsItemDefinition pinWheelZoomStepItem() {
+    return {QStringLiteral("pin-to-screen.mouse-wheel-zoom-step"),
+            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Mouse wheel zoom step")),
+            settingsText(QT_TRANSLATE_NOOP(
+                "SettingsCatalog", "Set the zoom percentage levels used by the mouse wheel")),
+            {},
+            QStringLiteral("pin_to_screen/mouse_wheel_zoom_step"),
+            SettingsSliderDefinition{SettingsSliderBinding::PinMouseWheelZoomStep,
+                                     settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "%"))}};
+}
+
 SettingsItemDefinition pinAutoResizeItem() {
     return switchItem(
         QStringLiteral("pin-to-screen.auto-resize-window"),
@@ -3440,9 +3462,9 @@ QVector<SettingsPageDefinition> builtInPages() {
                  SettingsSectionReset::PinToScreenBehavior,
                  {pinZoomModeItem(), pinDoubleClickActionItem(), pinMiddleClickActionItem(),
                   pinAutomaticOcrItem(), pinTextSelectionItem(), pinAutoResizeItem(),
-                  pinDuplicateContentItem(), pinShowWindowButtonsItem(),
-                  pinExitAnnotationModeBeforeClosingItem(), pinConfirmBeforeClosingWindowItem(),
-                  pinConfirmBeforeDestroyingWindowItem()},
+                  pinDuplicateContentItem(), pinWheelOpacityStepItem(), pinWheelZoomStepItem(),
+                  pinShowWindowButtonsItem(), pinExitAnnotationModeBeforeClosingItem(),
+                  pinConfirmBeforeClosingWindowItem(), pinConfirmBeforeDestroyingWindowItem()},
              },
              {
                  QStringLiteral("pin-to-screen"),
@@ -5403,6 +5425,12 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsSliderBinding::SkinMaskOpacity:
                         expectedKey = QStringLiteral("interface/skin_mask_opacity");
+                        break;
+                    case SettingsSliderBinding::PinMouseWheelOpacityStep:
+                        expectedKey = QStringLiteral("pin_to_screen/mouse_wheel_opacity_step");
+                        break;
+                    case SettingsSliderBinding::PinMouseWheelZoomStep:
+                        expectedKey = QStringLiteral("pin_to_screen/mouse_wheel_zoom_step");
                         break;
                     }
                     if (itemDefinition.configurationKey != expectedKey || schemaEntry == nullptr ||

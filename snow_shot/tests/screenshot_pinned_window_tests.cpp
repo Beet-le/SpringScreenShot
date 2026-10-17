@@ -568,6 +568,9 @@ class ScreenshotPinnedWindowTestAccess {
     static bool gesture(ScreenshotPinnedWindow& window, QEvent* event) {
         return window.handlePinnedGesture(&window, event);
     }
+    static bool wheel(ScreenshotPinnedWindow& window, QWheelEvent* event) {
+        return window.handleOpacityWheel(&window, event) || window.handleScaleWheel(&window, event);
+    }
 
     static void prepareReplacement(ScreenshotPinnedWindow& window,
                                    const ScreenshotPinnedWindow::Config& config) {
@@ -9644,6 +9647,142 @@ void pinnedSettledWheelScalingAdvancesPastRoundedLevel(SnowCanvasRuntime&) {
     pinnedWindow->close();
     require(processUntilDeleted(guardedWindow, 2000),
             "settled wheel scaling test pin was not deleted");
+}
+
+void pinnedWheelStepsFollowPreferences() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const snow_shot::storage::PinToScreenSettings settings;
+    const int originalOpacityStep = settings.mouseWheelOpacityStep();
+    const int originalZoomStep = settings.mouseWheelZoomStep();
+    const auto restoreSettings = qScopeGuard([&] {
+        static_cast<void>(settings.setMouseWheelOpacityStep(originalOpacityStep));
+        static_cast<void>(settings.setMouseWheelZoomStep(originalZoomStep));
+    });
+    for (const bool controlled : {false, true}) {
+        ScreenshotPinnedWindow window;
+        QImage image(400, 200, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::blue);
+        ScreenshotPinnedWindow::Config config;
+        config.screen = QGuiApplication::primaryScreen();
+        config.nativeGeometry = QRect(100, 100, 400, 200);
+        config.initialWindowSize = image.size();
+        config.canvasSourceRect = QRectF(QPointF(), QSizeF(image.size()));
+        config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+        config.mouseWheelZoomMode = QStringLiteral("top_left");
+        config.enableEditing = false;
+        config.automaticTextRecognition = false;
+        Access::restoreOffscreen(window, config);
+        const auto wheel = [&](int angle, Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                               int pixels = 0, Qt::ScrollPhase phase = Qt::NoScrollPhase) {
+            const QPointF local(100, 60);
+            QWheelEvent event(local, window.mapToGlobal(local.toPoint()), QPoint(0, pixels),
+                              QPoint(0, angle), Qt::NoButton, modifiers, phase, false);
+            require((controlled && Access::gesture(window, &event)) ||
+                        Access::wheel(window, &event),
+                    "configured wheel input must be handled");
+            require(event.isAccepted(), "configured wheel input must be consumed");
+        };
+        require(settings.setMouseWheelOpacityStep(5) && settings.setMouseWheelZoomStep(10),
+                "restore legacy wheel defaults on an existing window");
+        Access::setGeneralOpacity(window, 100);
+        wheel(-120, Qt::ControlModifier);
+        require(Access::opacity(window) == 95, "default opacity wheel subtracts five points");
+        wheel(120);
+        require(Access::scale(window) == 110, "default zoom wheel adds ten points");
+        Access::setFractionalScale(window, 83);
+        wheel(120);
+        require(Access::scale(window) == 90,
+                "default upward zoom snaps from eighty-three to ninety");
+        Access::setFractionalScale(window, 83);
+        wheel(-120);
+        require(Access::scale(window) == 80,
+                "default downward zoom snaps from eighty-three to eighty");
+
+        for (const int step : {1, 7, 20}) {
+            require(settings.setMouseWheelOpacityStep(step) && settings.setMouseWheelZoomStep(step),
+                    "customize both wheel steps while the window remains open");
+            Access::setGeneralOpacity(window, 60);
+            const QRect beforeOpacity = window.currentNativeGeometry();
+            wheel(120, Qt::ControlModifier);
+            require(Access::opacity(window) == 60 + step,
+                    "opacity wheel uses the new step immediately");
+            wheel(-240, Qt::ControlModifier);
+            require(Access::opacity(window) == std::max(25, 60 - step) &&
+                        window.currentNativeGeometry() == beforeOpacity,
+                    "multiple opacity notches use every configured step without resizing");
+            wheel(-120 * 100, Qt::ControlModifier);
+            require(Access::opacity(window) == 25,
+                    "custom opacity steps clamp at twenty-five percent");
+            wheel(120 * 100, Qt::ControlModifier);
+            require(Access::opacity(window) == 100,
+                    "custom opacity steps clamp at one hundred percent");
+            Access::setGeneralOpacity(window, 60);
+            wheel(60, Qt::ControlModifier);
+            require(Access::opacity(window) == 60, "partial opacity angles retain their remainder");
+            wheel(60, Qt::ControlModifier);
+            require(Access::opacity(window) == 60 + step,
+                    "partial opacity angles complete one step");
+
+            const int initial = (100 / step) * step;
+            Access::setFractionalScale(window, initial);
+            const QPoint anchor = window.currentNativeGeometry().topLeft();
+            wheel(120);
+            require(Access::scale(window) == initial + step &&
+                        window.currentNativeGeometry().topLeft() == anchor,
+                    "custom zoom step preserves the configured top-left anchor");
+            wheel(-240);
+            require(Access::scale(window) == initial - step,
+                    "multiple zoom notches apply every step");
+            wheel(120 * 1000);
+            require(Access::scale(window) == 500,
+                    "custom zoom steps clamp at five hundred percent");
+            wheel(-120 * 1000);
+            require(Access::scale(window) == 10, "custom zoom steps clamp at ten percent");
+            Access::setFractionalScale(window, initial);
+            wheel(60);
+            require(Access::scale(window) == initial + (controlled ? step : 0),
+                    "partial zoom angles preserve the existing platform response");
+            wheel(60);
+            require(Access::scale(window) == initial + step,
+                    "partial zoom angles accumulate one step");
+        }
+        require(settings.setMouseWheelZoomStep(7), "set irregular zoom snapping levels");
+        Access::setFractionalScale(window, 83);
+        wheel(120);
+        require(Access::scale(window) == 84, "upward zoom snaps to the next seven-percent level");
+        Access::setFractionalScale(window, 83);
+        wheel(-120);
+        require(Access::scale(window) == 77,
+                "downward zoom snaps to the previous seven-percent level");
+        if (controlled) {
+            require(settings.setMouseWheelOpacityStep(7), "customize precise opacity step");
+            Access::setGeneralOpacity(window, 60);
+            wheel(0, Qt::ControlModifier, -60, Qt::ScrollBegin);
+            require(Access::opacity(window) == 57,
+                    "precise opacity retains fractional configured steps");
+            wheel(0, Qt::ControlModifier, -60, Qt::ScrollUpdate);
+            require(Access::opacity(window) == 53,
+                    "precise opacity accumulates a full configured step");
+            require(settings.setMouseWheelOpacityStep(20), "change step during a precise gesture");
+            wheel(0, Qt::ControlModifier, 60, Qt::ScrollUpdate);
+            require(Access::opacity(window) == 63,
+                    "precise opacity uses the changed setting immediately");
+            Access::setFractionalScale(window, 83);
+            wheel(0, Qt::NoModifier, 1, Qt::ScrollBegin);
+            require(Access::scale(window) == 84, "precise zoom uses configured snapping levels");
+            wheel(0, Qt::NoModifier, 100, Qt::ScrollUpdate);
+            require(Access::scale(window) == 91, "precise zoom accumulates configured steps");
+        } else {
+            Access::setFractionalScale(window, 83);
+            wheel(0, Qt::NoModifier, 1);
+            require(Access::scale(window) == 84,
+                    "pixel-only wheel input uses configured zoom steps");
+            Access::setGeneralOpacity(window, 60);
+            wheel(0, Qt::ControlModifier, -1);
+            require(Access::opacity(window) == 40,
+                    "pixel-only opacity input uses the current step");
+        }
+    }
 }
 
 void pinnedWheelScalingUsesConfiguredAnchor(SnowCanvasRuntime&) {
@@ -24783,6 +24922,10 @@ int main(int argc, char* argv[]) {
         // without this, lazily initialized storage lands in the developer's
         // real AppData (see IsolatedPinnedStorage).
         IsolatedPinnedStorage processStorage;
+        if (app.arguments().contains(QStringLiteral("--wheel-step-only"))) {
+            pinnedWheelStepsFollowPreferences();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--ocr-highlighting-only"))) {
             pinnedOcrHighlightingFollowsVisibleResultsWithoutRebuildingLabels();
             return 0;
@@ -25650,6 +25793,7 @@ int main(int argc, char* argv[]) {
         pinnedBorderUsesCeiledWindowDpiPhysicalPixels(sourceRuntime);
         pinnedScalingAndAspectLockedResizing(sourceRuntime);
         pinnedSettledWheelScalingAdvancesPastRoundedLevel(sourceRuntime);
+        pinnedWheelStepsFollowPreferences();
         pinnedWheelScalingUsesConfiguredAnchor(sourceRuntime);
         pinnedFollowsPerMonitorDpiScaling(sourceRuntime);
         restoredSelectionPreservesShapeAndCreationSource();

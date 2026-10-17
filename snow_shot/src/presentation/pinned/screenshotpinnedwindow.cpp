@@ -505,10 +505,8 @@ constexpr int kThumbnailSize = 83;
 constexpr int kThumbnailAnimationDurationMs = 150;
 constexpr int kMinimumScalePercent = 10;
 constexpr int kMaximumScalePercent = 500;
-constexpr int kWheelScaleStep = 10;
 constexpr int kMinimumOpacityPercent = 25;
 constexpr int kMaximumOpacityPercent = 100;
-constexpr int kWheelOpacityStep = 5;
 const QColor kDefaultPinnedBorderColor(219, 219, 219, 255);
 const QColor kDefaultPinnedLockedBorderColor(250, 173, 20, 255);
 const QColor kDefaultPinnedBorderActiveColor(105, 177, 255, 255);
@@ -7725,15 +7723,15 @@ void ScreenshotPinnedWindow::applyWheelScaleSteps(int steps, const QPointF& nati
         return;
     }
 
-    // Wheel scaling moves between fixed ten-percent levels. Keep arbitrary
+    // Wheel scaling moves between configured percentage levels. Keep arbitrary
     // values produced by native resizing or pinch gestures, but use the next
-    // level in the direction of travel instead of adding ten to that value.
+    // level in the direction of travel instead of adding a step to that value.
     const int displayedScalePercent = qRound(m_scalePercent);
-    const double level = steps > 0 ? std::floor(displayedScalePercent / kWheelScaleStep)
-                                   : std::ceil(displayedScalePercent / kWheelScaleStep);
+    const int step = snow_shot::storage::PinToScreenSettings().mouseWheelZoomStep();
+    const double currentLevel = static_cast<double>(displayedScalePercent) / step;
+    const double level = steps > 0 ? std::floor(currentLevel) : std::ceil(currentLevel);
     const int targetPercent =
-        qBound(kMinimumScalePercent, qRound(level * kWheelScaleStep + steps * kWheelScaleStep),
-               kMaximumScalePercent);
+        qBound(kMinimumScalePercent, qRound(level * step + steps * step), kMaximumScalePercent);
     if (targetPercent != displayedScalePercent) {
         applyWheelScale(targetPercent, nativeCursor);
     }
@@ -7763,7 +7761,9 @@ bool ScreenshotPinnedWindow::handleOpacityWheel(QObject* watched, QWheelEvent* e
     }
 
     const int targetPercent =
-        qBound(kMinimumOpacityPercent, m_opacityPercent + steps * kWheelOpacityStep,
+        qBound(kMinimumOpacityPercent,
+               m_opacityPercent +
+                   steps * snow_shot::storage::PinToScreenSettings().mouseWheelOpacityStep(),
                kMaximumOpacityPercent);
     if (targetPercent != m_opacityPercent) {
         setOpacityPercent(targetPercent);
