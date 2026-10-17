@@ -1,5 +1,6 @@
 """Focused contracts for Windows target selection and cross-build dependencies."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,43 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 CMAKE = shutil.which('cmake')
+GIT = shutil.which('git')
+
+
+@unittest.skipUnless(GIT, 'Git is required')
+class VcpkgCacheLineEndings(unittest.TestCase):
+    def test_toolchain_hashes_survive_windows_checkout(self):
+        # These shared ABI inputs were first built with LF. A Windows checkout
+        # must preserve their bytes even when core.autocrlf is enabled.
+        inputs = ('cmake/SnowBuildToolchain.cmake', 'scripts/build-toolchain.json')
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            (fixture / '.gitattributes').write_bytes((ROOT / '.gitattributes').read_bytes())
+            expected = {}
+            for name in inputs:
+                path = fixture / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                contents = (ROOT / name).read_bytes().replace(b'\r\n', b'\n')
+                path.write_bytes(contents)
+                expected[name] = hashlib.sha256(contents).hexdigest()
+
+            def git(*arguments):
+                result = subprocess.run(
+                    [GIT, '-c', 'core.autocrlf=true', '-c', 'core.eol=crlf',
+                     '-c', 'core.safecrlf=false', *arguments], cwd=fixture,
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            git('init', '--quiet')
+            git('add', '--', '.gitattributes', *inputs)
+            for name in inputs:
+                (fixture / name).unlink()
+            git('checkout-index', '--all', '--force')
+            for name in inputs:
+                with self.subTest(path=name):
+                    actual = hashlib.sha256((fixture / name).read_bytes()).hexdigest()
+                    self.assertEqual(actual, expected[name],
+                                     'Checkout changed a shared vcpkg ABI input.')
 
 
 @unittest.skipUnless(CMAKE, 'CMake is required')
