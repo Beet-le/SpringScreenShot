@@ -1640,10 +1640,7 @@ void SnowShotApiClient::completeChatStream(RequestToken token) {
     } else if (current->imageResponse && !current->hasContent) {
         result.error = tr("The model returned no content");
     }
-    const QPointer<QNetworkReply> replyGuard(reply);
     finishTranslation(token, std::move(result));
-    if (replyGuard)
-        replyGuard->deleteLater();
 }
 
 void SnowShotApiClient::cleanupRequest(Request* request) {
@@ -1652,13 +1649,14 @@ void SnowShotApiClient::cleanupRequest(Request* request) {
         request->timeout->stop();
         request->timeout->deleteLater();
     }
-    if (request->reply) {
-        if (request->reply->isRunning()) {
-            request->reply->abort();
-        }
-        request->reply->deleteLater();
-    }
+    const QPointer<QNetworkReply> reply = request->reply;
     delete request;
+    // Aborting can synchronously emit finished and destroy the consumer or reply.
+    // Finished replies also need explicit disposal after a queued parser exits early.
+    if (reply && reply->isRunning())
+        reply->abort();
+    if (reply)
+        reply->deleteLater();
 }
 
 void SnowShotApiClient::cancel(RequestToken token) {
@@ -1775,27 +1773,18 @@ void SnowShotApiClient::finishTranslation(RequestToken token, SnowShotTranslatio
                                          : QStringLiteral("failed"),
                     result.httpStatus);
     m_requests.erase(it);
-    disconnect(request->receiverDestroyed);
-    if (request->timeout != nullptr) {
-        request->timeout->stop();
-        request->timeout->deleteLater();
-    }
     const QPointer<QObject> receiver = request->receiver;
     TranslationCompletion completion = std::move(request->translationCompletion);
-    const QPointer<QNetworkReply> reply = request->reply;
     const bool translation = request->textTranslation;
     const bool custom = request->custom;
     m_customChatQueue.removeAll(token);
-    delete request;
     if (translation)
         QTimer::singleShot(0, this, &SnowShotApiClient::pumpTextTranslations);
     if (custom)
         QTimer::singleShot(0, this, &SnowShotApiClient::pumpCustomChatStreams);
     // An SSE error can arrive before HTTP completion. Release its connection before
     // the consumer starts another request in the newly available queue slot.
-    if (reply != nullptr && reply->isRunning()) {
-        reply->abort();
-    }
+    cleanupRequest(request);
     if (receiver != nullptr && completion) {
         completion(std::move(result));
     }

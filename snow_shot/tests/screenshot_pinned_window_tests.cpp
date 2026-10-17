@@ -1,5 +1,6 @@
 #include "angle_wheel_host_test_support.h"
 #include "../src/app/mcp/mcppinnedstate_p.h"
+#include "../src/app/mcp/mcppinnedworkflowowners_p.h"
 #include "cloud_upload_test_support.h"
 #include "print_diagnostics_test_support.h"
 #include "recognition_workbook_test_support.h"
@@ -2025,6 +2026,116 @@ ScreenshotPinnedWindow::Config cachedOcrPinConfig(ScreenshotOcrRecognitionPort* 
     config.recognitionResults.key = QStringLiteral("cached-ocr-audit");
     config.recognitionResults.text = ScreenshotOcrRecognitionResult{presentation, {}, {}, {}};
     return config;
+}
+
+void pinnedMcpWorkflowOwnershipEndsWithWork() {
+    class DeferredRecognition final : public ScreenshotOcrRecognitionPort {
+      public:
+        QHash<RequestToken, Completion> pending;
+        RequestToken nextToken = 0;
+        int cancelled = 0;
+        RequestToken recognize(ScreenshotOcrRequest, QObject*, Completion completion) override {
+            const auto token = ++nextToken;
+            pending.insert(token, std::move(completion));
+            return token;
+        }
+        void cancel(RequestToken token) override {
+            if (pending.remove(token))
+                ++cancelled;
+        }
+        bool reprioritize(RequestToken, ScreenshotOcrRequestPriority) override {
+            return false;
+        }
+        void complete(ScreenshotOcrRecognitionResult result) {
+            require(pending.size() == 1, "one deterministic OCR request must be outstanding");
+            auto completion = pending.take(pending.constBegin().key());
+            completion(std::move(result));
+        }
+    } recognition;
+    snow_shot::app::mcp::McpPinnedWorkflowOwners owners;
+    const auto wait = [](auto predicate, const char* message) {
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!predicate() && deadline.elapsed() < 3000)
+            waitForUi(1);
+        require(predicate(), message);
+    };
+    auto config = cachedOcrPinConfig(&recognition);
+    const auto recognized = *config.recognitionResults.text;
+    config.recognitionResults = {};
+    const auto create = [&] {
+        auto* window = new ScreenshotPinnedWindow();
+        config.persistenceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        require(window->present(config), "create an independently identified MCP workflow pin");
+        wait([&] { return window->automationState().value(QStringLiteral("ready")).toBool(); },
+             "MCP workflow pin must publish its first frame");
+        return window;
+    };
+    const auto start = [&](ScreenshotPinnedWindow* window, quint64 connection) {
+        QString error;
+        static_cast<void>(window->automationEdit(QStringLiteral("recognize"),
+                                                 {{QStringLiteral("kind"), QStringLiteral("text")}},
+                                                 &error));
+        require(error.isEmpty() && window->automationWorkflowBusy() &&
+                    recognition.pending.size() == 1,
+                "the public pin edit command must start provider work");
+        owners.track(connection, window);
+        require(owners.size() == 1, "outstanding work retains one cancellation owner");
+    };
+    QSet<QString> identities;
+    for (int iteration = 0; iteration < 32; ++iteration) {
+        QPointer<ScreenshotPinnedWindow> window(create());
+        identities.insert(window->persistenceId());
+        start(window, 71);
+        switch (iteration % 4) {
+        case 0: {
+            recognition.complete(recognized);
+            wait([&] { return owners.size() == 0; },
+                 "completed recognition must release its connection ownership");
+            QString error;
+            static_cast<void>(
+                window->automationEdit(QStringLiteral("recognize"),
+                                       {{QStringLiteral("kind"), QStringLiteral("text")}}, &error));
+            owners.track(71, window);
+            require(error.isEmpty() && recognition.pending.isEmpty() && owners.size() == 0,
+                    "cached synchronous recognition must not retain an owner");
+            window->close();
+            break;
+        }
+        case 1:
+            recognition.complete({{}, QStringLiteral("deterministic provider failure"), {}, {}});
+            wait([&] { return owners.size() == 0; },
+                 "failed recognition must release its connection ownership");
+            window->close();
+            break;
+        case 2:
+            window->requestDestroy();
+            break;
+        case 3:
+            delete window.data();
+            break;
+        }
+        require(processUntilDeleted(window, 3000),
+                "closing or destroying a workflow pin deletes it");
+        require(owners.size() == 0 && recognition.pending.isEmpty(),
+                "one long-lived MCP connection must not accumulate completed or retired pins");
+    }
+    require(identities.size() == 32, "exercise distinct pin identities on the same connection");
+
+    QPointer<ScreenshotPinnedWindow> window(create());
+    start(window, 71);
+    owners.track(72, window);
+    owners.cancel(71);
+    require(owners.size() == 1 && recognition.pending.size() == 1 &&
+                window->automationWorkflowBusy(),
+            "disconnecting a former owner must preserve the current owner's work");
+    const int beforeCancel = recognition.cancelled;
+    owners.cancel(72);
+    require(owners.size() == 0 && recognition.pending.isEmpty() &&
+                recognition.cancelled == beforeCancel + 1 && !window->automationWorkflowBusy(),
+            "disconnecting the current owner cancels its still outstanding provider request");
+    window->close();
+    require(processUntilDeleted(window, 3000), "close the disconnected workflow pin");
 }
 
 void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
@@ -18182,6 +18293,7 @@ void pinnedAutoFilterPreservesBackgroundAndSession() {
 }
 
 void pinnedDrawingExitCancelsPendingAutoFilterAutomation() {
+    snow_shot::app::mcp::McpPinnedWorkflowOwners owners;
     QImage background(120, 80, QImage::Format_ARGB32_Premultiplied);
     background.fill(QColor(20, 40, 60));
     ScreenshotPinnedWindow::Config config;
@@ -18221,7 +18333,11 @@ void pinnedDrawingExitCancelsPendingAutoFilterAutomation() {
     require(edit->automationAutoFilter({QStringLiteral("text")}) && detection->detecting() &&
                 edit->automationAutoFilterState().value(QStringLiteral("busy")).toBool(),
             "automation detection must be pending before leaving drawing mode");
+    owners.track(71, &window);
+    require(owners.size() == 1, "pending automation filtering retains cancellation ownership");
     edit->setEditMode(false);
+    QCoreApplication::processEvents();
+    require(owners.size() == 0, "drawing exit releases the ended filtering workflow owner");
     require(
         !detection->detecting() &&
             !edit->automationAutoFilterState().value(QStringLiteral("busy")).toBool() &&
@@ -18231,7 +18347,10 @@ void pinnedDrawingExitCancelsPendingAutoFilterAutomation() {
             "drawing exit must release the canceled detection's queue slot");
     require(edit->automationAutoFilter({QStringLiteral("text")}) && detection->detecting(),
             "a new automation request must be accepted after drawing exit");
+    owners.track(71, &window);
     edit->cancelAutomationAutoFilter();
+    QCoreApplication::processEvents();
+    require(owners.size() == 0, "explicit filtering cancellation releases connection ownership");
     require(!detection->detecting() &&
                 !edit->automationAutoFilterState().value(QStringLiteral("busy")).toBool(),
             "explicit automation cancellation must clear the same pending state");
@@ -24922,6 +25041,12 @@ int main(int argc, char* argv[]) {
         // without this, lazily initialized storage lands in the developer's
         // real AppData (see IsolatedPinnedStorage).
         IsolatedPinnedStorage processStorage;
+        if (app.arguments().contains(QStringLiteral("--mcp-workflow-lifetime-only"))) {
+            pinnedMcpWorkflowOwnershipEndsWithWork();
+            pinnedDrawingExitCancelsPendingAutoFilterAutomation();
+            ScreenshotExportCoordinator::shared().shutdown();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--wheel-step-only"))) {
             pinnedWheelStepsFollowPreferences();
             return 0;

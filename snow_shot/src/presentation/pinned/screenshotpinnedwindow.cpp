@@ -4871,6 +4871,8 @@ void ScreenshotPinnedWindow::ensureEditController() {
             });
     connect(m_editController, &ScreenshotPinnedEditController::toolbarCreated, this,
             &ScreenshotPinnedWindow::configureEditToolbar);
+    connect(m_editController, &ScreenshotPinnedEditController::automationAutoFilterStateChanged,
+            this, &ScreenshotPinnedWindow::automationWorkflowStateChanged);
 
     if (m_recognitionSession != nullptr) {
         connect(m_editController, &ScreenshotPinnedEditController::textRecognitionRequested, this,
@@ -5635,6 +5637,9 @@ void ScreenshotPinnedWindow::configureRecognitionSession() {
             },
         },
         this);
+    connect(m_recognitionSession.get(),
+            &ScreenshotRecognitionSessionController::workflowStateChanged, this,
+            &ScreenshotPinnedWindow::automationWorkflowStateChanged);
     connect(m_recognitionSession.get(), &ScreenshotRecognitionSessionController::textResultChanged,
             this, [this](bool available) {
                 m_ocrReady = available;
@@ -9815,4 +9820,12 @@ void ScreenshotPinnedWindow::cancelAutomationRecognition() {
     if (m_automationRecognition && m_recognitionSession)
         m_recognitionSession->cancelWorkflow();
     m_automationRecognition = false;
+}
+
+bool ScreenshotPinnedWindow::automationWorkflowBusy() const {
+    return (m_recognitionSession &&
+            (m_recognitionSession->busy() ||
+             m_recognitionSession->workflowState().value(QStringLiteral("busy")).toBool())) ||
+           (m_editController &&
+            m_editController->automationAutoFilterState().value(QStringLiteral("busy")).toBool());
 }

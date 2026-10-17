@@ -5086,6 +5086,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-pinned-window-tests --hidden-window-lifecycle-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-hidden-window-lifecycle-tests PROPERTIES
         LABELS "unit" TIMEOUT 60)
+    add_test(NAME snow-shot-mcp-pinned-workflow-lifetime-tests
+        COMMAND snow-shot-pinned-window-tests --mcp-workflow-lifetime-only -platform offscreen)
+    set_tests_properties(snow-shot-mcp-pinned-workflow-lifetime-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-pinned-window-confirmation-tests
         COMMAND snow-shot-pinned-window-tests --window-confirmation-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-window-confirmation-tests PROPERTIES
@@ -8899,6 +8903,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         Qt6::Network
         snow_shot_image_codec
     )
+    if(SNOW_SHOT_ENABLE_AGGRESSIVE_RELEASE_OPTIMIZATION OR SNOW_SHOT_RELEASE_STATIC)
+        snow_apply_release_options(snow-shot-api-client-tests POLICY speed)
+    endif()
     add_test(
         NAME snow-shot-api-client-tests
         COMMAND snow-shot-api-client-tests
@@ -8906,7 +8913,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-api-client-lifetime-tests
         COMMAND snow-shot-api-client-tests --lifetime-only)
     set_tests_properties(snow-shot-api-client-lifetime-tests PROPERTIES LABELS "unit" TIMEOUT 30)
-    set_tests_properties(snow-shot-api-client-tests snow-shot-api-client-lifetime-tests PROPERTIES
+    add_test(NAME snow-shot-api-client-stream-lifetime-tests
+        COMMAND snow-shot-api-client-tests --stream-lifetime-only)
+    set_tests_properties(snow-shot-api-client-stream-lifetime-tests PROPERTIES LABELS "unit" TIMEOUT 30)
+    set_tests_properties(snow-shot-api-client-tests snow-shot-api-client-lifetime-tests
+        snow-shot-api-client-stream-lifetime-tests PROPERTIES
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )

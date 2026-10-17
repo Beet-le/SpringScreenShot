@@ -107,6 +107,7 @@ ScreenshotPinnedEditController::ScreenshotPinnedEditController(
                 const auto categories = std::exchange(m_automationFilterCategories, {});
                 for (const auto& category : categories)
                     m_autoFilterController->fillCategory(category);
+                emit automationAutoFilterStateChanged();
             });
     connect(m_autoFilterController.get(), &ScreenshotAutoFilterController::detectionFailed, this,
             [this](const QString& error) {
@@ -114,11 +115,20 @@ ScreenshotPinnedEditController::ScreenshotPinnedEditController(
                 if (!m_automationFilterCategories.isEmpty()) {
                     m_automationFilterCategories.clear();
                     m_automationFilterError = error;
+                    emit automationAutoFilterStateChanged();
                 }
             });
     connect(m_autoFilterController.get(), &ScreenshotAutoFilterController::detectionFailed, this,
             [this](const QString& message) {
                 adqt::widgets::AdMessageService::error(message, -1, &m_pinnedWindow);
+            });
+    connect(m_autoFilterController.get(), &ScreenshotAutoFilterController::detectionFinished, this,
+            [this](const QString& error) {
+                if (m_automationFilterCategories.isEmpty())
+                    return;
+                m_automationFilterCategories.clear();
+                m_automationFilterError = error;
+                emit automationAutoFilterStateChanged();
             });
     connect(m_autoFilterController.get(), &ScreenshotAutoFilterController::availabilityChanged,
             this, [this](bool available) {
@@ -1056,6 +1066,7 @@ bool ScreenshotPinnedEditController::automationAutoFilter(const QStringList& cat
     m_automationFilterCategories = categories;
     if (!m_canvas.setCanvasTool(SnowCanvasTool::AutoFilter)) {
         m_automationFilterCategories.clear();
+        emit automationAutoFilterStateChanged();
         return false;
     }
     m_autoFilterController->validate();
@@ -1064,6 +1075,7 @@ bool ScreenshotPinnedEditController::automationAutoFilter(const QStringList& cat
         for (const auto& category : pending)
             m_autoFilterController->fillCategory(category);
     }
+    emit automationAutoFilterStateChanged();
     return true;
 }
 
@@ -1081,6 +1093,7 @@ void ScreenshotPinnedEditController::cancelAutomationAutoFilter() {
 void ScreenshotPinnedEditController::resetAutoFilterSession() {
     m_automationFilterCategories.clear();
     m_autoFilterController->resetSession();
+    emit automationAutoFilterStateChanged();
 }
 
 void ScreenshotPinnedEditController::setCanvasColorSamplingCursor(bool enabled) {

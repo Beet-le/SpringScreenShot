@@ -252,6 +252,7 @@ class ScreenshotPinnedWindow final : public QWidget {
                                    const QSize& transformedPixels, const QRectF& contentRect);
     [[nodiscard]] ScreenshotClipboardOriginalContent automationOriginalContent() const;
     void cancelAutomationRecognition();
+    [[nodiscard]] bool automationWorkflowBusy() const;
 
   public slots:
     void setGroupId(const QString& id);
@@ -271,6 +272,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     static void setRuntimeTrayEnabled(bool enabled);
 
   signals:
+    void automationWorkflowStateChanged() const;
     void showMainWindowRequested();
     void splitRequested(const ScreenshotPinnedImageSnapshot& snapshot);
     void closingForPersistence(const snow_shot::storage::PinnedWindowRecord& snapshot,

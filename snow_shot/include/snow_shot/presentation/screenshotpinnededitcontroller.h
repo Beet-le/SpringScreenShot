@@ -65,6 +65,7 @@ class ScreenshotPinnedEditController final : public QObject {
     void cancelAutomationAutoFilter();
 
   signals:
+    void automationAutoFilterStateChanged() const;
     void toolbarCreated(ScreenshotFloatingToolPaletteWindow* toolbarWindow);
     void editModeChanged(bool enabled);
     void textRecognitionRequested();
