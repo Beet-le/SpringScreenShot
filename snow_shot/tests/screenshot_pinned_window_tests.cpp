@@ -1,3 +1,4 @@
+#include "snow_shot/app/supportedpinfiles.h"
 #include "angle_wheel_host_test_support.h"
 #include "../src/app/mcp/mcppinnedstate_p.h"
 #include "../src/app/mcp/mcppinnedworkflowowners_p.h"
@@ -19610,6 +19611,10 @@ void pinnedControlledInteractionAndGestures() {
 
 void decodedContentPresentationPreservesText() {
     IsolatedPinnedStorage storage;
+    const int font = QFontDatabase::addApplicationFont(
+        QStringLiteral(":/recording-test-fonts/SnowRecordingTestSans-Regular.ttf"));
+    require(font >= 0, "document fixtures must load their bundled font");
+    QApplication::setFont(QFont(QFontDatabase::applicationFontFamilies(font).first(), 12));
     QTemporaryDir files;
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen != nullptr && files.isValid(),
@@ -19652,18 +19657,65 @@ void decodedContentPresentationPreservesText() {
         }
         const auto saved = window->persistenceSnapshot();
         require(saved.originalText == original.text && saved.originalHtml == original.html &&
-                    saved.creationSource == source && saved.sourceIdentity == identity,
+                    saved.creationSource == source && saved.sourceIdentity == identity &&
+                    saved.textFormat == original.textFormat,
                 "decoded pins must retain original content and source metadata");
         auto expectedImage = image.convertToFormat(QImage::Format_RGBA8888);
         auto actualImage = ScreenshotPinnedWindowTestAccess::originalImage(*window).convertToFormat(
             QImage::Format_RGBA8888);
         expectedImage.setDevicePixelRatio(1.0);
         actualImage.setDevicePixelRatio(1.0);
-        require(window->currentNativeGeometry() == fit.nativeGeometry &&
+        // The fit describes document content; the native window also includes its shadow margin.
+        require(snow_shot::presentation::pinnedContentRect(window->currentNativeGeometry()) ==
+                        fit.nativeGeometry &&
                     actualImage == expectedImage,
                 "decoded pins must retain their pixels and target-screen sizing");
+        if (text) {
+            const auto copy = window->automationClipboardMimeData(true);
+            require(copy && copy->text() == original.text && copy->html() == original.html,
+                    "copy original retains document source rather than rendered Markdown");
+        }
+        const bool markdown = original.textFormat == snow_shot::storage::PinnedTextFormat::Markdown;
+        if (markdown) {
+            auto& repository = snow_shot::storage::ApplicationStorage::instance().pinnedWindows();
+            require(repository.upsert(saved).success && repository.flush().success,
+                    "commit Markdown pin before restore");
+        }
         window->close();
         require(processUntilDeleted(window, 2000), "decoded pin must close");
+        if (markdown) {
+            require(services.restoreRecord(saved.id, false), "queue Markdown restoration");
+            deadline.restart();
+            while (deadline.elapsed() < 5000) {
+                window = services.findDuplicatePin(identity);
+                if (window && ScreenshotPinnedWindowTestAccess::recognitionReady(*window))
+                    break;
+                waitForUi(5);
+            }
+            require(window && window->persistenceSnapshot().textFormat == original.textFormat &&
+                        window->automationClipboardMimeData(true)->text() == original.text,
+                    "restored Markdown pins preserve source and format after file deletion");
+            auto* restoredSession = ScreenshotPinnedWindowTestAccess::recognition(*window);
+            require(restoredSession && restoredSession->hasTextResult(),
+                    "restored documents have selectable text without recognition");
+            restoredSession->activate(ScreenshotRecognitionSessionController::Mode::Text);
+            auto restoredImage =
+                ScreenshotPinnedWindowTestAccess::originalImage(*window).convertToFormat(
+                    QImage::Format_RGBA8888);
+            restoredImage.setDevicePixelRatio(1.0);
+            require(restoredSession->originalText() == plainText && restoredImage == expectedImage,
+                    "restored Markdown keeps rendered pixels and selection text");
+            ScreenshotClipboardContentSnapshot replacement;
+            replacement.text = QStringLiteral("# Plain CSS <b>text</b>");
+            auto decoded = ScreenshotClipboardContentReader::decode(replacement);
+            require(decoded && window->automationReplaceContent(std::move(*decoded)) &&
+                        window->persistenceSnapshot().textFormat ==
+                            snow_shot::storage::PinnedTextFormat::PlainText &&
+                        window->automationClipboardMimeData(true)->text() == replacement.text,
+                    "replacing Markdown with plain text resets the persisted format");
+            window->close();
+            require(processUntilDeleted(window, 2000), "restored document pin must close");
+        }
         return true;
     };
     using Source = snow_shot::storage::PinnedWindowCreationSource;
@@ -19684,18 +19736,22 @@ void decodedContentPresentationPreservesText() {
         }
     }
     QStringList paths;
-    for (const auto& suffix :
-         {QStringLiteral("txt"), QStringLiteral("html"), QStringLiteral("htm")}) {
-        const QString path = files.filePath(QStringLiteral("content.") + suffix);
+    for (const auto& document : snow_shot::app::kPinDocumentFileFormats) {
+        const QString path =
+            files.filePath(QStringLiteral("content.") + QLatin1String(document.suffix));
         QFile file(path);
         require(file.open(QIODevice::WriteOnly), "text file fixture must open");
-        file.write(suffix == QStringLiteral("txt") ? "File text" : "<b>File text</b>");
+        file.write(document.format == snow_shot::app::PinDocumentFormat::Markdown ? "**File text**"
+                   : document.format == snow_shot::app::PinDocumentFormat::Html ? "<b>File text</b>"
+                                                                                : "File text");
         paths.append(path);
     }
     ScreenshotFilePinBatch batch;
     int presented = 0;
     batch.start(paths, [&](ScreenshotClipboardContent content) {
-        require(content.isFormattedText(), "file batch must decode TXT and HTML as text");
+        require(content.isFormattedText(), "file batch must decode supported documents as text");
+        require(QFile::remove(paths.at(presented)),
+                "remove original file before presenting its pin");
         ++presented;
         return present(std::move(content), Source::SelectedFiles);
     });

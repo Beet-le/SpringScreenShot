@@ -1,5 +1,6 @@
 #include "snow_shot/presentation/screenshotocrcontroller.h"
 #include "snow_shot/presentation/screenshotclipboardcontent.h"
+#include "snow_shot/presentation/screenshotdocumentformatting.h"
 #include <QTextDocument>
 #include <QCryptographicHash>
 #include <QDataStream>
@@ -651,7 +652,13 @@ void ScreenshotOcrController::seedImportedResults(
         m_importedFormattedDocument = std::make_shared<QTextDocument>();
         if (!originalContent.html.isEmpty())
             m_importedFormattedDocument->setHtml(originalContent.html);
-        else
+        else if (originalContent.textFormat == snow_shot::storage::PinnedTextFormat::Markdown) {
+            m_importedFormattedDocument =
+                std::make_shared<snow_shot::presentation::ScreenshotInertDocument>();
+            m_importedFormattedDocument->setMarkdown(originalContent.text,
+                                                     QTextDocument::MarkdownDialectGitHub);
+            m_importedPlainText = m_importedFormattedDocument->toPlainText();
+        } else
             m_importedFormattedDocument->setPlainText(originalContent.text);
         if (m_importedPlainText.isEmpty())
             m_importedPlainText = m_importedFormattedDocument->toPlainText();

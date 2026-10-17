@@ -50,6 +50,7 @@ readImageImportPinnedRecord(const QString& recordId,
         original.html = record->originalHtml;
         original.text = record->originalText;
         original.textStyle = record->textStyle;
+        original.textFormat = record->textFormat;
         auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
             original, record->firstCreationTextDpi, {}, reserve);
         if (rendered)

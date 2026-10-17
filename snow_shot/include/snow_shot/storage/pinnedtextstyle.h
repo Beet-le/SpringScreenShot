@@ -6,6 +6,13 @@
 
 namespace snow_shot::storage {
 
+// HTML is stored separately and takes precedence over this text payload format.
+enum class PinnedTextFormat { PlainText, Markdown };
+
+[[nodiscard]] inline bool isValidPinnedTextFormat(PinnedTextFormat format) {
+    return format == PinnedTextFormat::PlainText || format == PinnedTextFormat::Markdown;
+}
+
 // Resolved at import time, independently of later preference or palette changes.
 struct PinnedTextStyle final {
     int maximumWidth = 1024;

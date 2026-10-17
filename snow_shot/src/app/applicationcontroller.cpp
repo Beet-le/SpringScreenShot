@@ -2,7 +2,7 @@
 #include "snow_shot/app/edition.h"
 #include "snow_shot/app/applicationcontroller.h"
 #include "snow_shot/app/shellimagelaunch.h"
-#include "snow_shot/image/supportedimagefiles.h"
+#include "snow_shot/app/supportedpinfiles.h"
 #include "snow_shot/runtime/memoryoptimizationcontroller.h"
 #include "snow_shot/runtime/memoryoptimizationuisafety.h"
 #include "snow_shot/app/applicationrestart.h"
@@ -455,8 +455,8 @@ class ApplicationController::Impl {
             });
         QObject::connect(
             &applicationStorage, &storage::ApplicationStorage::directoryChangeFinished, &q, [this] {
-                const auto paths = std::move(deferredStorageShellImagePaths);
-                deferredStorageShellImagePaths.clear();
+                const auto paths = std::move(deferredStorageShellFilePaths);
+                deferredStorageShellFilePaths.clear();
                 const bool foreground = std::exchange(deferredStorageShellForeground, false);
                 if (paths.isEmpty())
                     return;
@@ -639,12 +639,12 @@ class ApplicationController::Impl {
                 startMcp();
             handoffMcp = false;
 #ifdef Q_OS_WIN
-            const auto deferredPaths = std::move(deferredShellImagePaths);
-            deferredShellImagePaths.clear();
+            const auto deferredPaths = std::move(deferredShellFilePaths);
+            deferredShellFilePaths.clear();
             const bool foreground = std::exchange(deferredShellForeground, false);
             updates->clearRelaunchArguments();
             if (!deferredPaths.isEmpty())
-                pinShellImageFiles(deferredPaths);
+                pinShellFiles(deferredPaths);
             if (foreground)
                 showMainWindow();
 #endif
@@ -666,19 +666,19 @@ class ApplicationController::Impl {
     }
 
 #ifdef Q_OS_WIN
-    void pinShellImageFiles(QStringList paths) {
+    void pinShellFiles(QStringList paths) {
         static_cast<void>(featureRouter.dispatch(
             FeatureFamily::PinToScreen, [this, paths = std::move(paths)]() mutable {
                 if (auto* controller = ensureScreenshotController())
-                    controller->pinImageFilesToScreen(std::move(paths));
+                    controller->pinFilesToScreen(std::move(paths));
             }));
     }
 
     void preserveShellLaunchForUpdate(const QStringList& paths, bool foreground) {
-        deferredShellImagePaths.append(paths);
+        deferredShellFilePaths.append(paths);
         deferredShellForeground = deferredShellForeground || foreground;
         updates->setRelaunchArguments(update::startupUpdateRelaunchArguments(
-            deferredShellForeground, deferredShellImagePaths));
+            deferredShellForeground, deferredShellFilePaths));
     }
 #endif
 
@@ -1250,7 +1250,8 @@ class ApplicationController::Impl {
                         return result;
                     result.image = record->image;
                     result.originalContent = {record->originalHtml, record->originalText,
-                                              record->originalFilePath, record->textStyle};
+                                              record->originalFilePath, record->textStyle,
+                                              record->textFormat};
                     result.recognitionResults =
                         liveRecognition.value_or(ScreenshotPinnedWindow::decodeRecognitionSnapshot(
                             record->recognitionResults));
@@ -2082,9 +2083,9 @@ class ApplicationController::Impl {
     std::unique_ptr<runtime::MemoryOptimizationController> memoryOptimization;
     update::UpdateService* updates = nullptr;
 #ifdef Q_OS_WIN
-    QStringList deferredShellImagePaths;
+    QStringList deferredShellFilePaths;
     bool deferredShellForeground = false;
-    QStringList deferredStorageShellImagePaths;
+    QStringList deferredStorageShellFilePaths;
     bool deferredStorageShellForeground = false;
 #endif
 };
@@ -2107,28 +2108,28 @@ void ApplicationController::handleLaunchRequest(const QStringList& arguments) {
     const auto request = parseShellImageLaunchRequest(arguments);
     if (request.requested) {
         if (!request.valid) {
-            m_impl->reportSelectedFilePinFailure(tr("The selected image file path is invalid"));
+            m_impl->reportSelectedFilePinFailure(tr("The selected file path is invalid"));
             return;
         }
         QStringList supportedPaths;
-        const auto supported = image::supportedImageFileExtensions();
+        const auto supported = supportedPinFileExtensions();
         for (const QString& path : request.paths) {
             if (supported.contains(QFileInfo(path).suffix().toLower()))
                 supportedPaths.append(path);
             else
                 m_impl->reportSelectedFilePinFailure(
-                    tr("Could not open the selected image file: %1").arg(path));
+                    tr("Could not open the selected file: %1").arg(path));
         }
         const bool foreground = arguments.contains(QStringLiteral("--show-main-window"));
         if (storage::ApplicationStorage::instance().directoryChanging()) {
-            m_impl->deferredStorageShellImagePaths.append(supportedPaths);
+            m_impl->deferredStorageShellFilePaths.append(supportedPaths);
             m_impl->deferredStorageShellForeground =
                 m_impl->deferredStorageShellForeground || foreground;
         } else if (m_impl->updates && m_impl->updates->handoffPending()) {
             m_impl->preserveShellLaunchForUpdate(supportedPaths, foreground);
         } else {
             if (!supportedPaths.isEmpty())
-                m_impl->pinShellImageFiles(std::move(supportedPaths));
+                m_impl->pinShellFiles(std::move(supportedPaths));
             if (foreground)
                 m_impl->showMainWindow();
         }

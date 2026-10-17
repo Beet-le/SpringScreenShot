@@ -1169,8 +1169,8 @@
             <translation>作用中視窗</translation>
         </message>
         <message>
-            <source>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</source>
-            <translation>在傳統 Windows 右鍵選單中新增「使用 Snow Shot 編輯」，將影像檔案固定到螢幕。</translation>
+            <source>Add Edit with Snow Shot to the classic Windows context menu to pin a supported image or document file to the screen.</source>
+            <translation>將「使用 Snow Shot 編輯」新增至傳統 Windows 右鍵選單，以將支援的影像或文件檔案貼到螢幕。</translation>
         </message>
         <message>
             <source>Add a mask to highlight text recognition results</source>
@@ -2561,12 +2561,12 @@
             <translation>影像辨識</translation>
         </message>
         <message>
-            <source>Image export</source>
-            <translation>影像匯出</translation>
+            <source>Image and document files</source>
+            <translation>影像與文件檔案</translation>
         </message>
         <message>
-            <source>Image files</source>
-            <translation>影像檔案</translation>
+            <source>Image export</source>
+            <translation>影像匯出</translation>
         </message>
         <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
@@ -3149,20 +3149,20 @@
             <translation>將剪貼簿內容固定到螢幕</translation>
         </message>
         <message>
-            <source>Pin images, image files, formatted text, or HTML from the clipboard to the screen</source>
-            <translation>將剪貼簿中的影像、影像檔案、格式化文字或 HTML 固定到螢幕</translation>
+            <source>Pin images, supported files, formatted text, or HTML from the clipboard to the screen</source>
+            <translation>將剪貼簿中的影像、支援的檔案、格式化文字或 HTML 貼到螢幕</translation>
         </message>
         <message>
             <source>Pin screenshot to screen</source>
             <translation>將截圖固定到螢幕</translation>
         </message>
         <message>
-            <source>Pin selected image files from File Explorer or the desktop to the screen</source>
-            <translation>將檔案總管或桌面中選取的影像檔案固定到螢幕</translation>
+            <source>Pin selected image or document files from File Explorer or the desktop to the screen</source>
+            <translation>將檔案總管或桌面中選取的影像或文件檔案貼到螢幕</translation>
         </message>
         <message>
-            <source>Pin selected image files from Finder or the desktop to the screen</source>
-            <translation>將 Finder 或桌面中所選的圖片檔案固定到螢幕</translation>
+            <source>Pin selected image or document files from Finder or the desktop to the screen</source>
+            <translation>將 Finder 或桌面中選取的影像或文件檔案貼到螢幕</translation>
         </message>
         <message>
             <source>Pin selection</source>

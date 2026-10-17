@@ -53,7 +53,7 @@ class ShellContextMenuRegistration final {
         QString executablePath;
         QString productId;
         QString verbName;
-        QStringList imageExtensions;
+        QStringList fileExtensions;
         ShellContextMenuRegistryAccess registry;
     };
 

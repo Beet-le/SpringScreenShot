@@ -854,8 +854,8 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>取消</translation>
         </message>
         <message>
-            <source>Could not open the selected image file: %1</source>
-            <translation>无法打开所选图像文件：%1</translation>
+            <source>Could not open the selected file: %1</source>
+            <translation>无法打开所选文件：%1</translation>
         </message>
         <message>
             <source>Could not pin selected files</source>
@@ -890,8 +890,8 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>Snow Shot 将关闭并重启以安装更新。是否继续？</translation>
         </message>
         <message>
-            <source>The selected image file path is invalid</source>
-            <translation>所选图像文件的路径无效</translation>
+            <source>The selected file path is invalid</source>
+            <translation>所选文件的路径无效</translation>
         </message>
         <message>
             <source>Your settings could not be saved. Please retry before updating.</source>

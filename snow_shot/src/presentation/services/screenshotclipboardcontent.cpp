@@ -1,7 +1,8 @@
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/presentation/screenshotclipboardcontent.h"
-#include "snow_shot/image/supportedimagefiles.h"
+#include "snow_shot/app/supportedpinfiles.h"
+#include "snow_shot/presentation/screenshotdocumentformatting.h"
 #include "screenshotclipboardcontentsnapshot.h"
 #include "screenshotclipboarddibdecoder_p.h"
 
@@ -19,6 +20,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
+#include <QFontDatabase>
 #include <QTextCursor>
 #include <QDir>
 #include <QSet>
@@ -66,9 +68,11 @@ constexpr qreal kFormattedTextPadding = 16.0;
 
 using AllocationCheck = ScreenshotClipboardContentReader::AllocationCheck;
 
+using snow_shot::app::PinDocumentFormat;
+using snow_shot::storage::PinnedTextFormat;
+
 bool isTextFile(const QString& suffix) {
-    return suffix == QLatin1String("txt") || suffix == QLatin1String("html") ||
-           suffix == QLatin1String("htm");
+    return snow_shot::app::pinDocumentFileFormat(suffix).has_value();
 }
 
 qint64 snapshotBytes(const ScreenshotClipboardContentSnapshot& snapshot) {
@@ -117,8 +121,8 @@ class RestrictedTextDocument final : public QTextDocument {
 
         const QString scheme = name.scheme().toLower();
         // Data URLs are self-contained. Every other scheme is denied before
-        // Qt can perform I/O. The clipboard snapshot does not inject any
-        // external resources, so an empty QVariant is the safe cache miss.
+        // Qt can perform I/O. Denied images must return a typed null image below:
+        // an invalid QVariant makes Qt's image handler open the URL directly.
         if (scheme == QStringLiteral("data")) {
             if (type == QTextDocument::ImageResource) {
                 // Qt's default data-URL loader decodes before exposing dimensions.
@@ -162,7 +166,7 @@ class RestrictedTextDocument final : public QTextDocument {
             }
             return QTextDocument::loadResource(type, name);
         }
-        return {};
+        return type == QTextDocument::ImageResource ? QVariant::fromValue(QImage()) : QVariant();
     }
 
   private:
@@ -399,7 +403,8 @@ renderTextDocument(std::shared_ptr<QTextDocument> document, QString plainText,
 std::shared_ptr<QTextDocument>
 makeDocument(const QString& source, bool html, QString* plainText,
              const AllocationCheck& allocate = {}, qint64 retained = 0,
-             const std::optional<snow_shot::storage::PinnedTextStyle>& style = {}) {
+             const std::optional<snow_shot::storage::PinnedTextStyle>& style = {},
+             PinnedTextFormat textFormat = PinnedTextFormat::PlainText) {
     if (plainText == nullptr) {
         return {};
     }
@@ -414,16 +419,35 @@ makeDocument(const QString& source, bool html, QString* plainText,
         font.setFamily(style->fontFamily);
     font.setPixelSize(style ? style->fontSize : kFormattedTextFontPixelSize);
     document->setDefaultFont(font);
-    if (html) {
-        if (source.trimmed().isEmpty()) {
+    if (html || textFormat == PinnedTextFormat::Markdown) {
+        if (source.trimmed().isEmpty())
             return {};
-        }
-        document->setHtml(source);
-        preserveHtmlCanvasBackground(document.get());
+        const QColor foreground = style ? style->textColor : QColor(Qt::black);
+        const QColor background = style ? style->backgroundColor : QColor(Qt::white);
+        const auto blend = [foreground, background](qreal amount) {
+            return QColor(qRound(foreground.red() * amount + background.red() * (1 - amount)),
+                          qRound(foreground.green() * amount + background.green() * (1 - amount)),
+                          qRound(foreground.blue() * amount + background.blue() * (1 - amount)),
+                          background.alpha());
+        };
+        const snow_shot::presentation::ScreenshotDocumentStyle documentStyle{
+            foreground,
+            background.lightness() < 128 ? QColor(105, 177, 255) : QColor(22, 119, 255),
+            QFontDatabase::systemFont(QFontDatabase::FixedFont).family(),
+            blend(0.08),
+            blend(0.7),
+            blend(0.2)};
+        // Existing HTML pins persist their original layout geometry. Keep HTML's
+        // authored/default Qt styling; Markdown needs the conversion preview defaults.
+        if (!html)
+            snow_shot::presentation::setScreenshotDocumentStyle(*document, documentStyle, true);
+        snow_shot::presentation::setScreenshotDocumentSource(*document, source, !html,
+                                                             documentStyle, true);
+        if (html)
+            preserveHtmlCanvasBackground(document.get());
     } else {
-        if (source.isEmpty()) {
+        if (source.isEmpty())
             return {};
-        }
         document->setPlainText(source);
     }
 
@@ -578,11 +602,15 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
     if (textFile) {
         if (allocate && !allocate(retained + encoded.size() * 3))
             return std::nullopt;
-        const bool html = localImage.suffix != QLatin1String("txt");
+        const auto documentFormat = *snow_shot::app::pinDocumentFileFormat(localImage.suffix);
+        const bool html = documentFormat == PinDocumentFormat::Html;
         const auto encoding = html ? QStringDecoder::encodingForHtml(encoded)
                                    : QStringDecoder::encodingForData(encoded);
         QStringDecoder decoder(encoding.value_or(QStringDecoder::Utf8));
         ScreenshotClipboardContentSnapshot textSnapshot;
+        textSnapshot.textFormat = documentFormat == PinDocumentFormat::Markdown
+                                      ? PinnedTextFormat::Markdown
+                                      : PinnedTextFormat::PlainText;
         (html ? textSnapshot.html : textSnapshot.text) = decoder.decode(encoded);
         if (decoder.hasError())
             return std::nullopt;
@@ -1044,9 +1072,7 @@ QStringList ScreenshotClipboardContentReader::supportedImageFileExtensions() {
 }
 
 QStringList ScreenshotClipboardContentReader::supportedFileExtensions() {
-    auto extensions = supportedImageFileExtensions();
-    extensions.append({QStringLiteral("txt"), QStringLiteral("html"), QStringLiteral("htm")});
-    return extensions;
+    return snow_shot::app::supportedPinFileExtensions();
 }
 
 QStringList ScreenshotClipboardContentReader::localFilePaths(const QMimeData* mimeData) {
@@ -1275,7 +1301,8 @@ ScreenshotClipboardContentReader::snapshotMimeData(const QMimeData* mimeData,
 std::optional<ScreenshotClipboardContent>
 ScreenshotClipboardContentReader::decode(ScreenshotClipboardContentSnapshot snapshot,
                                          CancellationCheck cancelled, AllocationCheck allocate) {
-    if ((snapshot.textStyle && !snapshot.textStyle->isValid()) || !snapshot.isValid() ||
+    if (!snow_shot::storage::isValidPinnedTextFormat(snapshot.textFormat) ||
+        (snapshot.textStyle && !snapshot.textStyle->isValid()) || !snapshot.isValid() ||
         !std::isfinite(snapshot.devicePixelRatio) || snapshot.devicePixelRatio <= 0.0 ||
         cancellationRequested(cancelled)) {
         return std::nullopt;
@@ -1373,6 +1400,7 @@ ScreenshotClipboardContentReader::decode(ScreenshotClipboardContentSnapshot snap
             if (result.has_value()) {
                 result->originalContent.html = std::move(snapshot.html);
                 result->originalContent.text = std::move(snapshot.text);
+                result->originalContent.textFormat = snapshot.textFormat;
                 return result;
             }
         }
@@ -1384,7 +1412,7 @@ ScreenshotClipboardContentReader::decode(ScreenshotClipboardContentSnapshot snap
         {
             SNOW_SHOT_PIN_PERF_SCOPE("clipboard.text_document_layout");
             document = makeDocument(snapshot.text, false, &plainText, checked, retained,
-                                    snapshot.textStyle);
+                                    snapshot.textStyle, snapshot.textFormat);
         }
         if (document != nullptr) {
             std::optional<ScreenshotClipboardContent> result;
@@ -1397,6 +1425,7 @@ ScreenshotClipboardContentReader::decode(ScreenshotClipboardContentSnapshot snap
             if (result.has_value()) {
                 result->originalContent.html = std::move(snapshot.html);
                 result->originalContent.text = std::move(snapshot.text);
+                result->originalContent.textFormat = snapshot.textFormat;
                 return result;
             }
         }
@@ -1485,7 +1514,8 @@ bool ScreenshotClipboardContentReader::prepareAnimationDisplay(ScreenshotClipboa
 std::optional<ScreenshotClipboardContent> ScreenshotClipboardContentReader::renderOriginalText(
     const ScreenshotClipboardOriginalContent& original, qreal devicePixelRatio,
     const QColor& baseColor, AllocationCheck allocate) {
-    if ((original.textStyle && !original.textStyle->isValid()) ||
+    if (!snow_shot::storage::isValidPinnedTextFormat(original.textFormat) ||
+        (original.textStyle && !original.textStyle->isValid()) ||
         (original.html.isEmpty() && original.text.isEmpty())) {
         return std::nullopt;
     }
@@ -1498,8 +1528,8 @@ std::optional<ScreenshotClipboardContent> ScreenshotClipboardContentReader::rend
             makeDocument(original.html, true, &plainText, allocate, retained, original.textStyle);
     }
     if (document == nullptr && !original.text.isEmpty()) {
-        document =
-            makeDocument(original.text, false, &plainText, allocate, retained, original.textStyle);
+        document = makeDocument(original.text, false, &plainText, allocate, retained,
+                                original.textStyle, original.textFormat);
     }
     if (document == nullptr) {
         return std::nullopt;

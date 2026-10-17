@@ -1,7 +1,7 @@
 #include "snow_shot/platform/windows/shellcontextmenuregistration.h"
 
 #include "snow_shot/app/edition.h"
-#include "snow_shot/image/supportedimagefiles.h"
+#include "snow_shot/app/supportedpinfiles.h"
 #include "snow_shot/shortcuts/menuaccesskey.h"
 
 #include <QCoreApplication>
@@ -264,9 +264,8 @@ ShellContextMenuRegistration::ShellContextMenuRegistration(Options options)
       m_verbName(options.verbName.isEmpty() ? app::edition::registryName() + QStringLiteral(".Edit")
                                             : options.verbName),
       m_registry(options.registry.read ? std::move(options.registry) : nativeRegistryAccess()) {
-    const auto extensions = options.imageExtensions.isEmpty()
-                                ? image::supportedImageFileExtensions()
-                                : std::move(options.imageExtensions);
+    const auto extensions = options.fileExtensions.isEmpty() ? app::supportedPinFileExtensions()
+                                                             : std::move(options.fileExtensions);
     for (auto extension : extensions) {
         extension = extension.toLower();
         if (!extension.startsWith(QLatin1Char('.')))

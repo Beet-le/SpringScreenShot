@@ -42,7 +42,7 @@ void catalogAndDefaults(const QString& configurationPath) {
                 schema->valueKind == storage::ConfigurationValueKind::String &&
                 schema->allowedStringValues ==
                     QStringList{QStringLiteral("image_files"), QStringLiteral("disabled")},
-            "shared schema defaults to Image files with two exact string values");
+            "shared schema defaults to Image and document files with two exact string values");
     const auto& registry = settings::builtInSettingsRegistry();
     require(registry.isValid(), "the context menu setting preserves valid catalog bindings");
     const auto* field = registry.field(kId);
@@ -79,7 +79,8 @@ void catalogAndDefaults(const QString& configurationPath) {
     const auto& select = std::get<settings::SettingsSelectDefinition>(field->definition->payload);
     require(select.source == settings::SettingsSelectSource::Fixed && select.options.size() == 2 &&
                 select.options[0].value == QStringLiteral("image_files") &&
-                select.options[0].label.translated() == QStringLiteral("Image files") &&
+                select.options[0].label.translated() ==
+                    QStringLiteral("Image and document files") &&
                 select.options[1].value == QStringLiteral("disabled") &&
                 select.options[1].label.translated() == QStringLiteral("Disabled") &&
                 !search.search(QStringLiteral("Windows context menu")).isEmpty(),
@@ -110,13 +111,15 @@ void catalogAndDefaults(const QString& configurationPath) {
                 store.value(kShortcutKey) == QJsonArray{} &&
                 store.value(QStringLiteral("system/application_priority")) ==
                     QStringLiteral("normal"),
-            "old configurations acquire Image files without changing existing preferences");
+            "old configurations acquire Image and document files without changing existing "
+            "preferences");
     require(store.applySnapshot({{kKey, QStringLiteral("disabled")}}) &&
                 store.value(kKey) == QStringLiteral("disabled") && store.applySnapshot({}) &&
                 store.value(kKey) == QStringLiteral("image_files") &&
                 store.applySnapshot({{kKey, QStringLiteral("unknown")}}) &&
                 store.value(kKey) == QStringLiteral("image_files"),
-            "imports preserve Disabled and default missing or invalid preferences to Image files");
+            "imports preserve Disabled and default missing or invalid preferences to Image and "
+            "document files");
     const auto revision = store.revision();
     require(!store.setValue(kKey, false) && !store.setValue(kKey, QStringLiteral("unknown")) &&
                 store.revision() == revision,
@@ -171,7 +174,7 @@ void settingsTransactions(const QString& configurationDirectory, const QString& 
     require(backend.selectValue(kBinding) == QStringLiteral("image_files") &&
                 session.state(kId).acceptedValue == QStringLiteral("image_files") &&
                 registration.setEnabled(true) && registry.keys.size() == 2,
-            "first launch applies the default Image files mode");
+            "first launch applies the default Image and document files mode");
     require(
         session.applySelectValue(kBinding, QStringLiteral("disabled")) && registry.keys.isEmpty() &&
             configuration.value(kKey) == QStringLiteral("disabled") && !session.hasDirtyFields(),

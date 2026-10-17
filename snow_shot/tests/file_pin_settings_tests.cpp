@@ -463,13 +463,15 @@ void shortcutSettings() {
         {QStringLiteral("global-hotkeys"), QStringLiteral("pin-to-screen"), id});
     require(item != nullptr, "file pin action must remain in global shortcut settings");
 #ifdef Q_OS_MACOS
-    require(item->description.translated() ==
-                QStringLiteral("Pin selected image files from Finder or the desktop to the screen"),
-            "macOS file pin description must identify Finder");
+    require(
+        item->description.translated() ==
+            QStringLiteral(
+                "Pin selected image or document files from Finder or the desktop to the screen"),
+        "macOS file pin description must identify Finder");
 #else
     require(item->description.translated() ==
-                QStringLiteral(
-                    "Pin selected image files from File Explorer or the desktop to the screen"),
+                QStringLiteral("Pin selected image or document files from File Explorer or the "
+                               "desktop to the screen"),
             "Windows file pin description must identify File Explorer");
 #endif
     require(stored.pinSelectedFiles().isEmpty(), "selected files starts unassigned");

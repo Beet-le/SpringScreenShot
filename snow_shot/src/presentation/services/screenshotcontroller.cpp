@@ -668,7 +668,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     ScreenshotClipboardCommitScope m_clipboardScope;
     ScreenshotExportJobHandle m_clipboardPinJob;
     ScreenshotFilePinBatch m_filePinBatch;
-    ScreenshotFilePinQueue m_imageFilePinQueue;
+    ScreenshotFilePinQueue m_filePinQueue;
     quint64 m_clipboardPinGeneration = 0;
     ScreenshotPinSourceTracker m_pinSources{QApplication::clipboard()};
     snow_shot::storage::PinnedSourceIdentity m_pendingClipboardIdentity;
@@ -6153,7 +6153,7 @@ void ScreenshotController::Impl::shutdown() {
         m_selectionExportUiServices->cancelClipboardPublication();
     }
     cancelContentPin();
-    m_imageFilePinQueue.cancel();
+    m_filePinQueue.cancel();
     cancelHistoryPins();
     ++m_imageExportGeneration;
     m_activeImageExports.clear();
@@ -6276,7 +6276,7 @@ void ScreenshotController::setCaptureSuspended(bool suspended) {
 }
 
 bool ScreenshotController::blocksApplicationUpdate() const {
-    return !m_impl->canBeginCapture() || m_impl->m_imageFilePinQueue.active() ||
+    return !m_impl->canBeginCapture() || m_impl->m_filePinQueue.active() ||
            !m_impl->m_activeImageExports.isEmpty() ||
            static_cast<bool>(m_impl->m_cancelSaveDialog) ||
            ScreenshotExportCoordinator::shared().pendingJobCount() > 0 ||
@@ -6288,7 +6288,7 @@ bool ScreenshotController::blocksApplicationUpdate() const {
 bool ScreenshotController::blocksMemoryTrimming() const {
     const auto& state = *m_impl;
     return !state.canBeginCapture() || state.m_recaptureBusy || state.m_globalMouseDrag.active() ||
-           state.m_filePinBatch.active() || state.m_imageFilePinQueue.active() ||
+           state.m_filePinBatch.active() || state.m_filePinQueue.active() ||
            !state.m_historyPinJobs.empty() || !state.m_activeImageExports.isEmpty() ||
            static_cast<bool>(state.m_cancelSaveDialog) ||
            (state.m_historyService && state.m_historyService->navigationInProgress()) ||
@@ -6399,22 +6399,22 @@ bool ScreenshotController::handleActiveScreenshotShortcut(
            m_impl->m_overlayShortcutController->handleGlobalScreenshotShortcut(action, ready);
 }
 
-void ScreenshotController::pinImageFilesToScreen(QStringList paths) {
+void ScreenshotController::pinFilesToScreen(QStringList paths) {
     const auto failure = [this](const QString& path) {
-        emit selectedFilePinFailed(tr("Could not open the selected image file: %1").arg(path));
+        emit selectedFilePinFailed(tr("Could not open the selected file: %1").arg(path));
     };
-    const auto supported = ScreenshotClipboardContentReader::supportedImageFileExtensions();
-    QStringList images;
+    const auto supported = ScreenshotClipboardContentReader::supportedFileExtensions();
+    QStringList supportedPaths;
     for (const QString& path : paths) {
         if (supported.contains(QFileInfo(path).suffix().toLower()))
-            images.append(path);
+            supportedPaths.append(path);
         else
             failure(path);
     }
-    if (images.isEmpty())
+    if (supportedPaths.isEmpty())
         return;
     if (!m_impl->ensureExportFeature()) {
-        for (const QString& path : images)
+        for (const QString& path : supportedPaths)
             failure(path);
         return;
     }
@@ -6422,8 +6422,8 @@ void ScreenshotController::pinImageFilesToScreen(QStringList paths) {
     if (!screen)
         screen = QGuiApplication::primaryScreen();
     const QPointer<QScreen> requestedScreen(screen);
-    m_impl->m_imageFilePinQueue.enqueue(
-        std::move(images),
+    m_impl->m_filePinQueue.enqueue(
+        std::move(supportedPaths),
         [this, requestedScreen] {
             QScreen* target =
                 requestedScreen ? requestedScreen.data() : QGuiApplication::primaryScreen();

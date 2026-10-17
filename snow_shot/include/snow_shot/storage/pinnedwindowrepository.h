@@ -41,6 +41,7 @@ struct PinnedWindowPreviewSource final {
     QString originalFileName{};
     QDateTime createdUtc{};
     std::optional<PinnedTextStyle> textStyle;
+    PinnedTextFormat textFormat = PinnedTextFormat::PlainText;
 };
 
 enum class PinnedWindowOperation {

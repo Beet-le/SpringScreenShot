@@ -1234,17 +1234,16 @@ SettingsItemDefinition toggleDisableOnFocusedFullscreenWindowItem() {
 }
 
 SettingsItemDefinition pinClipboardContentItem() {
-    return quickActionItem(
-        QStringLiteral("quick.pin-clipboard-content"),
-        QT_TRANSLATE_NOOP("SettingsCatalog", "Pin clipboard content to screen"),
-        QT_TRANSLATE_NOOP(
-            "SettingsCatalog",
-            "Pin images, image files, formatted text, or HTML from the clipboard to the screen"),
-        {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Clipboard content")),
-         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Pin clipboard"))},
-        GlobalShortcutAction::PinClipboardContent,
-        QStringLiteral("global_shortcuts/pin_clipboard_content"),
-        []() { return custom_outlined_icons::PinClipboard(); });
+    return quickActionItem(QStringLiteral("quick.pin-clipboard-content"),
+                           QT_TRANSLATE_NOOP("SettingsCatalog", "Pin clipboard content to screen"),
+                           QT_TRANSLATE_NOOP("SettingsCatalog",
+                                             "Pin images, supported files, formatted text, or HTML "
+                                             "from the clipboard to the screen"),
+                           {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Clipboard content")),
+                            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Pin clipboard"))},
+                           GlobalShortcutAction::PinClipboardContent,
+                           QStringLiteral("global_shortcuts/pin_clipboard_content"),
+                           []() { return custom_outlined_icons::PinClipboard(); });
 }
 
 SettingsItemDefinition restoreLastClosedWindowsItem() {
@@ -1273,12 +1272,13 @@ SettingsItemDefinition pinSelectedFilesItem() {
         QStringLiteral("quick.pin-selected-files"),
         QT_TRANSLATE_NOOP("SettingsCatalog", "Pin Selected Files to Screen"),
 #ifdef Q_OS_MACOS
-        QT_TRANSLATE_NOOP("SettingsCatalog",
-                          "Pin selected image files from Finder or the desktop to the screen"),
+        QT_TRANSLATE_NOOP(
+            "SettingsCatalog",
+            "Pin selected image or document files from Finder or the desktop to the screen"),
 #else
         QT_TRANSLATE_NOOP(
             "SettingsCatalog",
-            "Pin selected image files from File Explorer or the desktop to the screen"),
+            "Pin selected image or document files from File Explorer or the desktop to the screen"),
 #endif
         {}, GlobalShortcutAction::PinSelectedFiles,
         QStringLiteral("global_shortcuts/pin_selected_files"),
@@ -2323,11 +2323,11 @@ SettingsItemDefinition contextMenuModeItem() {
         QStringLiteral("system.context-menu-mode"),
         QT_TRANSLATE_NOOP("SettingsCatalog", "Windows context menu"),
         QT_TRANSLATE_NOOP("SettingsCatalog",
-                          "Add Edit with Snow Shot to the classic Windows context menu to pin an "
-                          "image file to the screen."),
+                          "Add Edit with Snow Shot to the classic Windows context menu to pin a "
+                          "supported image or document file to the screen."),
         QStringLiteral("system/context_menu_mode"), SettingsSelectBinding::ContextMenuMode,
         {{QStringLiteral("image_files"),
-          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Image files"))},
+          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Image and document files"))},
          {QStringLiteral("disabled"),
           settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Disabled"))}});
 }

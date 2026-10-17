@@ -37,6 +37,9 @@ struct ScreenshotClipboardOriginalContent final {
     QString localFilePath;
     std::optional<snow_shot::storage::PinnedTextStyle> textStyle;
 
+    snow_shot::storage::PinnedTextFormat textFormat =
+        snow_shot::storage::PinnedTextFormat::PlainText;
+
     [[nodiscard]] bool isEmpty() const {
         return html.isEmpty() && text.isEmpty() && localFilePath.isEmpty();
     }
@@ -107,6 +110,9 @@ struct ScreenshotClipboardContentSnapshot final {
     qreal devicePixelRatio = 1.0;
     std::optional<ScreenshotClipboardPlacement> placement = std::nullopt;
     std::optional<ScreenshotClipboardAppearance> appearance = std::nullopt;
+
+    snow_shot::storage::PinnedTextFormat textFormat =
+        snow_shot::storage::PinnedTextFormat::PlainText;
 
     [[nodiscard]] bool isValid() const {
         return !encodedImages.isEmpty() || (nativeDib.has_value() && nativeDib->isValid()) ||

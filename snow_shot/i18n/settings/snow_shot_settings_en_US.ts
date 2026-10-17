@@ -1169,8 +1169,8 @@
             <translation>Active window</translation>
         </message>
         <message>
-            <source>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</source>
-            <translation>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</translation>
+            <source>Add Edit with Snow Shot to the classic Windows context menu to pin a supported image or document file to the screen.</source>
+            <translation>Add Edit with Snow Shot to the classic Windows context menu to pin a supported image or document file to the screen.</translation>
         </message>
         <message>
             <source>Add a mask to highlight text recognition results</source>
@@ -2561,12 +2561,12 @@
             <translation>Image Recognition</translation>
         </message>
         <message>
-            <source>Image export</source>
-            <translation>Image export</translation>
+            <source>Image and document files</source>
+            <translation>Image and document files</translation>
         </message>
         <message>
-            <source>Image files</source>
-            <translation>Image files</translation>
+            <source>Image export</source>
+            <translation>Image export</translation>
         </message>
         <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
@@ -3149,20 +3149,20 @@
             <translation>Pin clipboard content to screen</translation>
         </message>
         <message>
-            <source>Pin images, image files, formatted text, or HTML from the clipboard to the screen</source>
-            <translation>Pin images, image files, formatted text, or HTML from the clipboard to the screen</translation>
+            <source>Pin images, supported files, formatted text, or HTML from the clipboard to the screen</source>
+            <translation>Pin images, supported files, formatted text, or HTML from the clipboard to the screen</translation>
         </message>
         <message>
             <source>Pin screenshot to screen</source>
             <translation>Pin screenshot to screen</translation>
         </message>
         <message>
-            <source>Pin selected image files from File Explorer or the desktop to the screen</source>
-            <translation>Pin selected image files from File Explorer or the desktop to the screen</translation>
+            <source>Pin selected image or document files from File Explorer or the desktop to the screen</source>
+            <translation>Pin selected image or document files from File Explorer or the desktop to the screen</translation>
         </message>
         <message>
-            <source>Pin selected image files from Finder or the desktop to the screen</source>
-            <translation>Pin selected image files from Finder or the desktop to the screen</translation>
+            <source>Pin selected image or document files from Finder or the desktop to the screen</source>
+            <translation>Pin selected image or document files from Finder or the desktop to the screen</translation>
         </message>
         <message>
             <source>Pin selection</source>

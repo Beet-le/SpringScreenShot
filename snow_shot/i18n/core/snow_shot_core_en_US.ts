@@ -854,8 +854,8 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Cancel</translation>
         </message>
         <message>
-            <source>Could not open the selected image file: %1</source>
-            <translation>Could not open the selected image file: %1</translation>
+            <source>Could not open the selected file: %1</source>
+            <translation>Could not open the selected file: %1</translation>
         </message>
         <message>
             <source>Could not pin selected files</source>
@@ -890,8 +890,8 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Snow Shot will close and restart to install the update. Continue?</translation>
         </message>
         <message>
-            <source>The selected image file path is invalid</source>
-            <translation>The selected image file path is invalid</translation>
+            <source>The selected file path is invalid</source>
+            <translation>The selected file path is invalid</translation>
         </message>
         <message>
             <source>Your settings could not be saved. Please retry before updating.</source>

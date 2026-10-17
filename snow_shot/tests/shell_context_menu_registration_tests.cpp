@@ -1,5 +1,5 @@
 #include "shell_context_menu_test_registry.h"
-#include "snow_shot/image/supportedimagefiles.h"
+#include "snow_shot/app/supportedpinfiles.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -180,24 +180,32 @@ void foreignOwnerAndLanguageRefresh() {
 void authoritativeSuffixes() {
     Registry registry;
     auto options = registry.options();
-    options.imageExtensions = snow_shot::image::supportedImageFileExtensions();
-    options.imageExtensions.removeAll(QStringLiteral("bmp"));
+    options.fileExtensions = snow_shot::image::supportedImageFileExtensions();
+    options.fileExtensions.removeAll(QStringLiteral("bmp"));
     windows::ShellContextMenuRegistration previousRegistration(options);
     require(previousRegistration.setEnabled(true) &&
                 !registry.keys.contains(Registry::path(QStringLiteral("bmp"))),
             "previous installations register the existing formats without BMP");
-    options.imageExtensions.clear();
+    options.fileExtensions.clear();
     windows::ShellContextMenuRegistration registration(std::move(options));
     const auto previous = registry.keys;
     registry.writesBeforeFailure = 0;
     require(!registration.setEnabled(true) && registry.keys == previous,
             "failed BMP registration preserves the previous installation's image verbs");
     require(registration.setEnabled(true) &&
-                registry.keys.size() == snow_shot::image::supportedImageFileExtensions().size(),
-            "default registrar uses the shared authoritative image extension list");
-    for (const auto& extension : snow_shot::image::supportedImageFileExtensions())
+                registry.keys.size() == snow_shot::app::supportedPinFileExtensions().size(),
+            "default registrar uses the shared authoritative pin extension list");
+    for (const auto& extension : snow_shot::app::supportedPinFileExtensions())
         require(registry.keys.contains(Registry::path(extension)),
-                "every supported image extension receives the context menu entry");
+                "every supported image or document extension receives the context menu entry");
+    for (const auto& document : snow_shot::app::kPinDocumentFileFormats) {
+        const auto entry =
+            registry.keys.value(Registry::path(QString::fromLatin1(document.suffix)));
+        require(entry.exists &&
+                    stringText(entry.children.value(QStringLiteral("command")).values.value({})) ==
+                        registration.expectedCommand(),
+                "startup upgrades add every document extension with the existing command");
+    }
     const auto bmp = Registry::path(QStringLiteral("bmp"));
     const auto key = registry.keys.value(bmp);
     require(key.exists &&
@@ -234,7 +242,7 @@ void isolatedNativeRegistry() {
     options.classesRoot = root;
     options.executablePath =
         QStringLiteral("C:/Native Snow Shot/雪/") + snow_shot::app::edition::executableName();
-    options.imageExtensions = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("bmp")};
+    options.fileExtensions = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("bmp")};
     windows::ShellContextMenuRegistration registration(std::move(options));
     require(registration.setEnabled(true, QStringLiteral("E")),
             "native isolated registry can enable the image verbs with an access key");
