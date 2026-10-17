@@ -4201,6 +4201,9 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-multi-region-tests COMMAND snow-shot-multi-region-tests)
     add_test(NAME snow-shot-region-overlay-input-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --region-input-only -platform offscreen)
+    add_test(NAME snow-shot-region-snapping-rendering-tests
+        COMMAND snow-shot-screenshot-canvas-renderer-tests --region-snapping-only -platform offscreen)
+    set_tests_properties(snow-shot-region-snapping-rendering-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-screenshot-magnifier-wheel-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --magnifier-wheel-only -platform offscreen)
     set_tests_properties(snow-shot-screenshot-magnifier-wheel-tests PROPERTIES

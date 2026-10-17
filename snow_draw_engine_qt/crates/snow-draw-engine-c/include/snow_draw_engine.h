@@ -1882,6 +1882,31 @@ SnowError snow_stroke_filter_append(SnowStrokeFilter* filter, const SnowArrowPoi
                                     size_t count, uint8_t finish, const SnowArrowPoint** output,
                                     size_t* output_count);
 
+typedef struct SnowSnapRect {
+    double min_x;
+    double min_y;
+    double max_x;
+    double max_y;
+} SnowSnapRect;
+
+typedef struct SnowSnapMoveConstraints {
+    SnowSnapRect bounds;
+    double position_step;
+} SnowSnapMoveConstraints;
+
+typedef struct SnowMoveSnap SnowMoveSnap;
+
+// Explicit object snapping; config.enabled is ignored. Null constraints keeps continuous geometry.
+// On success output owns a result that must be released with snow_move_snap_free.
+SnowError snow_snap_move(const SnowSnapRect* target, const SnowSnapRect* references,
+                         size_t reference_count, const SnowSnapConfig* config,
+                         double canvas_to_view_scale, const SnowSnapMoveConstraints* constraints,
+                         SnowMoveSnap** output);
+// Immutable guides are borrowed until the result is freed. Reading never repeats snapping.
+SnowError snow_move_snap_read(const SnowMoveSnap* result, SnowArrowPoint* correction,
+                              const SnowOverlayDisplayItem** guides, size_t* count);
+void snow_move_snap_free(SnowMoveSnap* result);
+
 // Stateless curve construction; null commands queries the required count.
 SnowError snow_build_catmull_rom_path(const SnowArrowPoint* vertices, size_t vertex_count,
                                       uint8_t closed, SnowArrowPathCommand* commands,

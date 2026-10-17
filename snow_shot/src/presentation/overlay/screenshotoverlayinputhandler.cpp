@@ -671,6 +671,25 @@ void ScreenshotOverlayInputHandler::updateSelectionDrag(const QPointF& virtualPo
     m_context.actions.updateColorPickerForSelectionDrag(virtualPosition);
 }
 
+void ScreenshotOverlayInputHandler::updateRegionSnapModifiers(Qt::KeyboardModifiers modifiers,
+                                                              bool recompute) {
+    const bool enabled = modifiers.testFlag(Qt::ControlModifier);
+    if (m_regionSnapCtrl == enabled)
+        return;
+    m_regionSnapCtrl = enabled;
+    if (recompute && m_context.interaction.dragging() && multiRegionEditing() &&
+        !m_moveEntireSelectionShortcut && !regionOperationActive())
+        updateSelectionDrag(m_lastMoveDragPosition);
+}
+
+void ScreenshotOverlayInputHandler::clearRegionSnapping() {
+    m_regionSnapCtrl = false;
+    if (!m_context.selection.moveSnapGuides().isEmpty()) {
+        m_context.selection.clearMoveSnapGuides();
+        m_context.actions.updateOverlayState();
+    }
+}
+
 void ScreenshotOverlayInputHandler::updateSelectionDragState(const QPointF& virtualPosition) {
     const QRectF previousSelection = m_context.selection.normalizedSelection();
     m_lastMoveDragPosition = virtualPosition;
@@ -1456,6 +1475,18 @@ QRectF ScreenshotOverlayInputHandler::selectionRectForDrag(ScreenshotSelectionDr
                                                            const QPointF& position) {
     const QRectF bounds = m_context.geometry.canvasBounds();
     constexpr qreal minimumSize = snow_shot::presentation::kScreenshotSelectionMinimumSize;
+    if (dragMode == ScreenshotSelectionDragMode::All && multiRegionEditing()) {
+        const auto candidate =
+            m_context.selection.selectionRectForDrag(dragMode, position, bounds, minimumSize);
+        const auto* display =
+            m_context.geometry.displayForCanvasPoint(m_context.displaySession, position);
+        if (!display)
+            display = m_context.geometry.displayForCanvasRect(m_context.displaySession, candidate);
+        const qreal scale =
+            display ? ScreenshotGeometryMapper::canvasToLogicalScale(*display) : 1.0;
+        return m_context.selection.snapIndividualRegionMove(
+            candidate, bounds, scale, m_regionSnapCtrl && !m_moveEntireSelectionShortcut);
+    }
     const bool resizingRectangle =
         m_context.selection.regionType() == ScreenshotRegionType::Rectangle &&
         !m_context.selection.regionOperationActive() &&
@@ -1532,6 +1563,7 @@ void ScreenshotOverlayInputHandler::restoreScrollingCaptureAfterFailedResize() {
 }
 
 void ScreenshotOverlayInputHandler::resetTransientShortcuts() {
+    m_regionSnapCtrl = false;
     m_selectionWheelSteps.reset();
     m_selectionResizeWheelSteps.reset();
     m_angleWheelSteps.reset();

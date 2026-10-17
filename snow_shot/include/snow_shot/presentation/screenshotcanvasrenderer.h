@@ -2,6 +2,7 @@
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTCANVASRENDERER_H
 
 #include "snow_draw_engine_qt/snow_canvas_custom_renderer.h"
+#include "snow_draw_engine_qt/snow_canvas_snapping.h"
 #include "snow_shot/presentation/screenshotimagesource.h"
 #include "snow_shot/presentation/screenshotresultcompositor.h"
 #include "snow_shot/presentation/screenshotselectioneffectgeometry.h"
@@ -56,6 +57,7 @@ struct ScreenshotSelectionVisualState {
     QColor dangerColor;
     QPainterPath draftPath;
     QVector<QPointF> draftVertices;
+    QVector<SnowCanvasSnapGuide> snapGuides;
 
     [[nodiscard]] bool operator==(const ScreenshotSelectionVisualState& other) const {
         return backgroundOpacityPercent == other.backgroundOpacityPercent &&
@@ -71,7 +73,8 @@ struct ScreenshotSelectionVisualState {
                highlightedRegion == other.highlightedRegion &&
                stationaryRegions == other.stationaryRegions && marquee == other.marquee &&
                subtracting == other.subtracting && dangerColor == other.dangerColor &&
-               draftPath == other.draftPath && draftVertices == other.draftVertices;
+               draftPath == other.draftPath && draftVertices == other.draftVertices &&
+               snapGuides == other.snapGuides;
     }
 
     [[nodiscard]] bool operator!=(const ScreenshotSelectionVisualState& other) const {

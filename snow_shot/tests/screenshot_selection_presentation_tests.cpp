@@ -92,6 +92,38 @@ void enableRedPointerGuides(Fixture& fixture) {
     fixture.enableGuides();
 }
 
+void regionSnapGuidesReachPresentationFrames() {
+    Fixture fixture(QSize(800, 600), false);
+    auto& model = fixture.selection;
+    model.setSelectionRect(QRect(100, 100, 40, 40));
+    model.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
+    model.setSelectionRect(QRect(300, 100, 40, 40));
+    model.commitRegionOperation();
+    fixture.interaction.confirmSelection();
+    require(fixture.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::All),
+            "start the region presentation gesture");
+    model.beginMoveDrag({310, 110});
+    fixture.services->updateOverlayState();
+    const auto before = decorationImage(fixture);
+    const auto geometry = model.selectionRegion();
+    const auto candidate =
+        model.snapIndividualRegionMove(QRectF(300, 100, 40, 40), QRectF(0, 0, 800, 600), 1, true);
+    model.setDraggedSelectionRect(candidate, ScreenshotSelectionDragMode::All);
+    require(model.selectionRegion() == geometry && !model.moveSnapGuides().isEmpty(),
+            "aligned region produces guides without moving any selected pixels");
+    fixture.services->requestSelectionDragPresentation();
+    fixture.advanceClock(17);
+    fixture.flushFrame();
+    require(decorationImage(fixture) != before,
+            "frame presentation must forward guide-only model changes to the renderer");
+    model.clearMoveSnapGuides();
+    fixture.services->requestSelectionDragPresentation();
+    fixture.advanceClock(17);
+    fixture.flushFrame();
+    require(decorationImage(fixture) == before,
+            "clearing guides must restore the original presentation on the next frame");
+}
+
 void independentRegionOutlineHasLocalDamage() {
     Fixture fixture(QSize(800, 600), false);
     auto& model = fixture.selection;
@@ -1952,6 +1984,7 @@ int main(int argc, char* argv[]) {
     deferredToolbarRaiseEndsWithItsPresenter();
     nativeToolbarRaiseAllowsPresenterDeletion();
     independentRegionOutlineHasLocalDamage();
+    regionSnapGuidesReachPresentationFrames();
     independentDragDamageCoversMasksAndContours();
     repeatedSelectionLeavesThePresentedUiIdle();
     multipleRequestsCommitOnlyTheirLatestSelection();

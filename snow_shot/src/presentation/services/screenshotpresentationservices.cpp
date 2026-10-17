@@ -86,6 +86,7 @@ selectionVisualState(const ScreenshotPresentationServicesContext& context, bool 
     if (context.interaction.moveToolActive()) {
         visualState.highlightedRegion = context.selection.highlightedRegion();
         visualState.stationaryRegions = context.selection.stationaryRegionsDuringMove();
+        visualState.snapGuides = context.selection.moveSnapGuides();
     }
     visualState.draftPath = context.selection.draftPath();
     visualState.draftVertices = context.selection.draftVertices();

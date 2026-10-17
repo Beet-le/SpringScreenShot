@@ -5930,6 +5930,92 @@ void regionOperationsUseMarqueeAndRestoreOnCancel() {
             "manual recovery after total subtraction");
 }
 
+void individualRegionSnapInput() {
+    for (qreal displayScale : {1.0, 1.5, 2.0}) {
+        ScreenshotCaptureState capture;
+        ScreenshotDisplaySession displays;
+        auto screen = display(QStringLiteral("snap"), QStringLiteral("snap"),
+                              QRect(-100, -100, 500, 500), {});
+        screen.geometryResolved = true;
+        screen.logicalToPhysicalScale = displayScale;
+        displays.appendDisplay(screen);
+        ScreenshotGeometryMapper geometry;
+        geometry.rebuild(displays);
+        ScreenshotSelectionModel selection;
+        ScreenshotIntelligentSelectionModel intelligent;
+        ScreenshotInteractionState interaction;
+        interaction.confirmSelection();
+        int presentations = 0;
+        ScreenshotOverlayInputActions actions;
+        actions.requestSelectionDragPresentation = [&] { ++presentations; };
+        actions.updateOverlayState = [&] { ++presentations; };
+        ScreenshotOverlayInputHandler handler(
+            {capture, interaction, selection, intelligent, geometry, displays, actions});
+        ScreenshotOverlayEventAdapter adapter;
+        adapter.setEventTargets(handler, [] {});
+        const auto seed = [&] {
+            selection.setSelectionRect(QRect(20, 30, 40, 40));
+            selection.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
+            selection.setSelectionRect(QRect(180, 130, 40, 40));
+            selection.commitRegionOperation();
+        };
+        seed();
+        const auto moving = selection.regionAt({190, 140});
+        adapter.handleOverlayMousePress(nullptr, {190, 140});
+        adapter.handleOverlayMouseMove(nullptr, {34, 122});
+        require(selection.highlightedRegion()->boundingRect().x() == 24,
+                "ordinary pointer movement remains unsnapped");
+        adapter.updateOverlayModifiers(Qt::ControlModifier, true);
+        require(selection.highlightedRegion()->boundingRect().x() == 20 &&
+                    !selection.moveSnapGuides().isEmpty(),
+                "Ctrl press snaps the last pointer sample without another mouse move");
+        adapter.updateOverlayModifiers(Qt::NoModifier, true);
+        require(selection.highlightedRegion()->boundingRect().x() == 24 &&
+                    selection.moveSnapGuides().isEmpty(),
+                "Ctrl release restores raw movement without accumulated offsets");
+        adapter.updateOverlayModifiers(Qt::ControlModifier, true);
+        const auto beforeGroup = selection.selectionRegion();
+        require(handler.activateMoveEntireSelectionShortcut() &&
+                    selection.moveSnapGuides().isEmpty(),
+                "Space suspends snapping");
+        adapter.handleOverlayMouseMove(nullptr, {39, 127});
+        require(selection.selectionRegion() == beforeGroup.translated(5, 5),
+                "Ctrl does not snap whole-selection movement");
+        require(handler.releaseMoveEntireSelectionShortcut(), "resume individual region");
+        adapter.handleOverlayMouseMove(nullptr, {43, 127});
+        require(selection.highlightedRegion()->boundingRect().x() == 25 &&
+                    selection.regionAt({35, 130}) == moving,
+                "resuming individual movement snaps against the translated target");
+        adapter.clearOverlaySnapping();
+        require(selection.moveSnapGuides().isEmpty(), "focus loss clears guides");
+        adapter.handleOverlayMouseRelease(nullptr, {43, 127});
+        require(selection.moveSnapGuides().isEmpty(), "release retires guide state");
+
+        seed();
+        adapter.updateOverlayModifiers(Qt::ControlModifier, false);
+        adapter.handleOverlayMousePress(nullptr, {190, 140});
+        // Mouse release has its own endpoint even if no move event was delivered.
+        adapter.handleOverlayMouseRelease(nullptr, {34, 122});
+        require(selection.regionAt({30, 120}).has_value() &&
+                    selection.selectionRegion().contains({20, 112}) &&
+                    selection.moveSnapGuides().isEmpty(),
+                "Ctrl held before press also snaps the final release endpoint");
+
+        seed();
+        adapter.handleOverlayMousePress(nullptr, {190, 140});
+        adapter.handleOverlayMouseMove(nullptr, {30, 122});
+        const auto aligned = selection.selectionRegion();
+        const int beforeGuides = presentations;
+        adapter.updateOverlayModifiers(Qt::NoModifier, true);
+        require(selection.selectionRegion() == aligned && selection.moveSnapGuides().isEmpty() &&
+                    presentations > beforeGuides,
+                "guide-only changes request presentation even when pixels stay aligned");
+        adapter.updateOverlayModifiers(Qt::ControlModifier, true);
+        handler.resetTransientShortcuts();
+        require(selection.moveSnapGuides().isEmpty(), "session reset clears guides");
+    }
+}
+
 void independentRegionInputAndShortcuts() {
     const storage::ScreenshotShortcutSettings settings;
     const auto original = settings.allShortcuts();
@@ -5970,6 +6056,9 @@ void independentRegionInputAndShortcuts() {
     ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction, intelligent,
                                                   actions);
     selection.setSelectionRect(QRect(10, 10, 40, 40));
+    require(!dispatchShortcut(window, Qt::Key_Space, Qt::ControlModifier),
+            "single-region Space retains its existing modifier eligibility");
+    static_cast<void>(dispatchShortcutRelease(window, Qt::Key_Space, Qt::ControlModifier));
     handler.beginRegionOperation(false);
     handler.handleMousePress(nullptr, {80, 10});
     handler.handleMouseMove(nullptr, {119, 49});
@@ -5994,6 +6083,10 @@ void independentRegionInputAndShortcuts() {
     require(selection.selectionRegion() == beforeGap && !interaction.dragging(),
             "empty space within the union bounds must not replace or move the selection");
     const auto beforeSpace = selection;
+    require(dispatchShortcut(window, Qt::Key_Space, Qt::ControlModifier),
+            "Ctrl must allow the group movement shortcut while editing multiple regions");
+    require(dispatchShortcutRelease(window, Qt::Key_Space, Qt::ControlModifier),
+            "Ctrl group movement shortcut releases normally");
     for (const QPointF start : {QPointF(20, 20), QPointF(70, 35)}) {
         require(dispatchShortcut(window, Qt::Key_Space),
                 "Space must arm whole-selection movement in multi-region editing");
@@ -7588,6 +7681,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (QCoreApplication::arguments().contains(QStringLiteral("--independent-regions-only"))) {
+        individualRegionSnapInput();
         independentRegionInputAndShortcuts();
         duplicatedRegionsUseDisplayCoordinates();
         storage::ApplicationStorage::instance().shutdown();

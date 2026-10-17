@@ -3803,6 +3803,67 @@ void overlaySelectionMoveDoesNotExpandForInactiveDecorations() {
             "inactive overlay decorations must keep rounded-selection damage sparse");
 }
 
+void regionSnapGuidesRepaintIncrementally() {
+    SnowCanvasWidget canvas;
+    canvas.resize(400, 300);
+    ScreenshotCanvasRenderer renderer(canvas);
+    renderer.setMaskVisible(true);
+    QImage source(400, 300, QImage::Format_ARGB32_Premultiplied);
+    source.fill(QColor(37, 83, 129));
+    renderer.setImage(source, QRectF(source.rect()));
+    const QRect viewport = source.rect();
+    const QRect first(20, 30, 40, 40), moving(180, 30, 40, 40);
+    ScreenshotSelectionVisualState base;
+    base.present = true;
+    base.handlesVisible = false;
+    base.region = ScreenshotRegionGeometry(QRegion(first).united(moving));
+    base.bounds = base.region->boundingRect();
+    base.highlightedRegion = ScreenshotRegionGeometry(moving);
+    base.stationaryRegions = ScreenshotRegionGeometry(first);
+    auto guided = base;
+    const auto snap = snowCanvasSnapMove(moving, {QRectF(first), QRectF(100, 30, 40, 40)}, 1);
+    require(snap && !snap->guides.isEmpty(), "guide rendering fixture");
+    guided.snapGuides = snap->guides;
+    auto shifted = guided;
+    shifted.highlightedRegion = ScreenshotRegionGeometry(moving.translated(0, 4));
+    shifted.region = base.stationaryRegions->united(*shifted.highlightedRegion);
+    shifted.bounds = shifted.region->boundingRect();
+    const auto shiftedSnap = snowCanvasSnapMove(QRectF(180, 34, 40, 40), {QRectF(first)}, 1);
+    require(shiftedSnap.has_value(), "shifted guide fixture");
+    shifted.snapGuides = shiftedSnap->guides;
+    const std::array<ScreenshotSelectionVisualState, 4> states{base, guided, shifted, base};
+    for (qreal dpr : {1.0, 1.5, 2.0}) {
+        for (qreal scale : {0.75, 1.0, 1.5}) {
+            const QTransform transform(scale, 0, 0, scale, 7, 9);
+            const auto paint = [&](QImage& image, const ScreenshotSelectionVisualState& state,
+                                   const QRegion& exposed) {
+                renderer.applySelectionState(state);
+                QPainter painter(&image);
+                painter.setClipRegion(exposed);
+                painter.fillRect(viewport, Qt::white);
+                const SnowCanvasRenderContext context{viewport, exposed, transform, dpr};
+                renderer.renderBeforeCanvas(painter, context);
+                renderer.renderAfterCanvas(painter, context);
+            };
+            QImage incremental(QSize(400, 300) * dpr, QImage::Format_ARGB32_Premultiplied);
+            incremental.setDevicePixelRatio(dpr);
+            incremental.fill(Qt::white);
+            paint(incremental, states[0], QRegion(viewport));
+            for (std::size_t i = 1; i < states.size(); ++i) {
+                const auto damage = planScreenshotSelectionDamage(states[i - 1], states[i],
+                                                                  viewport, transform, true);
+                require(!damage.isEmpty() && damage != QRegion(viewport),
+                        "region and guide changes retain localized damage");
+                paint(incremental, states[i], damage);
+                QImage fresh = incremental;
+                paint(fresh, states[i], QRegion(viewport));
+                require(incremental == fresh,
+                        "guide appearance, movement and removal must match a fresh full frame");
+            }
+        }
+    }
+}
+
 void selectionDamagePlannerAvoidsFullCanvasFallback() {
     const QRect viewport(0, 0, 640, 480);
     const QTransform transform;
@@ -9855,6 +9916,11 @@ int main(int argc, char** argv) {
         canvasDragKeepsMouseEventsAcrossSelectionBorder();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--region-snapping-only"))) {
+        regionSnapGuidesRepaintIncrementally();
+        selectionDamagePlannerAvoidsFullCanvasFallback();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--fractional-dpi"))) {
         overlayCameraPreservesDesktopPixels();
         physicalViewportRenderingPreservesEveryPixelAtFractionalDprs();
@@ -10070,6 +10136,7 @@ int main(int argc, char** argv) {
     roundedSelectionHidesCornerHandlesButKeepsEdgeHandles();
     movingSelectionInvalidatesOnlyChangedMaskAndDecorations();
     overlaySelectionMoveDoesNotExpandForInactiveDecorations();
+    regionSnapGuidesRepaintIncrementally();
     selectionDamagePlannerAvoidsFullCanvasFallback();
     activeWatermarkAreaMovementUsesUnionDamage();
     unchangedActiveWatermarkAreaDoesNotRepaint();

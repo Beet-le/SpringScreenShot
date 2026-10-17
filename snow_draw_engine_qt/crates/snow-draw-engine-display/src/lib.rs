@@ -1,6 +1,6 @@
 use snow_draw_engine_core::{
-    Camera, ColorRgba8, CornerRadii, PathGeometry, Point, SnapGuideAxis, SnapGuideKind,
-    SurfaceSize,
+    Camera, ColorRgba8, CornerRadii, PathGeometry, Point, SnapConfig, SnapGuide, SnapGuideAxis,
+    SnapGuideKind, SurfaceSize,
     arrow::{ArrowPathCommand, ArrowType, Arrowhead, StrokeStyle},
 };
 use std::sync::Arc;
@@ -796,6 +796,35 @@ pub struct SnapGuideDisplayItem {
     pub marker_size: f64,
     pub gap_dash_length: f64,
     pub gap_dash_gap: f64,
+}
+
+impl SnapGuideDisplayItem {
+    pub fn from_guide(guide: &SnapGuide, config: SnapConfig) -> Self {
+        let mut markers = [Point::default(), Point::default()];
+        let marker_count = guide.markers.len().min(markers.len());
+        for (index, marker) in guide.markers.iter().take(marker_count).enumerate() {
+            markers[index] = *marker;
+        }
+
+        Self {
+            kind: guide.kind,
+            axis: guide.axis,
+            start: guide.start,
+            end: guide.end,
+            marker_count: marker_count as u8,
+            markers,
+            label: if config.show_gap_size {
+                guide.label
+            } else {
+                None
+            },
+            color: config.line_color,
+            line_width: config.line_width,
+            marker_size: config.marker_size,
+            gap_dash_length: config.gap_dash_length,
+            gap_dash_gap: config.gap_dash_gap,
+        }
+    }
 }
 
 impl Default for SnapGuideDisplayItem {

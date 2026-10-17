@@ -191,6 +191,8 @@ class ScreenshotOverlayInputHandler final {
                                               bool leftButtonActive) const;
     void handleMouseMove(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
     void handleMouseRelease(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
+    void updateRegionSnapModifiers(Qt::KeyboardModifiers modifiers, bool recompute = true);
+    void clearRegionSnapping();
     void completeRightClickCancellation();
     [[nodiscard]] ScreenshotOverlayRightClickResult
     handleRightClick(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
@@ -315,6 +317,7 @@ class ScreenshotOverlayInputHandler final {
     AspectRatioSnapShortcutState m_selectionAspectRatioSnapShortcut =
         AspectRatioSnapShortcutState::Released;
     bool m_snappedDuringSelectionDrag = false;
+    bool m_regionSnapCtrl = false;
     bool m_aspectShortcutUsedForSelectionDrag = false;
     bool m_cycleColorFormatIfAspectShortcutUnused = false;
     ScreenshotSelectionDragMode m_moveDragModeBeforeShortcut = ScreenshotSelectionDragMode::None;

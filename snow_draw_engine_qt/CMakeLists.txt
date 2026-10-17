@@ -272,6 +272,14 @@ endif()
 
 if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     enable_testing()
+    add_executable(snow-canvas-snapping-tests tests/snow_canvas_snapping_tests.cpp)
+    target_include_directories(snow-canvas-snapping-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-canvas-snapping-tests PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-snapping-tests)
+    add_test(NAME snow-canvas-snapping-tests COMMAND snow-canvas-snapping-tests -platform offscreen)
+    set_tests_properties(snow-canvas-snapping-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     add_executable(snow-canvas-pressure-mask-tests tests/snow_canvas_pressure_mask_tests.cpp)
     target_include_directories(snow-canvas-pressure-mask-tests PRIVATE
         ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}

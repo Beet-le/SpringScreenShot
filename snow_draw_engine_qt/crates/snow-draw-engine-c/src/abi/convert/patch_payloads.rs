@@ -2,7 +2,7 @@ use std::ffi::c_char;
 
 use snow_draw_engine::{
     DirtyRegion, DisplayItemId, OverlayDisplayItem, PatchCursor, SceneDisplayItem, SnapGuideAxis,
-    SnapGuideKind, UiShapeKind as UiRectKind, ViewportPatch,
+    SnapGuideDisplayItem, SnapGuideKind, UiShapeKind as UiRectKind, ViewportPatch,
 };
 
 use crate::abi::types::*;
@@ -473,6 +473,39 @@ pub(crate) fn snow_scene_patch_item_from_rust(
     snow_scene_display_item_from_rust(value, omit_arrow_points, omit_path_commands)
 }
 
+impl From<&SnapGuideDisplayItem> for SnowOverlayDisplayItem {
+    fn from(item: &SnapGuideDisplayItem) -> Self {
+        Self {
+            kind: SnowOverlayDisplayItemKind::SnapGuide,
+            snap_guide_kind: match item.kind {
+                SnapGuideKind::Point => SnowSnapGuideKind::Point,
+                SnapGuideKind::Gap => SnowSnapGuideKind::Gap,
+            },
+            snap_guide_axis: match item.axis {
+                SnapGuideAxis::Horizontal => SnowSnapGuideAxis::Horizontal,
+                SnapGuideAxis::Vertical => SnowSnapGuideAxis::Vertical,
+            },
+            snap_marker_count: item.marker_count,
+            snap_has_label: u8::from(item.label.is_some()),
+            snap_start_x: item.start.x,
+            snap_start_y: item.start.y,
+            snap_end_x: item.end.x,
+            snap_end_y: item.end.y,
+            snap_marker0_x: item.markers[0].x,
+            snap_marker0_y: item.markers[0].y,
+            snap_marker1_x: item.markers[1].x,
+            snap_marker1_y: item.markers[1].y,
+            snap_label: item.label.unwrap_or(0.0),
+            snap_color: item.color.into(),
+            snap_line_width: item.line_width,
+            snap_marker_size: item.marker_size,
+            snap_gap_dash_length: item.gap_dash_length,
+            snap_gap_dash_gap: item.gap_dash_gap,
+            ..Self::default()
+        }
+    }
+}
+
 pub(crate) fn snow_overlay_display_item_from_rust(
     value: &OverlayDisplayItem,
 ) -> SnowOverlayPatchItem {
@@ -523,31 +556,7 @@ pub(crate) fn snow_overlay_display_item_from_rust(
             out.arrow_path_command_count = converted.arrow_path_commands.len() as u32;
         }
         OverlayDisplayItem::SnapGuide(item) => {
-            out.kind = SnowOverlayDisplayItemKind::SnapGuide;
-            out.snap_guide_kind = match item.kind {
-                SnapGuideKind::Point => SnowSnapGuideKind::Point,
-                SnapGuideKind::Gap => SnowSnapGuideKind::Gap,
-            };
-            out.snap_guide_axis = match item.axis {
-                SnapGuideAxis::Horizontal => SnowSnapGuideAxis::Horizontal,
-                SnapGuideAxis::Vertical => SnowSnapGuideAxis::Vertical,
-            };
-            out.snap_marker_count = item.marker_count;
-            out.snap_has_label = u8::from(item.label.is_some());
-            out.snap_start_x = item.start.x;
-            out.snap_start_y = item.start.y;
-            out.snap_end_x = item.end.x;
-            out.snap_end_y = item.end.y;
-            out.snap_marker0_x = item.markers[0].x;
-            out.snap_marker0_y = item.markers[0].y;
-            out.snap_marker1_x = item.markers[1].x;
-            out.snap_marker1_y = item.markers[1].y;
-            out.snap_label = item.label.unwrap_or(0.0);
-            out.snap_color = item.color.into();
-            out.snap_line_width = item.line_width;
-            out.snap_marker_size = item.marker_size;
-            out.snap_gap_dash_length = item.gap_dash_length;
-            out.snap_gap_dash_gap = item.gap_dash_gap;
+            *out = item.into();
         }
     }
     converted.refresh_pointers();

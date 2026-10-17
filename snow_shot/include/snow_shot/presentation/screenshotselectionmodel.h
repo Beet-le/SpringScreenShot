@@ -5,6 +5,7 @@
 #include "snow_shot/presentation/screenshotselectiongeometry.h"
 #include "snow_shot/presentation/screenshotselectionparams.h"
 #include "snow_shot/presentation/screenshotresultcompositor.h"
+#include "snow_draw_engine_qt/snow_canvas_snapping.h"
 
 #include <QColor>
 #include <QPointF>
@@ -116,6 +117,12 @@ class ScreenshotSelectionModel final {
     // moving the whole selection, avoiding a cursor jump.
     void rebaseMoveDrag(const QPointF& startPosition, bool entireSelection = false);
     void finishMoveDrag();
+    QRectF snapIndividualRegionMove(const QRectF& candidate, const QRectF& bounds,
+                                    qreal canvasToViewScale, bool enabled);
+    void clearMoveSnapGuides();
+    const QVector<SnowCanvasSnapGuide>& moveSnapGuides() const {
+        return m_moveSnapGuides;
+    }
     [[nodiscard]] QRectF moveOriginalSelection() const;
     [[nodiscard]] QRectF selectionRectForDrag(ScreenshotSelectionDragMode dragMode,
                                               const QPointF& position, const QRectF& bounds,
@@ -184,6 +191,7 @@ class ScreenshotSelectionModel final {
         ScreenshotRegionGeometry stationary;
         ScreenshotRegionGeometry preview;
         QPoint offset;
+        QVector<QRectF> snapReferences;
     };
     quint64 m_regionEditCompositions = 0;
     QVector<CreatedRegion> m_createdRegions;
@@ -192,6 +200,7 @@ class ScreenshotSelectionModel final {
     quint64 m_nextRegionId = 1;
     std::optional<quint64> m_hoveredRegion;
     std::optional<RegionMove> m_regionMove;
+    QVector<SnowCanvasSnapGuide> m_moveSnapGuides;
     bool m_moveEntireSelection = false;
     std::optional<qsizetype> m_regionBeforeEntireMove;
 

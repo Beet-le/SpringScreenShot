@@ -49,9 +49,9 @@ bool ScreenshotSelectionModel::hasSameSelectionState(const ScreenshotSelectionMo
     return m_backgroundOpacityPercent == other.m_backgroundOpacityPercent &&
            m_layoutCompaction == other.m_layoutCompaction &&
            m_multiRegionEditing == other.m_multiRegionEditing && hasSameCreatedRegions(other) &&
-           m_regionType == other.m_regionType && m_draftRegion == other.m_draftRegion &&
-           m_draftVertices == other.m_draftVertices && m_region == other.m_region &&
-           m_confirmedRegion == other.m_confirmedRegion &&
+           m_moveSnapGuides == other.m_moveSnapGuides && m_regionType == other.m_regionType &&
+           m_draftRegion == other.m_draftRegion && m_draftVertices == other.m_draftVertices &&
+           m_region == other.m_region && m_confirmedRegion == other.m_confirmedRegion &&
            m_regionOperation == other.m_regionOperation && m_start == other.m_start &&
            m_end == other.m_end && m_cornerRadius == other.m_cornerRadius &&
            m_shadowWidth == other.m_shadowWidth && m_shadowColor == other.m_shadowColor &&
@@ -73,6 +73,7 @@ ScreenshotSelectionModel::operator=(const ScreenshotSelectionModel& other) {
     m_nextRegionId = other.m_nextRegionId;
     m_hoveredRegion = other.m_hoveredRegion;
     m_regionMove = other.m_regionMove;
+    m_moveSnapGuides = other.m_moveSnapGuides;
     m_moveEntireSelection = other.m_moveEntireSelection;
     m_regionBeforeEntireMove = other.m_regionBeforeEntireMove;
     m_draftVertices = other.m_draftVertices;
@@ -237,14 +238,16 @@ void ScreenshotSelectionModel::beginMoveDrag(const QPointF& startPosition, bool 
 
 void ScreenshotSelectionModel::beginRegionMove(qsizetype index) {
     ScreenshotRegionGeometry stationary;
+    QVector<QRectF> references;
     for (qsizetype i = 0; i < m_createdRegions.size(); ++i) {
         if (i != index) {
+            references.append(QRectF(m_createdRegions[i].bounds));
             stationary = stationary.united(m_createdRegions[i].geometry);
             ++m_regionEditCompositions;
         }
     }
     const auto& region = m_createdRegions[index];
-    m_regionMove = RegionMove{index, region.geometry, stationary, region.geometry, {}};
+    m_regionMove = RegionMove{index, region.geometry, stationary, region.geometry, {}, references};
     m_moveOriginalSelection = QRectF(region.bounds);
     m_hoveredRegion = region.id;
 }
@@ -273,6 +276,7 @@ void ScreenshotSelectionModel::rebaseMoveDrag(const QPointF& startPosition, bool
 }
 
 void ScreenshotSelectionModel::finishMoveDrag() {
+    clearMoveSnapGuides();
     if (m_moveEntireSelection)
         m_moveOriginalRegion = {};
     m_moveEntireSelection = false;
@@ -285,6 +289,33 @@ void ScreenshotSelectionModel::finishMoveDrag() {
         region.bounds = region.geometry.boundingRect();
     }
     m_regionMove.reset();
+}
+
+void ScreenshotSelectionModel::clearMoveSnapGuides() {
+    if (!m_moveSnapGuides.isEmpty()) {
+        m_moveSnapGuides.clear();
+        ++m_changeRevision;
+    }
+}
+
+QRectF ScreenshotSelectionModel::snapIndividualRegionMove(const QRectF& candidate,
+                                                          const QRectF& bounds,
+                                                          qreal canvasToViewScale, bool enabled) {
+    QRectF result = candidate;
+    QVector<SnowCanvasSnapGuide> guides;
+    if (enabled && m_regionMove && !regionOperationActive()) {
+        if (const auto snap =
+                snowCanvasSnapMove(candidate, m_regionMove->snapReferences, canvasToViewScale, {},
+                                   SnowCanvasMoveSnapConstraints{bounds, 1.0})) {
+            result.translate(snap->correction);
+            guides = snap->guides;
+        }
+    }
+    if (guides != m_moveSnapGuides) {
+        m_moveSnapGuides = std::move(guides);
+        ++m_changeRevision;
+    }
+    return result;
 }
 
 QRectF ScreenshotSelectionModel::moveOriginalSelection() const {
@@ -714,6 +745,7 @@ void ScreenshotSelectionModel::beginRegionOperation(RegionOperation operation) {
 }
 
 void ScreenshotSelectionModel::clearCreatedRegions() {
+    clearMoveSnapGuides();
     m_createdRegions.clear();
     m_multiRegionEditing = false;
     m_multiRegionBeforeOperation = false;

@@ -79,6 +79,100 @@ void geometryAndTransactions() {
             "subtraction must split a region");
 }
 
+void individualRegionSnapping() {
+    using Operation = ScreenshotSelectionModel::RegionOperation;
+    const QRect bounds(-200, -200, 600, 600);
+    ScreenshotSelectionModel model;
+    const QRect fixed(20, 30, 40, 40), moving(180, 130, 40, 40);
+    model.setSelectionRect(fixed);
+    apply(model, Operation::Add, moving);
+    const auto id = model.regionAt({190, 140});
+    model.beginMoveDrag({190, 140});
+    const QRectF candidate(24, 112, 40, 40);
+    require(model.snapIndividualRegionMove(candidate, bounds, 1, false) == candidate &&
+                model.moveSnapGuides().isEmpty(),
+            "unmodified drag never snaps");
+    const auto snapped = model.snapIndividualRegionMove(candidate, bounds, 1, true);
+    require(snapped.x() == 20 && !model.moveSnapGuides().isEmpty(), "nearby edges snap");
+    model.setDraggedSelectionRect(snapped, ScreenshotSelectionDragMode::All);
+    model.finishMoveDrag();
+    require(model.regionAt(snapped.center()) == id && model.regionAt({30, 40}) != id &&
+                model.moveSnapGuides().isEmpty(),
+            "snap preserves identity and clears guides");
+    model.beginMoveDrag(snapped.center());
+    const auto origin = model.moveOriginalSelection();
+    for (qreal scale : {0.5, 1.0, 1.5, 2.0}) {
+        for (int x : {-100, 12, 13, 20, 24, 28, 29, 40, 100}) {
+            const QRectF raw(x, 112, 40, 40);
+            const auto engine = snowCanvasSnapMove(raw, {QRectF(fixed)}, scale);
+            require(engine.has_value(), "reference snap succeeds");
+            const QPointF expected(qRound(raw.x() + engine->correction.x()),
+                                   qRound(raw.y() + engine->correction.y()));
+            require(model.snapIndividualRegionMove(raw, bounds, scale, true).topLeft() == expected,
+                    "region edges, centers and thresholds match rectangle movement at every scale");
+        }
+    }
+    // Moving back near its old position cannot snap to itself.
+    require(model.snapIndividualRegionMove(QRectF(181, 131, 40, 40), bounds, 1, true) ==
+                QRectF(181, 131, 40, 40),
+            "moving identity is excluded from snap references");
+    model.rebaseMoveDrag(origin.center(), true);
+    require(model.snapIndividualRegionMove(candidate, bounds, 1, true) == candidate &&
+                model.moveSnapGuides().isEmpty(),
+            "group drag does not snap");
+    model.finishMoveDrag();
+
+    model.setSelectionRect(QRect(20, 30, 40, 40));
+    apply(model, Operation::Add, QRect(100, 30, 40, 40));
+    apply(model, Operation::Add, QRect(240, 100, 40, 40));
+    model.beginMoveDrag({250, 110});
+    require(model.snapIndividualRegionMove(QRectF(178, 30, 40, 40), bounds, 1, true).x() == 180 &&
+                std::any_of(model.moveSnapGuides().begin(), model.moveSnapGuides().end(),
+                            [](const auto& guide) { return guide.gap; }),
+            "equal spacing uses gap guides");
+    model.finishMoveDrag();
+
+    model.setSelectionRect(QRect(20, 20, 41, 40));
+    apply(model, Operation::Add, QRect(140, 100, 20, 20));
+    model.beginMoveDrag({145, 105});
+    const auto odd = model.snapIndividualRegionMove(QRectF(31, 100, 20, 20), bounds, 1, true);
+    require(odd.x() == 31 && odd.width() == 20 && model.moveSnapGuides().isEmpty(),
+            "unrepresentable half-pixel center guides are suppressed without resizing");
+    const auto mixed = model.snapIndividualRegionMove(QRectF(31, 22, 20, 20), bounds, 1, true);
+    require(mixed == QRectF(31, 20, 20, 20) && !model.moveSnapGuides().isEmpty() &&
+                std::all_of(model.moveSnapGuides().begin(), model.moveSnapGuides().end(),
+                            [](const auto& guide) { return !guide.vertical && !guide.gap; }),
+            "a fractional center on X must preserve exact top-edge alignment on Y");
+    model.finishMoveDrag();
+    model.setSelectionRect(QRect(28, 20, 40, 40));
+    apply(model, Operation::Add, QRect(100, 100, 40, 40));
+    model.beginMoveDrag({110, 110});
+    const auto clamped =
+        model.snapIndividualRegionMove(QRectF(24, 100, 40, 40), QRectF(0, 0, 64, 300), 1, true);
+    require(clamped.x() == 24 && model.moveSnapGuides().isEmpty(),
+            "capture bounds override snapping and erase misleading guides");
+
+    for (bool curved : {false, true}) {
+        model.setSelectionRect(QRect(20, 30, 40, 40));
+        QPainterPath path;
+        path.addEllipse(QRectF(180, 130, 40, 40));
+        const ScreenshotRegionGeometry shape =
+            curved ? ScreenshotRegionGeometry::fromPath(path, ScreenshotRegionType::Curve)
+                   : ScreenshotRegionGeometry(QRegion(moving).subtracted(QRect(190, 140, 10, 10)));
+        model.beginRegionOperation(Operation::Add);
+        model.setDraftRegion(shape);
+        model.commitDraftRegion(bounds);
+        model.beginMoveDrag({185, 150});
+        const QRectF result = model.snapIndividualRegionMove(candidate, bounds, 1, true);
+        model.setDraggedSelectionRect(result, ScreenshotSelectionDragMode::All);
+        require(model.highlightedRegion() ==
+                    shape.translated(result.topLeft().toPoint() - moving.topLeft()),
+                "snapping translates curves and cutouts without altering their geometry");
+        model.clearSelection();
+        require(model.moveSnapGuides().isEmpty(), "replacement retires snap state");
+    }
+}
+
 void independentRegionsAndDuplication() {
     using Operation = ScreenshotSelectionModel::RegionOperation;
     ScreenshotSelectionModel model;
@@ -1033,6 +1127,7 @@ int main(int argc, char** argv) {
     shapeCodecAndSamplingBoundaries();
     customGeometryTransactionsAndPersistence();
     geometryAndTransactions();
+    individualRegionSnapping();
     independentRegionsAndDuplication();
     duplicateGeometryBoundariesAndCurves();
     containedMovesAndSurvivingCreationOrder();

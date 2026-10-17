@@ -1615,6 +1615,19 @@ QRegion planScreenshotSelectionDamage(const ScreenshotSelectionVisualState& prev
     if (previous == next || viewportRect.isEmpty()) {
         return {};
     }
+    if (!previous.snapGuides.isEmpty() || !next.snapGuides.isEmpty()) {
+        auto before = previous;
+        auto after = next;
+        before.snapGuides.clear();
+        after.snapGuides.clear();
+        QRegion damage = planScreenshotSelectionDamage(before, after, viewportRect,
+                                                       canvasToViewTransform, maskVisible);
+        if (previous.snapGuides != next.snapGuides) {
+            damage += snowCanvasSnapGuideDamage(previous.snapGuides, canvasToViewTransform);
+            damage += snowCanvasSnapGuideDamage(next.snapGuides, canvasToViewTransform);
+        }
+        return damage.intersected(viewportRect);
+    }
     if (previous.backgroundOpacityPercent != next.backgroundOpacityPercent) {
         QRegion damage;
         for (const auto* state : {&previous, &next}) {
@@ -2747,6 +2760,7 @@ void ScreenshotCanvasRenderer::setSelection(const QRectF& selection, bool handle
     next.confirmedRegion = {};
     next.highlightedRegion.reset();
     next.stationaryRegions.reset();
+    next.snapGuides.clear();
     next.marquee = {};
     next.bounds = selection.normalized();
     next.present = next.bounds.isValid() && !next.bounds.isEmpty();
@@ -2764,6 +2778,7 @@ void ScreenshotCanvasRenderer::setSelectionRegion(const ScreenshotRegionGeometry
     auto state = m_selectionState;
     state.highlightedRegion.reset();
     state.stationaryRegions.reset();
+    state.snapGuides.clear();
     state.region = region;
     state.confirmedRegion = confirmed;
     state.marquee = marquee;
@@ -3942,6 +3957,8 @@ void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
             }
         }
     }
+    snowCanvasPaintSnapGuides(painter, m_selectionState.snapGuides, context.canvasToViewTransform,
+                              context.exposedRegion);
     if (m_ocrVisible && m_renderMode == RenderMode::Standard && m_ocrPresentation != nullptr &&
         m_ocrPresentationMode == OcrPresentationMode::BackgroundAndText) {
         if (m_ocrTextLayer != nullptr) {

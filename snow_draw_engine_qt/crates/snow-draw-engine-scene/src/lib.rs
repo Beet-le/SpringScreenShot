@@ -25,7 +25,7 @@ pub use scene_cache::DocumentSceneCache;
 use scene_composition::*;
 use selection_visuals::*;
 use snow_draw_engine_core::{
-    ColorRgba8, CornerRadii, DrawRect, Point, SnapConfig, SnapGuide, ViewportQuery,
+    ColorRgba8, CornerRadii, DrawRect, Point, SnapConfig, ViewportQuery,
     arrow::{
         ArrowEndpointPosition, ArrowPathCommand, ArrowType, ArrowheadDashMode, ArrowheadFillMode,
         ArrowheadRenderPrimitive, StrokeStyle,

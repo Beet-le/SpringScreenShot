@@ -158,10 +158,9 @@ pub(crate) fn compose_overlay_items(
     }
 
     for guide in &presentation.snap_guides {
-        items.push(OverlayDisplayItem::SnapGuide(snap_guide_display_item(
-            guide,
-            snap_config,
-        )));
+        items.push(OverlayDisplayItem::SnapGuide(
+            SnapGuideDisplayItem::from_guide(guide, snap_config),
+        ));
     }
 
     if let Some(highlight) = presentation.binding_highlight.as_ref() {
