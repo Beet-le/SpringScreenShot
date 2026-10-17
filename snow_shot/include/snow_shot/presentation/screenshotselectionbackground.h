@@ -11,35 +11,30 @@
 namespace screenshot_selection_background {
 struct Span {
     qint64 sourceBegin;
-    qint64 sourceEnd;
     int destinationBegin;
     int destinationEnd;
 };
 
-// Occupied bands, including shadow footprints, keep their native scale. Only
-// empty intervals are resampled. Keep the two axes separate: sparse selections
-// must never allocate a Cartesian tile list or an uncompressed source raster.
+// Extend each occupied crop into the spacing at its native scale. Adjacent
+// crops meet at a hard midpoint clip; an odd extra pixel goes right/bottom.
+// Keep axes separate so sparse selections need no Cartesian tile list or
+// uncompressed source raster.
 inline QVector<Span> spans(const QVector<screenshot_layout_compaction::Band>& bands,
                            int sourceExtent, int padding) {
     if (bands.isEmpty())
-        return {{-padding, qint64(sourceExtent) + padding, 0, sourceExtent + 2 * padding}};
+        return {{-padding, 0, sourceExtent + 2 * padding}};
     QVector<Span> result;
-    result.reserve(bands.size() * 2 + 1);
-    if (padding > 0)
-        result.append({-padding, 0, 0, padding});
-    int sourceEnd = 0;
-    int destinationEnd = 0;
-    for (const auto& band : bands) {
-        if (band.begin > sourceEnd && band.destination > destinationEnd)
-            result.append(
-                {sourceEnd, band.begin, destinationEnd + padding, band.destination + padding});
-        sourceEnd = band.end;
-        destinationEnd = band.destination + band.end - band.begin;
-        result.append({band.begin, band.end, band.destination + padding, destinationEnd + padding});
+    result.reserve(bands.size());
+    int begin = -padding;
+    for (qsizetype i = 0; i < bands.size(); ++i) {
+        const auto& band = bands[i];
+        const int bandEnd = band.destination + band.end - band.begin;
+        const int end = i + 1 < bands.size() ? bandEnd + (bands[i + 1].destination - bandEnd) / 2
+                                             : bandEnd + padding;
+        result.append(
+            {qint64(band.begin) + begin - band.destination, begin + padding, end + padding});
+        begin = end;
     }
-    if (padding > 0)
-        result.append({sourceExtent, qint64(sourceExtent) + padding, destinationEnd + padding,
-                       destinationEnd + 2 * padding});
     return result;
 }
 } // namespace screenshot_selection_background
@@ -87,13 +82,12 @@ inline QImage renderScreenshotSelectionBackground(
         for (const auto& column : columns) {
             if (cancelled && cancelled())
                 return {};
-            const QRectF source(selection.x() + static_cast<qreal>(column.sourceBegin) * sx,
-                                selection.y() + static_cast<qreal>(row.sourceBegin) * sy,
-                                static_cast<qreal>(column.sourceEnd - column.sourceBegin) * sx,
-                                static_cast<qreal>(row.sourceEnd - row.sourceBegin) * sy);
             const QRectF destination(column.destinationBegin, row.destinationBegin,
                                      column.destinationEnd - column.destinationBegin,
                                      row.destinationEnd - row.destinationBegin);
+            const QRectF source(selection.x() + static_cast<qreal>(column.sourceBegin) * sx,
+                                selection.y() + static_cast<qreal>(row.sourceBegin) * sy,
+                                destination.width() * sx, destination.height() * sy);
             painter.setClipRect(destination);
             for (const auto& layer : sources) {
                 if (layer.image.isNull() || layer.canvasRect.isEmpty())
@@ -108,12 +102,9 @@ inline QImage renderScreenshotSelectionBackground(
                         layer.canvasRect.height(),
                     intersection.width() * layer.image.width() / layer.canvasRect.width(),
                     intersection.height() * layer.image.height() / layer.canvasRect.height());
-                const QRectF to(destination.x() + (intersection.x() - source.x()) *
-                                                      destination.width() / source.width(),
-                                destination.y() + (intersection.y() - source.y()) *
-                                                      destination.height() / source.height(),
-                                intersection.width() * destination.width() / source.width(),
-                                intersection.height() * destination.height() / source.height());
+                const QRectF to(destination.x() + (intersection.x() - source.x()) / sx,
+                                destination.y() + (intersection.y() - source.y()) / sy,
+                                intersection.width() / sx, intersection.height() / sy);
                 painter.drawImage(to, layer.image, from);
             }
         }

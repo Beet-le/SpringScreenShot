@@ -65,11 +65,11 @@ void opacityPreservesForegroundAndShadow() {
     }
 }
 
-void compressionMapsOccupiedAndEmptyBands() {
+void compressionExtendsCropsIntoSpacing() {
     const auto capture = pattern({120, 100});
     const QRect selection(10, 10, 80, 60);
     const ScreenshotRegionGeometry region = QRegion(QRect(0, 0, 20, 20)) + QRect(60, 40, 20, 20);
-    for (int spacing : {0, 3, 50}) {
+    for (int spacing : {0, 1, 3, 4, 20, 40, 50, 100}) {
         for (int shadow : {0, 4}) {
             ScreenshotResultStyle style{5, shadow, Qt::black, region};
             style.backgroundOpacityPercent = 100;
@@ -91,17 +91,65 @@ void compressionMapsOccupiedAndEmptyBands() {
                                     "including empty pockets");
                 }
             }
-            if (spacing > 0) {
-                const int x = plan.columns[0].end + shadow;
-                const auto color = background.pixelColor(x + spacing / 2, shadow + 10);
-                require(
-                    color.alpha() == 255 && color.red() > 90 && color.red() < 220,
-                    "new spacing must resample the original gap rather than leave transparency");
+            // Each crop keeps its source scale and extends to the midpoint of
+            // the spacing. An odd extra pixel belongs to the right/bottom crop.
+            const int seam = 20 + 2 * shadow + spacing / 2;
+            for (int y = 0; y < background.height(); ++y) {
+                for (int x = 0; x < background.width(); ++x) {
+                    const QPoint source(
+                        selection.x() + x - shadow - (x < seam ? 0 : spacing + 2 * shadow - 40),
+                        selection.y() + y - shadow - (y < seam ? 0 : spacing + 2 * shadow - 20));
+                    const QRgb expected =
+                        capture.rect().contains(source) ? capture.pixel(source) : qRgba(0, 0, 0, 0);
+                    require(background.pixel(x, y) == expected,
+                            "spacing must hard-clip outward source crops without stretching");
+                }
             }
             require(background.pixelColor(0, 0) == capture.pixelColor(10 - shadow, 10 - shadow),
                     "outer padding must sample neighboring capture pixels");
         }
     }
+}
+
+void middleCropClipsOverlappingLayers() {
+    QImage capture(100, 30, QImage::Format_ARGB32_Premultiplied);
+    capture.fill(QColor(200, 20, 30, 128));
+    QImage overlay(30, 12, capture.format());
+    overlay.fill(QColor(20, 200, 30, 128));
+    QImage flattened = capture.copy();
+    QPainter painter(&flattened);
+    painter.drawImage(QPoint(35, 10), overlay);
+    painter.end();
+    const QRect selection(10, 10, 80, 12);
+    const ScreenshotRegionGeometry region =
+        QRegion(0, 0, 8, 12) + QRect(30, 0, 10, 12) + QRect(70, 0, 10, 12);
+    const ScreenshotResultStyle style{0, 0, Qt::black, region, 1, 100};
+    const QList<CanvasExportSource> sources{{capture, capture.rect()},
+                                            {overlay, QRectF(35, 10, 30, 12)}};
+    for (int spacing : {1, 7, 60}) {
+        const auto plan =
+            makeScreenshotLayoutCompactionPlan(region, selection.size(), 1, {true, spacing});
+        const auto background =
+            renderScreenshotSelectionBackground(sources, selection, selection.size(), style, &plan);
+        for (int y = 0; y < background.height(); ++y) {
+            for (int x = 0; x < background.width(); ++x) {
+                const int offset = x < 8 + spacing / 2              ? 0
+                                   : x < 18 + spacing + spacing / 2 ? spacing - 22
+                                                                    : 2 * spacing - 52;
+                const QPoint source(selection.x() + x - offset, selection.y() + y);
+                const QRgb expected =
+                    flattened.rect().contains(source) ? flattened.pixel(source) : qRgba(0, 0, 0, 0);
+                require(background.pixel(x, y) == expected,
+                        "adjacent crops must clip without blending twice or changing layer alpha");
+            }
+        }
+    }
+    int calls = 0;
+    const auto plan = makeScreenshotLayoutCompactionPlan(region, selection.size(), 1, {true, 7});
+    require(renderScreenshotSelectionBackground(sources, selection, selection.size(), style, &plan,
+                                                [&] { return ++calls == 3; })
+                .isNull(),
+            "cancellation between crops must discard the partial background");
 }
 
 void sourceAlphaCoverageAndScale() {
@@ -153,11 +201,24 @@ void compressedDisplaySeamsAtFractionalScale() {
                                                                  selection, pixels, style, &plan);
             const auto two =
                 renderScreenshotSelectionBackground(displays, selection, pixels, style, &plan);
+            const auto full = renderScreenshotSelectionBackground({{capture, capture.rect()}},
+                                                                  selection, pixels, style);
+            const int padding = style.shadowWidth;
+            const int seamX = padding + plan.columns[0].end + qRound(spacing * scale) / 2;
+            const int seamY = padding + plan.rows[0].end + qRound(spacing * scale) / 2;
             require(one.size() == two.size(),
                     "display decomposition must not change output bounds");
             for (int y = 0; y < one.height(); ++y) {
                 for (int x = 0; x < one.width(); ++x) {
                     const auto a = one.pixelColor(x, y), b = two.pixelColor(x, y);
+                    const auto expected = full.pixelColor(
+                        x - (x < seamX ? 0 : plan.columns[1].destination - plan.columns[1].begin),
+                        y - (y < seamY ? 0 : plan.rows[1].destination - plan.rows[1].begin));
+                    require(a.alpha() == expected.alpha() &&
+                                std::abs(a.red() - expected.red()) <= 3 &&
+                                std::abs(a.green() - expected.green()) <= 3 &&
+                                std::abs(a.blue() - expected.blue()) <= 3,
+                            "fractional crops must retain the uncompacted source scale in spacing");
                     require(
                         a.alpha() == b.alpha() && std::abs(a.red() - b.red()) <= 3 &&
                             std::abs(a.green() - b.green()) <= 3 &&
@@ -236,7 +297,8 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
         opacityPreservesForegroundAndShadow();
-        compressionMapsOccupiedAndEmptyBands();
+        compressionExtendsCropsIntoSpacing();
+        middleCropClipsOverlappingLayers();
         sourceAlphaCoverageAndScale();
         compressedDisplaySeamsAtFractionalScale();
         curvesHolesAndSparseComposition();
