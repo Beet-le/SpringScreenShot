@@ -191,6 +191,7 @@ pub fn editor_style_defaults() -> EditorStyleDefaults {
             opacity: 1.0,
         },
         serial_number: SerialNumberStyle {
+            stroke_rendering_style: Default::default(),
             number: 1,
             serial_number_type: SerialNumberType::OutlinedCircle,
             numeric_type: snow_draw_engine_document::SerialNumberNumericType::Arabic,

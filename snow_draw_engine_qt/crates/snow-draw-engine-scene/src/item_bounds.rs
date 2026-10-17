@@ -107,6 +107,17 @@ pub(crate) fn scene_display_item_bounds(
         SceneDisplayItem::Arrow(item) if item.stroke.a != 0 && item.stroke_width > 0.0 => {
             item.stroke_rendering_style
         }
+        SceneDisplayItem::SerialNumber(item)
+            if item.color.a != 0
+                && item.stroke_width > 0.0
+                && matches!(
+                    item.serial_number_type,
+                    snow_draw_engine_display::DisplaySerialNumberType::OutlinedCircle
+                        | snow_draw_engine_display::DisplaySerialNumberType::OutlinedSquare
+                ) =>
+        {
+            item.stroke_rendering_style
+        }
         _ => Default::default(),
     };
     let outset = snow_draw_engine_core::arrow::stroke_rendering_outset(style, f64::MAX)
@@ -969,6 +980,53 @@ mod tests {
                 scene_display_item_bounds(&SceneDisplayItem::Rectangle(item), frame).unwrap();
             assert_eq!(rough.min_x, exact.min_x - 4.0 * zoom);
             assert_eq!(rough.max_y, exact.max_y + 4.0 * zoom);
+        }
+    }
+
+    #[test]
+    fn serial_stroke_rendering_dirty_bounds_expand_only_outlined_badges() {
+        use snow_draw_engine_core::arrow::StrokeRenderingStyle;
+        use snow_draw_engine_display::{DisplaySerialNumberType, SerialNumberDisplayItem};
+        for zoom in [0.75, 1.0, 1.5] {
+            let mut frame = frame_view();
+            frame.camera.zoom = zoom;
+            for kind in [
+                DisplaySerialNumberType::OutlinedCircle,
+                DisplaySerialNumberType::OutlinedSquare,
+                DisplaySerialNumberType::SolidCircle,
+                DisplaySerialNumberType::SolidSquare,
+                DisplaySerialNumberType::Circle,
+            ] {
+                let mut item = SerialNumberDisplayItem {
+                    diameter: 40.0,
+                    color: ColorRgba8 {
+                        r: 255,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    },
+                    stroke_width: 2.0,
+                    serial_number_type: kind,
+                    ..Default::default()
+                };
+                let exact =
+                    scene_display_item_bounds(&SceneDisplayItem::SerialNumber(item.clone()), frame)
+                        .unwrap();
+                item.stroke_rendering_style = StrokeRenderingStyle::Cartoonist;
+                let rough = scene_display_item_bounds(&SceneDisplayItem::SerialNumber(item), frame)
+                    .unwrap();
+                let extra = if matches!(
+                    kind,
+                    DisplaySerialNumberType::OutlinedCircle
+                        | DisplaySerialNumberType::OutlinedSquare
+                ) {
+                    4.0 * zoom
+                } else {
+                    0.0
+                };
+                assert_eq!(rough.min_x, exact.min_x - extra);
+                assert_eq!(rough.max_y, exact.max_y + extra);
+            }
         }
     }
 }

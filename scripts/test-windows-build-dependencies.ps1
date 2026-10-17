@@ -89,9 +89,9 @@ foreach ($preset in @("windows-msvc-debug", "windows-msvc-performance",
         "snow-shot-msvc-arm64-release", "snow-shot-msvc-arm64-fast")) {
     $downloadedTools = Get-PresetEnvironmentSetting $preset 'VCPKG_FORCE_DOWNLOADED_BINARIES'
     $systemTools = Get-PresetEnvironmentSetting $preset 'VCPKG_FORCE_SYSTEM_BINARIES'
-    if (-not $downloadedTools -or $downloadedTools.Value -cne '1' -or
+    if (-not $downloadedTools -or $null -ne $downloadedTools.Value -or
         -not $systemTools -or $null -ne $systemTools.Value) {
-        $failures += "$preset must use pinned vcpkg tools and clear inherited system-tool overrides."
+        $failures += "$preset must let vcpkg apply minimum tool versions and clear inherited force overrides."
     }
     if ((Get-PresetVariable $preset "VCPKG_MANIFEST_INSTALL") -cne "ON") {
         $failures += "$preset must enable dependency installation when reusing a cache."

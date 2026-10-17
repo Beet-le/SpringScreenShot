@@ -426,7 +426,11 @@ mod spotlight_abi_tests {
         assert_eq!(SnowSerialNumberType::OutlinedSquare as i32, 2);
         assert_eq!(SnowSerialNumberType::SolidSquare as i32, 3);
         assert_eq!(SnowSerialNumberType::Circle as i32, 4);
-        assert_eq!(std::mem::size_of::<SnowSerialNumberStyle>(), 200);
+        assert_eq!(std::mem::size_of::<SnowSerialNumberStyle>(), 208);
+        assert_eq!(
+            std::mem::offset_of!(SnowSerialNumberStyle, stroke_rendering_style),
+            200
+        );
         assert_eq!(std::mem::align_of::<SnowSerialNumberStyle>(), 8);
         assert_eq!(
             std::mem::offset_of!(SnowSerialNumberStyle, numeric_type),
@@ -458,6 +462,7 @@ pub struct SnowSerialNumberStyle {
     pub reserved1: [u8; 3],
     pub font_family_utf8: [std::ffi::c_char; SNOW_FONT_FAMILY_UTF8_CAPACITY],
     pub numeric_type: SnowSerialNumberNumericType,
+    pub stroke_rendering_style: SnowStrokeRenderingStyle,
 }
 
 snow_c_enum! {
@@ -768,6 +773,7 @@ impl Default for SnowTextStyle {
 impl Default for SnowSerialNumberStyle {
     fn default() -> Self {
         Self {
+            stroke_rendering_style: SnowStrokeRenderingStyle::Architect,
             number: 0,
             color: SnowColorRgba8::default(),
             fill: SnowColorRgba8::default(),

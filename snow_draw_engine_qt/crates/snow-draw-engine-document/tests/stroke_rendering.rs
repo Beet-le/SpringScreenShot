@@ -111,3 +111,60 @@ fn stroke_rendering_json_is_backward_compatible_and_preserves_seed_zero() {
     bad["stroke_rendering_style"] = "unknown".into();
     assert!(serde_json::from_value::<RectangleData>(bad).is_err());
 }
+
+#[test]
+fn serial_number_stroke_rendering_preserves_geometry_and_legacy_documents() {
+    use snow_draw_engine_document::{
+        SerialNumberData, SerialNumberType, serial_number_bounds, serial_number_hit_test,
+        serial_number_paint_bounds,
+    };
+    for kind in [
+        SerialNumberType::OutlinedCircle,
+        SerialNumberType::OutlinedSquare,
+        SerialNumberType::SolidCircle,
+        SerialNumberType::SolidSquare,
+        SerialNumberType::Circle,
+    ] {
+        let mut serial = SerialNumberData {
+            serial_number_type: kind,
+            ..Default::default()
+        };
+        let logical = serial_number_bounds(&serial);
+        serial.stroke_rendering_style = StrokeRenderingStyle::Cartoonist;
+        serial.stroke_rendering_seed = 12345;
+        assert_eq!(serial_number_bounds(&serial), logical);
+        let outlined = matches!(
+            kind,
+            SerialNumberType::OutlinedCircle | SerialNumberType::OutlinedSquare
+        );
+        let paint = serial_number_paint_bounds(&serial);
+        assert_eq!(
+            paint.min_x,
+            logical.min_x - if outlined { 4.0 } else { 0.0 }
+        );
+        assert_eq!(
+            serial_number_hit_test(&serial, Point::new(logical.max_x + 2.0, 0.0), 0.0),
+            outlined
+        );
+        let value = serde_json::to_value(&serial).unwrap();
+        assert_eq!(
+            serde_json::from_value::<SerialNumberData>(value.clone()).unwrap(),
+            serial
+        );
+        let mut legacy = value;
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("stroke_rendering_style");
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("stroke_rendering_seed");
+        let restored: SerialNumberData = serde_json::from_value(legacy).unwrap();
+        assert_eq!(
+            restored.stroke_rendering_style,
+            StrokeRenderingStyle::Architect
+        );
+        assert_eq!(restored.stroke_rendering_seed, 0);
+    }
+}

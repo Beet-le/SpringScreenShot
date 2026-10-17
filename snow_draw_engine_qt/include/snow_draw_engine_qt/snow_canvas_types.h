@@ -120,6 +120,7 @@ enum SnowCanvasSerialNumberStyleMixedFlag : quint32 {
     SnowCanvasSerialNumberStyleMixedOpacity = 1u << 8,
     SnowCanvasSerialNumberStyleMixedType = 1u << 9,
     SnowCanvasSerialNumberStyleMixedNumericType = 1u << 10,
+    SnowCanvasSerialNumberStyleMixedStrokeRenderingStyle = 1u << 11,
 };
 
 enum class SnowCanvasSerialNumberNumericType : quint32 {
@@ -653,6 +654,7 @@ struct SnowCanvasSerialNumberStyle {
     double strokeWidth = 2.0;
     SnowCanvasStrokeStyle strokeStyle = SnowCanvasStrokeStyle::Solid;
     double opacity = 1.0;
+    SnowCanvasStrokeRenderingStyle strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Architect;
 };
 
 inline bool operator==(const SnowCanvasSerialNumberStyle& lhs,
@@ -663,7 +665,8 @@ inline bool operator==(const SnowCanvasSerialNumberStyle& lhs,
            lhs.fontFamily == rhs.fontFamily &&
            snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) &&
            lhs.strokeStyle == rhs.strokeStyle &&
-           snowCanvasExactDoubleEqual(lhs.opacity, rhs.opacity);
+           snowCanvasExactDoubleEqual(lhs.opacity, rhs.opacity) &&
+           lhs.strokeRenderingStyle == rhs.strokeRenderingStyle;
 }
 
 inline bool operator!=(const SnowCanvasSerialNumberStyle& lhs,

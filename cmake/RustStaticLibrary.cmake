@@ -1,4 +1,5 @@
 include_guard(GLOBAL)
+include("${CMAKE_CURRENT_LIST_DIR}/SnowBuildToolchain.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/SnowWindowsArchitecture.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/SnowRustLibclang.cmake")
 
@@ -152,6 +153,7 @@ function(snow_add_rust_static_libraries batch_name)
     endforeach()
 
     find_program(CARGO_EXECUTABLE NAMES cargo REQUIRED)
+    snow_require_rust_version("${SNOW_RUST_MANIFEST_DIR}")
     if(NOT DEFINED SNOW_RUST_CARGO_TARGET_DIR OR SNOW_RUST_CARGO_TARGET_DIR STREQUAL "")
         set(SNOW_RUST_CARGO_TARGET_DIR "${CMAKE_BINARY_DIR}/cargo" CACHE PATH
             "Cargo target directory for the active CMake build tree.")

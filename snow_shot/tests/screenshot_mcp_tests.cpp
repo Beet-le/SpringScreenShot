@@ -951,10 +951,23 @@ void completeToolStyleContract() {
                     "rendering MCP styles should map names to exact rendering property patches");
         }
     }
+    for (const auto& value :
+         {QStringLiteral("architect"), QStringLiteral("artist"), QStringLiteral("cartoonist")}) {
+        const auto number = styles.state.serialNumberStyle.number;
+        require(apply(QStringLiteral("serial_number"),
+                      {{QStringLiteral("stroke_rendering_style"), value}}) &&
+                    styles.properties == SnowCanvasSerialNumberStyleMixedStrokeRenderingStyle &&
+                    styles.state.serialNumberStyle.number == number &&
+                    styles.state.serialNumberStyle.strokeRenderingStyle ==
+                        (value == QStringLiteral("artist") ? SnowCanvasStrokeRenderingStyle::Artist
+                         : value == QStringLiteral("cartoonist")
+                             ? SnowCanvasStrokeRenderingStyle::Cartoonist
+                             : SnowCanvasStrokeRenderingStyle::Architect),
+                "sequence MCP stroke types must dispatch only the stroke rendering property");
+    }
     const int renderingUpdates = styles.updates;
-    for (const auto& target :
-         {QStringLiteral("freehand"), QStringLiteral("speech_bubble"), QStringLiteral("text"),
-          QStringLiteral("serial_number"), QStringLiteral("rectangle_highlight")}) {
+    for (const auto& target : {QStringLiteral("freehand"), QStringLiteral("speech_bubble"),
+                               QStringLiteral("text"), QStringLiteral("rectangle_highlight")}) {
         require(
             !apply(target, {{QStringLiteral("stroke_rendering_style"), QStringLiteral("artist")}}),
             "rendering MCP styles should reject unsupported tool targets");

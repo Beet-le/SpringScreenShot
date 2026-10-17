@@ -24,7 +24,7 @@ done
 xcrun --find clang >/dev/null
 if [[ "$skip_qt" == 1 ]]; then
     export PATH="$snow_repo_root/.tools/macos-dev/bin:$snow_repo_root/.tools/macos-media/host/bin:$PATH"
-    for tool in cmake ninja cargo rustup pkg-config; do
+    for tool in cmake ninja cargo rustc rustup pkg-config; do
         command -v "$tool" >/dev/null || snow_die "Missing $tool. Install the prerequisites listed in docs-macos-build.md."
     done
     snow_require_target_tools "$snow_arch"
@@ -40,26 +40,29 @@ if [[ ! "$cmake_version" =~ ^cmake[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+
     snow_die "CMake 4.2 or newer is required; found: ${cmake_version:-unknown}"
 fi
 cd "$snow_repo_root"
-rust_toolchain=1.97.1
-rust_toolchain_is_ready() {
-    local rust_info rust_host installed_components component
-    # `rustup run` checks an existing toolchain without auto-installing it.
-    rust_info="$(rustup run "$rust_toolchain" rustc -vV 2>/dev/null)" || return 1
-    rust_host="$(sed -n 's/^host: //p' <<< "$rust_info")"
-    [[ -n "$rust_host" ]] || return 1
-    installed_components="$(rustup component list --toolchain "$rust_toolchain" --installed)" || return 1
-    for component in cargo rustc rust-std rustfmt clippy; do
-        grep -Fqx "$component-$rust_host" <<< "$installed_components" || return 1
-    done
-    grep -Fqx "rust-std-$snow_rust_target" <<< "$installed_components"
-}
-# Builds call bootstrap too. A complete pinned toolchain needs no distribution sync.
-if rust_toolchain_is_ready; then
-    printf 'Reusing Rust %s with target %s.\n' "$rust_toolchain" "$snow_rust_target"
-else
-    rustup toolchain install "$rust_toolchain" --profile minimal \
-        --component rustfmt --component clippy --target "$snow_rust_target" --no-self-update
+snow_require_rust
+# Inspect the active toolchain locally. Builds call bootstrap too, so a complete
+# installation must not invoke rustup's distribution-syncing add/install commands.
+rust_info="$(rustc -vV)" || snow_die 'Unable to determine the active Rust host.'
+rust_host="$(sed -n 's/^host: //p' <<< "$rust_info")"
+[[ -n "$rust_host" ]] || snow_die 'Unable to determine the active Rust host.'
+installed_components="$(rustup component list --installed)" || snow_die 'Unable to list installed Rust components.'
+missing_components=()
+for component in cargo rustc rust-std rustfmt clippy; do
+    if ! grep -Fqx "$component-$rust_host" <<< "$installed_components"; then
+        missing_components+=("$component")
+    fi
+done
+if [[ ${#missing_components[@]} -gt 0 ]]; then
+    rustup component add "${missing_components[@]}"
 fi
+# The host standard library is covered above; only a missing cross target needs
+# another rustup operation. All additions use the active toolchain as well.
+if [[ "$snow_rust_target" != "$rust_host" ]] &&
+    ! grep -Fqx "rust-std-$snow_rust_target" <<< "$installed_components"; then
+    rustup target add "$snow_rust_target"
+fi
+printf 'Using the active Rust toolchain with target %s.\n' "$snow_rust_target"
 # Use the same pinned registry baseline and isolated dynamic/static install roots as Windows.
 vcpkg_root="$snow_repo_root/.tools/vcpkg"
 vcpkg_baseline=4497409a47f19db373a410a0efb84eca4747adbf

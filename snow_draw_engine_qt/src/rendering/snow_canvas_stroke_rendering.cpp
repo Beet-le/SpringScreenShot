@@ -697,10 +697,14 @@ void recordCacheAllocation(bool detach) {
 }
 
 const Cache& geometry(const SnowCanvasSceneItem& item) {
-    return prepare(item, item.kind == SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT,
-                   item.kind == SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT ? item.stroke_style
-                                                                  : item.arrow_stroke_style,
-                   static_cast<SnowDisplayRectShape>(item.rect_shape), 0, sceneArrowPath);
+    const bool serial = item.kind == SNOW_SCENE_DISPLAY_ITEM_SERIAL_NUMBER;
+    const bool rectangle = item.kind == SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT || serial;
+    const auto shape = serial ? (item.serial_number_type == SNOW_SERIAL_NUMBER_TYPE_OUTLINED_SQUARE
+                                     ? SNOW_DISPLAY_RECT_SHAPE_RECTANGLE
+                                     : SNOW_DISPLAY_RECT_SHAPE_ELLIPSE)
+                              : static_cast<SnowDisplayRectShape>(item.rect_shape);
+    return prepare(item, rectangle, rectangle ? item.stroke_style : item.arrow_stroke_style, shape,
+                   0, sceneArrowPath);
 }
 
 const Cache& geometry(const SnowCanvasOverlayItem& item) {
@@ -712,11 +716,15 @@ const Cache* cachedGeometry(const SnowCanvasSceneItem& item) {
     const Cache* cache = item.strokeRenderingCacheIfPresent();
     if (cache == nullptr || !cache->valid)
         return nullptr;
-    const bool rectangle = item.kind == SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT;
+    const bool serial = item.kind == SNOW_SCENE_DISPLAY_ITEM_SERIAL_NUMBER;
+    const bool rectangle = item.kind == SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT || serial;
+    const auto shape = serial ? (item.serial_number_type == SNOW_SERIAL_NUMBER_TYPE_OUTLINED_SQUARE
+                                     ? SNOW_DISPLAY_RECT_SHAPE_RECTANGLE
+                                     : SNOW_DISPLAY_RECT_SHAPE_ELLIPSE)
+                              : static_cast<SnowDisplayRectShape>(item.rect_shape);
     const auto key =
         geometryKey(item, rectangle, rectangle ? item.stroke_style : item.arrow_stroke_style,
-                    item.strokeRenderingGeometryRevision(), 0,
-                    static_cast<SnowDisplayRectShape>(item.rect_shape));
+                    item.strokeRenderingGeometryRevision(), 0, shape);
     return cache->key == key ? cache : nullptr;
 }
 

@@ -58,6 +58,7 @@ bool serialNumberStylesEqual(const SnowSerialNumberStyle& lhs, const SnowSerialN
            colorsEqual(lhs.fill, rhs.fill) && lhs.fill_style == rhs.fill_style &&
            lhs.font_size == rhs.font_size && lhs.stroke_width == rhs.stroke_width &&
            lhs.stroke_style == rhs.stroke_style && lhs.opacity == rhs.opacity &&
+           lhs.stroke_rendering_style == rhs.stroke_rendering_style &&
            lhs.font_family_truncated == rhs.font_family_truncated &&
            fontFamiliesEqual(lhs.font_family_utf8, lhs.font_family_utf8_len, rhs.font_family_utf8,
                              rhs.font_family_utf8_len);

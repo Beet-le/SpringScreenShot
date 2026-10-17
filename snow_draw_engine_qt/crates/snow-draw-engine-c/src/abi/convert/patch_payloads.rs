@@ -421,6 +421,9 @@ pub(crate) fn snow_scene_display_item_from_rust(
             out.fill_style = snow_fill_style_from_rust(item.fill_style);
             out.stroke_style = snow_stroke_style_from_rust(item.stroke_style);
             out.serial_number_type = item.serial_number_type as u8;
+            out.stroke_rendering_style =
+                super::snow_stroke_rendering_style_from_rust(item.stroke_rendering_style);
+            out.stroke_rendering_seed = item.stroke_rendering_seed;
             converted.font_family_utf8 = utf8_bytes(item.font_family.as_deref());
             out.font_family_utf8_len = converted.font_family_utf8.len() as u32;
             encode_bound_text_id(out, item.bound_text_id);

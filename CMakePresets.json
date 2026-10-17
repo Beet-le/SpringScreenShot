@@ -11,12 +11,12 @@
       "hidden": true,
       "generator": "Visual Studio 18 2026",
       "architecture": "x64",
-      "toolset": "host=x64,version=14.51",
+      "toolset": "host=x64",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "toolchainFile": "${sourceDir}/.tools/vcpkg/scripts/buildsystems/vcpkg.cmake",
       "environment": {
         "VCPKG_ROOT": "${sourceDir}/.tools/vcpkg",
-        "VCPKG_FORCE_DOWNLOADED_BINARIES": "1",
+        "VCPKG_FORCE_DOWNLOADED_BINARIES": null,
         "VCPKG_FORCE_SYSTEM_BINARIES": null
       },
       "cacheVariables": {
@@ -88,7 +88,7 @@
         "strategy": "external"
       },
       "toolset": {
-        "value": "host=x64,version=14.51",
+        "value": "host=x64",
         "strategy": "external"
       },
       "cacheVariables": {
@@ -331,12 +331,11 @@
       "hidden": true,
       "generator": "Visual Studio 18 2026",
       "architecture": "ARM64",
-      "toolset": "version=14.51",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "toolchainFile": "${sourceDir}/.tools/vcpkg/scripts/buildsystems/vcpkg.cmake",
       "environment": {
         "VCPKG_ROOT": "${sourceDir}/.tools/vcpkg",
-        "VCPKG_FORCE_DOWNLOADED_BINARIES": "1",
+        "VCPKG_FORCE_DOWNLOADED_BINARIES": null,
         "VCPKG_FORCE_SYSTEM_BINARIES": null
       },
       "cacheVariables": {

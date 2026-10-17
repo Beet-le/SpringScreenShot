@@ -437,6 +437,8 @@ pub(crate) fn scene_item_from_serial_number(
         font_family: serial.font_family,
         stroke_width,
         stroke_style: serial.stroke_style,
+        stroke_rendering_style: serial.stroke_rendering_style,
+        stroke_rendering_seed: serial.stroke_rendering_seed,
         corner_radii: snow_draw_engine_core::CornerRadii::splat(corner_radius),
         opacity: serial.opacity,
         bound_text_id: bound_text_id.map(display_item_id),
@@ -1053,6 +1055,8 @@ mod tests {
             diameter: 24.0,
             font_size: 40.0,
             stroke_width: 2.0,
+            stroke_rendering_style: snow_draw_engine_core::arrow::StrokeRenderingStyle::Artist,
+            stroke_rendering_seed: 45,
             ..SerialNumberData::default()
         };
         let SceneDisplayItem::SerialNumber(display) = scene_item_from_serial_number(
@@ -1067,6 +1071,11 @@ mod tests {
         };
 
         let paint = serial_paint_geometry_from_display_item(&display);
+        assert_eq!(
+            display.stroke_rendering_style,
+            serial.stroke_rendering_style
+        );
+        assert_eq!(display.stroke_rendering_seed, serial.stroke_rendering_seed);
         assert_eq!(paint, SerialPaintGeometry::from_serial(&serial));
         assert!((paint.stroke_width - 4.0).abs() < 1e-9);
     }

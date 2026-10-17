@@ -49,7 +49,8 @@ constexpr quint32 kSerialNumberAppearanceProperties =
     SnowCanvasSerialNumberStyleMixedFillStyle | SnowCanvasSerialNumberStyleMixedFontSize |
     SnowCanvasSerialNumberStyleMixedFontFamily | SnowCanvasSerialNumberStyleMixedStrokeWidth |
     SnowCanvasSerialNumberStyleMixedStrokeStyle | SnowCanvasSerialNumberStyleMixedOpacity |
-    SnowCanvasSerialNumberStyleMixedType | SnowCanvasSerialNumberStyleMixedNumericType;
+    SnowCanvasSerialNumberStyleMixedType | SnowCanvasSerialNumberStyleMixedNumericType |
+    SnowCanvasSerialNumberStyleMixedStrokeRenderingStyle;
 
 const QString kShapeKey = QStringLiteral("drawing/shape_style");
 const QString kSpeechBubbleKey = QStringLiteral("drawing/speech_bubble_style");
@@ -435,6 +436,7 @@ QJsonObject serialNumberValue(const SnowCanvasSerialNumberStyle& style) {
     value.insert(QStringLiteral("font_family"), style.fontFamily);
     putDouble(&value, QStringLiteral("stroke_width"), style.strokeWidth);
     putEnum(&value, QStringLiteral("stroke_style"), style.strokeStyle);
+    putEnum(&value, QStringLiteral("stroke_rendering_style"), style.strokeRenderingStyle);
     putDouble(&value, QStringLiteral("opacity"), style.opacity);
     return value;
 }
@@ -459,6 +461,9 @@ void readSerialNumberValue(const QJsonObject& object, SnowCanvasSerialNumberStyl
     readDouble(object, QStringLiteral("stroke_width"), &style->strokeWidth);
     readEnum(object, QStringLiteral("stroke_style"),
              static_cast<int>(SnowCanvasStrokeStyle::Dotted), &style->strokeStyle);
+    readEnum(object, QStringLiteral("stroke_rendering_style"),
+             static_cast<int>(SnowCanvasStrokeRenderingStyle::Cartoonist),
+             &style->strokeRenderingStyle);
     readDouble(object, QStringLiteral("opacity"), &style->opacity);
 }
 

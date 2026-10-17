@@ -994,6 +994,9 @@ impl From<SnowSerialNumberStyle> for SerialNumberStyle {
             font_family: font_family_from_c(&value.font_family_utf8, value.font_family_utf8_len),
             stroke_width: value.stroke_width,
             stroke_style: snow_stroke_style_to_rust(value.stroke_style),
+            stroke_rendering_style: snow_stroke_rendering_style_to_rust(
+                value.stroke_rendering_style,
+            ),
             opacity: value.opacity,
         }
     }
@@ -1017,6 +1020,9 @@ impl From<SerialNumberStyle> for SnowSerialNumberStyle {
             font_size: value.font_size,
             stroke_width: value.stroke_width,
             stroke_style: snow_stroke_style_from_rust(value.stroke_style),
+            stroke_rendering_style: snow_stroke_rendering_style_from_rust(
+                value.stroke_rendering_style,
+            ),
             opacity: value.opacity,
             font_family_utf8_len: 0,
             font_family_truncated: 0,
@@ -1135,6 +1141,9 @@ unsafe fn runtime_style_default_enums_are_valid(defaults: *const SnowStyleDefaul
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).serial_number.fill_style))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).serial_number.stroke_style))
             && raw_c_enum_is_valid(std::ptr::addr_of!(
+                (*defaults).serial_number.stroke_rendering_style
+            ))
+            && raw_c_enum_is_valid(std::ptr::addr_of!(
                 (*defaults).serial_number.serial_number_type
             ))
     }
@@ -1235,6 +1244,9 @@ pub(crate) fn runtime_config_from_c(
                     fill_style: snow_fill_style_to_rust(defaults.serial_number.fill_style),
                     font_size: defaults.serial_number.font_size,
                     font_family: normalize_font_family(Some(serial_font_family)),
+                    stroke_rendering_style: snow_stroke_rendering_style_to_rust(
+                        defaults.serial_number.stroke_rendering_style,
+                    ),
                     stroke_width: defaults.serial_number.stroke_width,
                     stroke_style: snow_stroke_style_to_rust(defaults.serial_number.stroke_style),
                     opacity: defaults.serial_number.opacity,
@@ -1984,6 +1996,7 @@ mod tests {
             fill_style: FillStyle::Solid,
             font_size: 16.0,
             font_family: Some(family),
+            stroke_rendering_style: Default::default(),
             stroke_width: 2.0,
             stroke_style: StrokeStyle::Solid,
             opacity: 1.0,
@@ -2198,6 +2211,15 @@ mod stroke_rendering_tests {
             };
             let native: ShapeStyle = value.into();
             assert_eq!(SnowShapeStyle::from(native).stroke_rendering_style, style);
+            let serial = SnowSerialNumberStyle {
+                stroke_rendering_style: style,
+                ..Default::default()
+            };
+            let native: SerialNumberStyle = serial.into();
+            assert_eq!(
+                SnowSerialNumberStyle::from(native).stroke_rendering_style,
+                style
+            );
         }
         let item = snow_draw_engine::RectangleDisplayItem {
             stroke_rendering_style: StrokeRenderingStyle::Cartoonist,
@@ -2214,6 +2236,21 @@ mod stroke_rendering_tests {
             SnowStrokeRenderingStyle::Cartoonist
         );
         assert_eq!(converted.view.stroke_rendering_seed, 0x1234_abcd);
+        let serial = snow_draw_engine::SerialNumberDisplayItem {
+            stroke_rendering_style: StrokeRenderingStyle::Artist,
+            stroke_rendering_seed: 123,
+            ..Default::default()
+        };
+        let converted = snow_scene_display_item_from_rust(
+            &snow_draw_engine::SceneDisplayItem::SerialNumber(serial),
+            false,
+            false,
+        );
+        assert_eq!(
+            converted.view.stroke_rendering_style,
+            SnowStrokeRenderingStyle::Artist
+        );
+        assert_eq!(converted.view.stroke_rendering_seed, 123);
         assert_eq!(
             crate::snow_stroke_rendering_outset(SnowStrokeRenderingStyle::Artist, f64::INFINITY),
             2.0

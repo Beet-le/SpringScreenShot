@@ -17384,6 +17384,83 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
             "reconciliation should preserve each tool's rendering and pattern choices");
 }
 
+void serialNumberStrokeRenderingControlsRespectBadgeTypes() {
+    using Tool = ScreenshotToolPalette::Tool;
+    using Rendering = SnowCanvasStrokeRenderingStyle;
+    ScreenshotToolPalette::Options options;
+    options.showSerialNumberTool = true;
+    options.showTextTool = true;
+    options.styleDefaults = snow_shot::presentation::screenshotCanvasStyleDefaults();
+    ScreenshotToolPalette palette(options);
+    palette.setActiveTool(Tool::SerialNumber);
+    SnowCanvasStyleToolbarState state;
+    state.source = SnowCanvasStyleToolbarSource::SelectedSerialNumber;
+    state.serialNumberStyle.number = 12;
+    state.serialNumberStyleMixed = SnowCanvasSerialNumberStyleMixedStrokeRenderingStyle;
+    palette.setStyleToolbarState(state);
+    int commits = 0;
+    palette.setStyleEditHandler([&](const SnowCanvasStyleEdit& edit) {
+        const auto* serial = std::get_if<SnowCanvasSerialNumberEdit>(&edit);
+        require(serial != nullptr &&
+                    serial->properties == SnowCanvasSerialNumberStyleMixedStrokeRenderingStyle &&
+                    serial->style.number == 12,
+                "sequence stroke type must commit only its own property");
+        ++commits;
+        state.serialNumberStyle = serial->style;
+        state.serialNumberStyleMixed = 0;
+        palette.rememberStyleEdit(edit);
+        return true;
+    });
+    for (int pass = 0; pass < 2; ++pass) {
+        for (const auto type :
+             {SnowCanvasSerialNumberType::OutlinedCircle,
+              SnowCanvasSerialNumberType::OutlinedSquare, SnowCanvasSerialNumberType::SolidCircle,
+              SnowCanvasSerialNumberType::SolidSquare, SnowCanvasSerialNumberType::Circle}) {
+            state.serialNumberStyle.type = type;
+            palette.setStyleToolbarState(state);
+            auto* picker = colorPickerWithAccessibleName(palette, "Sequence number color");
+            require(picker != nullptr, "sequence numbers need the shared color picker");
+            picker->setPopupLayerMode(adqt::widgets::AdColorPicker::PopupLayerMode::InWindow);
+            picker->setPopupVisible(true);
+            QApplication::processEvents();
+            auto* row = picker->popupContent()->findChild<QWidget*>(
+                QStringLiteral("screenshotStrokeRenderingStyles"));
+            const bool outlined = type == SnowCanvasSerialNumberType::OutlinedCircle ||
+                                  type == SnowCanvasSerialNumberType::OutlinedSquare;
+            require(row != nullptr && row->isHidden() != outlined,
+                    "sequence stroke types are available only for outlined circles and squares");
+            const auto buttons = strokeRenderingButtons(row);
+            if (pass == 0 && type == SnowCanvasSerialNumberType::OutlinedCircle) {
+                for (auto* button : buttons)
+                    require(button->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Text,
+                            "mixed sequence stroke types clear selection");
+            }
+            const int before = commits;
+            buttons.at(1)->click();
+            require(commits == before + (outlined && (before == 0) ? 1 : 0),
+                    "hidden stroke types and repeated choices must not commit edits");
+            if (outlined) {
+                auto expected = options.styleDefaults;
+                expected.serialNumber.strokeRenderingStyle = Rendering::Artist;
+                require(palette.creationStyleDefaults() == expected,
+                        "sequence stroke type edits remember only the sequence preference");
+            }
+            picker->setPopupVisible(false);
+        }
+        palette.setActiveTool(Tool::Text);
+        auto* picker = colorPickerWithAccessibleName(palette, "Text color");
+        picker->setPopupVisible(true);
+        QApplication::processEvents();
+        auto* row = picker->popupContent() != nullptr
+                        ? picker->popupContent()->findChild<QWidget*>(
+                              QStringLiteral("screenshotStrokeRenderingStyles"))
+                        : nullptr;
+        require(row == nullptr || row->isHidden(), "reused text color pickers hide stroke types");
+        picker->setPopupVisible(false);
+        palette.setActiveTool(Tool::SerialNumber);
+    }
+}
+
 void strokeRenderingMixedSelectionResolvesOneProperty() {
     using Tool = ScreenshotToolPalette::Tool;
     for (const auto tool : {Tool::Shape, Tool::Arrow, Tool::Line}) {
@@ -17438,11 +17515,16 @@ void strokeRenderingPreferencesRoundTripAndRejectUnknownValues() {
     defaults.rectangle.strokeRenderingStyle = Rendering::Artist;
     defaults.arrow.strokeRenderingStyle = Rendering::Cartoonist;
     defaults.line.strokeRenderingStyle = Rendering::Artist;
+    defaults.serialNumber.strokeRenderingStyle = Rendering::Cartoonist;
     require(persistScreenshotCanvasToolStyles(defaults) &&
                 screenshotCanvasToolStyleDefaults() == defaults,
             "rendering preferences should persist independently for shape, arrow, and line");
     SnowCanvasWidget canvas;
     applyScreenshotCanvasToolStyles(canvas, defaults);
+    require(canvas.setCanvasTool(SnowCanvasTool::SerialNumber) &&
+                canvas.canvasStyleToolbarState().serialNumberStyle.strokeRenderingStyle ==
+                    Rendering::Cartoonist,
+            "saved sequence stroke type must reach canvas creation state");
     for (const auto tool : {SnowCanvasTool::Shape, SnowCanvasTool::Arrow, SnowCanvasTool::Line}) {
         require(canvas.setCanvasTool(tool), "activate a tool with restored rendering preferences");
         require(canvas.canvasStyleToolbarState().shapeStyle.strokeRenderingStyle ==
@@ -17452,7 +17534,7 @@ void strokeRenderingPreferencesRoundTripAndRejectUnknownValues() {
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
     for (const auto& key :
          {QStringLiteral("drawing/shape_style"), QStringLiteral("drawing/arrow_style"),
-          QStringLiteral("drawing/line_style")}) {
+          QStringLiteral("drawing/line_style"), QStringLiteral("drawing/serial_number_style")}) {
         for (const auto& value :
              {QJsonValue(QJsonValue::Undefined), QJsonValue(), QJsonValue(-1), QJsonValue(3),
               QJsonValue(1.5), QJsonValue(QStringLiteral("artist"))}) {
@@ -17464,7 +17546,11 @@ void strokeRenderingPreferencesRoundTripAndRejectUnknownValues() {
             const auto& style = key.endsWith(QStringLiteral("shape_style"))   ? loaded.rectangle
                                 : key.endsWith(QStringLiteral("arrow_style")) ? loaded.arrow
                                                                               : loaded.line;
-            require(style.strokeRenderingStyle == Rendering::Architect && style.strokeWidth == 2.0,
+            const bool serial = key.endsWith(QStringLiteral("serial_number_style"));
+            const auto rendering =
+                serial ? loaded.serialNumber.strokeRenderingStyle : style.strokeRenderingStyle;
+            const auto width = serial ? loaded.serialNumber.strokeWidth : style.strokeWidth;
+            require(rendering == Rendering::Architect && width == 2.0,
                     "missing or invalid rendering preferences should preserve Architect and other "
                     "fields");
         }
@@ -19831,6 +19917,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--stroke-rendering-only"))) {
+        serialNumberStrokeRenderingControlsRespectBadgeTypes();
         strokeRenderingControlsPreserveIndependentToolStyles();
         strokeRenderingMixedSelectionResolvesOneProperty();
         strokeRenderingPreferencesRoundTripAndRejectUnknownValues();
@@ -20156,6 +20243,7 @@ int main(int argc, char** argv) {
     tableQrEntrySelectionPersistsAcrossPaletteInstances();
     drawingColorsPreserveAlphaAcrossEditsAndToolSwitches();
     canvasToolStylesPersistIndependentlyWithoutGlobalStyles();
+    serialNumberStrokeRenderingControlsRespectBadgeTypes();
     strokeRenderingControlsPreserveIndependentToolStyles();
     strokeRenderingMixedSelectionResolvesOneProperty();
     strokeRenderingPreferencesRoundTripAndRejectUnknownValues();

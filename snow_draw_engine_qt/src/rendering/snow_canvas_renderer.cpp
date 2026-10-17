@@ -1089,7 +1089,7 @@ void drawTextItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
 }
 
 void drawSerialNumberItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
-                          const SnowSceneDisplayItem& item) {
+                          const SnowCanvasSceneItem& item) {
     const snow_canvas_render_geometry::ViewProjection projection =
         snow_canvas_render_geometry::sceneProjection(displayInfo);
     const QPointF center = canvasToView(projection, item.center_x, item.center_y);
@@ -1150,7 +1150,18 @@ void drawSerialNumberItem(QPainter& painter, const SceneDisplayInfo& displayInfo
     }
     snow_canvas_fill_render::drawTextBackgroundFill(painter, backgroundPath, item.fill,
                                                     item.fill_style, item.font_size, zoom);
-    if (square) {
+    const bool outlined = item.serial_number_type == SNOW_SERIAL_NUMBER_TYPE_OUTLINED_CIRCLE ||
+                          item.serial_number_type == SNOW_SERIAL_NUMBER_TYPE_OUTLINED_SQUARE;
+    if (outlined && item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT) {
+        const auto& geometry = snow_canvas_stroke_rendering::geometry(item);
+        painter.save();
+        painter.scale(zoom, zoom);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(toQColor(item.stroke));
+        if (item.stroke.a != 0 && strokeWidth > 0.0)
+            painter.drawPath(geometry.ink);
+        painter.restore();
+    } else if (square) {
         painter.drawRoundedRect(localRect, cornerRadius, cornerRadius);
     } else {
         painter.drawEllipse(localRect);

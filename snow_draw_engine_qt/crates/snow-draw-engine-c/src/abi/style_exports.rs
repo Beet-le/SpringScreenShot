@@ -138,8 +138,12 @@ unsafe fn serial_number_style_type_is_valid(style: *const SnowSerialNumberStyle)
     let numeric_raw = unsafe {
         std::ptr::read_unaligned(std::ptr::addr_of!((*style).numeric_type).cast::<i32>())
     };
+    let rendering_raw = unsafe {
+        std::ptr::read_unaligned(std::ptr::addr_of!((*style).stroke_rendering_style).cast::<i32>())
+    };
     SnowSerialNumberType::from_raw(raw).is_some()
         && SnowSerialNumberNumericType::from_raw(numeric_raw).is_some()
+        && SnowStrokeRenderingStyle::from_raw(rendering_raw).is_some()
 }
 
 #[unsafe(no_mangle)]
@@ -557,6 +561,11 @@ mod serial_number_style_type_tests {
             let invalid_ptr = invalid.as_mut_ptr();
             invalid_ptr.write(SnowSerialNumberStyle::default());
             std::ptr::addr_of_mut!((*invalid_ptr).serial_number_type)
+                .cast::<i32>()
+                .write_unaligned(99);
+            assert!(!serial_number_style_type_is_valid(invalid_ptr));
+            invalid_ptr.write(SnowSerialNumberStyle::default());
+            std::ptr::addr_of_mut!((*invalid_ptr).stroke_rendering_style)
                 .cast::<i32>()
                 .write_unaligned(99);
             assert!(!serial_number_style_type_is_valid(invalid_ptr));

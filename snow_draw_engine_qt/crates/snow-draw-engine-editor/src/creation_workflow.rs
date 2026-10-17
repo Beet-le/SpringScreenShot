@@ -286,6 +286,10 @@ impl Editor {
         // edits to existing badges cannot become implicit sequence starts.
         let mut serial = SerialNumberData {
             center,
+            stroke_rendering_seed: snow_draw_engine_core::arrow::stroke_rendering_seed(
+                (center.x as f32).to_bits(),
+                (center.y as f32).to_bits(),
+            ),
             ..self.state.default_serial_number.clone()
         };
         serial.text_element_id = None;

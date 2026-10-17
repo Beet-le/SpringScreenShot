@@ -12,6 +12,9 @@ endif()
 
 project(snow_apps VERSION 0.2.0 LANGUAGES CXX)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SnowBuildToolchain.cmake")
+snow_require_msvc_version()
+
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SnowWindowsArchitecture.cmake")
 snow_configure_windows_architecture()
 

@@ -196,6 +196,8 @@ impl Default for SerialNumberData {
             font_family: None,
             stroke_width: 2.0,
             stroke_style: StrokeStyle::Solid,
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             opacity: 1.0,
             text_element_id: None,
         }
@@ -701,6 +703,29 @@ pub fn serial_number_bounds(serial: &SerialNumberData) -> DrawRect {
     serial_paint_bounds(&SerialPaintGeometry::from_serial(serial))
 }
 
+fn serial_number_stroke_rendering_outset(serial: &SerialNumberData) -> f64 {
+    if !matches!(
+        serial.serial_number_type,
+        SerialNumberType::OutlinedCircle | SerialNumberType::OutlinedSquare
+    ) || serial.color.a == 0
+        || resolve_serial_number_stroke_width(serial) <= 0.0
+    {
+        return 0.0;
+    }
+    snow_draw_engine_core::arrow::stroke_rendering_outset(serial.stroke_rendering_style, f64::MAX)
+}
+
+pub fn serial_number_paint_bounds(serial: &SerialNumberData) -> DrawRect {
+    let bounds = serial_number_bounds(serial);
+    let outset = serial_number_stroke_rendering_outset(serial);
+    DrawRect::new(
+        bounds.min_x - outset,
+        bounds.min_y - outset,
+        bounds.max_x + outset,
+        bounds.max_y + outset,
+    )
+}
+
 pub fn serial_number_rect_proxy(serial: &SerialNumberData) -> RectangleData {
     RectangleData {
         stroke_rendering_seed: 0,
@@ -849,7 +874,9 @@ pub fn serial_number_hit_test(
     if radius <= 0.0 {
         return false;
     }
-    let outset = resolve_serial_number_stroke_width(serial) / 2.0 + hit_tolerance.max(0.0);
+    let outset = resolve_serial_number_stroke_width(serial) / 2.0
+        + hit_tolerance.max(0.0)
+        + serial_number_stroke_rendering_outset(serial);
     let effective_radius = radius + outset;
     if effective_radius <= 0.0 {
         return false;
@@ -1376,7 +1403,7 @@ pub(crate) fn element_visible_bounds(element: &ElementRecord) -> Option<DrawRect
             Some(text_bounds(text))
         }
         ElementData::SerialNumber(serial) if serial.diameter > 0.0 => {
-            Some(serial_number_bounds(serial))
+            Some(serial_number_paint_bounds(serial))
         }
         _ => None,
     }

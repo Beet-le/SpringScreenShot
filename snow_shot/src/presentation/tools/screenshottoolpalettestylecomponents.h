@@ -164,6 +164,7 @@ struct ScreenshotToolPaletteColorEditorConfig {
     std::function<ScreenshotToolPaletteTranslationText(const QColor& color)> presetTooltip;
     bool alphaEnabled = true;
     bool observePopup = false;
+    std::function<void(SnowCanvasStrokeRenderingStyle)> setRenderingStyle;
 };
 
 // Color picker trigger plus preset swatches. Shared by the highlight,
@@ -180,6 +181,7 @@ class ScreenshotToolPaletteColorEditor final : public ScreenshotToolPaletteStyle
                 const std::function<void(const QColor&)>& commitColor,
                 const std::function<void(const QColor&)>& previewColor);
     void update(const QColor& color, bool mixed);
+    void updateRenderingStyle(SnowCanvasStrokeRenderingStyle style, bool mixed, bool enabled);
     void refreshMetrics(const ScreenshotToolPaletteButtonMetrics& metrics) override;
     [[nodiscard]] bool isInteracting() const override {
         return m_handlingChange != nullptr && *m_handlingChange;
@@ -188,9 +190,16 @@ class ScreenshotToolPaletteColorEditor final : public ScreenshotToolPaletteStyle
     void release() override;
 
   private:
+    void ensureRenderingStyleContent(const ScreenshotToolPaletteButtonMetrics& metrics);
     adqt::widgets::AdColorPicker* m_picker = nullptr;
     ColorPickerTrigger* m_trigger = nullptr;
     ScreenshotToolPaletteColorPresets m_presets;
+    std::function<void(SnowCanvasStrokeRenderingStyle)> m_setRenderingStyle;
+    QWidget* m_renderingStyleRow = nullptr;
+    QVector<StrokeRenderingStylePreviewButton*> m_renderingStyleButtons;
+    SnowCanvasStrokeRenderingStyle m_renderingStyle = SnowCanvasStrokeRenderingStyle::Architect;
+    bool m_renderingStyleMixed = false;
+    bool m_renderingStyleEnabled = false;
     std::shared_ptr<std::function<void(const QColor&)>> m_commitColor;
     std::shared_ptr<std::function<void(const QColor&)>> m_previewColor;
     std::shared_ptr<bool> m_handlingChange;

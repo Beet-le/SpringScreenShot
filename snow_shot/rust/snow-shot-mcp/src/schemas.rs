@@ -1810,7 +1810,7 @@ mod tests {
     #[test]
     fn stroke_rendering_styles_are_typed() {
         for value in ["architect", "artist", "cartoonist"] {
-            for target in ["rectangle", "arrow", "line"] {
+            for target in ["rectangle", "arrow", "line", "serial_number"] {
                 assert!(
                     schema(
                         "snow_shot_screenshot_set_tool_style",

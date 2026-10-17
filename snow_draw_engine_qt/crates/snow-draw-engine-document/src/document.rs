@@ -7,7 +7,7 @@ use crate::{
     Operation, Transaction, arrow_bounds, arrow_hit_test, arrow_is_degenerate,
     document_geometry::{
         element_visible_bounds, filter_bounds, filter_rect_proxy, pen_filter_bounds,
-        pen_filter_rect_proxy, rectangle_hit_test, serial_number_bounds, serial_number_hit_test,
+        pen_filter_rect_proxy, rectangle_hit_test, serial_number_hit_test,
         serial_number_rect_proxy, text_bounds, text_hit_test, validate_element_data,
     },
     free_draw_bounds, free_draw_hit_test,
@@ -902,6 +902,10 @@ pub struct SerialNumberData {
     pub font_family: Option<String>,
     pub stroke_width: f64,
     pub stroke_style: StrokeStyle,
+    #[serde(default)]
+    pub stroke_rendering_style: snow_draw_engine_core::arrow::StrokeRenderingStyle,
+    #[serde(default)]
+    pub stroke_rendering_seed: u32,
     pub opacity: f64,
     pub text_element_id: Option<ElementId>,
 }
@@ -979,7 +983,7 @@ impl ElementData {
             Self::Arrow(arrow) => crate::arrow_paint_bounds(arrow),
             Self::FreeDraw(free_draw) => free_draw_bounds(free_draw),
             Self::Text(text) => text_bounds(text),
-            Self::SerialNumber(serial) => serial_number_bounds(serial),
+            Self::SerialNumber(serial) => crate::serial_number_paint_bounds(serial),
         }
     }
 

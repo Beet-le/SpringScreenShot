@@ -587,8 +587,18 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDispl
         }
         const double resolvedStrokeWidth = item.stroke_width * projection.cameraZoom;
         const double strokeWidth = std::isfinite(resolvedStrokeWidth) ? resolvedStrokeWidth : 0.0;
-        return rotatedRectBounds(center, diameter * projection.cameraZoom,
-                                 diameter * projection.cameraZoom, item.rotation, strokeWidth);
+        QRectF bounds =
+            rotatedRectBounds(center, diameter * projection.cameraZoom,
+                              diameter * projection.cameraZoom, item.rotation, strokeWidth);
+        if ((item.serial_number_type == SNOW_SERIAL_NUMBER_TYPE_OUTLINED_CIRCLE ||
+             item.serial_number_type == SNOW_SERIAL_NUMBER_TYPE_OUTLINED_SQUARE) &&
+            item.stroke.a != 0 && strokeWidth > 0.0) {
+            const double extra =
+                snow_stroke_rendering_outset(item.stroke_rendering_style, diameter) *
+                projection.cameraZoom;
+            bounds.adjust(-extra, -extra, extra, extra);
+        }
+        return bounds;
     }
     case SNOW_SCENE_DISPLAY_ITEM_SERIAL_NUMBER_CONNECTOR: {
         const QPointF start = canvasToView(projection, item.center_x, item.center_y);

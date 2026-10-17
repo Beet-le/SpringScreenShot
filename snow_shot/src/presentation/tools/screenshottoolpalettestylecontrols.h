@@ -343,7 +343,8 @@ class ScreenshotToolPaletteStyleControls final {
         SerialNumberFontFamilyRefresh = 1u << 4,
         SerialNumberTypeRefresh = 1u << 5,
         SerialNumberNumericTypeRefresh = 1u << 6,
-        AllSerialNumberRefreshes = (1u << 7) - 1,
+        SerialNumberStrokeRenderingRefresh = 1u << 7,
+        AllSerialNumberRefreshes = (1u << 8) - 1,
     };
     static constexpr quint32 kAllRefreshGroups = 0xffffffffu;
 
@@ -443,6 +444,7 @@ class ScreenshotToolPaletteStyleControls final {
     void setWatermarkGap(double gap);
     void setWatermarkOpacity(double opacity);
     void setSerialNumberColor(const QColor& color);
+    void setSerialNumberStrokeRenderingStyle(SnowCanvasStrokeRenderingStyle style);
     void setSerialNumberType(SnowCanvasSerialNumberType type);
     void setSerialNumberNumericType(SnowCanvasSerialNumberNumericType type);
     void setSerialNumberFillColor(const QColor& color);

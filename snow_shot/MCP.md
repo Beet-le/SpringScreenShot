@@ -280,7 +280,8 @@ successive requests.
 
 Styles use RGBA byte arrays (`stroke`, `fill`, `color`), finite dimensions and
 opacity, `stroke_style: solid|dashed|dotted`,
-`stroke_rendering_style: architect|artist|cartoonist` (rectangle, arrow, and line),
+`stroke_rendering_style: architect|artist|cartoonist` (rectangle, arrow, line, and
+the outer ring of outlined serial-number circles and squares),
 `arrow_type: straight|curve|elbow`,
 and `filter: mosaic|gaussian_blur|grayscale|inversion|emboss`.
 Other fields are `stroke_width`, `corner_radius`, `rotation`, `font_size`,

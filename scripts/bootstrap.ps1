@@ -59,7 +59,6 @@ $vcpkgInstalledRoot = Join-Path $vcpkgRoot "installed"
 # Keep this paired with the available vcpkg tool release and CMake 4.2.3:
 # newer snapshots require an unsupported manifest-tool schema or bundled CMake 4.4+.
 $vcpkgBaseline = "4497409a47f19db373a410a0efb84eca4747adbf"
-$rustToolchain = "1.97.1"
 $rustTarget = $windowsTarget.RustTarget
 
 Add-SnowMsvcToolsToPath -Architecture $Architecture | Out-Null
@@ -224,19 +223,19 @@ if (-not $SkipDependencyInstall) {
     }
 }
 
+$rustToolchain = Get-SnowRustToolchainInfo
 Invoke-Checked -Command $rustup.Source -Arguments @(
-    "toolchain", "install", $rustToolchain,
-    "--profile", "minimal",
-    "--component", "rustfmt",
-    "--component", "clippy",
-    "--target", $rustTarget
+    "component", "add", "rustfmt", "clippy"
+) -WorkingDirectory $repoRoot
+Invoke-Checked -Command $rustup.Source -Arguments @(
+    "target", "add", $rustTarget
 ) -WorkingDirectory $repoRoot
 
 $null = Invoke-Checked -Command $cargo.Source -Arguments @(
-    "+$rustToolchain", "metadata", "--format-version", "1", "--no-deps"
+    "metadata", "--format-version", "1", "--no-deps"
 ) -WorkingDirectory (Join-Path $repoRoot "snow-crates")
 $null = Invoke-Checked -Command $cargo.Source -Arguments @(
-    "+$rustToolchain", "metadata", "--format-version", "1", "--no-deps"
+    "metadata", "--format-version", "1", "--no-deps"
 ) -WorkingDirectory (Join-Path $repoRoot "snow_draw_engine_qt")
 
 $libclangDirectory = Join-Path $toolsRoot "llvm\bin"
@@ -260,4 +259,4 @@ if (-not $SkipQtValidation) {
         Write-Host "SNOW_QT_STATIC_DIR: $env:SNOW_QT_STATIC_DIR"
     }
 }
-Write-Host "Rust: $rustToolchain ($rustTarget)"
+Write-Host "Rust: $($rustToolchain.Version) ($rustTarget)"

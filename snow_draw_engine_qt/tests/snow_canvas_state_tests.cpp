@@ -71,6 +71,20 @@ void strokeRenderingStylesRoundTripAndPatchIndependently() {
         snowCanvasMergeStyle(patched, requested, SnowCanvasShapeStylePropertyStrokeRenderingStyle);
         require(patched == style,
                 "rendering patches preserve stroke pattern and unrelated properties");
+        SnowCanvasSerialNumberStyle serial;
+        serial.fill = QColor(Qt::transparent);
+        serial.strokeRenderingStyle = rendering;
+        require(snow_canvas_types::toCanvasSerialNumberStyle(
+                    snow_canvas_types::toEngineSerialNumberStyle(serial)) == serial,
+                "sequence stroke types survive the Qt/C ABI round trip");
+        auto serialPatch = serial;
+        serialPatch.number = 30;
+        serialPatch.fontSize = 42;
+        SnowCanvasSerialNumberStyle merged;
+        merged.fill = QColor(Qt::transparent);
+        snowCanvasMergeStyle(merged, serialPatch,
+                             SnowCanvasSerialNumberStyleMixedStrokeRenderingStyle);
+        require(merged == serial, "sequence stroke type patches preserve other properties");
     }
     auto changed = original;
     changed.strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Artist;
@@ -94,12 +108,21 @@ void strokeRenderingStylesRoundTripAndPatchIndependently() {
     after.styleToolbarState.shape_style_mixed = SnowCanvasShapeStyleMixedStrokeRenderingStyle;
     require(snow_canvas_state::diffSnapshots(before, after).styleToolbarChanged,
             "mixed rendering state synchronizes the toolbar");
+    before = after;
+    after.styleToolbarState.serial_number_style.stroke_rendering_style =
+        SNOW_STROKE_RENDERING_STYLE_ARTIST;
+    require(snow_canvas_state::diffSnapshots(before, after).styleToolbarChanged,
+            "sequence stroke types synchronize toolbar state");
 
     SnowCanvasStyleDefaults invalid;
     invalid.rectangle.strokeRenderingStyle = static_cast<SnowCanvasStrokeRenderingStyle>(99);
     SnowStyleDefaults engineDefaults{};
     require(!snow_canvas_types::toEngineStyleDefaults(invalid, engineDefaults),
             "invalid rendering preferences are rejected before crossing the C ABI");
+    invalid = SnowCanvasStyleDefaults{};
+    invalid.serialNumber.strokeRenderingStyle = static_cast<SnowCanvasStrokeRenderingStyle>(99);
+    require(!snow_canvas_types::toEngineStyleDefaults(invalid, engineDefaults),
+            "invalid sequence stroke types are rejected before crossing the C ABI");
 }
 
 void magnifierStylePatchesAndSynchronization() {

@@ -3496,6 +3496,9 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSerialNumberFamily(
     serialNumberColorConfig.presetSource =
         snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Stroke;
     serialNumberColorConfig.observePopup = true;
+    serialNumberColorConfig.setRenderingStyle = [this](SnowCanvasStrokeRenderingStyle style) {
+        setSerialNumberStrokeRenderingStyle(style);
+    };
     serialNumberColorConfig.presetTooltip = [](const QColor& color) {
         return ScreenshotToolPaletteTranslationText("Sequence number color %1").arg(color.name());
     };
@@ -4771,6 +4774,18 @@ void ScreenshotToolPaletteStyleControls::registerSerialNumberEntries() {
              if (m_serialNumberColorEditor != nullptr) {
                  m_serialNumberColorEditor->update(m_state.m_serialNumberStyle.color,
                                                    mixed(SnowCanvasSerialNumberStyleMixedColor));
+             }
+         }},
+        {SerialNumberStrokeRenderingRefresh | SerialNumberTypeRefresh,
+         [this, mixed]() {
+             if (m_serialNumberColorEditor != nullptr) {
+                 const auto type = m_state.m_serialNumberStyle.type;
+                 m_serialNumberColorEditor->updateRenderingStyle(
+                     m_state.m_serialNumberStyle.strokeRenderingStyle,
+                     mixed(SnowCanvasSerialNumberStyleMixedStrokeRenderingStyle),
+                     mixed(SnowCanvasSerialNumberStyleMixedType) ||
+                         type == SnowCanvasSerialNumberType::OutlinedCircle ||
+                         type == SnowCanvasSerialNumberType::OutlinedSquare);
              }
          }},
         {SerialNumberNumericTypeRefresh,
@@ -6811,6 +6826,17 @@ void ScreenshotToolPaletteStyleControls::setSerialNumberColor(const QColor& colo
                                });
 }
 
+void ScreenshotToolPaletteStyleControls::setSerialNumberStrokeRenderingStyle(
+    SnowCanvasStrokeRenderingStyle renderingStyle) {
+    commitSerialNumberProperty(SnowCanvasSerialNumberStyleMixedStrokeRenderingStyle,
+                               [renderingStyle](SnowCanvasSerialNumberStyle& style) {
+                                   if (style.strokeRenderingStyle == renderingStyle)
+                                       return false;
+                                   style.strokeRenderingStyle = renderingStyle;
+                                   return true;
+                               });
+}
+
 void ScreenshotToolPaletteStyleControls::setSerialNumberNumericType(
     SnowCanvasSerialNumberNumericType type) {
     commitSerialNumberProperty(SnowCanvasSerialNumberStyleMixedNumericType,
@@ -7051,6 +7077,10 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
             if (m_state.m_serialNumberStyle.color != displayedStyle.color ||
                 (mixedChanged & SnowCanvasSerialNumberStyleMixedColor) != 0)
                 groups |= SerialNumberColorRefresh;
+            if (m_state.m_serialNumberStyle.strokeRenderingStyle !=
+                    displayedStyle.strokeRenderingStyle ||
+                (mixedChanged & SnowCanvasSerialNumberStyleMixedStrokeRenderingStyle) != 0)
+                groups |= SerialNumberStrokeRenderingRefresh;
             if (m_state.m_serialNumberStyle.numericType != displayedStyle.numericType ||
                 (mixedChanged & SnowCanvasSerialNumberStyleMixedNumericType) != 0)
                 groups |= SerialNumberNumericTypeRefresh;

@@ -6,8 +6,8 @@ Existing x64 presets, artifact names, and update feeds retain their identities.
 
 ## Prerequisites
 
-Use PowerShell 7.2+, CMake 4.2+, Visual Studio 2026/MSVC 14.51, the matching
-Windows SDK ARM64 libraries, and Rust 1.97.1. Install the Visual Studio C++ ARM64
+Use PowerShell 7.2+, CMake 4.2+, Visual Studio 2026/MSVC 14.51 or newer, the matching
+Windows SDK ARM64 libraries, and Rust 1.97.1 or newer. Install the Visual Studio C++ ARM64
 build-tools component, including `armasm64.exe`. A native ARM64 host uses
 `HostARM64/arm64`; an x64 host uses `Hostx64/arm64`.
 
@@ -15,6 +15,11 @@ Rust bindgen loads libclang into the Rust host process. Native ARM64 Rust requir
 an ARM64 `libclang.dll`; place it under `.tools/llvm-arm64/bin`, select a native
 Visual Studio LLVM installation, or set `LIBCLANG_PATH` to its directory. An x64
 Rust host uses x64 libclang even when building ARM64 application binaries.
+
+Toolchain versions in `scripts/build-toolchain.json` are minimums. Build scripts
+select the newest supported installed MSVC toolset and use the active Rust
+toolchain. Bootstrap adds Rust components and targets to that toolchain. vcpkg
+accepts installed host tools meeting its own minimums and downloads them when needed.
 
 ARM64 dependencies are isolated under `.tools/vcpkg/installed/arm64/{static,dynamic}`.
 Host tools use the physical host triplet independently of the application target.

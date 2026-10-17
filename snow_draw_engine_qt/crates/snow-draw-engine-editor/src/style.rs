@@ -20,14 +20,14 @@ use crate::{
     SERIAL_NUMBER_STYLE_MIXED_FILL_STYLE, SERIAL_NUMBER_STYLE_MIXED_FONT_FAMILY,
     SERIAL_NUMBER_STYLE_MIXED_FONT_SIZE, SERIAL_NUMBER_STYLE_MIXED_NUMBER,
     SERIAL_NUMBER_STYLE_MIXED_NUMERIC_TYPE, SERIAL_NUMBER_STYLE_MIXED_OPACITY,
-    SERIAL_NUMBER_STYLE_MIXED_STROKE_STYLE, SERIAL_NUMBER_STYLE_MIXED_STROKE_WIDTH,
-    SERIAL_NUMBER_STYLE_MIXED_TYPE, SHAPE_STYLE_MIXED_ARROW_TYPE, SHAPE_STYLE_MIXED_CORNER_RADII,
-    SHAPE_STYLE_MIXED_END_ARROWHEAD, SHAPE_STYLE_MIXED_FILL, SHAPE_STYLE_MIXED_FILL_STYLE,
-    SHAPE_STYLE_MIXED_HIGHLIGHT_SHAPE, SHAPE_STYLE_MIXED_OPACITY, SHAPE_STYLE_MIXED_SHAPE,
-    SHAPE_STYLE_MIXED_START_ARROWHEAD, SHAPE_STYLE_MIXED_STROKE, SHAPE_STYLE_MIXED_STROKE_STYLE,
-    SHAPE_STYLE_MIXED_STROKE_WIDTH, SHAPE_STYLE_PROPERTY_ARROW_TYPE,
-    SHAPE_STYLE_PROPERTY_CORNER_RADII, SHAPE_STYLE_PROPERTY_END_ARROWHEAD,
-    SHAPE_STYLE_PROPERTY_FILL, SHAPE_STYLE_PROPERTY_FILL_STYLE,
+    SERIAL_NUMBER_STYLE_MIXED_STROKE_RENDERING_STYLE, SERIAL_NUMBER_STYLE_MIXED_STROKE_STYLE,
+    SERIAL_NUMBER_STYLE_MIXED_STROKE_WIDTH, SERIAL_NUMBER_STYLE_MIXED_TYPE,
+    SHAPE_STYLE_MIXED_ARROW_TYPE, SHAPE_STYLE_MIXED_CORNER_RADII, SHAPE_STYLE_MIXED_END_ARROWHEAD,
+    SHAPE_STYLE_MIXED_FILL, SHAPE_STYLE_MIXED_FILL_STYLE, SHAPE_STYLE_MIXED_HIGHLIGHT_SHAPE,
+    SHAPE_STYLE_MIXED_OPACITY, SHAPE_STYLE_MIXED_SHAPE, SHAPE_STYLE_MIXED_START_ARROWHEAD,
+    SHAPE_STYLE_MIXED_STROKE, SHAPE_STYLE_MIXED_STROKE_STYLE, SHAPE_STYLE_MIXED_STROKE_WIDTH,
+    SHAPE_STYLE_PROPERTY_ARROW_TYPE, SHAPE_STYLE_PROPERTY_CORNER_RADII,
+    SHAPE_STYLE_PROPERTY_END_ARROWHEAD, SHAPE_STYLE_PROPERTY_FILL, SHAPE_STYLE_PROPERTY_FILL_STYLE,
     SHAPE_STYLE_PROPERTY_HIGHLIGHT_SHAPE, SHAPE_STYLE_PROPERTY_OPACITY, SHAPE_STYLE_PROPERTY_SHAPE,
     SHAPE_STYLE_PROPERTY_START_ARROWHEAD, SHAPE_STYLE_PROPERTY_STROKE,
     SHAPE_STYLE_PROPERTY_STROKE_STYLE, SHAPE_STYLE_PROPERTY_STROKE_WIDTH, SelectionArrowState,
@@ -52,6 +52,7 @@ const SERIAL_NUMBER_STYLE_ALL_PROPERTIES: u32 = SERIAL_NUMBER_STYLE_MIXED_NUMBER
     | SERIAL_NUMBER_STYLE_MIXED_FONT_FAMILY
     | SERIAL_NUMBER_STYLE_MIXED_STROKE_WIDTH
     | SERIAL_NUMBER_STYLE_MIXED_STROKE_STYLE
+    | SERIAL_NUMBER_STYLE_MIXED_STROKE_RENDERING_STYLE
     | SERIAL_NUMBER_STYLE_MIXED_OPACITY;
 
 pub(crate) fn stepped_font_size(current: f64, increase: bool) -> f64 {
@@ -468,6 +469,7 @@ impl SerialNumberStyle {
             font_family: serial.font_family.clone(),
             stroke_width: serial.stroke_width,
             stroke_style: serial.stroke_style,
+            stroke_rendering_style: serial.stroke_rendering_style,
             opacity: serial.opacity,
         }
     }
@@ -742,6 +744,9 @@ fn serial_number_style_changed_properties(
     if current.stroke_style != next.stroke_style {
         properties |= SERIAL_NUMBER_STYLE_MIXED_STROKE_STYLE;
     }
+    if current.stroke_rendering_style != next.stroke_rendering_style {
+        properties |= SERIAL_NUMBER_STYLE_MIXED_STROKE_RENDERING_STYLE;
+    }
     if current.opacity != next.opacity {
         properties |= SERIAL_NUMBER_STYLE_MIXED_OPACITY;
     }
@@ -799,6 +804,9 @@ fn serial_number_with_style_properties(
     }
     if properties & SERIAL_NUMBER_STYLE_MIXED_STROKE_STYLE != 0 {
         updated.stroke_style = style.stroke_style;
+    }
+    if properties & SERIAL_NUMBER_STYLE_MIXED_STROKE_RENDERING_STYLE != 0 {
+        updated.stroke_rendering_style = style.stroke_rendering_style;
     }
     if properties & SERIAL_NUMBER_STYLE_MIXED_OPACITY != 0 {
         updated.opacity = style.opacity;
@@ -1826,6 +1834,9 @@ impl Editor {
             }
             if style.stroke_style != first.stroke_style {
                 mixed |= SERIAL_NUMBER_STYLE_MIXED_STROKE_STYLE;
+            }
+            if style.stroke_rendering_style != first.stroke_rendering_style {
+                mixed |= SERIAL_NUMBER_STYLE_MIXED_STROKE_RENDERING_STYLE;
             }
             if style.opacity != first.opacity {
                 mixed |= SERIAL_NUMBER_STYLE_MIXED_OPACITY;
@@ -4459,6 +4470,62 @@ mod tests {
         );
         assert_ne!(
             editor.serial_number_style_mixed(&document) & SERIAL_NUMBER_STYLE_MIXED_NUMBER,
+            0
+        );
+    }
+
+    #[test]
+    fn serial_number_stroke_rendering_patch_resolves_only_the_mixed_stroke_type() {
+        use snow_draw_engine_core::arrow::StrokeRenderingStyle;
+        let mut document = DocumentModel::new();
+        let first_id = document.allocate_element_id();
+        let second_id = document.allocate_element_id();
+        let first = SerialNumberData {
+            number: 4,
+            stroke_rendering_seed: 123,
+            ..Default::default()
+        };
+        let second = SerialNumberData {
+            number: 8,
+            font_size: 35.0,
+            stroke_style: StrokeStyle::Dashed,
+            stroke_rendering_seed: 456,
+            stroke_rendering_style: StrokeRenderingStyle::Artist,
+            ..Default::default()
+        };
+        let mut insert = Transaction::new("mixed stroke types");
+        insert.insert_serial_number(first_id, ElementMeta::default(), first.clone());
+        insert.insert_serial_number(second_id, ElementMeta::default(), second.clone());
+        document.apply_transaction(insert).unwrap();
+        let mut editor = Editor::new(Default::default()).unwrap();
+        editor.set_selection_state(vec![first_id, second_id], Some(first_id));
+        assert_ne!(
+            editor.serial_number_style_mixed(&document)
+                & SERIAL_NUMBER_STYLE_MIXED_STROKE_RENDERING_STYLE,
+            0
+        );
+        let mut style = editor.serial_number_style(&document);
+        // Resolve the mixed property to the first item's value.
+        style.stroke_rendering_style = StrokeRenderingStyle::Architect;
+        let EditorCommand::ApplyTransaction(command) = editor
+            .set_serial_number_style_patch(
+                &document,
+                style,
+                SERIAL_NUMBER_STYLE_MIXED_STROKE_RENDERING_STYLE,
+            )
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("expected transaction")
+        };
+        document.apply_transaction(command.transaction).unwrap();
+        for (id, mut original) in [(first_id, first), (second_id, second)] {
+            original.stroke_rendering_style = StrokeRenderingStyle::Architect;
+            assert_eq!(document.serial_number(id).unwrap(), &original);
+        }
+        assert_eq!(
+            editor.serial_number_style_mixed(&document)
+                & SERIAL_NUMBER_STYLE_MIXED_STROKE_RENDERING_STYLE,
             0
         );
     }

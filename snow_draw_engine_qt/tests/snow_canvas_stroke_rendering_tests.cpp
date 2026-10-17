@@ -130,6 +130,54 @@ void stylesAreStableAndDistinct() {
     }
 }
 
+void serialNumberStrokeTypesOnlyChangeOutlinedRings() {
+    for (const auto type :
+         {SNOW_SERIAL_NUMBER_TYPE_OUTLINED_CIRCLE, SNOW_SERIAL_NUMBER_TYPE_OUTLINED_SQUARE,
+          SNOW_SERIAL_NUMBER_TYPE_SOLID_CIRCLE, SNOW_SERIAL_NUMBER_TYPE_SOLID_SQUARE,
+          SNOW_SERIAL_NUMBER_TYPE_CIRCLE}) {
+        SnowSceneDisplayItem source{};
+        source.kind = SNOW_SCENE_DISPLAY_ITEM_SERIAL_NUMBER;
+        source.serial_number_type = static_cast<std::uint8_t>(type);
+        source.width = source.height = 120;
+        source.corner_radii = {10, 10, 10, 10};
+        source.font_size = 28;
+        source.text_utf8 = "12";
+        source.text_utf8_len = 2;
+        source.serial_number = 12;
+        source.stroke = source.text_color = {25, 50, 90, 255};
+        source.fill = {240, 220, 100, 255};
+        source.fill_style = SNOW_FILL_STYLE_SOLID;
+        source.stroke_width = 3;
+        source.opacity = 0.7;
+        source.stroke_rendering_seed = 142857;
+        source.stroke_rendering_style = SNOW_STROKE_RENDERING_STYLE_ARCHITECT;
+        const QImage architect = render(SnowCanvasSceneItem(source));
+        source.stroke_rendering_style = SNOW_STROKE_RENDERING_STYLE_ARTIST;
+        SnowCanvasSceneItem artist(source);
+        const QImage artistImage = render(artist);
+        source.stroke_rendering_style = SNOW_STROKE_RENDERING_STYLE_CARTOONIST;
+        const QImage cartoon = render(SnowCanvasSceneItem(source));
+        const bool outlined = type == SNOW_SERIAL_NUMBER_TYPE_OUTLINED_CIRCLE ||
+                              type == SNOW_SERIAL_NUMBER_TYPE_OUTLINED_SQUARE;
+        if (outlined) {
+            require(architect != artistImage && artistImage != cartoon && architect != cartoon,
+                    "outlined sequence numbers must expose three distinct stroke types");
+            const QRect interior(120, 70, 80, 80);
+            require(architect.copy(interior) == artistImage.copy(interior) &&
+                        architect.copy(interior) == cartoon.copy(interior),
+                    "stroke types must preserve sequence number glyphs and interior fills");
+            require(artistImage == render(artist), "sequence number strokes must be deterministic");
+            snow_canvas_stroke_rendering::takeDiagnostics();
+            render(artist, 1.5, 1.5);
+            require(snow_canvas_stroke_rendering::takeDiagnostics().geometryBuilds == 0,
+                    "sequence number strokes must reuse coverage across zoom and DPI");
+        } else {
+            require(architect == artistImage && architect == cartoon,
+                    "solid and numberless sequence styles must ignore stroke types");
+        }
+    }
+}
+
 void warmGeometrySurvivesColourAndOpacityChanges() {
     auto item = rectangle(SNOW_STROKE_RENDERING_STYLE_ARTIST, SNOW_DISPLAY_RECT_SHAPE_ELLIPSE);
     render(item);
@@ -202,10 +250,19 @@ void patternsUseOneTraceAndFillsStayCrisp() {
 
 void clippingAndBoundsIncludeStyledInk() {
     for (double zoom : {0.75, 1.0, 1.5}) {
-        for (int shape = 0; shape < 6; ++shape) {
-            auto item = shape < 3 ? rectangle(SNOW_STROKE_RENDERING_STYLE_CARTOONIST, shape)
-                                  : arrow(SNOW_STROKE_RENDERING_STYLE_CARTOONIST,
-                                          static_cast<SnowArrowType>(shape - 3));
+        for (int shape = 0; shape < 8; ++shape) {
+            auto item = shape < 3   ? rectangle(SNOW_STROKE_RENDERING_STYLE_CARTOONIST, shape)
+                        : shape < 6 ? arrow(SNOW_STROKE_RENDERING_STYLE_CARTOONIST,
+                                            static_cast<SnowArrowType>(shape - 3))
+                                    : rectangle(SNOW_STROKE_RENDERING_STYLE_CARTOONIST);
+            if (shape >= 6) {
+                item.kind = SNOW_SCENE_DISPLAY_ITEM_SERIAL_NUMBER;
+                item.serial_number_type =
+                    static_cast<std::uint8_t>(shape == 6 ? SNOW_SERIAL_NUMBER_TYPE_OUTLINED_CIRCLE
+                                                         : SNOW_SERIAL_NUMBER_TYPE_OUTLINED_SQUARE);
+                item.width = item.height = 90;
+                item.corner_radii = {6, 6, 6, 6};
+            }
             item.rotation = shape < 3 ? 0.21 : 0;
             auto info = displayInfo();
             info.camera_zoom = zoom;
@@ -742,6 +799,7 @@ int main(int argc, char** argv) {
     QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf"));
     architectKeepsTheOriginalFastPath();
     stylesAreStableAndDistinct();
+    serialNumberStrokeTypesOnlyChangeOutlinedRings();
     warmGeometrySurvivesColourAndOpacityChanges();
     translucentInkReceivesOpacityOnce();
     patternsUseOneTraceAndFillsStayCrisp();

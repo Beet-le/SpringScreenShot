@@ -194,6 +194,7 @@ typedef struct SnowFilterStyle {
 #define SNOW_SERIAL_NUMBER_STYLE_MIXED_OPACITY (1u << 8)
 #define SNOW_SERIAL_NUMBER_STYLE_MIXED_TYPE (1u << 9)
 #define SNOW_SERIAL_NUMBER_STYLE_MIXED_NUMERIC_TYPE (1u << 10)
+#define SNOW_SERIAL_NUMBER_STYLE_MIXED_STROKE_RENDERING_STYLE (1u << 11)
 
 typedef enum SnowSerialNumberNumericType {
     SNOW_SERIAL_NUMBER_NUMERIC_TYPE_ARABIC = 0,
@@ -632,6 +633,7 @@ typedef struct SnowSerialNumberStyle {
     uint8_t reserved1[3];
     char font_family_utf8[SNOW_FONT_FAMILY_UTF8_CAPACITY];
     SnowSerialNumberNumericType numeric_type;
+    SnowStrokeRenderingStyle stroke_rendering_style;
 } SnowSerialNumberStyle;
 
 typedef enum SnowDistanceUnit {

@@ -709,6 +709,12 @@ impl Engine {
                                 s.font_family,
                             )),
                             stroke_width: s.stroke_width,
+                            stroke_rendering_style: s.stroke_rendering_style,
+                            stroke_rendering_seed:
+                                snow_draw_engine_core::arrow::stroke_rendering_seed(
+                                    id.index,
+                                    id.generation,
+                                ),
                             opacity: s.opacity,
                             ..Default::default()
                         },
@@ -880,12 +886,19 @@ mod tests {
         apply(&mut engine, json!([
             {"type":"rectangle", "bounds":[10,20,100,80], "style":{"stroke_rendering_style":"artist"}},
             {"type":"arrow", "points":[[0,0],[100,80]], "style":{"stroke_rendering_style":"cartoonist"}},
-            {"type":"line", "points":[[0,80],[100,0]], "style":{"stroke_rendering_style":"artist"}}
+            {"type":"line", "points":[[0,80],[100,0]], "style":{"stroke_rendering_style":"artist"}},
+            {"type":"serial_number", "center":[50,50], "number":4, "style":{"stroke_rendering_style":"cartoonist"}}
         ])).unwrap();
         let ids = engine.model.paint_order().to_vec();
         let rect = *engine.model.rectangle(ids[0]).unwrap();
         let arrow = engine.model.arrow(ids[1]).unwrap().clone();
         let line = engine.model.arrow(ids[2]).unwrap().clone();
+        let serial = engine.model.serial_number(ids[3]).unwrap().clone();
+        assert_eq!(
+            serial.stroke_rendering_style,
+            StrokeRenderingStyle::Cartoonist
+        );
+        assert_ne!(serial.stroke_rendering_seed, 0);
         assert_eq!(rect.stroke_rendering_style, StrokeRenderingStyle::Artist);
         assert_eq!(
             arrow.stroke_rendering_style,
@@ -899,6 +912,7 @@ mod tests {
         engine.redo().unwrap();
         assert_eq!(*engine.model.rectangle(ids[0]).unwrap(), rect);
         assert_eq!(*engine.model.arrow(ids[1]).unwrap(), arrow);
+        assert_eq!(*engine.model.serial_number(ids[3]).unwrap(), serial);
         for restored in [
             Engine::from_serialized_document_session_with_config(
                 &engine.serialize_document_session().unwrap(),
@@ -914,6 +928,7 @@ mod tests {
             assert_eq!(*restored.model.rectangle(ids[0]).unwrap(), rect);
             assert_eq!(*restored.model.arrow(ids[1]).unwrap(), arrow);
             assert_eq!(*restored.model.arrow(ids[2]).unwrap(), line);
+            assert_eq!(*restored.model.serial_number(ids[3]).unwrap(), serial);
         }
     }
     #[test]

@@ -42,6 +42,62 @@ snow_detect_rust_target(target)
 message(STATUS "SELECTED=${{SNOW_WINDOWS_ARCHITECTURE}};${{SNOW_WINDOWS_PLATFORM}};${{target}}")
 '''
 
+    def test_compiler_minimum_accepts_newer_versions(self):
+        for version, supported in [('19.50.99999', False), ('19.51.0', True),
+                                   ('19.52.0', True), ('19.100.0', True), ('20.0.0', True)]:
+            with self.subTest(version=version):
+                output = self.run_cmake(f'''
+include("{ROOT.as_posix()}/cmake/SnowBuildToolchain.cmake")
+set(CMAKE_CXX_COMPILER_ID MSVC)
+set(CMAKE_CXX_COMPILER_VERSION {version})
+snow_require_msvc_version()
+''', supported)
+                if not supported:
+                    self.assertIn('or newer is required', output)
+
+    def test_msvc_selection_uses_minimum_and_numeric_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            versions = ('14.50.99999', '14.51.0', '14.99.0', '14.100.0', 'invalid')
+            for version in versions:
+                (root / 'VC/Tools/MSVC' / version).mkdir(parents=True)
+            fixture = f'''
+include("{ROOT.as_posix()}/cmake/SnowBuildToolchain.cmake")
+set(ENV{{VCToolsInstallDir}} "")
+set(ENV{{VSINSTALLDIR}} "{root.as_posix()}")
+'''
+            output = self.run_cmake(fixture + '''
+snow_resolve_msvc_tools_root(selected)
+message(STATUS "SELECTED=${selected}")
+''')
+            self.assertIn('/VC/Tools/MSVC/14.100.0', output)
+            output = self.run_cmake(fixture + f'''
+include("{ROOT.as_posix()}/cmake/vcpkg-windows-triplet-environment.cmake")
+message(STATUS "SELECTED=${{VCPKG_PLATFORM_TOOLSET_VERSION}}")
+''')
+            self.assertIn('SELECTED=14.100.0', output)
+            for version, supported in [('14.50.99999', False), ('14.51.0', True),
+                                       ('14.100.0', True)]:
+                with self.subTest(version=version):
+                    self.run_cmake(fixture + f'''
+set(ENV{{VCToolsInstallDir}} "{root.as_posix()}/VC/Tools/MSVC/{version}/")
+snow_resolve_msvc_tools_root(selected)
+''', supported)
+
+    def test_rust_minimum_accepts_newer_versions(self):
+        for version, supported in [('1.97.0', False), ('1.97.1', True), ('1.97.2', True),
+                                   ('1.100.0', True), ('2.0.0', True), ('invalid', False)]:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                rustc = Path(directory) / ('rustc.cmd' if os.name == 'nt' else 'rustc')
+                rustc.write_text(f'@echo off\necho rustc {version}\n' if os.name == 'nt'
+                                 else f'#!/bin/sh\necho "rustc {version}"\n', encoding='utf-8')
+                rustc.chmod(0o755)
+                self.run_cmake(f'''
+include("{ROOT.as_posix()}/cmake/SnowBuildToolchain.cmake")
+set(RUSTC_EXECUTABLE "{rustc.as_posix()}")
+snow_require_rust_version()
+''', supported)
+
     def test_compiler_selects_target_independently_of_host(self):
         for compiler, arch, rust in [('x64', 'x64', 'x86_64'), ('ARM64', 'arm64', 'aarch64')]:
             with self.subTest(arch=arch):
@@ -88,7 +144,7 @@ message(STATUS "RUST=${{target}}")
         self.assertIn('RUST=aarch64-apple-darwin', output)
 
     def test_arm64_static_dependencies_use_native_optimized_objects(self):
-        output = self.run_cmake(f'''
+        output = self.triplet_fixture(f'''
 include("{ROOT.as_posix()}/cmake/vcpkg-overlay-triplets/arm64-windows-static.cmake")
 message(STATUS "C_FLAGS=${{VCPKG_C_FLAGS_RELEASE}}")
 message(STATUS "CXX_FLAGS=${{VCPKG_CXX_FLAGS_RELEASE}}")
@@ -106,7 +162,7 @@ message(STATUS "LINK_FLAGS=${{VCPKG_LINKER_FLAGS_RELEASE}}")
         self.assertIn('/OPT:ICF', link_flags)
 
     def test_x64_static_dependencies_retain_ltcg(self):
-        output = self.run_cmake(f'''
+        output = self.triplet_fixture(f'''
 include("{ROOT.as_posix()}/cmake/vcpkg-overlay-triplets/x64-windows-static.cmake")
 message(STATUS "C_FLAGS=${{VCPKG_C_FLAGS_RELEASE}}")
 message(STATUS "CXX_FLAGS=${{VCPKG_CXX_FLAGS_RELEASE}}")
@@ -117,6 +173,12 @@ message(STATUS "LINK_FLAGS=${{VCPKG_LINKER_FLAGS_RELEASE}}")
             self.assertIn('/GL', flags)
             self.assertNotIn('/GL-', flags)
         self.assertIn('/LTCG', re.search(r'LINK_FLAGS=([^\n]*)', output).group(1).split())
+
+    def triplet_fixture(self, contents):
+        with tempfile.TemporaryDirectory() as directory:
+            msvc = Path(directory) / 'MSVC/14.100.0'
+            msvc.mkdir(parents=True)
+            return self.run_cmake(f'set(ENV{{VCToolsInstallDir}} "{msvc.as_posix()}")\n' + contents)
 
     def test_arm64_presets_disable_cpp_ipo_without_changing_rust_target(self):
         presets = json.loads((ROOT / 'CMakePresets.json').read_text(encoding='utf-8'))
@@ -145,8 +207,9 @@ message(STATUS "LINK_FLAGS=${{VCPKG_LINKER_FLAGS_RELEASE}}")
 
     def libclang_fixture(self, directory, host):
         rustc = directory / ('rustc.cmd' if os.name == 'nt' else 'rustc')
-        contents = (f'@echo off\necho host: {host}-pc-windows-msvc\n' if os.name == 'nt'
-                    else f'#!/bin/sh\necho "host: {host}-pc-windows-msvc"\n')
+        contents = (f'@echo off\necho rustc 1.98.0 (fixture)\necho host: {host}-pc-windows-msvc\n'
+                    if os.name == 'nt' else
+                    f'#!/bin/sh\necho "rustc 1.98.0 (fixture)"\necho "host: {host}-pc-windows-msvc"\n')
         rustc.write_text(contents, encoding='utf-8')
         rustc.chmod(0o755)
         for arch, machine in [('x64', 0x8664), ('arm64', 0xAA64)]:
@@ -160,6 +223,7 @@ message(STATUS "LINK_FLAGS=${{VCPKG_LINKER_FLAGS_RELEASE}}")
         return f'''
 set(WIN32 TRUE)
 set(ENV{{RUSTC}} "{rustc.as_posix()}")
+set(RUSTC_EXECUTABLE "{rustc.as_posix()}")
 set(ENV{{LIBCLANG_PATH}} "")
 include("{ROOT.as_posix()}/cmake/SnowRustLibclang.cmake")
 '''
@@ -352,7 +416,7 @@ message(STATUS "OPTIONS=${{OPTIONS}}")
                                          ('parser', {'mpegaudio'})]:
                     self.assertEqual(components <= enabled[kind], compatibility)
 
-    def test_crashpad_uses_runnable_host_compilers_and_pinned_toolset(self):
+    def test_crashpad_uses_runnable_host_compilers_and_selected_toolset(self):
         overlay = (ROOT / 'cmake/vcpkg-overlay-ports/crashpad/portfile.cmake').read_text(
             encoding='utf-8')
         build_tools = re.search(r'set\(_snow_build_tools \[=\[(.*?)\]=\]\)', overlay,
@@ -394,17 +458,18 @@ endfunction()
             for host, expected in [('x64', ['amd64_x86', 'amd64', 'amd64_arm64']),
                                    ('arm64', ['arm64_x86', 'arm64_x64', 'arm64'])]:
                 with self.subTest(host=host), patch.dict(
-                        os.environ, {'SNOW_MSVC_HOST_ARCHITECTURE': host}, clear=True):
+                        os.environ, {'SNOW_MSVC_HOST_ARCHITECTURE': host,
+                                     'VCToolsVersion': '14.100.99999'}, clear=True):
                     arguments = list(namespace['toolchain_arguments']('vcvarsall.bat'))
                     self.assertEqual([argument[1] for argument in arguments], expected)
-                    self.assertTrue(all(argument[2:] == ['-vcvars_ver=14.51', '&&', 'set']
+                    self.assertTrue(all(argument[2:] == ['-vcvars_ver=14.100.99999', '&&', 'set']
                                         for argument in arguments))
 
     def test_toolchain_separates_host_tools_and_target_libraries(self):
         for host in ('x64', 'arm64'):
             with self.subTest(host=host), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                msvc = root / 'MSVC/14.51.fixture'
+                msvc = root / 'MSVC/14.100.0'
                 sdk = root / 'Windows Kits/10'
                 version = '10.0.26100.0'
                 compiler = msvc / f'bin/Host{host}/arm64'

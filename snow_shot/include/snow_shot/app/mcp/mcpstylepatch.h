@@ -216,7 +216,7 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
     else
         return false;
     if (target == QStringLiteral("rectangle") || target == QStringLiteral("arrow") ||
-        target == QStringLiteral("line")) {
+        target == QStringLiteral("line") || target == QStringLiteral("serial_number")) {
         allowed.append(QStringLiteral("stroke_rendering_style"));
     }
     if (patch.contains(QStringLiteral("corner_radius")) &&
@@ -503,6 +503,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
             enumeration("fill_style", static_cast<int>(style.fillStyle)));
         style.strokeStyle = static_cast<SnowCanvasStrokeStyle>(
             enumeration("stroke_style", static_cast<int>(style.strokeStyle)));
+        style.strokeRenderingStyle = static_cast<SnowCanvasStrokeRenderingStyle>(
+            enumeration("stroke_rendering_style", static_cast<int>(style.strokeRenderingStyle)));
         const QHash<QString, quint32> properties{
             {QStringLiteral("number"), SnowCanvasSerialNumberStyleMixedNumber},
             {QStringLiteral("serial_type"), SnowCanvasSerialNumberStyleMixedType},
@@ -514,6 +516,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
             {QStringLiteral("font_family"), SnowCanvasSerialNumberStyleMixedFontFamily},
             {QStringLiteral("stroke_width"), SnowCanvasSerialNumberStyleMixedStrokeWidth},
             {QStringLiteral("stroke_style"), SnowCanvasSerialNumberStyleMixedStrokeStyle},
+            {QStringLiteral("stroke_rendering_style"),
+             SnowCanvasSerialNumberStyleMixedStrokeRenderingStyle},
             {QStringLiteral("opacity"), SnowCanvasSerialNumberStyleMixedOpacity}};
         quint32 flags = 0;
         for (auto it = patch.begin(); it != patch.end(); ++it)

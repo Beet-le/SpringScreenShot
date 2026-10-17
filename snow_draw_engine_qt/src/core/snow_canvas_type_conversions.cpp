@@ -714,6 +714,7 @@ SnowCanvasSerialNumberStyle toCanvasSerialNumberStyle(const SnowSerialNumberStyl
         style.stroke_width,
         toCanvasStrokeStyle(style.stroke_style),
         style.opacity,
+        toCanvasStrokeRenderingStyle(style.stroke_rendering_style),
     };
 }
 
@@ -731,6 +732,7 @@ SnowSerialNumberStyle toEngineSerialNumberStyle(const SnowCanvasSerialNumberStyl
                            SNOW_FONT_FAMILY_UTF8_CAPACITY);
     engineStyle.stroke_width = style.strokeWidth;
     engineStyle.stroke_style = toEngineStrokeStyle(style.strokeStyle);
+    engineStyle.stroke_rendering_style = toEngineStrokeRenderingStyle(style.strokeRenderingStyle);
     engineStyle.opacity = style.opacity;
     return engineStyle;
 }
@@ -910,6 +912,9 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
         !enumInRange(defaults.text.verticalAlign, SnowCanvasTextVerticalAlign::Top,
                      SnowCanvasTextVerticalAlign::Bottom) ||
         !validFillStyle(defaults.serialNumber.fillStyle) ||
+        !enumInRange(defaults.serialNumber.strokeRenderingStyle,
+                     SnowCanvasStrokeRenderingStyle::Architect,
+                     SnowCanvasStrokeRenderingStyle::Cartoonist) ||
         !enumInRange(defaults.serialNumber.strokeStyle, SnowCanvasStrokeStyle::Solid,
                      SnowCanvasStrokeStyle::Dotted) ||
         !enumInRange(defaults.serialNumber.type, SnowCanvasSerialNumberType::OutlinedCircle,
