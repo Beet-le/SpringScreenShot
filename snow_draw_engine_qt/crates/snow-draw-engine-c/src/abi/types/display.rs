@@ -243,6 +243,7 @@ pub enum SnowOverlayRectKind {
     SpeechBubbleAddTailHandle = 17,
     SpeechBubbleTailBaseHandle = 18,
     SpeechBubbleTailTipHandle = 19,
+    ShapeTextHandle = 20,
 }
 
 #[repr(C)]

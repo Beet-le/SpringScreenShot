@@ -25,6 +25,7 @@ impl Editor {
         match self.state.active_tool {
             ActiveTool::Select | ActiveTool::Text => true,
             ActiveTool::SerialNumber => document.is_text_bound_to_serial_number(id),
+            ActiveTool::Shape => !document.shapes_for_text(id).is_empty(),
             _ => false,
         }
     }
@@ -654,6 +655,7 @@ mod empty_canvas_selection_tests {
             id,
             ElementMeta::default(),
             RectangleData {
+                text_element_id: None,
                 stroke_rendering_style: Default::default(),
                 stroke_rendering_seed: 0,
                 rectangle_kind: RectangleElementKind::Rectangle,

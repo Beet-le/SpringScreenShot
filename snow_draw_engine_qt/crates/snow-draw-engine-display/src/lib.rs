@@ -160,6 +160,7 @@ pub enum DisplayBlendMode {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RectangleDisplayItem {
     pub id: DisplayItemId,
+    pub bound_text_id: Option<DisplayItemId>,
     pub center_x: f64,
     pub center_y: f64,
     pub width: f64,
@@ -595,6 +596,7 @@ impl Default for RectangleDisplayItem {
             stroke_rendering_seed: 0,
             stroke_rendering_style: Default::default(),
             id: DisplayItemId::default(),
+            bound_text_id: None,
             center_x: 0.0,
             center_y: 0.0,
             width: 0.0,
@@ -711,6 +713,7 @@ pub enum UiShapeKind {
     SpeechBubbleAddTailHandle,
     SpeechBubbleTailBaseHandle,
     SpeechBubbleTailTipHandle,
+    ShapeTextHandle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

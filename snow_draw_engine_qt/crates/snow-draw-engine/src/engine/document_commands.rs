@@ -234,6 +234,7 @@ mod delete_all_elements_tests {
 
     fn rectangle() -> RectangleData {
         RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,

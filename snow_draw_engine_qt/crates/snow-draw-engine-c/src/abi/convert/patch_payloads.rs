@@ -241,6 +241,7 @@ pub(crate) fn snow_scene_display_item_from_rust(
         SceneDisplayItem::Magnifier(_) | SceneDisplayItem::SpeechBubble(_) => unreachable!(),
         SceneDisplayItem::Rectangle(item) => {
             out.kind = SnowSceneDisplayItemKind::DrawRect;
+            encode_bound_text_id(out, item.bound_text_id);
             out.element_id = SnowElementId {
                 index: item.id.index,
                 generation: item.id.generation,
@@ -572,6 +573,7 @@ fn snow_overlay_rect_kind_from_rust(value: UiRectKind) -> SnowOverlayRectKind {
         UiRectKind::MagnifierMoveHandle => SnowOverlayRectKind::MagnifierMoveHandle,
         UiRectKind::MagnifierSelectionFrame => SnowOverlayRectKind::MagnifierSelectionFrame,
         UiRectKind::SpeechBubbleAddTailHandle => SnowOverlayRectKind::SpeechBubbleAddTailHandle,
+        UiRectKind::ShapeTextHandle => SnowOverlayRectKind::ShapeTextHandle,
         UiRectKind::SpeechBubbleTailBaseHandle => SnowOverlayRectKind::SpeechBubbleTailBaseHandle,
         UiRectKind::SpeechBubbleTailTipHandle => SnowOverlayRectKind::SpeechBubbleTailTipHandle,
     }
@@ -828,6 +830,25 @@ mod tests {
         );
 
         assert_eq!(item.view.stroke_style, SnowStrokeStyle::Dashed);
+    }
+
+    #[test]
+    fn shape_display_item_exports_bound_text_id() {
+        let item = snow_scene_display_item_from_rust(
+            &SceneDisplayItem::Rectangle(RectangleDisplayItem {
+                bound_text_id: Some(DisplayItemId {
+                    index: 42,
+                    generation: 7,
+                }),
+                ..RectangleDisplayItem::default()
+            }),
+            false,
+            false,
+        );
+        assert_eq!(item.view.has_bound_text_element, 1);
+        assert_eq!(item.view.bound_text_element_index, 42);
+        assert_eq!(item.view.bound_text_element_generation, 7);
+        assert_eq!(SnowOverlayRectKind::ShapeTextHandle as u32, 20);
     }
 
     #[test]

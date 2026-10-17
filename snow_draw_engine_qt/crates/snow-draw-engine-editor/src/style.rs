@@ -574,6 +574,7 @@ pub(crate) fn rectangle_with_style(
     style: RectangleShapeStyle,
 ) -> RectangleData {
     RectangleData {
+        text_element_id: rect.text_element_id,
         rectangle_kind: rect.rectangle_kind,
         highlight_shape: style.shape,
         center: rect.center,
@@ -2096,6 +2097,7 @@ impl Editor {
                         id,
                         rect: RectangleData {
                             stroke_rendering_seed: 0,
+                            text_element_id: None,
                             stroke_rendering_style: Default::default(),
                             rectangle_kind:
                                 snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -2319,6 +2321,7 @@ impl Editor {
                         id,
                         rect: RectangleData {
                             stroke_rendering_style: Default::default(),
+                            text_element_id: None,
                             stroke_rendering_seed: 0,
                             rectangle_kind:
                                 snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -2542,6 +2545,7 @@ mod tests {
         use snow_draw_engine_document::{HighlightShape, RectangleElementKind};
         let mut document = DocumentModel::new();
         let base = RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
@@ -2771,6 +2775,7 @@ mod tests {
     #[test]
     fn rectangle_style_preserves_and_updates_fill_style() {
         let rect = RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -2935,6 +2940,7 @@ mod tests {
         let first_id = document.allocate_element_id();
         let second_id = document.allocate_element_id();
         let base = RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -3023,6 +3029,7 @@ mod tests {
         let mut document = DocumentModel::new();
         let rectangle_id = document.peek_next_element_id();
         let rectangle = RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -4277,6 +4284,7 @@ mod tests {
             ..filter
         };
         let rectangle = RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,

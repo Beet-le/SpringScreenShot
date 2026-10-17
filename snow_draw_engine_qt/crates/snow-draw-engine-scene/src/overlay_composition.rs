@@ -222,6 +222,12 @@ pub(crate) fn compose_overlay_items(
             ),
         )));
     }
+    if let Some(center) = presentation.shape_text_handle {
+        items.push(OverlayDisplayItem::Rectangle(ui_rect_item(
+            UiShapeKind::ShapeTextHandle,
+            selection_handle_rect(center, selection_handle_size(zoom), 0.0, true, zoom),
+        )));
+    }
     items.retain(|item| overlay_item_visible(item, frame_view));
     items
 }
@@ -515,6 +521,7 @@ mod tests {
 
     fn rect(width: f64, height: f64) -> RectangleData {
         RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -773,6 +780,7 @@ mod tests {
     #[test]
     fn marquee_rectangle_preserves_the_selection_visual_style() {
         let marquee = RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,

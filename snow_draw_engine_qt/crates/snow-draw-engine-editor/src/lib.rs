@@ -8,6 +8,8 @@ mod creation_workflow;
 pub use creation_workflow::SerialNumberLabelLayoutRequest;
 mod speech_bubble;
 pub use speech_bubble::*;
+mod shape_text;
+pub use shape_text::ShapeBoundTextPreview;
 mod magnifier;
 pub use magnifier::*;
 mod angle;
@@ -353,6 +355,9 @@ impl Editor {
         if self.speech_bubble_tail_drag.take().is_some() {
             self.bump_scene_state_revision();
         }
+        if self.state.shape_text_drag.take().is_some() {
+            self.bump_scene_state_revision();
+        }
         self.state.ui.free_draw_hover_position = None;
         self.state.pending_text_edit = None;
         self.state.pending_new_text_draft = false;
@@ -448,6 +453,7 @@ mod tests {
 
     fn test_rect() -> RectangleData {
         RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,

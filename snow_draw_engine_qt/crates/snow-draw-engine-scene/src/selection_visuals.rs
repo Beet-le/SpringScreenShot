@@ -105,6 +105,7 @@ pub(crate) fn selection_outline_for_arrow_bounds(bounds: DrawRect, zoom: f64) ->
 
 pub(crate) fn text_actual_frame(rect: RectangleData, zoom: f64) -> RectangleData {
     RectangleData {
+        text_element_id: None,
         stroke_rendering_style: Default::default(),
         stroke_rendering_seed: 0,
         rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -125,6 +126,7 @@ pub(crate) fn text_actual_frame(rect: RectangleData, zoom: f64) -> RectangleData
 
 pub(crate) fn text_hover_underline_for_rect(rect: RectangleData, zoom: f64) -> RectangleData {
     RectangleData {
+        text_element_id: None,
         stroke_rendering_style: Default::default(),
         stroke_rendering_seed: 0,
         rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -149,6 +151,7 @@ pub(crate) fn selection_outline_bounds(
     frame_padding: f64,
 ) -> RectangleData {
     RectangleData {
+        text_element_id: None,
         stroke_rendering_style: Default::default(),
         stroke_rendering_seed: 0,
         rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -263,6 +266,7 @@ pub(crate) fn selection_handle_rect(
     zoom: f64,
 ) -> RectangleData {
     RectangleData {
+        text_element_id: None,
         stroke_rendering_style: Default::default(),
         stroke_rendering_seed: 0,
         rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,

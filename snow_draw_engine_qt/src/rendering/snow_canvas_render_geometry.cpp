@@ -847,7 +847,7 @@ QPainterPath roundedDiamondPath(const QRectF& rect, const SnowCornerRadii& radii
                                           origin + QPointF(0.0, b), origin + QPointF(-a, 0.0)};
     const std::array<QPointF, 4> inward{QPointF(0.0, 1.0), QPointF(-1.0, 0.0), QPointF(0.0, -1.0),
                                         QPointF(1.0, 0.0)};
-    constexpr double radiansToDegrees = 180.0 / 3.14159265358979323846;
+    constexpr double halfPi = 3.14159265358979323846 / 2.0;
     for (std::size_t index = 0; index < values.size(); ++index) {
         const double radius = values[index] * scale;
         const QPointF vertex = vertices[index];
@@ -864,12 +864,27 @@ QPainterPath roundedDiamondPath(const QRectF& rect, const SnowCornerRadii& radii
             const QPointF center = vertex + inward[index] * (radius / sine);
             const QPointF start = (entry - center) / radius;
             const QPointF end = (exit - center) / radius;
-            const double startAngle = std::atan2(-start.y(), start.x()) * radiansToDegrees;
-            const double sweep =
-                -std::acos(std::clamp(QPointF::dotProduct(start, end), -1.0, 1.0)) *
-                radiansToDegrees;
-            path.arcTo(QRectF(center.x() - radius, center.y() - radius, radius * 2.0, radius * 2.0),
-                       startAngle, sweep);
+            const double angle = std::atan2(start.y(), start.x());
+            const double sweep = std::max(0.0, std::atan2(start.x() * end.y() - start.y() * end.x(),
+                                                          QPointF::dotProduct(start, end)));
+            const int steps = std::max(1, static_cast<int>(std::ceil(sweep / halfPi - 1e-12)));
+            const double delta = sweep / steps;
+            const double k = 4.0 / 3.0 * std::tan(delta / 4.0);
+            // arcTo may insert a tiny line from the exact tangent point to its
+            // approximated arc start. Miter joins amplify that line into a spike
+            // with thick strokes. These cubics share the Rust diamond contour's
+            // tangent endpoints and introduce no extra joins.
+            for (int step = 0; step < steps; ++step) {
+                const double a0 = angle + step * delta;
+                const double a1 = angle + (step + 1) * delta;
+                const QPointF u0(std::cos(a0), std::sin(a0));
+                const QPointF u1(std::cos(a1), std::sin(a1));
+                const QPointF control1 =
+                    center + radius * QPointF(u0.x() - k * u0.y(), u0.y() + k * u0.x());
+                const QPointF control2 =
+                    center + radius * QPointF(u1.x() + k * u1.y(), u1.y() - k * u1.x());
+                path.cubicTo(control1, control2, step + 1 == steps ? exit : center + radius * u1);
+            }
         } else {
             path.lineTo(exit);
         }

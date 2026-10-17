@@ -11,6 +11,8 @@ mod scene_order;
 mod scene_order_tests;
 mod selection_visuals;
 #[cfg(test)]
+mod shape_text_tests;
+#[cfg(test)]
 mod smart_erase_tests;
 #[cfg(test)]
 mod speech_bubble_tests;
@@ -1715,6 +1717,7 @@ mod tests {
 
     fn spotlight_rect(center: Point<f64>, width: f64, height: f64) -> RectangleData {
         RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -2350,6 +2353,7 @@ mod tests {
     fn spotlight_decoration_tracks_first_drag_and_visible_cutouts() {
         let mut model = DocumentModel::new();
         let spotlight = RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -2757,6 +2761,7 @@ mod tests {
     #[test]
     fn rectangle_creation_preview_updates_only_scene_channel() {
         let patch = patch_for_creation_preview(ElementCreationPreview::Rectangle(RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,

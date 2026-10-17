@@ -504,6 +504,19 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         LABELS "unit"
     )
 
+    add_executable(snow-canvas-shape-text-tests tests/snow_canvas_shape_text_tests.cpp)
+    target_include_directories(snow-canvas-shape-text-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-shape-text-tests PRIVATE snow_draw_engine_qt_canvas)
+    qt_import_plugins(snow-canvas-shape-text-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    add_test(NAME snow-canvas-shape-text-tests COMMAND snow-canvas-shape-text-tests)
+    set_tests_properties(snow-canvas-shape-text-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        LABELS "unit"
+    )
+
     add_executable(snow-canvas-serial-number-drag-tests tests/snow_canvas_serial_number_drag_tests.cpp)
     target_include_directories(snow-canvas-serial-number-drag-tests PRIVATE
         ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}

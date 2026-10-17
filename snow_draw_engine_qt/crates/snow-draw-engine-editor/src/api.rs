@@ -475,6 +475,8 @@ pub struct EditorPresentationState {
     pub free_draw_endpoint: Option<Point<f64>>,
     pub free_draw_replacement: Option<(ElementId, Arc<FreeDrawPreview>)>,
     pub active_text_draft: Option<ActiveTextDraftPresentation>,
+    pub shape_bound_text_preview: Option<crate::ShapeBoundTextPreview>,
+    pub shape_text_handle: Option<Point<f64>>,
     pub arrow_text_previews: Vec<(ElementId, TextData)>,
     pub preview_arrows: Vec<SelectionArrowState>,
     pub speech_bubble_previews: Vec<(ElementId, snow_draw_engine_document::SpeechBubbleData)>,
@@ -632,6 +634,7 @@ impl ActiveTextDraftPresentation {
 
     pub fn rect(&self) -> RectangleData {
         RectangleData {
+            text_element_id: None,
             stroke_rendering_seed: 0,
             stroke_rendering_style: Default::default(),
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,

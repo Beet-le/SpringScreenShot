@@ -2068,6 +2068,7 @@ mod line_creation_tests {
             document.peek_next_element_id(),
             ElementMeta::default(),
             RectangleData {
+                text_element_id: None,
                 stroke_rendering_style: Default::default(),
                 stroke_rendering_seed: 0,
                 rectangle_kind: RectangleElementKind::Rectangle,

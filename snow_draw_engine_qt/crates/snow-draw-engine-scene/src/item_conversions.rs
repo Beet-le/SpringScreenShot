@@ -113,6 +113,7 @@ pub(crate) fn scene_item_from_magnifier(
 pub(crate) fn scene_item_from_rect(id: ElementId, rect: RectangleData) -> SceneDisplayItem {
     SceneDisplayItem::Rectangle(RectangleDisplayItem {
         id: display_item_id(id),
+        bound_text_id: rect.text_element_id.map(display_item_id),
         center_x: rect.center.x,
         center_y: rect.center.y,
         width: rect.width,
@@ -564,6 +565,45 @@ pub(crate) fn serial_paint_geometry_from_display_item(
     }
 }
 
+pub(crate) fn shape_geometry_from_display_item(shape: &RectangleDisplayItem) -> RectangleData {
+    RectangleData {
+        text_element_id: shape.bound_text_id.map(|id| ElementId {
+            index: id.index,
+            generation: id.generation,
+        }),
+        rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
+        highlight_shape: match shape.shape {
+            snow_draw_engine_display::DisplayRectangleShape::Rectangle => {
+                snow_draw_engine_document::HighlightShape::Rectangle
+            }
+            snow_draw_engine_display::DisplayRectangleShape::Ellipse => {
+                snow_draw_engine_document::HighlightShape::Ellipse
+            }
+            snow_draw_engine_display::DisplayRectangleShape::Diamond => {
+                snow_draw_engine_document::HighlightShape::Diamond
+            }
+        },
+        center: Point::new(shape.center_x, shape.center_y),
+        width: shape.width,
+        height: shape.height,
+        rotation: shape.rotation,
+        fill: shape.fill,
+        fill_style: match shape.fill_style {
+            DisplayFillStyle::Solid => FillStyle::Solid,
+            DisplayFillStyle::Line => FillStyle::Line,
+            DisplayFillStyle::CrossLine => FillStyle::CrossLine,
+            DisplayFillStyle::Border => FillStyle::Border,
+        },
+        stroke: shape.stroke,
+        stroke_width: shape.stroke_width,
+        stroke_style: shape.stroke_style,
+        stroke_rendering_style: shape.stroke_rendering_style,
+        stroke_rendering_seed: shape.stroke_rendering_seed,
+        corner_radii: shape.corner_radii,
+        opacity: shape.opacity,
+    }
+}
+
 fn document_serial_number_type(serial_number_type: DisplaySerialNumberType) -> SerialNumberType {
     match serial_number_type {
         DisplaySerialNumberType::OutlinedCircle => SerialNumberType::OutlinedCircle,
@@ -896,6 +936,7 @@ pub(crate) fn arrow_handle_item(handle: ArrowHandleState, zoom: f64) -> UiRectan
             ArrowHandleKind::Segment => UiShapeKind::ArrowSegmentHandle,
         },
         RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -1082,6 +1123,7 @@ mod tests {
 
     fn preview_rect(center: Point<f64>, width: f64, height: f64) -> RectangleData {
         RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -1164,6 +1206,7 @@ mod tests {
                 generation: 2,
             },
             RectangleData {
+                text_element_id: None,
                 stroke_rendering_style: Default::default(),
                 stroke_rendering_seed: 0,
                 rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -1195,6 +1238,7 @@ mod tests {
         let item = ui_rect_item(
             UiShapeKind::SelectionCandidateFrame,
             RectangleData {
+                text_element_id: None,
                 stroke_rendering_style: Default::default(),
                 stroke_rendering_seed: 0,
                 rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
@@ -1262,6 +1306,7 @@ mod tests {
     #[test]
     fn rectangle_highlight_display_item_uses_multiply_blending() {
         let highlight = RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,

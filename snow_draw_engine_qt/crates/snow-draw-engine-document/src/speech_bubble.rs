@@ -87,7 +87,8 @@ impl TryFrom<SerializedSpeechBubble> for SpeechBubbleData {
 }
 
 impl SpeechBubbleData {
-    pub fn new(body: RectangleData) -> Self {
+    pub fn new(mut body: RectangleData) -> Self {
+        body.text_element_id = None;
         Self {
             body,
             text_element_id: None,
@@ -109,6 +110,7 @@ impl SpeechBubbleData {
 /// Diamond rounding is capped so its centered half-size text box remains inside.
 pub fn speech_bubble_body_proxy(value: &SpeechBubbleData) -> RectangleData {
     let mut body = value.body;
+    body.text_element_id = None;
     if body.highlight_shape != HighlightShape::Ellipse {
         let divisor = if body.highlight_shape == HighlightShape::Diamond {
             4.0
@@ -153,6 +155,7 @@ pub fn validate_speech_bubble(value: &SpeechBubbleData) -> Result<(), ErrorCode>
     }
     crate::validate_rectangle(&speech_bubble_body_proxy(value))?;
     if value.body.rectangle_kind != RectangleElementKind::Rectangle
+        || value.body.text_element_id.is_some()
         || value.body.width <= 0.0
         || value.body.height <= 0.0
     {
@@ -309,6 +312,7 @@ pub fn speech_bubble_with_selection_rect(
 ) -> SpeechBubbleData {
     let mut next = value.clone();
     next.body = rect;
+    next.body.text_element_id = None;
     next.body.rectangle_kind = RectangleElementKind::Rectangle;
     if next.body.center != value.body.center || next.body.rotation != value.body.rotation {
         let frame = SpeechBubbleData::new(next.body);
@@ -1247,6 +1251,7 @@ mod tests {
 
     fn bubble(shape: HighlightShape) -> SpeechBubbleData {
         SpeechBubbleData::new(RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,

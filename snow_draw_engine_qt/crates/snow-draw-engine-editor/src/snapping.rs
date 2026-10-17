@@ -855,6 +855,7 @@ fn preview_rectangle(
 
     Some(RectangleData {
         rectangle_kind: RectangleElementKind::Rectangle,
+        text_element_id: None,
         highlight_shape: style.shape,
         center,
         width,

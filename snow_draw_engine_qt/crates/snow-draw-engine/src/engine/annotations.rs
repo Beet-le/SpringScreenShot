@@ -336,6 +336,7 @@ fn rectangle(b: [f64; 4], s: &Style, id: ElementId) -> Result<RectangleData, Err
     s.validate()?;
     let (center, width, height) = bounds(b)?;
     Ok(RectangleData {
+        text_element_id: None,
         center,
         width,
         height,
@@ -387,6 +388,7 @@ impl Engine {
         let mut tx = Transaction::new(batch.label);
         let mut next = self.model.peek_next_element_id();
         let mut created = Vec::new();
+        let mut removed = std::collections::HashSet::new();
         let mut selection = None;
         for op in batch.operations {
             let id = next;
@@ -411,7 +413,14 @@ impl Engine {
                         if self.model.element(id)?.data.is_background_restore() {
                             return Err(ErrorCode::InvalidState);
                         }
-                        tx.remove_element(id);
+                        if removed.insert(id) {
+                            tx.remove_element(id);
+                        }
+                        if let Some(text_id) = self.model.bound_text_id_for_shape(id)
+                            && removed.insert(text_id)
+                        {
+                            tx.remove_element(text_id);
+                        }
                     }
                     continue;
                 }
@@ -766,6 +775,52 @@ mod tests {
         )?;
         Ok(serde_json::from_slice(&result).unwrap())
     }
+    #[test]
+    fn shape_text_annotation_delete_removes_label_once_and_undo_restores_binding() {
+        for delete_label_explicitly in [false, true] {
+            let mut engine = Engine::default();
+            let viewport = engine.create_viewport(ViewportConfig::default()).unwrap();
+            apply(
+                &mut engine,
+                json!([
+                    {"type":"rectangle","bounds":[10,20,40,60]},
+                    {"type":"text","bounds":[100,100,80,30],"text":"label"}
+                ]),
+            )
+            .unwrap();
+            let shape_id = engine.model.paint_order()[0];
+            let text_id = engine.model.paint_order()[1];
+            let mut shape = *engine.model.rectangle(shape_id).unwrap();
+            shape.text_element_id = Some(text_id);
+            let mut transaction = Transaction::new("bind shape label");
+            transaction.update_rectangle(shape_id, shape);
+            engine
+                .commit_transaction(
+                    viewport,
+                    ApplyTransactionCommand {
+                        transaction,
+                        history_undo_snapshot: None,
+                    },
+                )
+                .unwrap();
+            let ids = if delete_label_explicitly {
+                vec![text_id, shape_id]
+            } else {
+                vec![shape_id]
+            };
+            apply(&mut engine, json!([{"type":"delete","ids":ids}])).unwrap();
+            assert!(engine.model.paint_order().is_empty());
+            engine.undo().unwrap();
+            assert_eq!(
+                engine.model.bound_text_id_for_shape(shape_id),
+                Some(text_id)
+            );
+            assert_eq!(engine.model.text(text_id).unwrap().text, "label");
+            engine.redo().unwrap();
+            assert!(engine.model.paint_order().is_empty());
+        }
+    }
+
     #[test]
     fn document_content_excludes_styles_and_history() {
         let mut engine = Engine::new(EngineConfig::default());

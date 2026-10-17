@@ -439,7 +439,8 @@ typedef enum SnowOverlayRectKind {
     SNOW_OVERLAY_RECT_MAGNIFIER_SELECTION_FRAME = 16,
     SNOW_OVERLAY_RECT_SPEECH_BUBBLE_ADD_TAIL_HANDLE = 17,
     SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_BASE_HANDLE = 18,
-    SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_TIP_HANDLE = 19
+    SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_TIP_HANDLE = 19,
+    SNOW_OVERLAY_RECT_SHAPE_TEXT_HANDLE = 20
 } SnowOverlayRectKind;
 
 typedef enum SnowSnapGuideKind {
@@ -1041,6 +1042,13 @@ SnowError
 snow_viewport_apply_serial_label_layout_ex(SnowRuntime runtime, SnowViewport viewport,
                                            SnowElementId text_id, SnowTextLayoutSize layout,
                                            SnowChangedViewportList* out_changed_viewports);
+SnowError snow_viewport_get_bound_label_layout_request(SnowRuntime runtime, SnowViewport viewport,
+                                                       SnowSerialLabelLayoutRequest* out_request,
+                                                       uint8_t* out_has_request);
+SnowError snow_viewport_apply_bound_label_layout_ex(SnowRuntime runtime, SnowViewport viewport,
+                                                    SnowElementId text_id,
+                                                    SnowTextLayoutSize layout,
+                                                    SnowChangedViewportList* out_changed_viewports);
 
 typedef struct SnowPointerEvent {
     uint32_t pointer_id;
@@ -1410,6 +1418,9 @@ SnowMagnifierPaintBounds snow_scene_magnifier_body_paint_bounds(const SnowSceneD
 uint8_t snow_scene_resolve_serial_text_connection(const SnowSceneDisplayItem* serial,
                                                   const SnowSceneDisplayItem* text,
                                                   SnowSerialTextConnection* out_connection);
+uint8_t snow_scene_resolve_shape_text_connection(const SnowSceneDisplayItem* shape,
+                                                 const SnowSceneDisplayItem* text,
+                                                 SnowSerialTextConnection* out_connection);
 
 /* Pointer fields follow the same SnowPatchHandle lifetime as scene items. */
 /* The visitor borrows each item for the duration of the call and must not reenter runtime. */

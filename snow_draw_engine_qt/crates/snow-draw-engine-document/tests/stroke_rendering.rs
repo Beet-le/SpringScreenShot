@@ -7,6 +7,7 @@ use snow_draw_engine_document::{
 
 fn rectangle() -> RectangleData {
     RectangleData {
+        text_element_id: None,
         rectangle_kind: RectangleElementKind::Rectangle,
         highlight_shape: HighlightShape::Rectangle,
         center: Point::default(),

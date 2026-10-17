@@ -447,6 +447,7 @@ mod tests {
             rectangle_id,
             ElementMeta::default(),
             RectangleData {
+                text_element_id: None,
                 stroke_rendering_style: Default::default(),
                 stroke_rendering_seed: 0,
                 rectangle_kind: RectangleElementKind::Rectangle,
@@ -544,6 +545,7 @@ mod tests {
             rectangle_id,
             ElementMeta::default(),
             RectangleData {
+                text_element_id: None,
                 stroke_rendering_style: Default::default(),
                 stroke_rendering_seed: 0,
                 rectangle_kind: RectangleElementKind::Rectangle,

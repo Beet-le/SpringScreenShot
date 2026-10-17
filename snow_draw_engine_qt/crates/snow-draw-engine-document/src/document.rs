@@ -488,6 +488,8 @@ impl Default for ElementMeta {
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RectangleData {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_element_id: Option<ElementId>,
     pub rectangle_kind: RectangleElementKind,
     pub highlight_shape: HighlightShape,
     pub center: Point<f64>,
@@ -741,6 +743,7 @@ pub enum HighlightShape {
 
 impl RectangleData {
     pub fn into_highlight(mut self, shape: HighlightShape) -> Self {
+        self.text_element_id = None;
         debug_assert!(shape != HighlightShape::Diamond);
         self.rectangle_kind = RectangleElementKind::RectangleHighlight;
         self.highlight_shape = shape;
@@ -756,6 +759,7 @@ impl RectangleData {
     }
 
     pub fn into_spotlight(mut self) -> Self {
+        self.text_element_id = None;
         self.rectangle_kind = RectangleElementKind::Spotlight;
         self.fill = ColorRgba8::default();
         self.stroke = ColorRgba8::default();
@@ -1331,6 +1335,21 @@ impl Document {
                 return Err(ErrorCode::InvalidArgument);
             }
         }
+        for id in &self.paint_order {
+            let Ok(shape) = self.rectangle(*id) else {
+                continue;
+            };
+            let Some(text_id) = shape.text_element_id else {
+                continue;
+            };
+            if shape.rectangle_kind != RectangleElementKind::Rectangle
+                || self.text(text_id).is_err()
+                || !owned.insert(text_id)
+                || serial_labels.contains(&text_id)
+            {
+                return Err(ErrorCode::InvalidArgument);
+            }
+        }
         Ok(())
     }
 
@@ -1339,6 +1358,35 @@ impl Document {
         inverse: &mut Vec<Operation>,
         changes: &mut DocumentDelta,
     ) -> Result<(), ErrorCode> {
+        // Direct document deletion (including annotation batches) may remove a
+        // label without going through the editor's dependency expansion. Detach
+        // only links removed by this transaction; malformed new links and
+        // imported documents still fail ownership validation below.
+        if !changes.removed.is_empty() {
+            let removed: HashSet<_> = changes.removed.iter().copied().collect();
+            let detached: Vec<_> = self
+                .paint_order
+                .iter()
+                .filter_map(|id| {
+                    let mut shape = *self.rectangle(*id).ok()?;
+                    let label = shape.text_element_id?;
+                    if !removed.contains(&label) || self.text(label).is_ok() {
+                        return None;
+                    }
+                    shape.text_element_id = None;
+                    Some((*id, shape))
+                })
+                .collect();
+            for (id, shape) in detached {
+                inverse.push(self.apply_operation(
+                    &Operation::UpdateElementData {
+                        id,
+                        data: ElementData::Rectangle(shape),
+                    },
+                    changes,
+                )?);
+            }
+        }
         self.validate_arrow_text_bindings()?;
         let bindings = self.arrow_text_bindings();
         self.synchronize_arrow_text_pairs(&bindings, inverse, changes)?;
@@ -1708,6 +1756,7 @@ impl Document {
         }
         if let Ok(free_draw) = self.free_draw(id) {
             return Some(RectangleData {
+                text_element_id: None,
                 stroke_rendering_seed: 0,
                 stroke_rendering_style: Default::default(),
                 rectangle_kind: RectangleElementKind::Rectangle,
@@ -1730,6 +1779,7 @@ impl Document {
         }
         if let Ok(text) = self.text(id) {
             return Some(RectangleData {
+                text_element_id: None,
                 stroke_rendering_seed: 0,
                 stroke_rendering_style: Default::default(),
                 rectangle_kind: RectangleElementKind::Rectangle,
@@ -1898,6 +1948,23 @@ impl Document {
     pub fn bound_text_id_for_serial_number(&self, serial_id: ElementId) -> Option<ElementId> {
         let text_id = self.serial_number(serial_id).ok()?.text_element_id?;
         self.text(text_id).ok().map(|_| text_id)
+    }
+
+    pub fn bound_text_id_for_shape(&self, shape_id: ElementId) -> Option<ElementId> {
+        let shape = self.rectangle(shape_id).ok()?;
+        if shape.rectangle_kind != RectangleElementKind::Rectangle {
+            return None;
+        }
+        let text_id = shape.text_element_id?;
+        self.text(text_id).ok().map(|_| text_id)
+    }
+
+    pub fn shape_ids_with_text(&self, text_id: ElementId) -> Vec<ElementId> {
+        self.paint_order
+            .iter()
+            .copied()
+            .filter(|id| self.bound_text_id_for_shape(*id) == Some(text_id))
+            .collect()
     }
 
     pub fn serial_number_ids_with_text(&self, text_id: ElementId) -> Vec<ElementId> {
@@ -2272,6 +2339,7 @@ impl Document {
 
 fn element_data_has_relations(data: &ElementData) -> bool {
     match data {
+        ElementData::Rectangle(shape) => shape.text_element_id.is_some(),
         ElementData::Arrow(arrow) => {
             arrow.text_element_id.is_some() || !arrow.bound_element_ids().is_empty()
         }
@@ -2282,6 +2350,9 @@ fn element_data_has_relations(data: &ElementData) -> bool {
 }
 
 fn element_data_relation_targets_changed(previous: &ElementData, next: &ElementData) -> bool {
+    if let (ElementData::Rectangle(previous), ElementData::Rectangle(next)) = (previous, next) {
+        return previous.text_element_id != next.text_element_id;
+    }
     if let (ElementData::SpeechBubble(previous), ElementData::SpeechBubble(next)) = (previous, next)
     {
         return previous.text_element_id != next.text_element_id;
@@ -2298,6 +2369,106 @@ fn element_data_relation_targets_changed(previous: &ElementData, next: &ElementD
     previous.text_element_id != next.text_element_id
         || previous_ids.len() != next_ids.len()
         || previous_ids.iter().any(|id| !next_ids.contains(id))
+}
+
+#[cfg(test)]
+mod shape_text_binding_tests {
+    use super::*;
+
+    #[test]
+    fn shape_text_binding_round_trips_and_legacy_payload_defaults_to_none() {
+        let mut shape = crate::MagnifierData::default().magnified_rect();
+        let legacy = serde_json::to_value(shape).unwrap();
+        assert!(legacy.get("text_element_id").is_none());
+        assert_eq!(
+            serde_json::from_value::<RectangleData>(legacy).unwrap(),
+            shape
+        );
+        let mut document = Document::new();
+        let owner = document.allocate_element_id();
+        let label = document.allocate_element_id();
+        shape.text_element_id = Some(label);
+        let mut insert = Transaction::new("shape text");
+        insert.insert_rectangle(owner, ElementMeta::default(), shape);
+        insert.insert_text(label, ElementMeta::default(), TextData::default());
+        document.apply(&insert).unwrap();
+        assert_eq!(document.bound_text_id_for_shape(owner), Some(label));
+        assert_eq!(document.shape_ids_with_text(label), vec![owner]);
+        let restored: Document =
+            serde_json::from_str(&serde_json::to_string(&document).unwrap()).unwrap();
+        restored.validate_session().unwrap();
+        assert_eq!(restored.bound_text_id_for_shape(owner), Some(label));
+        assert!(
+            shape
+                .into_highlight(HighlightShape::Rectangle)
+                .text_element_id
+                .is_none()
+        );
+        assert!(shape.into_spotlight().text_element_id.is_none());
+        assert!(
+            crate::SpeechBubbleData::new(shape)
+                .body
+                .text_element_id
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn shape_text_binding_rejects_missing_nontext_and_shared_labels() {
+        let mut document = Document::new();
+        let owner = document.allocate_element_id();
+        let label = document.allocate_element_id();
+        let mut shape = crate::MagnifierData::default().magnified_rect();
+        shape.text_element_id = Some(label);
+        let mut missing = Transaction::new("missing label");
+        missing.insert_rectangle(owner, ElementMeta::default(), shape);
+        assert_eq!(
+            document.apply(&missing).unwrap_err(),
+            ErrorCode::InvalidArgument
+        );
+        let mut self_bound = shape;
+        self_bound.text_element_id = Some(owner);
+        let mut invalid = Transaction::new("nontext label");
+        invalid.insert_rectangle(owner, ElementMeta::default(), self_bound);
+        assert_eq!(
+            document.apply(&invalid).unwrap_err(),
+            ErrorCode::InvalidArgument
+        );
+        missing.insert_text(label, ElementMeta::default(), TextData::default());
+        document.apply(&missing).unwrap();
+        let mut shared = Transaction::new("shared label");
+        shared.insert_rectangle(
+            document.allocate_element_id(),
+            ElementMeta::default(),
+            shape,
+        );
+        assert_eq!(
+            document.apply(&shared).unwrap_err(),
+            ErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn shape_text_binding_direct_label_removal_detaches_and_undo_restores() {
+        let mut document = Document::new();
+        let owner = document.allocate_element_id();
+        let label = document.allocate_element_id();
+        let mut shape = crate::MagnifierData::default().magnified_rect();
+        shape.text_element_id = Some(label);
+        let mut insert = Transaction::new("shape and text");
+        insert.insert_rectangle(owner, ElementMeta::default(), shape);
+        insert.insert_text(label, ElementMeta::default(), TextData::default());
+        document.apply(&insert).unwrap();
+        let mut remove = Transaction::new("direct label removal");
+        remove.remove_element(label);
+        let removed = document.apply(&remove).unwrap();
+        assert!(document.rectangle(owner).unwrap().text_element_id.is_none());
+        assert!(removed.changes.relations_changed);
+        let restored = document.apply(&removed.inverse).unwrap();
+        assert_eq!(document.bound_text_id_for_shape(owner), Some(label));
+        document.apply(&restored.inverse).unwrap();
+        assert!(document.rectangle(owner).unwrap().text_element_id.is_none());
+    }
 }
 
 #[cfg(test)]
@@ -2745,6 +2916,7 @@ mod tests {
     #[test]
     fn common_element_state_has_one_geometry_opacity_and_z_order_definition() {
         let rectangle = RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
@@ -2936,6 +3108,7 @@ mod tests {
         );
 
         let spotlight = RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,

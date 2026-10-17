@@ -1292,7 +1292,8 @@ void drawOverlayRectItem(QPainter& painter, const OverlayDisplayInfo& displayInf
     const double height = item.height * zoom;
     const double strokeWidth = item.stroke_width * zoom;
 
-    if (item.rect_kind == SNOW_OVERLAY_RECT_SPEECH_BUBBLE_ADD_TAIL_HANDLE) {
+    if (item.rect_kind == SNOW_OVERLAY_RECT_SPEECH_BUBBLE_ADD_TAIL_HANDLE ||
+        item.rect_kind == SNOW_OVERLAY_RECT_SHAPE_TEXT_HANDLE) {
         painter.save();
         painter.translate(center);
         painter.rotate(item.rotation * kRadiansToDegrees);
@@ -1367,6 +1368,7 @@ void drawOverlayRectItem(QPainter& painter, const OverlayDisplayInfo& displayInf
         return;
     }
     if (item.rect_kind == SNOW_OVERLAY_RECT_SPEECH_BUBBLE_ADD_TAIL_HANDLE ||
+        item.rect_kind == SNOW_OVERLAY_RECT_SHAPE_TEXT_HANDLE ||
         item.rect_kind == SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_BASE_HANDLE ||
         item.rect_kind == SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_TIP_HANDLE) {
         drawOverlayRectItem(painter, displayInfo, static_cast<const SnowOverlayDisplayItem&>(item));

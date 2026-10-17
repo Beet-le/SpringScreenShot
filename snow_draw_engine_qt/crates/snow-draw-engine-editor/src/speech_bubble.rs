@@ -905,13 +905,7 @@ impl Editor {
     ) -> Vec<SpeechBubbleControl> {
         let zoom = self.camera().zoom.max(0.0001);
         let padding = selection_frame_padding_for_members(zoom, 1, 0);
-        let add = speech_bubble_local_to_canvas(
-            bubble,
-            Point::new(
-                0.0,
-                bubble.body.height / 2.0 + padding + selection_rotation_offset(zoom),
-            ),
-        );
+        let add = selection_bottom_control_center(&bubble.body, zoom);
         let mut reserved = vec![
             add,
             speech_bubble_local_to_canvas(
@@ -1194,6 +1188,7 @@ mod tests {
     use snow_draw_engine_document::{FillStyle, RectangleElementKind};
     fn body(shape: HighlightShape) -> RectangleData {
         RectangleData {
+            text_element_id: None,
             stroke_rendering_style: Default::default(),
             stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
