@@ -3023,15 +3023,16 @@ void ScreenshotCanvasRenderer::reset() {
     // Release only derived data, leaving those snapshots fully usable.
     clearRenderState();
     setOcrVisible(true);
-    const bool hadCachedContent = m_imageSource.isValid() ||
-                                  !m_imageViewportPhysicalSize.isEmpty() ||
-                                  m_renderMode != RenderMode::Standard ||
-                                  m_ocrPresentation != nullptr || hasScrollingResultPreview();
+    const bool hadCachedContent =
+        m_imageSource.isValid() || !m_imageViewportPhysicalSize.isEmpty() ||
+        m_renderMode != RenderMode::Standard || m_ocrPresentation != nullptr ||
+        !m_ocrFilteredImage.isNull() || hasScrollingResultPreview();
     const bool hadState = m_imageSource.isValid() || !m_imageViewportPhysicalSize.isEmpty() ||
                           m_renderMode != RenderMode::Standard || m_maskVisible ||
                           m_selectionState.present || m_selectionState.shadowWidth > 0 ||
                           m_selectionState.toolbarHovered || !m_selectionState.borderVisible ||
-                          m_ocrPresentation != nullptr || m_guideLinesVisible;
+                          m_ocrPresentation != nullptr || !m_ocrFilteredImage.isNull() ||
+                          m_guideLinesVisible;
     m_imageSource = {};
     m_samplingImageSource = {};
     m_baseImageSources.clear();
@@ -3058,6 +3059,8 @@ void ScreenshotCanvasRenderer::reset() {
     m_monitorCenterGuideLineColor = QColor(0, 0, 0, 0);
     m_guideLinesVisible = false;
     m_ocrPresentation.reset();
+    m_ocrFilteredImage = {};
+    m_ocrFilteredCanvasRect = {};
     m_ocrBackgroundColor = {};
     m_ocrPresentationMode = OcrPresentationMode::BackgroundAndText;
     if (m_ocrTextLayer != nullptr) {

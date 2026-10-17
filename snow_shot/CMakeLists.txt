@@ -1808,6 +1808,7 @@ set(PROJECT_HEADERS
     include/snow_shot/presentation/screenshotoverlaywindow.h
     include/snow_shot/presentation/screenshotselectorcoordinator.h
     src/presentation/selector/screenshotselectorpolicy.h
+    src/presentation/selector/screenshotselectordisplaygeometry.h
     include/snow_shot/presentation/screenshotselectorworkflow.h
     include/snow_shot/presentation/screenshotselectorworkflowports.h
     include/snow_shot/presentation/screenshottoolbarcommands.h
@@ -3468,6 +3469,8 @@ if(SNOW_SHOT_BUILD_TESTS)
              COMMAND snow-shot-window-element-api-tests)
     add_test(NAME snow-shot-selector-phased-tests
              COMMAND snow-shot-window-element-api-tests --selector-only)
+    add_test(NAME snow-shot-selector-lifecycle-tests
+             COMMAND snow-shot-window-element-api-tests --selector-lifecycle-only)
     add_test(NAME snow-shot-shortcut-exit-confirmation-settings-tests
              COMMAND snow-shot-window-element-api-tests
                      --shortcut-exit-confirmation-settings-only)
@@ -3479,6 +3482,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(
         snow-shot-window-element-api-tests
         snow-shot-selector-phased-tests
+        snow-shot-selector-lifecycle-tests
         snow-shot-shortcut-exit-confirmation-settings-tests
         snow-shot-auto-qr-settings-tests
         snow-shot-screenshot-guide-settings-reset-tests
@@ -4572,6 +4576,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-screenshot-canvas-renderer-tests
         tests/screenshot_canvas_renderer_tests.cpp
+        tests/screenshot_session_input_cleanup_tests.cpp
         tests/screenshot_overlay_input_tests.cpp
         tests/screenshot_selection_effect_editor_tests.cpp
         src/presentation/overlay/screenshotoverlayinputhandler.cpp
@@ -4765,6 +4770,17 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-ocr-line-box-rendering-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --ocr-line-box-rendering-only
             -platform offscreen)
+    add_test(NAME snow-shot-ocr-renderer-reset-tests
+        COMMAND snow-shot-screenshot-canvas-renderer-tests --ocr-reset-only -platform offscreen)
+    add_test(NAME snow-shot-session-input-cleanup-tests
+        COMMAND snow-shot-screenshot-canvas-renderer-tests --session-input-cleanup-only -platform offscreen)
+    set_tests_properties(snow-shot-session-input-cleanup-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(snow-shot-ocr-renderer-reset-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-ocr-line-box-rendering-tests PROPERTIES
         LABELS "unit" RUN_SERIAL TRUE TIMEOUT 90
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

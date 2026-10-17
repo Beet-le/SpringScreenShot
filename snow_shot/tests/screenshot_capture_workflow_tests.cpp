@@ -1247,6 +1247,83 @@ void capturedImagePlacementFollowsNormalizedCanvasGeometry() {
             "captured image placement must follow normalized canvas geometry");
 }
 
+void selectorRefreshOnlyBorrowsDisplayGeometry() {
+    class Service final : public ScreenshotSelectorServicePort {
+      public:
+        QVector<CapturedDisplayModel> snapshot;
+        bool startRefreshWithDisplays(const QVector<std::uintptr_t>& excluded,
+                                      const QVector<CapturedDisplayModel>& displays) override {
+            require(excluded == QVector<std::uintptr_t>{123},
+                    "geometry refresh must preserve excluded overlays");
+            snapshot = displays;
+            return true;
+        }
+        bool ready() const override {
+            return false;
+        }
+        bool refreshInFlight() const override {
+            return false;
+        }
+        bool startRefresh(const QVector<std::uintptr_t>&) override {
+            require(false, "frozen display refresh must not enumerate displays");
+            return false;
+        }
+        bool requestHitTest(const QPoint&, ScreenshotSelectorHitTestMode) override {
+            return false;
+        }
+    } service;
+    class Exclusions final : public ScreenshotOverlayExclusionPort {
+      public:
+        QVector<std::uintptr_t> excludedHwnds(const ScreenshotDisplaySession&) const override {
+            return {123};
+        }
+    } exclusions;
+    const auto trackedImage = [](int& released) {
+        struct Storage {
+            uchar pixels[16]{};
+            int* released;
+        };
+        auto* storage = new Storage{{}, &released};
+        return QImage(
+            storage->pixels, 2, 2, 8, QImage::Format_ARGB32,
+            [](void* data) {
+                auto* image = static_cast<Storage*>(data);
+                ++*image->released;
+                delete image;
+            },
+            storage);
+    };
+    int imagesReleased = 0;
+    int cursorsReleased = 0;
+    ScreenshotCaptureState state;
+    ScreenshotDisplaySession displays;
+    CapturedDisplayModel display;
+    display.active = true;
+    display.physicalRect = QRect(-200, 40, 400, 300);
+    display.capturedLogicalRect = QRect(-100, 20, 200, 150);
+    display.nativeDisplayId = 17;
+    display.canvasUsesPoints = true;
+    display.image = trackedImage(imagesReleased);
+    display.cursorPatch = trackedImage(cursorsReleased);
+    displays.appendDisplay(std::move(display));
+    ScreenshotGeometryMapper geometry;
+    ScreenshotInteractionState interaction;
+    interaction.beginCapture();
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotSelectorWorkflow workflow(
+        {state, service, exclusions, displays, geometry, interaction, selection, intelligent, {}});
+    workflow.startRefresh();
+    require(service.snapshot.size() == 1 && service.snapshot.first().nativeDisplayId == 17 &&
+                service.snapshot.first().canvasUsesPoints &&
+                service.snapshot.first().physicalRect == QRect(-200, 40, 400, 300) &&
+                service.snapshot.first().capturedLogicalRect == QRect(-100, 20, 200, 150),
+            "selector refresh must preserve captured display coordinate mapping");
+    displays.clear();
+    require(imagesReleased == 1 && cursorsReleased == 1,
+            "selector refresh must not retain capture or cursor pixels after display cleanup");
+}
+
 void phasedWorkflowOnlySignalsInitialReadinessOnce() {
     class Service final : public ScreenshotSelectorServicePort {
       public:
@@ -2406,6 +2483,7 @@ int main() {
     capturedImagePlacementFollowsNormalizedCanvasGeometry();
     intelligentSelectionTargetsPreserveElementPathBehavior();
     phasedSelectionPreservesUserIntent();
+    selectorRefreshOnlyBorrowsDisplayGeometry();
     phasedWorkflowOnlySignalsInitialReadinessOnce();
     captureSessionsApplyTheCurrentSmartSelectionSetting();
     return 0;

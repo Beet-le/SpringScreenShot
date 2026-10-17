@@ -5623,6 +5623,70 @@ void ocrBackgroundRastersPreserveSourceRowExposureAndDpi() {
             "teardown must release source-row backgrounds and glyphs together");
 }
 
+void rendererResetReleasesOcrFilteredImages() {
+    SnowCanvasWidget canvas;
+    canvas.resize(64, 48);
+    require(canvas.setViewportCamera(0.0, 0.0, 1.0), "initialize OCR cleanup camera");
+    ScreenshotCanvasRenderer renderer(canvas);
+    canvas.setCustomRenderer(&renderer);
+    CanvasPaintRegionObserver observer;
+    canvas.installEventFilter(&observer);
+    canvas.show();
+    QApplication::processEvents();
+
+    for (const bool hasPresentation : {false, true}) {
+        for (const bool visible : {true, false}) {
+            std::weak_ptr<ScreenshotOcrPresentation> presentation;
+            if (hasPresentation) {
+                auto current = std::make_shared<ScreenshotOcrPresentation>();
+                presentation = current;
+                renderer.setOcrPresentation(std::move(current));
+            }
+            renderer.setOcrVisible(visible);
+
+            int releasedImages = 0;
+            auto* pixels = new uchar[16 * 12 * 4]{};
+            auto* cleanupInfo = new std::pair<int*, uchar*>(&releasedImages, pixels);
+            QImage filtered(
+                pixels, 16, 12, 16 * 4, QImage::Format_RGBA8888,
+                [](void* info) {
+                    const auto* state = static_cast<std::pair<int*, uchar*>*>(info);
+                    ++*state->first;
+                    delete[] state->second;
+                    delete state;
+                },
+                cleanupInfo);
+            renderer.setOcrFilteredImage(std::move(filtered), QRectF(-8.0, -6.0, 16.0, 12.0));
+            require(!renderer.ocrFilteredImage().isNull() && releasedImages == 0,
+                    "the renderer must own filtered OCR pixels before capture cleanup");
+            QApplication::processEvents();
+            const auto contentRevision = renderer.contentRevision();
+            const auto originalRevision = renderer.originalBackgroundRevision();
+            observer.begin();
+
+            renderer.reset();
+
+            require(releasedImages == 1 && renderer.ocrFilteredImage().isNull(),
+                    "renderer reset must release filtered OCR pixels before reuse");
+            require(renderer.ocrFilteredCanvasRect().isEmpty(),
+                    "renderer reset must discard the filtered OCR image geometry");
+            require(presentation.expired(), "renderer reset must release its OCR presentation");
+            require(renderer.contentRevision() > contentRevision &&
+                        renderer.originalBackgroundRevision() > originalRevision,
+                    "resetting image-only OCR state must invalidate cached canvas content");
+            QApplication::processEvents();
+            require(observer.region().contains(canvas.rect()),
+                    "resetting image-only OCR state must repaint the cleared canvas");
+
+            const auto clearedRevision = renderer.contentRevision();
+            renderer.reset();
+            require(releasedImages == 1 && renderer.contentRevision() == clearedRevision,
+                    "an already empty renderer reset must not release or invalidate content twice");
+        }
+    }
+    canvas.setCustomRenderer(nullptr);
+}
+
 void originalImageVisibilityPreservesLatestOcrRendering() {
     using Renderer = ScreenshotCanvasRenderer;
     for (const bool pinned : {false, true}) {
@@ -9602,6 +9666,7 @@ void overlayWindowHasNoNativeShadow() {
 void runScreenshotCursorTests();
 void runScreenshotSelectionEffectEditorTests();
 void runScreenshotOverlayInputTests();
+void runScreenshotSessionInputCleanupTests();
 #if defined(SNOW_SHOT_CURSOR_BENCHMARK)
 void runScreenshotCursorBenchmark();
 #endif
@@ -9820,6 +9885,10 @@ int main(int argc, char** argv) {
         overlayRightQuickSelection();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--session-input-cleanup-only"))) {
+        runScreenshotSessionInputCleanupTests();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--close-release-only")) ||
         application.arguments().contains(QStringLiteral("--close-release-native"))) {
 #ifdef Q_OS_WIN
@@ -9888,6 +9957,10 @@ int main(int argc, char** argv) {
         ocrFilteredCropMatchesFullFrameReference();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--ocr-reset-only"))) {
+        rendererResetReleasesOcrFilteredImages();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--cursor-layer-priority"))) {
         canvasCursorLayersKeepToolCursorAfterScreenshotSelection();
         overlaySelectionCursorUpdatesAreIdempotentWhileSelecting();
@@ -9920,6 +9993,7 @@ int main(int argc, char** argv) {
         ocrGlyphCachingPreservesOriginalAndCffFontCoverage();
         ocrGlyphCachesCropTransparentMarginsWithoutChangingPhase();
         originalImageVisibilityPreservesLatestOcrRendering();
+        rendererResetReleasesOcrFilteredImages();
         mergedParagraphUsesSourceRows();
         ocrBackgroundFillSamplesRobustlyAndChoosesContrastingText();
         ocrSolidFillRendersAdaptiveTextPerBlock();
@@ -9931,6 +10005,8 @@ int main(int argc, char** argv) {
         ocrFilteredCropMatchesFullFrameReference();
         return 0;
     }
+    runScreenshotSessionInputCleanupTests();
+    rendererResetReleasesOcrFilteredImages();
     originalEraserSourceExcludesPresentationOverlays();
     ocrLineBoxPreviewMatchesEngineVisuals();
     ocrLineBoxSelectionUpdatesOnlyChangedItemsAndDamage();

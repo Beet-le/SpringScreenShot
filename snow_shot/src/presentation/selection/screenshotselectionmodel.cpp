@@ -118,10 +118,11 @@ void ScreenshotSelectionModel::setRegionType(ScreenshotRegionType type) {
 
 void ScreenshotSelectionModel::reset() {
     const ChangeRevisionGuard revision(*this);
+    QVector<CreatedRegion>().swap(m_createdRegions);
     clearCreatedRegions();
     m_cachedSelectionRegion.reset();
     m_cachedMarqueeRegion.reset();
-    m_draftVertices.clear();
+    QVector<QPointF>().swap(m_draftVertices);
     m_draftRegion.reset();
     m_region.reset();
     m_confirmedRegion = {};

@@ -214,11 +214,15 @@ class ScreenshotOverlayInputHandler final {
     void cancelSelectionAspectRatioSnapShortcut();
     [[nodiscard]] bool toggleIntelligentSelectionTargetShortcut();
     void resetTransientShortcuts();
+    // Session termination releases construction state even while its draft is still active.
+    void endCaptureSession();
     [[nodiscard]] bool canvasColorSamplingActive() const;
     void armCanvasColorSampling();
     void cancelCanvasColorSampling();
 
   private:
+    friend struct ScreenshotSessionInputCleanupTestAccess;
+
     ScreenshotSelectionEffectLayout effectLayout(const ScreenshotOverlayWindow* overlay) const;
     ScreenshotSelectionEffectHandle effectHandleAt(const ScreenshotOverlayWindow* overlay,
                                                    const QPointF& localPosition) const;

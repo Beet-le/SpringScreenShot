@@ -371,6 +371,11 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     # exit code instead of blocking on modal dialogs.
     snow_link_test_cli_guard(qt)
 
+    add_executable(snow-canvas-path-geometry-tests tests/snow_canvas_path_geometry_tests.cpp)
+    target_link_libraries(snow-canvas-path-geometry-tests PRIVATE snow_draw_engine_qt_canvas)
+    add_test(NAME snow-canvas-path-geometry-tests COMMAND snow-canvas-path-geometry-tests)
+    set_tests_properties(snow-canvas-path-geometry-tests PROPERTIES LABELS "unit" TIMEOUT 30)
+
     add_executable(snow-canvas-stroke-rendering-tests tests/snow_canvas_stroke_rendering_tests.cpp)
     target_include_directories(snow-canvas-stroke-rendering-tests PRIVATE
         ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}

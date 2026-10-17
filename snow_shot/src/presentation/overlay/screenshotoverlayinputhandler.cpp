@@ -1553,6 +1553,27 @@ void ScreenshotOverlayInputHandler::resetTransientShortcuts() {
     }
 }
 
+void ScreenshotOverlayInputHandler::endCaptureSession() {
+    // Tool/scrolling restoration belongs to an interrupted gesture in a live capture.
+    m_toolBeforeSelectionResize.reset();
+    m_scrollingCaptureSelectionResize = false;
+    resetTransientShortcuts();
+    m_regionPreviewTimer.stop();
+    QVector<QPointF>().swap(m_regionPoints);
+    m_freehandFilter.clear();
+    m_freehandRawStart = 0;
+    m_pendingRegionPointer = {};
+    m_pendingRegionEdge = false;
+    m_freehandPressed = false;
+    m_consumeRegionRelease = false;
+    m_consumeEffectRelease = false;
+    m_externalDragActive = false;
+    m_effectMouseGrab.clear();
+    QObject::disconnect(m_angleTargetConnection);
+    m_angleTargetConnection = {};
+    m_angleWheelCanvas.clear();
+}
+
 bool ScreenshotOverlayInputHandler::canvasColorSamplingActive() const {
     return m_canvasColorSamplingArmed;
 }
