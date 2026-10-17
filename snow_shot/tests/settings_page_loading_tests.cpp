@@ -7,6 +7,8 @@
 #include "snow_shot/presentation/languagemanager.h"
 #include "snow_shot/presentation/settings/settingsbackend.h"
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
+#include "snow_shot/presentation/settings/settingsformfield.h"
+#include "widgets/modal.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/presentation/screenshotclipboardcontent.h"
 #include "snow_shot/storage/applicationstorage.h"
@@ -29,10 +31,12 @@
 #include <QDir>
 #include <QEvent>
 #include <QFontDatabase>
+#include <QFileDialog>
 #include <QKeyEvent>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
+#include <QVBoxLayout>
 #include <QMap>
 #include <QProxyStyle>
 #include <QResizeEvent>
@@ -42,6 +46,9 @@
 #include <QScrollBar>
 #include <QSet>
 #include <QTemporaryDir>
+#include <QTimer>
+#include <QToolButton>
+#include <QtTest/QTest>
 #include <QTranslator>
 
 #include <cstdlib>
@@ -571,6 +578,149 @@ class TestTranslator final : public QTranslator {
                    : QString();
     }
 };
+
+void variableDescriptionLinks(const settings::SettingsRegistry& registry,
+                              settings::SettingsRuntimeSession& session) {
+    class HelpTranslator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            return qstrcmp(context, "SettingsVariableHelp") == 0
+                       ? QStringLiteral("Translated: ") + QString::fromUtf8(source)
+                       : QString();
+        }
+    } translator;
+    QWidget owner;
+    auto* layout = new QVBoxLayout(&owner);
+    owner.resize(880, 760);
+    const QStringList ids{QStringLiteral("screenshot-output.image-save-directory"),
+                          QStringLiteral("screen-recording-output.video-save-directory"),
+                          QStringLiteral("screenshot-output.manual-filename-format"),
+                          QStringLiteral("screenshot-output.auto-filename-format"),
+                          QStringLiteral("screen-recording-output.video-filename-format")};
+    QVector<settings::SettingsFormField*> fields;
+    for (const QString& id : ids) {
+        const auto* descriptor = registry.field(id);
+        require(descriptor != nullptr, "variable-capable settings must be registered");
+        snow_shot::presentation::components::form_fields::Options options;
+        options.parent = &owner;
+        options.presentation =
+            snow_shot::presentation::components::form_fields::Presentation::SettingsRow;
+        auto* field = settings::SettingsFormField::create(*descriptor, session, options);
+        require(field != nullptr && field->controller()->metadata().descriptionAction.isValid(),
+                "all five supported settings must provide a description action");
+        fields.push_back(field);
+        layout->addWidget(field->viewWidget());
+    }
+    owner.show();
+    drainEvents();
+    QTemporaryDir browseDirectory;
+    const QString pathTemplate = browseDirectory.filePath(QStringLiteral("{AN}/{WN}/{'resolved'}"));
+    const QString resolved = browseDirectory.filePath(QStringLiteral("Unknown/Unknown/resolved"));
+    require(browseDirectory.isValid() && QDir().mkpath(resolved), "browse fixture must exist");
+    QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+    for (auto* field : {fields.at(0), fields.at(1)}) {
+        auto* path = qobject_cast<DirectoryPathInput*>(field->editor());
+        require(path != nullptr, "image and recording directories must expose path editors");
+        path->setText(pathTemplate);
+        bool inspectedPicker = false;
+        QTimer::singleShot(0, &owner, [&] {
+            for (auto* widget : QApplication::topLevelWidgets()) {
+                if (auto* dialog = qobject_cast<QFileDialog*>(widget)) {
+                    require(dialog->directory().absolutePath() == resolved,
+                            "directory picker resolves window variables without recording context");
+                    inspectedPicker = true;
+                    dialog->reject();
+                }
+            }
+        });
+        path->browseButton()->click();
+        require(inspectedPicker && path->text() == pathTemplate,
+                "canceling the directory picker must preserve the stored template");
+    }
+    for (auto* field : fields) {
+        auto* description =
+            field->viewWidget()->findChild<QLabel*>(QStringLiteral("formFieldDescription"));
+        require(description && description->wordWrap() &&
+                    description->text().endsWith(QStringLiteral("Variable Description</a>")) &&
+                    description->textInteractionFlags().testFlag(Qt::LinksAccessibleByKeyboard) &&
+                    !field->editor()->accessibleDescription().contains(QStringLiteral("<a")),
+                "help must follow the description and remain accessible without exposing markup");
+        description->setFocus(Qt::TabFocusReason);
+        QTest::keyClick(description, Qt::Key_Return);
+        drainEvents();
+        auto* modal = field->viewWidget()->findChild<adqt::widgets::AdModal*>(
+            QStringLiteral("settingsVariableDescriptionModal"));
+        require(modal && modal->isOpen() && modal->centered() &&
+                    modal->standardButtons() == adqt::widgets::AdModal::StandardButton::Ok &&
+                    modal->text().startsWith(QStringLiteral("{YYYY}: Current time")),
+                "keyboard activation must open a centered modal with the variable description and "
+                "one button");
+        require(modal->text().contains(QStringLiteral("{AN}: Application Name")) &&
+                    modal->text().contains(QStringLiteral("{WN}: Window Name")) &&
+                    !modal->text().contains(QStringLiteral("Unknown")),
+                "window variable help must be available for screenshot and recording templates");
+        const QString snapshot = qEnvironmentVariable("SNOW_VARIABLE_HELP_SNAPSHOT");
+        if (field == fields.constFirst() && !snapshot.isEmpty())
+            require(owner.grab().save(snapshot), "help modal snapshot must save");
+        require(QCoreApplication::installTranslator(&translator), "help translator must install");
+        drainEvents();
+        require(
+            modal->windowTitle() == QStringLiteral("Translated: Variable Description") &&
+                modal->text().startsWith(QStringLiteral("Translated: {YYYY}: Current time")) &&
+                description->text().contains(QStringLiteral("Translated: Variable Description")),
+            "open modal and inline link must follow language changes");
+        QCoreApplication::removeTranslator(&translator);
+        drainEvents();
+        modal->acceptButton()->click();
+        drainEvents();
+        require(!field->viewWidget()->findChild<adqt::widgets::AdModal*>(
+                    QStringLiteral("settingsVariableDescriptionModal")),
+                "accepting help must release the modal");
+    }
+    auto* first = fields.constFirst();
+    auto* firstDescription =
+        first->viewWidget()->findChild<QLabel*>(QStringLiteral("formFieldDescription"));
+    firstDescription->setFocus(Qt::TabFocusReason);
+    QTest::keyClick(firstDescription, Qt::Key_Return);
+    drainEvents();
+    auto* modal = first->viewWidget()->findChild<adqt::widgets::AdModal*>(
+        QStringLiteral("settingsVariableDescriptionModal"));
+    require(modal && modal->isOpen(), "help must reopen after dismissal");
+    owner.activateWindow();
+    require(QTest::qWaitForWindowActive(&owner),
+            "help owner must be active for keyboard shortcuts");
+    modal->acceptButton()->setFocus(Qt::TabFocusReason);
+    drainEvents();
+    require(modal->acceptButton()->hasFocus(), "help accept button must receive keyboard focus");
+    QTest::keyClick(modal->acceptButton(), Qt::Key_Escape);
+    drainEvents();
+    require(!first->viewWidget()->findChild<adqt::widgets::AdModal*>(
+                QStringLiteral("settingsVariableDescriptionModal")),
+            "Escape must dismiss help");
+    firstDescription->setFocus(Qt::TabFocusReason);
+    QTest::keyClick(firstDescription, Qt::Key_Return);
+    drainEvents();
+    modal = first->viewWidget()->findChild<adqt::widgets::AdModal*>(
+        QStringLiteral("settingsVariableDescriptionModal"));
+    require(modal && modal->isOpen(), "help must reopen after Escape");
+    modal->closeButton()->click();
+    drainEvents();
+    require(!first->viewWidget()->findChild<adqt::widgets::AdModal*>(
+                QStringLiteral("settingsVariableDescriptionModal")),
+            "close button must dismiss help");
+    owner.resize(560, 760);
+    drainEvents();
+    for (auto* field : fields) {
+        auto* description =
+            field->viewWidget()->findChild<QLabel*>(QStringLiteral("formFieldDescription"));
+        require(description->height() >= description->heightForWidth(description->width()),
+                "wrapped descriptions must receive their required height");
+    }
+}
 
 void deferredStateAndKeyboard(const settings::SettingsRegistry& registry,
                               settings::SettingsRuntimeSession& session) {
@@ -1731,6 +1881,11 @@ int main(int argc, char** argv) {
     settings::BuiltInSettingsBackend backend(shortcuts);
     const auto registry = settings::buildBuiltInSettingsRegistry();
     settings::SettingsRuntimeSession session(registry, backend);
+    if (application.arguments().contains(QStringLiteral("--variable-help-only"))) {
+        variableDescriptionLinks(registry, session);
+        storage.shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--catalog-resets-only"))) {
         catalogResetsPreserveOtherSections(session);
         storage.shutdown();

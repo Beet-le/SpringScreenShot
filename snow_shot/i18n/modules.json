@@ -38,6 +38,7 @@
     "SettingsBackend",
     "SettingsCatalog",
     "SettingsPageWidget",
+    "SettingsVariableHelp",
     "ShellContextMenuRegistration",
     "ShortcutKeyRow",
     "StorageDirectoryChange",

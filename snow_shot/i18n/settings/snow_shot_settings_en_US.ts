@@ -4677,6 +4677,29 @@
         </message>
     </context>
     <context>
+        <name>SettingsVariableHelp</name>
+        <message>
+            <source>%1: Application Name</source>
+            <translation>%1: Application Name</translation>
+        </message>
+        <message>
+            <source>%1: Current time</source>
+            <translation>%1: Current time</translation>
+        </message>
+        <message>
+            <source>%1: Window Name</source>
+            <translation>%1: Window Name</translation>
+        </message>
+        <message>
+            <source>OK</source>
+            <translation>OK</translation>
+        </message>
+        <message>
+            <source>Variable Description</source>
+            <translation>Variable Description</translation>
+        </message>
+    </context>
+    <context>
         <name>ShellContextMenuRegistration</name>
         <message>
             <source>Could not access the Windows context menu registry. Windows error %1.</source>

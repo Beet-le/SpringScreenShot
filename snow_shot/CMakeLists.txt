@@ -751,6 +751,7 @@ set(SNOW_SHOT_STORAGE_SOURCES
     include/snow_shot/storage/configurationstore.h
     include/snow_shot/storage/configurationschema.h
     include/snow_shot/storage/exportfilename.h
+    include/snow_shot/storage/timevariables.h
     include/snow_shot/storage/persistedselectioncodec.h
     include/snow_shot/storage/persistedwindowgeometry.h
     include/snow_shot/storage/pinnedwindowrepository.h
@@ -767,6 +768,8 @@ set(SNOW_SHOT_STORAGE_SOURCES
     src/storage/configurationstore.cpp
     src/storage/configurationschema.cpp
     src/storage/exportfilename.cpp
+    src/storage/timevariables.cpp
+    src/storage/screenshotexportvariables.cpp
     src/storage/persistedselectioncodec.cpp
     src/storage/persistedwindowgeometry.cpp
     src/storage/pinnedwindowrepository.cpp
@@ -1847,6 +1850,19 @@ else()
     target_sources(snow_shot_print PRIVATE src/presentation/services/nativeprintunsupported.cpp)
 endif()
 
+add_library(snow_shot_export_naming STATIC)
+target_include_directories(snow_shot_export_naming PUBLIC include)
+target_link_libraries(snow_shot_export_naming PUBLIC Qt6::Gui)
+if(APPLE)
+    target_sources(snow_shot_export_naming PRIVATE src/platform/macos/screenshotwindownames.mm)
+    target_link_libraries(snow_shot_export_naming PRIVATE "-framework AppKit" "-framework CoreGraphics")
+else()
+    target_sources(snow_shot_export_naming PRIVATE src/platform/windows/screenshotwindownames.cpp)
+    if(WIN32)
+        target_link_libraries(snow_shot_export_naming PRIVATE dwmapi version)
+    endif()
+endif()
+
 set(PROJECT_CXX_SOURCES
     ${SNOW_SELECTED_FILES_SOURCES}
     src/presentation/services/screenshotfilepinbatch.cpp
@@ -2087,6 +2103,7 @@ if(WIN32)
     )
 endif()
 target_link_libraries(snow_shot PRIVATE
+    snow_shot_export_naming
     snow_shot_collage
     snow_shot_image_split
     snow_shot_animation_playback
@@ -3117,11 +3134,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+    snow_find_qt(COMPONENTS Test)
     add_executable(snow-shot-settings-page-loading-tests
         tests/settings_page_loading_tests.cpp
         src/presentation/services/screenshotclipboardservice.cpp)
     target_link_libraries(snow-shot-settings-page-loading-tests PRIVATE
-        snow_shot_settings snow_shot_image_codec)
+        snow_shot_settings snow_shot_image_codec Qt6::Test)
     snow_shot_import_offscreen_platform(snow-shot-settings-page-loading-tests)
     snow_shot_add_translations(snow-shot-settings-page-loading-tests)
     add_test(NAME snow-shot-settings-select-tests
@@ -3139,6 +3157,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-settings-page-loading-tests
         COMMAND snow-shot-settings-page-loading-tests)
+    add_test(NAME snow-shot-settings-variable-help-tests
+        COMMAND snow-shot-settings-page-loading-tests --variable-help-only -platform offscreen)
+    set_tests_properties(snow-shot-settings-variable-help-tests PROPERTIES
+        LABELS unit RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-stitch-selected-images-settings-tests
         COMMAND snow-shot-settings-page-loading-tests --stitch-selected-images-only)
     set_tests_properties(snow-shot-stitch-selected-images-settings-tests PROPERTIES LABELS unit
@@ -4220,6 +4243,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     )
     target_link_libraries(snow-shot-selection-geometry-tests PRIVATE
+        snow_shot_storage
         snow_canvas_image
         ant_design_qt
         Qt6::Gui
@@ -5245,6 +5269,34 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-pdf-export-tests PROPERTIES
         LABELS "unit" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+    if(APPLE OR WIN32)
+        add_executable(snow-shot-window-names-native-tests tests/screenshot_window_names_tests.cpp)
+        target_link_libraries(snow-shot-window-names-native-tests PRIVATE snow_shot_export_naming Qt6::Widgets)
+        if(APPLE)
+            set_source_files_properties(tests/screenshot_window_names_tests.cpp PROPERTIES LANGUAGE OBJCXX)
+            target_link_libraries(snow-shot-window-names-native-tests PRIVATE "-framework AppKit")
+        endif()
+        add_test(NAME snow-shot-window-names-native-tests COMMAND snow-shot-window-names-native-tests)
+        set_tests_properties(snow-shot-window-names-native-tests PROPERTIES
+            LABELS "interactive;e2e" RUN_SERIAL TRUE SKIP_RETURN_CODE 77 TIMEOUT 15)
+    endif()
+
+    add_executable(snow-shot-save-directory-time-variables-tests
+        tests/save_directory_time_variables_tests.cpp
+        src/presentation/services/screenshotimagefileservice.cpp
+        src/presentation/services/screenshotpdfexport.cpp
+        src/presentation/recording/screenrecordingfolder.cpp)
+    target_include_directories(snow-shot-save-directory-time-variables-tests PRIVATE
+        include src/image)
+    target_link_libraries(snow-shot-save-directory-time-variables-tests PRIVATE
+        snow_shot_storage snow_shot_image_codec Qt6::Gui)
+    add_test(NAME snow-shot-save-directory-time-variables-tests
+        COMMAND snow-shot-save-directory-time-variables-tests -platform offscreen)
+    snow_shot_import_offscreen_platform(snow-shot-save-directory-time-variables-tests)
+    set_tests_properties(snow-shot-save-directory-time-variables-tests PROPERTIES
+        LABELS unit RUN_SERIAL TRUE
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
     add_executable(snow-shot-screenshot-image-file-service-tests
         tests/screenshot_image_file_service_tests.cpp
         include/snow_shot/presentation/screenshotimagefileservice.h
@@ -5272,6 +5324,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_executable(snow-shot-recognition-file-export-tests
         tests/screenshot_recognition_file_export_tests.cpp
         src/presentation/services/screenshotrecognitionfileexport.cpp
+        src/storage/exportfilename.cpp
         src/presentation/ocr/screenshottabledocument.cpp
     )
     target_include_directories(snow-shot-recognition-file-export-tests PRIVATE
@@ -5775,6 +5828,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-export-dialog-workflow-tests)
     add_test(NAME snow-shot-export-dialog-shortcut-tests
         COMMAND snow-shot-export-dialog-workflow-tests --shortcuts)
+    add_test(NAME snow-shot-export-dialog-time-variables-tests
+        COMMAND snow-shot-export-dialog-workflow-tests --time-variables -platform offscreen)
+    set_tests_properties(snow-shot-export-dialog-time-variables-tests PROPERTIES
+        LABELS unit RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-collage-export-dialog-tests
         COMMAND snow-shot-export-dialog-workflow-tests --collage-modality -platform offscreen)
     set_tests_properties(snow-shot-collage-export-dialog-tests PROPERTIES
@@ -5862,6 +5920,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_link_libraries(snow-shot-export-artifact-tests PRIVATE user32)
     endif()
     add_test(NAME snow-shot-export-artifact-tests COMMAND snow-shot-export-artifact-tests)
+    add_test(NAME snow-shot-export-window-variables-tests
+        COMMAND snow-shot-export-artifact-tests --window-variables-only)
+    set_tests_properties(snow-shot-export-window-variables-tests PROPERTIES LABELS unit RUN_SERIAL TRUE)
+
     add_test(NAME snow-shot-clipboard-file-export-tests
         COMMAND snow-shot-export-artifact-tests --clipboard-files-only)
     set_tests_properties(snow-shot-clipboard-file-export-tests PROPERTIES
@@ -7958,6 +8020,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/../test-support/fonts/recording_test_fonts.qrc")
     # Override only the test executable: exercise the real controller without
     # opening capture devices, recording the desktop, or exporting media.
+    target_compile_definitions(snow-shot-screen-recording-controller-tests PRIVATE
+        screenshotWindowNamesAtPoint=test_recording_window_names_at_point)
     foreach(_operation create_direct create_deferred finalize_deferred destroy start pause resume request_stop stop state set_audio_gain set_audio_metering take_audio_levels request_exclusions exclusion_status)
         target_compile_definitions(snow-shot-screen-recording-controller-tests PRIVATE
             "snow_recording_session_${_operation}=test_recording_session_${_operation}")

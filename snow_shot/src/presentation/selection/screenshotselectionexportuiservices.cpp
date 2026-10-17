@@ -52,6 +52,7 @@ void startAutomaticPinSave(std::shared_ptr<ScreenshotExportArtifact> artifact,
                 callback(std::move(result));
             }
         };
+    artifact->setWindowNames(request->windowNames);
     if (!artifact->requestAutomaticSaveToConfiguredDirectory(
             request->receiver, std::move(request->configuredSaveDirectory), request->format,
             std::move(request->filenameFormat), request->encoding, completion, request->pdf,

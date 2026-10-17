@@ -6500,9 +6500,13 @@ void ScreenshotPinnedWindow::quickSave() {
         return;
     if (fileSnapshot) {
         const snow_shot::storage::ScreenshotSettings settings;
+        const QDateTime timestamp = QDateTime::currentDateTime();
         const auto result = ScreenshotRecognitionFileExport::quickSave(
-            *fileSnapshot, settings.imageSaveDirectory(),
-            ScreenshotImageFileService::suggestedBaseName(settings.autoSaveFilenameFormat()));
+            *fileSnapshot,
+            snow_shot::storage::expandScreenshotExportVariables(settings.imageSaveDirectory(),
+                                                                timestamp),
+            ScreenshotImageFileService::suggestedBaseName(settings.autoSaveFilenameFormat(),
+                                                          timestamp));
         if (!result.succeeded()) {
             showPinnedRecognitionMessage(
                 this,
@@ -7061,7 +7065,7 @@ void ScreenshotPinnedWindow::printContent() {
                 {{QStringLiteral("request_kind"), QStringLiteral("pinned")},
                  {QStringLiteral("operation"), QString::number(replacement)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer         ? QStringLiteral("service_destroyed")
+                                           : !printer ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
@@ -7210,12 +7214,15 @@ void ScreenshotPinnedWindow::saveAsFile() {
             return;
         }
         const snow_shot::storage::ScreenshotSettings settings;
+        const QDateTime timestamp = QDateTime::currentDateTime();
         const QString directory = ScreenshotImageFileService::saveDialogDirectory(
-            settings.lastManualSaveDirectory(), settings.imageSaveDirectory());
+            settings.lastManualSaveDirectory(), settings.imageSaveDirectory(), timestamp);
         static_cast<void>(QDir().mkpath(directory));
-        const QString initialPath = QDir(directory).filePath(
-            ScreenshotImageFileService::suggestedBaseName(settings.manualSaveFilenameFormat()) +
-            QLatin1Char('.') + ScreenshotRecognitionFileExport::extension(fileSnapshot->kind));
+        const QString initialPath =
+            QDir(directory).filePath(snow_shot::storage::composeExportFileName(
+                ScreenshotImageFileService::suggestedBaseName(settings.manualSaveFilenameFormat(),
+                                                              timestamp),
+                QLatin1Char('.') + ScreenshotRecognitionFileExport::extension(fileSnapshot->kind)));
         const QPointer<ScreenshotPinnedWindow> lifetime(this);
         setProperty("saveDialogOpen", true);
         const QString selectedPath = QFileDialog::getSaveFileName(

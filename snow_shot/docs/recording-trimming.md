@@ -51,6 +51,13 @@ Cropped Copy exports and Save suggestions expand the configured video filename f
 time, keeping the original output directory and extension. They share normal recording exports'
 `_1`, `_2`, and subsequent collision suffixes. Repeated Copy reuses the cached clip and its filename.
 
+Recording filename and save-directory templates also support `{AN}` (application name) and
+`{WN}` (window title). Both names come from the window under the selected recording region's
+center when capture starts, after any countdown, ignoring the recording controls even when the
+toolbar is included in the video. Trimmed exports retain those names as other windows or titles
+change. Values use the same safe path characters as screenshot exports; unavailable names become
+`Unknown`. Without a recording context, directory pickers and folder resolution use `Unknown`.
+
 A single playback worker owns FFmpeg and the native audio sink. Seek commands coalesce, revision
 numbers reject stale frames, and cancellation interrupts forward decoding. Hardware frames stay on
 the GPU until the requested presentation frame needs CPU pixels. The worker keeps current/lookahead
