@@ -17284,7 +17284,7 @@ QWidget* openStrokeRenderingRow(ScreenshotToolPalette& palette, ScreenshotToolPa
     QApplication::processEvents();
     auto* row = picker->popupContent()->findChild<QWidget*>(
         QStringLiteral("screenshotStrokeRenderingStyles"));
-    require(row != nullptr, "stroke rendering options should materialize below stroke patterns");
+    require(row != nullptr, "stroke rendering options should materialize with stroke patterns");
     return row;
 }
 
@@ -17293,6 +17293,23 @@ QList<adqt::widgets::AdButton*> strokeRenderingButtons(QWidget* row) {
         row->findChildren<adqt::widgets::AdButton*>(QString(), Qt::FindDirectChildrenOnly);
     require(buttons.size() == 3, "stroke rendering should have exactly three option buttons");
     return buttons;
+}
+
+void requireStrokeRenderingBesidePatterns(QWidget* row) {
+    QWidget* styleRow = row->parentWidget();
+    const auto patterns =
+        styleRow->findChildren<adqt::widgets::AdButton*>(QString(), Qt::FindDirectChildrenOnly);
+    require(patterns.size() == 3, "rendering styles should share a row with three stroke patterns");
+    const auto rendering = strokeRenderingButtons(row);
+    const QRect firstRendering(rendering.first()->mapTo(styleRow, QPoint()),
+                               rendering.first()->size());
+    const QRect lastPattern = patterns.last()->geometry();
+    const int patternGap =
+        patterns.at(1)->geometry().left() - patterns.first()->geometry().right() - 1;
+    require(firstRendering.center().y() == lastPattern.center().y(),
+            "stroke patterns and rendering styles should align on the same row");
+    require(firstRendering.left() - lastPattern.right() - 1 > patternGap,
+            "rendering styles should sit to the right with a wider gap between the groups");
 }
 
 void strokeRenderingControlsPreserveIndependentToolStyles() {
@@ -17309,6 +17326,7 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
     options.showSpeechBubbleTool = true;
     options.styleDefaults = product;
     ScreenshotToolPalette palette(options);
+    palette.show();
     SnowCanvasShapeStyle emitted;
     quint32 properties = 0;
     SnowCanvasShapeKind kind = SnowCanvasShapeKind::Rectangle;
@@ -17332,8 +17350,7 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
                     buttons.at(1)->toolTip() == QStringLiteral("Artist") &&
                     buttons.at(2)->toolTip() == QStringLiteral("Cartoonist"),
                 "rendering options should follow Architect, Artist, Cartoonist order");
-        require(row->parentWidget()->layout()->indexOf(row) == 1,
-                "rendering options should be the row directly below the stroke patterns");
+        requireStrokeRenderingBesidePatterns(row);
         const int before = commits;
         const int index = tool == Tool::Arrow ? 2 : 1;
         buttons.at(index)->click();
@@ -17368,6 +17385,9 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
             require(
                 row->isHidden() != supported,
                 "reused stroke editors should expose rendering styles only for supported tools");
+            if (supported) {
+                requireStrokeRenderingBesidePatterns(row);
+            }
             require(
                 row->parentWidget()
                         ->findChildren<QWidget*>(QStringLiteral("screenshotStrokeRenderingStyles"))
@@ -17393,6 +17413,8 @@ void serialNumberStrokeRenderingControlsRespectBadgeTypes() {
     options.styleDefaults = snow_shot::presentation::screenshotCanvasStyleDefaults();
     ScreenshotToolPalette palette(options);
     palette.setActiveTool(Tool::SerialNumber);
+    palette.show();
+    QApplication::processEvents();
     SnowCanvasStyleToolbarState state;
     state.source = SnowCanvasStyleToolbarSource::SelectedSerialNumber;
     state.serialNumberStyle.number = 12;
@@ -17420,14 +17442,13 @@ void serialNumberStrokeRenderingControlsRespectBadgeTypes() {
             palette.setStyleToolbarState(state);
             auto* picker = colorPickerWithAccessibleName(palette, "Sequence number color");
             require(picker != nullptr, "sequence numbers need the shared color picker");
-            picker->setPopupLayerMode(adqt::widgets::AdColorPicker::PopupLayerMode::InWindow);
             picker->setPopupVisible(true);
             QApplication::processEvents();
             auto* row = picker->popupContent()->findChild<QWidget*>(
                 QStringLiteral("screenshotStrokeRenderingStyles"));
             const bool outlined = type == SnowCanvasSerialNumberType::OutlinedCircle ||
                                   type == SnowCanvasSerialNumberType::OutlinedSquare;
-            require(row != nullptr && row->isHidden() != outlined,
+            require(row != nullptr && row->isVisible() == outlined,
                     "sequence stroke types are available only for outlined circles and squares");
             const auto buttons = strokeRenderingButtons(row);
             if (pass == 0 && type == SnowCanvasSerialNumberType::OutlinedCircle) {
@@ -17811,6 +17832,7 @@ void strokeRenderingPopupKeepsDpiAndRetranslates() {
     palette.show();
     QWidget* row = openStrokeRenderingRow(palette, ScreenshotToolPalette::Tool::Shape);
     const auto buttons = strokeRenderingButtons(row);
+    requireStrokeRenderingBesidePatterns(row);
     const QSize size = buttons.at(0)->size();
     const QSize rowSize = row->sizeHint();
     const auto snapshot = [&](int toolbarScale) {
@@ -17849,6 +17871,7 @@ void strokeRenderingPopupKeepsDpiAndRetranslates() {
     QApplication::processEvents();
     require(buttons.at(0)->size() == size && row->sizeHint() == rowSize,
             "toolbar counter-scaling should not resize stroke rendering popup controls");
+    requireStrokeRenderingBesidePatterns(row);
     snapshot(150);
     for (const auto& locale : {QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
         require(language.setLanguage(locale), "load translated stroke rendering labels");

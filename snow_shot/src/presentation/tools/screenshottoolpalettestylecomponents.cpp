@@ -933,9 +933,9 @@ void ScreenshotToolPaletteStrokeEditor::ensurePopupContent(
                              }
                          });
     }
-    styleRow.layout->addStretch(1);
     ColorPickerPopupLayout renderingRow = addColorPickerPopupRow(
-        popupContent, QStringLiteral("screenshotStrokeRenderingStyles"), metrics);
+        styleRow, QStringLiteral("screenshotStrokeRenderingStyles"), metrics);
+    renderingRow.layout->setContentsMargins(colorPickerOptionSpacing(metrics), 0, 0, 0);
     m_renderingStyleRow = renderingRow.widget;
     const SnowCanvasStrokeRenderingStyle renderingStyles[] = {
         SnowCanvasStrokeRenderingStyle::Architect,
@@ -960,7 +960,7 @@ void ScreenshotToolPaletteStrokeEditor::ensurePopupContent(
                              }
                          });
     }
-    renderingRow.layout->addStretch(1);
+    styleRow.layout->addStretch(1);
     updateRenderingStyleRow();
     m_picker->setPopupContent(popupContent.widget);
 }
