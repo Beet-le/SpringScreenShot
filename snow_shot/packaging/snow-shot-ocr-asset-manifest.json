@@ -6,20 +6,20 @@
     "platform": "windows-x64",
     "archive": {
       "name": "snow-ocr-runtime-1.0.11-windows-x64.zip",
-      "size": 3817440,
-      "sha256": "3ea4509448fe93693356a3fcb9ff55f5207c6abb9b1813de34d2cbf8d0df7926",
+      "size": 3817194,
+      "sha256": "82dce6792b5f31c1ea0c8ea8c9971842cf1cd8601e04cd2a002e952a8689f9a9",
       "url": "https://www.modelscope.cn/models/mgchao/SnowShotOCR/resolve/master/runtime/1.0.11/windows-x64/snow-ocr-runtime-1.0.11-windows-x64.zip"
     },
     "files": [
       {
         "name": "snow-ocr-process-1.0.11-windows-x64.exe",
         "size": 11399168,
-        "sha256": "a8490e8e39d483035167ffc7120316617e30b6a3e7a31c2b31703e286c7588a6"
+        "sha256": "f40b688ec5da994a88a6a83e169d44aeaeb5aaee02fc445aa2b381c970df1038"
       },
       {
         "name": "runtime-manifest.json",
         "size": 294,
-        "sha256": "9d802f6ddf3e65c351069338f3a7ebd3f0ca50f26580f67d54f4ff0f43c0a91d"
+        "sha256": "994dbaa5f9febc8e04f856f08ffc42c34fc85717e0bb035ff33d315c1b2b5cab"
       }
     ]
   },
