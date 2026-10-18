@@ -93,9 +93,9 @@ repository-level scope rules and third-party material policy.
 | Project | License |
 | --- | --- |
 | `ant_design_qt/` | [Apache License 2.0](ant_design_qt/LICENSE) |
-| `snow-crates/` | [Apache License 2.0](snow-crates/LICENSE) |
+| `snow-crates/` | [GNU GPL v3.0 or later](snow-crates/COPYRIGHT) |
 | `snow_draw_engine_qt/` | [Apache License 2.0](snow_draw_engine_qt/LICENSE) |
-| `snow_rust_ffi/` | [Apache License 2.0](snow_rust_ffi/LICENSE) |
+| `snow_rust_ffi/` | [GNU GPL v3.0 or later](snow_rust_ffi/COPYRIGHT) |
 | `snow-crates/crates/simd-paddle-ocr-rs/` | [Apache License 2.0](snow-crates/crates/simd-paddle-ocr-rs/LICENSE) |
 | `snow_image/` | [GNU GPL v3.0 or later](snow_image/COPYRIGHT) |
 | `snow_image_viewer/` | [GNU GPL v3.0 or later](snow_image_viewer/COPYRIGHT) |

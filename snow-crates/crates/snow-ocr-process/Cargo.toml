@@ -2,7 +2,7 @@
 name = "snow-ocr-process"
 version = "1.1.0"
 edition = "2024"
-license = "Apache-2.0"
+license.workspace = true
 
 [[bin]]
 name = "snow-ocr-process"

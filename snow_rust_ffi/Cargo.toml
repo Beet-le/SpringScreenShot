@@ -2,7 +2,7 @@
 name = "snow-shot-rust-ffi"
 version = "0.1.0"
 edition = "2024"
-license = "Apache-2.0"
+license = "GPL-3.0-or-later"
 
 [lib]
 crate-type = ["staticlib"]
