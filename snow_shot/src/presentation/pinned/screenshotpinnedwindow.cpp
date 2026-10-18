@@ -9514,7 +9514,7 @@ void ScreenshotPinnedWindow::refreshColorSwatch() {
         if (!lifetime)
             return;
     }
-    for (int row = 0; row < 3; ++row) {
+    for (std::size_t row = 0; row < m_colorSwatchButtons.size(); ++row) {
         if (!m_colorSwatchButtons[row]) {
             auto* button = new ColorSwatchCopyButton(this);
             button->setObjectName(QStringLiteral("pinnedColorCopy%1").arg(row));
@@ -9553,7 +9553,7 @@ void ScreenshotPinnedWindow::updateColorSwatchControls() {
         imagePixelsToCanvasTransform(m_imageTransform, m_transformedImage.size(),
                                      m_backgroundCanvasRect) *
         m_canvas->canvasToViewTransform() * toWindow;
-    for (int row = 0; row < 3; ++row) {
+    for (std::size_t row = 0; row < m_colorSwatchButtons.size(); ++row) {
         auto* button = static_cast<ColorSwatchCopyButton*>(m_colorSwatchButtons[row]);
         if (!button)
             continue;

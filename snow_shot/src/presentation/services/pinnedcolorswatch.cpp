@@ -105,12 +105,13 @@ std::optional<QColor> parse(const QString& input) {
     QColor color;
     if (function.startsWith(QStringLiteral("rgb"))) {
         std::array<int, 3> channels{};
-        for (int i = 0; i < 3; ++i) {
-            const bool percent = components[i].endsWith(QLatin1Char('%'));
+        for (std::size_t i = 0; i < channels.size(); ++i) {
+            const auto& component = components[static_cast<qsizetype>(i)];
+            const bool percent = component.endsWith(QLatin1Char('%'));
             if (body.contains(QLatin1Char(',')) &&
                 percent != components.first().endsWith(QLatin1Char('%')))
                 return {};
-            const auto value = number(components[i], percent ? 100 : 255, percent);
+            const auto value = number(component, percent ? 100 : 255, percent);
             if (!value)
                 return {};
             channels[i] = qRound(percent ? *value * 255 / 100 : *value);
@@ -126,8 +127,9 @@ std::optional<QColor> parse(const QString& input) {
         if (!hue || !saturation || !lightness)
             return {};
         const double degrees = std::fmod(*hue, 360.0);
-        color = QColor::fromHslF((degrees < 0 ? degrees + 360 : degrees) / 360, *saturation / 100,
-                                 *lightness / 100)
+        color = QColor::fromHslF(static_cast<float>((degrees < 0 ? degrees + 360 : degrees) / 360),
+                                 static_cast<float>(*saturation / 100),
+                                 static_cast<float>(*lightness / 100))
                     .toRgb();
     }
     return QColor(color.red(), color.green(), color.blue(), qRound(opacity * 255));
@@ -195,7 +197,7 @@ PinnedColorSwatchRendering renderPinnedColorSwatch(const PinnedColorSwatchValues
     document.setTextWidth(logicalSize.width());
     QTextCursor cursor(&document);
     const bool opaque = values.color.alpha() == 255;
-    for (int row = 0; row < 4; ++row) {
+    for (std::size_t row = 0; row < 4; ++row) {
         if (row)
             cursor.insertBlock();
         QTextBlockFormat block;
@@ -248,10 +250,10 @@ PinnedColorSwatchRendering renderPinnedColorSwatch(const PinnedColorSwatchValues
     painter.drawRoundedRect(swatch.adjusted(0.5 * scale, 0.5 * scale, -0.5 * scale, -0.5 * scale),
                             3 * scale, 3 * scale);
     auto block = document.begin().next();
-    for (int row = 0; row < 3; ++row, block = block.next()) {
+    for (std::size_t row = 0; row < result.copyRects.size(); ++row, block = block.next()) {
         const auto bounds = document.documentLayout()->blockBoundingRect(block);
         const auto line = block.layout()->lineAt(0);
-        const qreal x = bounds.x() + line.cursorToX(block.text().size()) + 6 * scale;
+        const qreal x = bounds.x() + line.cursorToX(block.length() - 1) + 6 * scale;
         const QRectF button(x, bounds.y() + scale, 28 * scale, 28 * scale);
         result.copyRects[row] = button;
         painter.setPen(QPen(style.link, 1.6 * scale));

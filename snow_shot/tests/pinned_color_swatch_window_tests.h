@@ -65,10 +65,10 @@ void pinnedColorSwatchWindowTests() {
         require(window.present(configFor(content)), "present color pin");
         window.setAttribute(Qt::WA_DeleteOnClose, false);
         waitForUi(80);
-        const auto buttons = [&window](int row) {
+        const auto buttons = [&window](std::size_t row) {
             return window.findChild<QAbstractButton*>(QStringLiteral("pinnedColorCopy%1").arg(row));
         };
-        const auto click = [&](int row) {
+        const auto click = [&](std::size_t row) {
             auto* button = buttons(row);
             require(button && button->isVisible() && button->isEnabled(), "copy button visible");
             const QPoint point = button->rect().center();
@@ -92,7 +92,7 @@ void pinnedColorSwatchWindowTests() {
                         !Access::lockInteractionActive(window),
                     "copy keeps the pin open without moving it");
         };
-        for (int row = 0; row < 3; ++row)
+        for (std::size_t row = 0; row < expected->clipboard.size(); ++row)
             click(row);
         const auto artifact = Access::fileSave(window);
         ScreenshotExportImageResult exported;
