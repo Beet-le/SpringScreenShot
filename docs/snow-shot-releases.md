@@ -610,6 +610,10 @@ default; `-Architecture x64` requests Full only.
 ```
 
 `-WhatIf` lists the planned assets without building or publishing.
+When explicitly authorized for a release, `-SkipArm64NativeValidation` records
+byte-bound Windows ARM64 waivers without reporting native probes as passed.
+Windows x64 validation, signatures, inventories, and checksums remain required.
+Direct Gitee retries of such a release also require `--skip-arm64-native-validation`.
 `-AuditOnly` signs and audits without upload. `Verify` downloads published
 GitHub assets and checks the signed Windows packages and any macOS checksum pairs.
 A corrective release uses a higher version; published assets are immutable.

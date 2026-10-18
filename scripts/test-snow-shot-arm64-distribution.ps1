@@ -90,6 +90,10 @@ try {
     Must-Fail { Assert-SnowShotNativeValidation $audit $artifact 'windows-arm64' }
     $proof.Artifacts[0].Sha256 = (Get-FileHash $artifact).Hash.ToLowerInvariant(); $proof.Passed = $false
     Must-Fail { Assert-SnowShotNativeValidation $audit $artifact 'windows-arm64' }
+    $waiver = Assert-SnowShotNativeValidation $audit $artifact 'windows-arm64' -SkipArm64NativeValidation
+    Require ($waiver.Waived -and -not $waiver.Passed -and
+        $waiver.Artifacts[0].Sha256 -ceq (Get-FileHash $artifact).Hash.ToLowerInvariant()) 'An explicit waiver must retain exact bytes without claiming a native pass.'
+    Must-Fail { Assert-SnowShotNativeValidation $audit $artifact 'windows-x64' -SkipArm64NativeValidation }
     Write-Output 'PASS: ARM64 WinGet/Scoop completeness and exact-byte native publication proof.'
 } finally {
     $resolved = [IO.Path]::GetFullPath($root)
