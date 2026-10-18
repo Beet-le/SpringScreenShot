@@ -1,6 +1,7 @@
 #include "snow_shot/globalmouseactivationkeys.h"
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/ocrtextoptions.h"
+#include "snow_shot/selectiontransitionanimation.h"
 #include "snow_shot/storage/floatingtoolbarsettings.h"
 #include "snow_shot/app/edition.h"
 #include "snow_shot/clouduploadconfiguration.h"
@@ -1394,8 +1395,9 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("small"), QStringLiteral("normal")}},
-    {QStringLiteral("screenshot_ui/selection_transition_animation"), true,
-     ConfigurationValueKind::Boolean},
+    {QStringLiteral("screenshot_ui/selection_transition_animation"),
+     static_cast<int>(SelectionTransitionAnimation::Soft), ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{0, 72, 1}},
     {QStringLiteral("screenshot_ui/selection_display_unit"),
 #ifdef Q_OS_MACOS
      QStringLiteral("logical_pixels"),
@@ -2859,6 +2861,14 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     }
     if (key == QStringLiteral("screen_recording/frame_rate")) {
         return normalizeAllowedInteger(value, {5, 10, 15, 24, 30, 60, 120, 83});
+    }
+    if (key == QStringLiteral("screenshot_ui/selection_transition_animation")) {
+        if (value.isBool()) {
+            return {static_cast<int>(value.toBool() ? SelectionTransitionAnimation::Soft
+                                                    : SelectionTransitionAnimation::Disabled),
+                    true, true};
+        }
+        return normalizeAllowedInteger(value, {0, 32, 72});
     }
     if (key == QStringLiteral("screen_recording/animated_image_frame_rate")) {
         return normalizeAllowedInteger(value, {5, 10, 15, 24});

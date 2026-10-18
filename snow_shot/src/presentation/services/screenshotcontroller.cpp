@@ -844,8 +844,7 @@ void ScreenshotController::Impl::reloadUiPreferences() {
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
     if (storage.isInitialized()) {
         const snow_shot::storage::ScreenshotUiSettings settings;
-        preferences.selectionTransitionAnimationEnabled =
-            settings.selectionTransitionAnimationEnabled();
+        preferences.selectionTransitionAnimation = settings.selectionTransitionAnimation();
         preferences.selectionDisplayUnit =
             screenshotSelectionDisplayUnitFromId(settings.selectionDisplayUnit());
         preferences.colorPickerDisplayMode =

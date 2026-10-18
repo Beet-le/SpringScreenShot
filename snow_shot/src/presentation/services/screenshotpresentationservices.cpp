@@ -251,7 +251,8 @@ void ScreenshotPresentationServices::setUiPreferences(const ScreenshotUiPreferen
         return;
     m_uiPreferences = normalized;
     m_state->preferencesDirty = true;
-    m_smartSelectionTransition.setEnabled(m_uiPreferences.selectionTransitionAnimationEnabled);
+    m_smartSelectionTransition.setAnimation(m_uiPreferences.selectionTransitionAnimation,
+                                            nowNanoseconds() / 1000000);
     updateOverlayState();
 }
 

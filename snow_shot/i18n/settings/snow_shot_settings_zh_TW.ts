@@ -2349,6 +2349,10 @@
             <translation>擴充功能設定</translation>
         </message>
         <message>
+            <source>Fast</source>
+            <translation>快速</translation>
+        </message>
+        <message>
             <source>Fill Style</source>
             <translation>填充樣式</translation>
         </message>
@@ -3019,6 +3023,10 @@
         <message>
             <source>OCR models &amp; performance</source>
             <translation>OCR 模型與效能</translation>
+        </message>
+        <message>
+            <source>Off</source>
+            <translation>關閉</translation>
         </message>
         <message>
             <source>Only when displayed</source>
@@ -4123,6 +4131,10 @@
         <message>
             <source>Snowflake light</source>
             <translation>雪花淺色</translation>
+        </message>
+        <message>
+            <source>Soft</source>
+            <translation>柔和</translation>
         </message>
         <message>
             <source>Soften all three skin images with blur.</source>

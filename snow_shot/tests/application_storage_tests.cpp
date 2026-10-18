@@ -482,7 +482,8 @@ void defaultsAndTypedRoundTrip() {
                     QStringLiteral("medium") &&
                 screenshotUi.value(QStringLiteral("toolbar_size")).toString() ==
                     QStringLiteral("normal") &&
-                screenshotUi.value(QStringLiteral("selection_transition_animation")).toBool() &&
+                screenshotUi.value(QStringLiteral("selection_transition_animation")).toInt() ==
+                    32 &&
                 screenshotUi.value(QStringLiteral("selection_border_color")).toString() ==
                     QStringLiteral("#4096FFFF") &&
                 screenshotUi.value(QStringLiteral("selection_mask_color")).toString() ==
@@ -529,6 +530,57 @@ void defaultsAndTypedRoundTrip() {
             reloaded.value(QStringLiteral("screenshot_ui/shortcut_hint_opacity")).toInt() == 42 &&
             reloaded.value(QStringLiteral("tray/icon")).toString() == QStringLiteral("snow-dark"),
         "typed values did not normalize and round-trip");
+}
+
+void selectionTransitionAnimationMigratesAndPersists() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "selection animation requires isolated storage");
+    const QString key = QStringLiteral("screenshot_ui/selection_transition_animation");
+    require(storage::ConfigurationSchema::defaultValue(key) == QJsonValue(32),
+            "selection animation must default to Soft");
+    for (const int value : {0, 32, 72}) {
+        const auto normalized = storage::ConfigurationSchema::normalize(key, value);
+        require(normalized.valid && !normalized.changed && normalized.value == QJsonValue(value),
+                "all three animation values must be canonical integers");
+    }
+    for (const QJsonValue& invalid :
+         {QJsonValue(-1), QJsonValue(42), QJsonValue(72.5), QJsonValue(QStringLiteral("Fast")),
+          QJsonValue(QJsonValue::Null)}) {
+        require(!storage::ConfigurationSchema::normalize(key, invalid).valid,
+                "unsupported animation values must be rejected");
+    }
+    const QString path = temporary.filePath(QStringLiteral("config.json"));
+    for (const bool enabled : {false, true}) {
+        QJsonObject root = storage::ConfigurationSchema::completeDefaultDocument();
+        auto screenshotUi = root.value(QStringLiteral("screenshot_ui")).toObject();
+        screenshotUi.insert(QStringLiteral("selection_transition_animation"), enabled);
+        root.insert(QStringLiteral("screenshot_ui"), screenshotUi);
+        writeBytes(path, QJsonDocument(root).toJson());
+        const int expected = enabled ? 32 : 0;
+        {
+            storage::ConfigurationStore migrated(path, true, true, 60000);
+            require(migrated.value(key) == QJsonValue(expected) && migrated.isDirty() &&
+                        migrated.flushNow().success,
+                    "legacy animation switches must migrate On to Soft and Off to Disabled");
+        }
+        require(readObject(path)
+                        .value(QStringLiteral("screenshot_ui"))
+                        .toObject()
+                        .value(QStringLiteral("selection_transition_animation")) ==
+                    QJsonValue(expected),
+                "legacy animation migration must write the canonical integer to disk");
+        storage::ConfigurationStore reloaded(path, true, true, 60000);
+        require(reloaded.value(key) == QJsonValue(expected) && !reloaded.isDirty(),
+                "animation migration must be idempotent across reloads");
+    }
+    writeBytes(path, QJsonDocument(
+                         QJsonObject{
+                             {QStringLiteral("screenshot_ui"),
+                              QJsonObject{{QStringLiteral("selection_transition_animation"), 42}}}})
+                         .toJson());
+    storage::ConfigurationStore repaired(path, true, true, 60000);
+    require(repaired.value(key) == QJsonValue(32),
+            "unsupported stored animation values must recover to Soft");
 }
 
 void settingsSchemaDefaultsAndValidationAreComplete() {
@@ -3607,6 +3659,11 @@ int main(int argc, char** argv) {
     }
 #endif
     LifetimeObservedApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--selection-transition-animation-only"))) {
+        defaultsAndTypedRoundTrip();
+        selectionTransitionAnimationMigratesAndPersists();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--ocr-highlighting-only"))) {
         ocrHighlightingSettingsPersistAndValidate();
         return 0;
@@ -3706,6 +3763,7 @@ int main(int argc, char** argv) {
     updateSettingsPersistAndValidate();
     markerResolutionAndStatus();
     defaultsAndTypedRoundTrip();
+    selectionTransitionAnimationMigratesAndPersists();
     autoSaveAfterExecutionSettingsMigrateAndPersist();
     selectionAspectRatioSettingsValidateAndPreserveLegacyLock();
     settingsSchemaDefaultsAndValidationAreComplete();

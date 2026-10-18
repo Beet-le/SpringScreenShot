@@ -8,6 +8,7 @@
 #include "snow_shot/texttranslationconfiguration.h"
 #endif
 #include "snow_shot/shortcuts/shortcutbinding.h"
+#include "snow_shot/selectiontransitionanimation.h"
 #include "snow_shot/storage/persistedwindowgeometry.h"
 
 #include <QColor>
@@ -433,8 +434,8 @@ class ScreenshotUiSettings final {
   public:
     [[nodiscard]] QString toolbarSize() const;
     bool setToolbarSize(const QString& size) const;
-    [[nodiscard]] bool selectionTransitionAnimationEnabled() const;
-    bool setSelectionTransitionAnimationEnabled(bool enabled) const;
+    [[nodiscard]] SelectionTransitionAnimation selectionTransitionAnimation() const;
+    bool setSelectionTransitionAnimation(SelectionTransitionAnimation animation) const;
     [[nodiscard]] QString selectionDisplayUnit() const;
     bool setSelectionDisplayUnit(const QString& unit) const;
     [[nodiscard]] bool selectionToolbarHidden() const;

@@ -311,7 +311,13 @@ class Fixture final {
 #endif
             coordinator.hideColorPicker();
         };
+#if defined(SNOW_SHOT_SELECTION_PRESENTATION_BASELINE)
         preferences.selectionTransitionAnimationEnabled = animation;
+#else
+        preferences.selectionTransitionAnimation =
+            animation ? snow_shot::SelectionTransitionAnimation::Soft
+                      : snow_shot::SelectionTransitionAnimation::Disabled;
+#endif
         services->setUiPreferences(preferences);
         overlay.show();
         requestSelection(baseSelection());

@@ -12,6 +12,7 @@
 #include <QPointer>
 #include <QTimer>
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
@@ -580,6 +581,12 @@ void animationFramesOnlyChangeDisplayedGeometry() {
     const QRectF firstFrame = fixture.displayedSelection();
     require(firstFrame != initial && firstFrame != target,
             "an eight-millisecond presentation frame must interpolate the selection");
+    const qreal remainingAfterEightMs = std::exp(-32.0 * 0.008);
+    require(std::abs(firstFrame.x() - (target.x() + (initial.x() - target.x()) *
+                                                        remainingAfterEightMs)) < 0.000001 &&
+                std::abs(firstFrame.y() - (target.y() + (initial.y() - target.y()) *
+                                                            remainingAfterEightMs)) < 0.000001,
+            "Soft presentation frames must follow at 32 per second using the scheduler clock");
     require(fixture.selection.normalizedSelection() == target,
             "display interpolation must preserve the capture target");
     fixture.advanceClock(8);
@@ -587,7 +594,7 @@ void animationFramesOnlyChangeDisplayedGeometry() {
     fixture.processEvents();
     require(fixture.displayedSelection() != firstFrame,
             "high-refresh frames must advance independently of a second animation timer");
-    fixture.advanceClock(ScreenshotSmartSelectionTransition::kDurationMs);
+    fixture.advanceClock(400);
     fixture.flushFrame();
     fixture.processEvents();
 
@@ -597,6 +604,45 @@ void animationFramesOnlyChangeDisplayedGeometry() {
             "animation frames must not notify semantic state consumers");
     require(fixture.hintTranslations.requests == 0,
             "animation frames must not translate and format unchanged shortcut rows");
+    require(!fixture.services->frameSchedulerForTesting().active(),
+            "the presentation scheduler must become idle once all selection edges converge");
+}
+
+void animationPreferencesSelectRatesAndDisableRunningFrames() {
+    using Animation = snow_shot::SelectionTransitionAnimation;
+    for (const auto animation : {Animation::Fast, Animation::Soft}) {
+        Fixture fixture;
+        fixture.preferences.selectionTransitionAnimation = animation;
+        fixture.services->setUiPreferences(fixture.preferences);
+        const QRectF initial = fixture.displayedSelection();
+        const QRectF target = initial.translated(160.0, 120.0);
+        fixture.requestSelection(target);
+        fixture.flushFrame();
+        fixture.advanceClock(16);
+        fixture.flushFrame();
+        const qreal rate = animation == Animation::Fast ? 72.0 : 32.0;
+        const qreal expectedX = target.x() + (initial.x() - target.x()) * std::exp(-rate * 0.016);
+        require(std::abs(fixture.displayedSelection().x() - expectedX) < 0.000001 &&
+                    fixture.selection.normalizedSelection() == target,
+                "selected animation speeds must reach the shared scheduler without changing "
+                "capture geometry");
+
+        fixture.preferences.selectionTransitionAnimation = Animation::Disabled;
+        fixture.services->setUiPreferences(fixture.preferences);
+        fixture.flushFrame();
+        require(fixture.displayedSelection() == target &&
+                    !fixture.services->frameSchedulerForTesting().active(),
+                "Off must immediately finish running animation and leave the scheduler idle");
+        const QRectF direct = target.translated(40.0, 30.0);
+        fixture.requestSelection(direct);
+        fixture.flushFrame();
+        require(fixture.displayedSelection() == direct,
+                "Off must present subsequent smart selections directly");
+    }
+    ScreenshotUiPreferences invalid;
+    invalid.selectionTransitionAnimation = static_cast<Animation>(42);
+    require(invalid.normalized().selectionTransitionAnimation == Animation::Soft,
+            "invalid programmatic animation preferences must normalize to Soft");
 }
 
 void modeAndSessionChangesCancelOldAnimation() {
@@ -1019,7 +1065,7 @@ void qtDeadlineFramesMergeAnimationGuidesAndMagnifierBursts() {
     const QImage image = decorationImage(fixture);
     require(image.pixelColor(static_cast<int>(pointer.x()), 20) == QColor(Qt::red),
             "the combined frame must use the latest pointer for its guide");
-    fixture.advanceClock(ScreenshotSmartSelectionTransition::kDurationMs);
+    fixture.advanceClock(400);
     fixture.flushFrame();
     fixture.processEvents();
     require(fixture.displayedSelection() == target && fixture.stateNotifications == 1 &&
@@ -1997,6 +2043,7 @@ int main(int argc, char* argv[]) {
     displayRebindingReappliesSelectionAfterRendererReset();
     endingSelectionMovementRefreshesTheDeferredToolbarContent();
     animationFramesOnlyChangeDisplayedGeometry();
+    animationPreferencesSelectRatesAndDisableRunningFrames();
     hiddenSelectionToolbarDefersPresentationUntilReveal();
     modeAndSessionChangesCancelOldAnimation();
     anEpochChangeDiscardsPendingWorkWithoutAnotherStateUpdate();

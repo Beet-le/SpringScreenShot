@@ -1591,13 +1591,15 @@ bool ScreenshotUiSettings::setToolbarSize(const QString& size) const {
     return cache().setValue(QStringLiteral("screenshot_ui/toolbar_size"), size);
 }
 
-bool ScreenshotUiSettings::selectionTransitionAnimationEnabled() const {
-    return cache().value(QStringLiteral("screenshot_ui/selection_transition_animation")).toBool();
+SelectionTransitionAnimation ScreenshotUiSettings::selectionTransitionAnimation() const {
+    return static_cast<SelectionTransitionAnimation>(
+        cache().value(QStringLiteral("screenshot_ui/selection_transition_animation")).toInt());
 }
 
-bool ScreenshotUiSettings::setSelectionTransitionAnimationEnabled(bool enabled) const {
+bool ScreenshotUiSettings::setSelectionTransitionAnimation(
+    SelectionTransitionAnimation animation) const {
     return cache().setValue(QStringLiteral("screenshot_ui/selection_transition_animation"),
-                            enabled);
+                            static_cast<int>(animation));
 }
 
 QString ScreenshotUiSettings::selectionDisplayUnit() const {

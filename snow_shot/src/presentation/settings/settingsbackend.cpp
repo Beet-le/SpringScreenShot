@@ -553,6 +553,8 @@ QVariant BuiltInSettingsBackend::selectValue(SettingsSelectBinding binding) cons
         return storage::ScreenshotSettings().windowElementApi();
     case SettingsSelectBinding::ScreenshotToolbarSize:
         return storage::ScreenshotUiSettings().toolbarSize();
+    case SettingsSelectBinding::SelectionTransitionAnimation:
+        return static_cast<int>(storage::ScreenshotUiSettings().selectionTransitionAnimation());
     case SettingsSelectBinding::OcrFillStyle:
         return storage::ApplicationStorage::instance()
             .configuration()
@@ -787,6 +789,14 @@ bool BuiltInSettingsBackend::applySelectValue(SettingsSelectBinding binding,
         return storage::ScreenshotSettings().setWindowElementApi(value.toString());
     case SettingsSelectBinding::ScreenshotToolbarSize:
         return storage::ScreenshotUiSettings().setToolbarSize(value.toString());
+    case SettingsSelectBinding::SelectionTransitionAnimation: {
+        const auto normalized = storage::ConfigurationSchema::normalize(
+            QStringLiteral("screenshot_ui/selection_transition_animation"),
+            QJsonValue::fromVariant(value));
+        return normalized.valid &&
+               storage::ScreenshotUiSettings().setSelectionTransitionAnimation(
+                   static_cast<SelectionTransitionAnimation>(normalized.value.toInt()));
+    }
     case SettingsSelectBinding::OcrFillStyle:
         return storage::ApplicationStorage::instance().configuration().setValue(
             QStringLiteral("text_recognition/fill_style"), value.toString());
@@ -877,8 +887,6 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
                    .configuration()
                    .value(QStringLiteral("text_recognition/direct_ml_acceleration"))
                    .toBool();
-    case SettingsSwitchBinding::SelectionTransitionAnimation:
-        return storage::ScreenshotUiSettings().selectionTransitionAnimationEnabled();
     case SettingsSwitchBinding::ScreenshotAreaTypeHint:
         return storage::ScreenshotUiSettings().screenshotAreaTypeHintEnabled();
     case SettingsSwitchBinding::ShowGuidesByDefault:
@@ -1173,9 +1181,6 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
         return accepted;
     }
 
-    if (binding == SettingsSwitchBinding::SelectionTransitionAnimation) {
-        return storage::ScreenshotUiSettings().setSelectionTransitionAnimationEnabled(value);
-    }
     if (binding == SettingsSwitchBinding::ScreenshotAreaTypeHint) {
         return storage::ScreenshotUiSettings().setScreenshotAreaTypeHintEnabled(value);
     }
@@ -1335,7 +1340,6 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::OcrModelHotStart:
     case SettingsSwitchBinding::DirectMlAcceleration:
         return false;
-    case SettingsSwitchBinding::SelectionTransitionAnimation:
     case SettingsSwitchBinding::ScreenshotAreaTypeHint:
     case SettingsSwitchBinding::ShowGuidesByDefault:
     case SettingsSwitchBinding::ShowEditSelectionToolbar:

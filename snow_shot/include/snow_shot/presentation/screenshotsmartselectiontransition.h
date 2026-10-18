@@ -1,7 +1,8 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTSMARTSELECTIONTRANSITION_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTSMARTSELECTIONTRANSITION_H
 
-#include <QEasingCurve>
+#include "snow_shot/selectiontransitionanimation.h"
+
 #include <QRectF>
 #include <QtGlobal>
 
@@ -9,8 +10,7 @@
 
 class ScreenshotSmartSelectionTransition final {
   public:
-    static constexpr int kDurationMs = 101;
-    static constexpr QEasingCurve::Type kEasingCurve = QEasingCurve::OutQuad;
+    static constexpr qreal kSnapTolerance = 0.4;
 
     using UpdateCallback = std::function<void(const QRectF&)>;
 
@@ -19,8 +19,8 @@ class ScreenshotSmartSelectionTransition final {
     ScreenshotSmartSelectionTransition&
     operator=(const ScreenshotSmartSelectionTransition&) = delete;
 
-    void setEnabled(bool enabled);
-    [[nodiscard]] bool enabled() const;
+    void setAnimation(snow_shot::SelectionTransitionAnimation animation, qint64 nowMs);
+    [[nodiscard]] snow_shot::SelectionTransitionAnimation animation() const;
     // Both entry points use the presentation scheduler's monotonic clock in milliseconds.
     [[nodiscard]] bool update(const QRectF& selection, bool smartFraming, qint64 nowMs);
     // Returns whether the displayed geometry changed; no autonomous animation timer runs.
@@ -35,13 +35,12 @@ class ScreenshotSmartSelectionTransition final {
 
     UpdateCallback m_update;
     QRectF m_displayedSelection;
-    QRectF m_startSelection;
     QRectF m_targetSelection;
-    qint64 m_startedAtMs = 0;
     qint64 m_lastAdvancedAtMs = 0;
     bool m_running = false;
     bool m_hasPresentedSmartSelection = false;
-    bool m_enabled = true;
+    snow_shot::SelectionTransitionAnimation m_animation =
+        snow_shot::SelectionTransitionAnimation::Soft;
 };
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENSHOTSMARTSELECTIONTRANSITION_H

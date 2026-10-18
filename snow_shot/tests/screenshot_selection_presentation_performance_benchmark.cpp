@@ -578,9 +578,9 @@ QJsonObject runCase(const Case& benchmarkCase, const QSize& logicalSize, int ite
     qint64 colorPickerPositionMoves = 0;
     qint64 colorPickerOwnerChanges = 0;
 #endif
-    const int framesPerTarget =
-        (ScreenshotSmartSelectionTransition::kDurationMs + frameIntervalMs - 1) / frameIntervalMs +
-        2;
+    // Preserve the input cadence across animation models, including archived baselines.
+    constexpr int targetHoldMs = 101;
+    const int framesPerTarget = (targetHoldMs + frameIntervalMs - 1) / frameIntervalMs + 2;
     QRectF previousDisplayed = fixture.displayedSelection();
     QElapsedTimer cadence;
     cadence.start();

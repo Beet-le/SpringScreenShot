@@ -497,7 +497,7 @@ void animatedMarqueeUsesDisplayedGeometry() {
         require(model.selectionRegion() == targetRegion,
                 "animated region preview must not change the capture target");
 
-        static_cast<void>(transition.advance(ScreenshotSmartSelectionTransition::kDurationMs));
+        static_cast<void>(transition.advance(400));
         require(!transition.isRunning(), "region preview transition must finish");
         require(displayed == targetRegion, "region preview must finish at the target shape");
     };
