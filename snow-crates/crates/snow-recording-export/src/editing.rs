@@ -5056,7 +5056,8 @@ impl<'a> EditingVideoEncoder<'a> {
             video: *video,
             encode_threads: performance.encode_threads,
             audio: audio_config,
-        });
+        })
+        .offline_output();
         let builder = if let Some(format) = source_hint {
             builder.cpu_input_format_hint(format)
         } else {
@@ -7207,12 +7208,17 @@ mod tests {
         )
         .unwrap_or_else(|error| panic!("hardware-preferred export should encode: {error}"));
 
-        // h264_mf when a Media Foundation H.264 encoder is available, otherwise
-        // the software fallback must have produced the file instead.
+        // Use an available native encoder, otherwise the software fallback.
         assert!(
             matches!(
                 result.video_encoder.as_deref(),
-                Some("h264_mf") | Some("h264_videotoolbox") | Some("libx264") | Some("libopenh264")
+                Some("h264_nvenc")
+                    | Some("h264_qsv")
+                    | Some("h264_amf")
+                    | Some("h264_mf")
+                    | Some("h264_videotoolbox")
+                    | Some("libx264")
+                    | Some("libopenh264")
             ),
             "unexpected encoder for hardware-preferred export: {:?}",
             result.video_encoder
