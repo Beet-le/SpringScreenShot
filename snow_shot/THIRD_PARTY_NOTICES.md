@@ -55,7 +55,7 @@ CPU inference. It includes adaptations of Sdcb.SimdPaddleOCR (Apache-2.0),
 approximation (MIT). The generated bundle includes the submodule's LICENSE,
 NOTICE, and both component notices from its `licenses/` directory, along with
 its resolved dependencies. The worker is built using the submodule's pinned
-nightly toolchain. Runtime 1.0.11 has no external inference libraries.
+nightly toolchain. Runtime 1.1.0 has no external inference libraries.
 
 The GPL-3.0-only `snow-shot-updater` sidecar is implemented in Rust and is
 distributed as part of Snow Shot. Its resolved normal and build dependency

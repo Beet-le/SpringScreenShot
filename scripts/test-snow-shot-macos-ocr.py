@@ -31,9 +31,9 @@ class MacOSOcrAssets(unittest.TestCase):
             path = self.model / name
             path.write_bytes(name.encode())
             files.append(dict(ocr.descriptor(path), url=f'https://example.invalid/{name}'))
-        self.source = dict(runtime=dict(version='1.0.11'), models=[dict(type='small', id='small-id', files=files)])
+        self.source = dict(runtime=dict(version='1.1.0'), models=[dict(type='small', id='small-id', files=files)])
         ocr.atomic_json(self.model / '.complete.json', dict(schema=1, component='small-id'))
-        self.run = patch.object(ocr, 'run', return_value='snow-ocr-process 1.0.11 macos-aarch64 protocol 6').start()
+        self.run = patch.object(ocr, 'run', return_value='snow-ocr-process 1.1.0 macos-aarch64 protocol 6').start()
         self.addCleanup(patch.stopall)
 
     def test_bundle_data_is_sealed_as_resources_with_stable_lookup_paths(self):
@@ -164,7 +164,7 @@ class MacOSOcrAssets(unittest.TestCase):
     def test_x64_stage_finalization_and_report_use_the_target_architecture(self):
         for name in ocr.RUNTIME_FILES:
             (self.runtime / name).write_bytes(ocr.X64_HEADER + bytes(24) + name.encode())
-        self.run.return_value = 'snow-ocr-process 1.0.11 macos-x86_64 protocol 6'
+        self.run.return_value = 'snow-ocr-process 1.1.0 macos-x86_64 protocol 6'
         with patch.object(ocr, 'stage_models'):
             self.command('stage', '--arch', 'x64',
                          '--worker', self.runtime / 'snow-ocr-process')
@@ -187,7 +187,7 @@ class MacOSOcrAssets(unittest.TestCase):
             (self.runtime / name).write_bytes(ocr.X64_HEADER + bytes(24))
         with self.assertRaisesRegex(ValueError, 'version/protocol'):
             ocr.runtime_manifest(self.source, self.runtime, arch='x64')
-        self.run.return_value = 'snow-ocr-process 1.0.11 macos-x86_64 protocol 6'
+        self.run.return_value = 'snow-ocr-process 1.1.0 macos-x86_64 protocol 6'
         ocr.finalize(self.source, self.runtime, arch='x64')
         manifest = self.runtime / 'assets/ocr/asset-manifest.json'
         value = json.loads(manifest.read_text())
@@ -445,7 +445,7 @@ class MacOSOcrAssets(unittest.TestCase):
             ocr.verify_assets(self.source, self.runtime)
 
     def test_previous_protocol_is_rejected(self):
-        self.run.return_value = 'snow-ocr-process 1.0.11 macos-aarch64 protocol 5'
+        self.run.return_value = 'snow-ocr-process 1.1.0 macos-aarch64 protocol 5'
         with self.assertRaisesRegex(ValueError, 'version/protocol'):
             ocr.finalize(self.source, self.runtime)
 
@@ -549,7 +549,7 @@ class MacOSOcrAssets(unittest.TestCase):
 
         def inspect(*args):
             if '--version' in args:
-                return 'snow-ocr-process 1.0.11 macos-aarch64 protocol 6'
+                return 'snow-ocr-process 1.1.0 macos-aarch64 protocol 6'
             path = Path(args[-1])
             if '-D' in args:
                 return f'{path}:\n@rpath/{path.name}'

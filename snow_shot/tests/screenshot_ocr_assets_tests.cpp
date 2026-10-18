@@ -37,9 +37,9 @@ const QString kWindowsPlatform = QStringLiteral("windows-arm64");
 const QString kWindowsPlatform = QStringLiteral("windows-x64");
 #endif
 const QString kWindowsWorkerName =
-    QStringLiteral("snow-ocr-process-1.0.11-%1.exe").arg(kWindowsPlatform);
+    QStringLiteral("snow-ocr-process-1.1.0-%1.exe").arg(kWindowsPlatform);
 const QString kWindowsArchiveName =
-    QStringLiteral("snow-ocr-runtime-1.0.11-%1.zip").arg(kWindowsPlatform);
+    QStringLiteral("snow-ocr-runtime-1.1.0-%1.zip").arg(kWindowsPlatform);
 #ifdef Q_OS_MACOS
 const QString kWorkerName = QStringLiteral("snow-ocr-process");
 #if defined(Q_PROCESSOR_ARM_64)
@@ -126,7 +126,7 @@ void writeAssetManifest(const QString& root, bool completePayload) {
     const QByteArray recognizer("recognizer");
     const QByteArray dictionary("dictionary");
     const QString runtimeDirectory =
-        QDir(root).filePath(QStringLiteral("runtimes/1.0.11/%1").arg(kWindowsPlatform));
+        QDir(root).filePath(QStringLiteral("runtimes/1.1.0/%1").arg(kWindowsPlatform));
     const QString modelDirectory =
         QDir(root).filePath(QStringLiteral("models/ppocrv6-small-463ea9f"));
     if (completePayload) {
@@ -139,7 +139,7 @@ void writeAssetManifest(const QString& root, bool completePayload) {
                      recognizer);
         writeFixture(QDir(modelDirectory).filePath(QStringLiteral("ppocrv6_dict.txt")), dictionary);
         writeFixture(QDir(runtimeDirectory).filePath(QStringLiteral(".complete.json")),
-                     R"({"schema":1,"component":"1.0.11"})");
+                     R"({"schema":1,"component":"1.1.0"})");
         writeFixture(QDir(modelDirectory).filePath(QStringLiteral(".complete.json")),
                      R"({"schema":1,"component":"ppocrv6-small-463ea9f"})");
     }
@@ -172,7 +172,7 @@ void writeAssetManifest(const QString& root, bool completePayload) {
         {QStringLiteral("schema"), 2},
         {QStringLiteral("default_model"), QStringLiteral("small")},
         {QStringLiteral("runtime"),
-         QJsonObject{{QStringLiteral("version"), QStringLiteral("1.0.11")},
+         QJsonObject{{QStringLiteral("version"), QStringLiteral("1.1.0")},
                      {QStringLiteral("platform"), kWindowsPlatform},
                      {QStringLiteral("archive"),
                       assetFile(kWindowsArchiveName, archive,
@@ -203,7 +203,7 @@ void writeAssetManifest(const QString& root, bool completePayload) {
     manifest.insert(QStringLiteral("schema"), 3);
     manifest.insert(
         QStringLiteral("runtime"),
-        QJsonObject{{QStringLiteral("version"), QStringLiteral("1.0.11")},
+        QJsonObject{{QStringLiteral("version"), QStringLiteral("1.1.0")},
                     {QStringLiteral("platform"), kMacPlatform},
                     {QStringLiteral("delivery"), QStringLiteral("bundled")},
                     {QStringLiteral("protocol"), 6},
@@ -342,7 +342,7 @@ void installedAssetsUseLightweightChecks() {
 #else
             const QDir runtime(
                 QDir(payloadRoot)
-                    .filePath(QStringLiteral("runtimes/1.0.11/%1").arg(kWindowsPlatform)));
+                    .filePath(QStringLiteral("runtimes/1.1.0/%1").arg(kWindowsPlatform)));
             changeFixtureContentsWithoutResizing(runtime.filePath(kWindowsWorkerName));
             changeFixtureContentsWithoutResizing(
                 runtime.filePath(QStringLiteral("runtime-manifest.json")));
@@ -501,13 +501,14 @@ void acquiredRuntimeStillRequiresMatchingHashes() {
                 "runtime acquisition integrity validation should complete");
         require(!ready && failure.contains(QStringLiteral("invalid SHA-256")),
                 "runtime archives, extracted entries, and staged overrides must match SHA-256");
-        require(!QDir(cache.path())
-                        .exists(QStringLiteral("runtimes/1.0.11/%1/.complete.json")
-                                    .arg(kWindowsPlatform)) &&
-                    QDir(QDir(cache.path()).filePath(QStringLiteral(".staging")))
-                        .entryList(QDir::NoDotAndDotDot | QDir::AllEntries)
-                        .isEmpty(),
-                "corrupt runtimes must never be published or retain staging files");
+        require(
+            !QDir(cache.path())
+                    .exists(
+                        QStringLiteral("runtimes/1.1.0/%1/.complete.json").arg(kWindowsPlatform)) &&
+                QDir(QDir(cache.path()).filePath(QStringLiteral(".staging")))
+                    .entryList(QDir::NoDotAndDotDot | QDir::AllEntries)
+                    .isEmpty(),
+            "corrupt runtimes must never be published or retain staging files");
     }
 #endif
 }

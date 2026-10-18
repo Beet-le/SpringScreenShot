@@ -137,7 +137,7 @@ Use the prepared archive for local packaging:
 
 ```powershell
 ./scripts/package-snow-shot.ps1 -Architecture arm64 `
-  -OcrRuntimeArchive build/snow-shot-msvc-arm64-release/snow-ocr-runtime-1.0.9-windows-arm64.zip
+  -OcrRuntimeArchive build/snow-shot-msvc-arm64-release/snow-ocr-runtime-1.1.0-windows-arm64.zip
 ```
 
 Use the runtime version reported by the preparation command if it differs from
@@ -220,4 +220,4 @@ artifacts neither publishes the application nor changes the public update feeds.
 
 The OCR worker uses the submodule-pinned `nightly-2026-09-08` compiler and
 `aarch64-pc-windows-msvc` standard library. Bootstrap installs them separately
-from the Rust toolchain used by other packages. OCR 1.0.11 ships no inference DLLs.
+from the Rust toolchain used by other packages. OCR 1.1.0 ships no inference DLLs.

@@ -442,7 +442,7 @@ $updaterCargoManifest = Join-Path $repoRoot "snow_shot\rust\snow-shot-updater\Ca
     -CargoManifest @((Join-Path $repoRoot "snow_rust_ffi\Cargo.toml"), $ocrCargoManifest,
         $updaterCargoManifest, (Join-Path $repoRoot "snow_shot\rust\snow-shot-mcp\Cargo.toml")) `
     -CargoOptions @{ (Join-Path $repoRoot "snow_rust_ffi\Cargo.toml") = @('--features', 'selected-text,language-detection');
-        # Runtime 1.0.11 ships the raw-pixel worker without convenience dependencies.
+        # Runtime 1.1.0 ships the raw-pixel worker without convenience dependencies.
         $ocrCargoManifest = @('--no-default-features', '--features',
         'crash-diagnostics') } `
     -AntDesignNotice (Join-Path $repoRoot "ant_design_qt\THIRD_PARTY_NOTICES.md") `
