@@ -52,6 +52,39 @@ Installation reuses Snow Shot's local signing identity and may request Keychain
 access and macOS privacy permissions. See [Homebrew installation and migration](docs-macos-build.md#homebrew-installation)
 for existing installations, custom app directories, and recovery.
 
+## Maintain the OCR submodule
+
+[`snow-crates/crates/simd-paddle-ocr-rs/`](snow-crates/crates/simd-paddle-ocr-rs/)
+is a Git submodule with its own
+[repository](https://github.com/mg-chao/simd-paddle-ocr-rs), history, branches,
+and releases. Snow Apps records the exact OCR commit to check out.
+The submodule is excluded from the Snow Crates Cargo workspace so it retains
+its own pinned nightly toolchain and lockfile. Run its Cargo commands from
+the submodule directory.
+
+After cloning Snow Apps, initialize the submodule from the repository root:
+
+```sh
+git submodule update --init --recursive
+```
+
+For a new clone, `git clone --recurse-submodules` initializes it automatically.
+Submodule updates normally check out a detached HEAD. Before editing OCR code,
+switch to `main` or a feature branch inside the submodule:
+
+```sh
+git -C snow-crates/crates/simd-paddle-ocr-rs switch main
+```
+
+Follow the submodule's README and AGENTS.md for its build and validation commands.
+Commit and push OCR changes to its own repository first, then record the new
+revision in Snow Apps:
+
+```sh
+git add snow-crates/crates/simd-paddle-ocr-rs
+git commit -m "build(ocr): update simd paddle ocr submodule"
+```
+
 ## Open Source Licenses
 
 This is a multi-license repository. See [LICENSE.md](LICENSE.md) for the
@@ -63,6 +96,7 @@ repository-level scope rules and third-party material policy.
 | `snow-crates/` | [Apache License 2.0](snow-crates/LICENSE) |
 | `snow_draw_engine_qt/` | [Apache License 2.0](snow_draw_engine_qt/LICENSE) |
 | `snow_rust_ffi/` | [Apache License 2.0](snow_rust_ffi/LICENSE) |
+| `snow-crates/crates/simd-paddle-ocr-rs/` | [Apache License 2.0](snow-crates/crates/simd-paddle-ocr-rs/LICENSE) |
 | `snow_image/` | [GNU GPL v3.0 or later](snow_image/COPYRIGHT) |
 | `snow_image_viewer/` | [GNU GPL v3.0 or later](snow_image_viewer/COPYRIGHT) |
 | `snow_shot/` | [GNU GPL v3.0 or later](snow_shot/COPYRIGHT) |

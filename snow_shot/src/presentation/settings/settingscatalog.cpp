@@ -2753,21 +2753,6 @@ QVector<SettingsItemDefinition> pinToScreenShortcutItems() {
     };
 }
 
-#ifndef Q_OS_MACOS
-SettingsItemDefinition directMlAccelerationItem() {
-    return {
-        QStringLiteral("text-recognition.direct-ml-acceleration"),
-        settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "DirectML acceleration")),
-        settingsText(QT_TRANSLATE_NOOP(
-            "SettingsCatalog", "Use DirectML for GPU-accelerated text recognition when available")),
-        {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "DirectML")),
-         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "GPU acceleration"))},
-        QStringLiteral("text_recognition/direct_ml_acceleration"),
-        SettingsSwitchDefinition{SettingsSwitchBinding::DirectMlAcceleration},
-    };
-}
-#endif
-
 SettingsItemDefinition ocrResidentProcessItem() {
     return {
         QStringLiteral("text-recognition.resident-process"),
@@ -2801,14 +2786,6 @@ SettingsItemDefinition ocrModelTypeItem() {
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Ultra Small V6"))},
         {QStringLiteral("small"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Small V6"))},
         {QStringLiteral("medium"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Medium V6"))},
-        {QStringLiteral("small_v5"),
-         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Small V5"))},
-        {QStringLiteral("medium_v5"),
-         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Medium V5"))},
-        {QStringLiteral("small_v4"),
-         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Small V4"))},
-        {QStringLiteral("medium_v4"),
-         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Medium V4"))},
     };
     payload.binding = SettingsSelectBinding::OcrModelType;
     return {
@@ -3677,12 +3654,9 @@ QVector<SettingsPageDefinition> builtInPages() {
              {QStringLiteral("text-recognition"),
               settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "OCR models & performance")),
               settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
-                                             "Configure text recognition models and acceleration")),
+                                             "Configure text recognition models and processing")),
               SettingsSectionReset::TextRecognition,
               {ocrModelTypeItem(), ocrDetectorResizePolicyItem(), ocrTextDetectionProcessingItem(),
-#ifndef Q_OS_MACOS
-               directMlAccelerationItem(),
-#endif
                ocrResidentProcessItem(), ocrModelHotStartItem()},
               SettingsSectionItemLayout::VerticalList},
          },
@@ -5079,9 +5053,6 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsSwitchBinding::OcrModelHotStart:
                         expectedKey = QStringLiteral("text_recognition/model_hot_start");
-                        break;
-                    case SettingsSwitchBinding::DirectMlAcceleration:
-                        expectedKey = QStringLiteral("text_recognition/direct_ml_acceleration");
                         break;
                     case SettingsSwitchBinding::ScreenshotAreaTypeHint:
                         expectedKey = QStringLiteral("screenshot_ui/area_type_hint_enabled");

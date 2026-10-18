@@ -902,9 +902,7 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
         {QStringLiteral("text_recognition/fill_style"),
          {QStringLiteral("blur"), QStringLiteral("background_fill")}},
         {QStringLiteral("text_recognition/model_type"),
-         {QStringLiteral("extra_small"), QStringLiteral("small"), QStringLiteral("medium"),
-          QStringLiteral("small_v5"), QStringLiteral("medium_v5"), QStringLiteral("small_v4"),
-          QStringLiteral("medium_v4")}},
+         {QStringLiteral("extra_small"), QStringLiteral("small"), QStringLiteral("medium")}},
         {QStringLiteral("text_recognition/detector_resize_policy"),
          {QStringLiteral("max"), QStringLiteral("min")}},
         {QStringLiteral("screenshot/auto_execute_after_text_recognition"),
@@ -2792,6 +2790,34 @@ void invalidOcrModelConfigurationFallsBackToSmallWithoutAMigration() {
             "invalid OCR model types must normalize while migrating the schema version");
 }
 
+void retiredOcrModelConfigurationsNormalizeToSmall() {
+    for (const auto* model : {"small_v4", "medium_v4", "small_v5", "medium_v5"}) {
+        QTemporaryDir temporary;
+        const QString config = QDir(temporary.path()).filePath(QStringLiteral("config.json"));
+        writeBytes(
+            config,
+            QJsonDocument(
+                QJsonObject{{QStringLiteral("storage"),
+                             QJsonObject{{QStringLiteral("schema_version"),
+                                          storage::ConfigurationStore::currentSchemaVersion()}}},
+                            {QStringLiteral("text_recognition"),
+                             QJsonObject{{QStringLiteral("model_type"), QString::fromLatin1(model)},
+                                         {QStringLiteral("direct_ml_acceleration"), true}}}})
+                .toJson());
+        storage::ConfigurationStore store(config, true, true, 60000);
+        require(
+            store.value(QStringLiteral("text_recognition/model_type")) == QStringLiteral("small") &&
+                storage::ConfigurationSchema::entry(
+                    QStringLiteral("text_recognition/direct_ml_acceleration")) == nullptr &&
+                store.flushNow().success,
+            "retired models normalize to Small and obsolete acceleration settings have no effect");
+        storage::ConfigurationStore reloaded(config, true, true, 60000);
+        require(reloaded.value(QStringLiteral("text_recognition/model_type")) ==
+                    QStringLiteral("small"),
+                "repaired V6 selection must persist");
+    }
+}
+
 void missingOcrModelConfigurationDefaultsToSmallWithoutAMigration() {
     QTemporaryDir temporary;
     require(temporary.isValid(), "failed to create missing OCR model setting directory");
@@ -3698,6 +3724,14 @@ int main(int argc, char** argv) {
     }
     QCoreApplication::setOrganizationName(QStringLiteral("SnowShotTests"));
     QCoreApplication::setApplicationName(QStringLiteral("storage-tests"));
+    if (application.arguments().contains(QStringLiteral("--ocr-settings-only"))) {
+        ocrHighlightingSettingsPersistAndValidate();
+        invalidOcrModelConfigurationFallsBackToSmallWithoutAMigration();
+        retiredOcrModelConfigurationsNormalizeToSmall();
+        missingOcrModelConfigurationDefaultsToSmallWithoutAMigration();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--tray-theme-icons-only"))) {
         trayDarkIconSettingsPersistAndValidate();
         return 0;
@@ -3789,6 +3823,7 @@ int main(int argc, char** argv) {
     recordingPostProcessingPreferencesPersistAndValidate();
     invalidCaptureCursorConfigurationFallsBackToDisabled();
     invalidOcrModelConfigurationFallsBackToSmallWithoutAMigration();
+    retiredOcrModelConfigurationsNormalizeToSmall();
     missingOcrModelConfigurationDefaultsToSmallWithoutAMigration();
     smartSelectionAccessorAndSignal();
     unknownFieldsArePreserved();

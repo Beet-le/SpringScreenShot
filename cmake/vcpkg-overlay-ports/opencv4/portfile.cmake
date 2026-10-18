@@ -43,9 +43,7 @@ vcpkg_from_github(
 )
 # Disallow accidental build of vendored copies. 3rdparty/protobuf is the one
 # exception: the dnn module consumes it, and vcpkg's protobuf is a shared-CRT
-# package that cannot be linked into Snow Shot's static-CRT executables (the
-# onnxruntime port still uses the vcpkg protobuf DLLs, so overriding the
-# protobuf port itself is not an option).
+# package that cannot be linked into Snow Shot's static-CRT executables.
 file(GLOB third_party "${SOURCE_PATH}/3rdparty/*")
 list(FILTER third_party EXCLUDE REGEX "/ippicv\$")
 list(FILTER third_party EXCLUDE REGEX "/protobuf\$")
@@ -96,7 +94,6 @@ vcpkg_check_features(OUT_FEATURE_OPTIONS FEATURE_OPTIONS
  "cuda"       ENABLE_CUDA_FIRST_CLASS_LANGUAGE
  "cudnn"      WITH_CUDNN
  "dc1394"     WITH_1394
- "directml"   WITH_DIRECTML
  "dnn"        BUILD_opencv_dnn
  "dnn"        WITH_PROTOBUF
  "dnn-cuda"   OPENCV_DNN_CUDA
@@ -478,6 +475,7 @@ vcpkg_cmake_configure(
         ${FEATURE_OPTIONS}
         -Dade_DIR=${ADE_DIR}
         -DWITH_AVIF=OFF
+        -DWITH_DIRECTML=OFF
         -DWITH_CPUFEATURES=${WITH_CPUFEATURES}
         # Snow Apps overlay: only Caffe models are loaded; keep the TFLite
         # importer off so flatbuffers is not needed at all. The bundled

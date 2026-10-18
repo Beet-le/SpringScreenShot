@@ -476,7 +476,6 @@ project(snow_mini_install_contract LANGUAGES NONE)
 add_executable(snow_shot_mini IMPORTED)
 set(SNOW_SHOT_QT_STATIC {'ON' if static else 'OFF'})
 set(SNOW_SHOT_RELEASE_STATIC OFF)
-set(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME ON)
 set(SNOW_MACOS_CODESIGN_IDENTITY "-")
 {qt_target}
 {cache}
@@ -652,7 +651,6 @@ include([==[{(ROOT / 'cmake/SnowShotMiniMacOS.cmake').as_posix()}]==])
             result = verify()
             self.assertEqual(result.returncode, 0, result.stderr)
             for relative in ('Contents/MacOS/snow_shot', 'Contents/MacOS/snow-shot-mcp',
-                             'Contents/MacOS/libonnxruntime.dylib',
                              'Contents/Frameworks/Unused.framework/Unused',
                              'Contents/PlugIns/imageformats/unused.dylib',
                              'Contents/Resources/assets/qrcode/detect.prototxt',
@@ -744,9 +742,7 @@ class MacOSRuntimeTestContracts(unittest.TestCase):
                             'snow-shot-ocr-recognition-service-tests',
                             'snow-shot-diagnostics-crash-tests'}
         expected_tests = {'snow-shot-ocr-assets-tests', 'snow-shot-ocr-managed-runtime-tests',
-                          'snow-shot-ocr-managed-directml-runtime-tests',
                           'snow-shot-ocr-cpu-recognition-service-tests',
-                          'snow-shot-ocr-directml-recognition-service-tests',
                           'snow-shot-ocr-storage-relocation-tests',
                           'snow-shot-ocr-process-lifecycle-tests',
                           'snow-shot-diagnostics-crash-tests'}
@@ -777,7 +773,6 @@ set(WIN32 {'ON' if platform == 'windows' else 'OFF'})
 set(SNOW_WINDOWS_ARCHITECTURE x64)
 set(SNOW_SHOT_BUILD_TESTS {'ON' if general else 'OFF'})
 set(SNOW_SHOT_BUILD_RUNTIME_TESTS {'ON' if focused else 'OFF'})
-set(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME ON)
 set(CMAKE_CURRENT_BINARY_DIR [[{root.as_posix()}]])
 set(CMAKE_CURRENT_SOURCE_DIR [[{(ROOT / 'snow_shot').as_posix()}]])
 {mocks}
@@ -817,10 +812,6 @@ endif()
                 self.assertEqual(len(targets), len(set(targets)))
                 self.assertEqual(set(tests), expected_tests | windows_tests)
                 self.assertEqual(len(tests), len(set(tests)))
-                static_contract = ('target_compile_definitions:'
-                                   'snow-shot-ocr-recognition-service-tests;PRIVATE;'
-                                   'SNOW_SHOT_OCR_STATIC_ONNXRUNTIME=1')
-                self.assertEqual(static_contract in lines, platform == 'macos')
                 if platform == 'windows':
                     self.assertIn('set_tests_properties:snow-shot-ocr-crash-tests;PROPERTIES;'
                                   'TIMEOUT;60;LABELS;unit;windows', lines)
@@ -980,6 +971,9 @@ class MacOSBuildScripts(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         shutil.copytree(ROOT / "scripts", self.root / "scripts")
+        ocr_pin = self.root / 'snow-crates/crates/simd-paddle-ocr-rs/rust-toolchain.toml'
+        ocr_pin.parent.mkdir(parents=True)
+        shutil.copyfile(ROOT / 'snow-crates/crates/simd-paddle-ocr-rs/rust-toolchain.toml', ocr_pin)
         self.bin = self.root / ".tools/macos-dev/bin"
         self.bin.mkdir(parents=True)
         self.log = self.root / "commands.jsonl"
@@ -1004,12 +998,13 @@ if name == 'rustc':
     print('rustc ' + os.environ.get('SNOW_TEST_RUST_VERSION', '1.98.0') + ' (fixture)')
     if '-vV' in sys.argv: print('host: ' + host)
 if name == 'rustup':
+    if sys.argv[1:3] == ['toolchain', 'list']: print('nightly-2026-09-08-' + host)
     if sys.argv[1:3] == ['component', 'list']:
         if os.environ.get('FAIL_RUST_COMPONENT_LIST'): sys.exit(17)
         components = [component + '-' + host
                       for component in ('cargo', 'rustc', 'rust-std', 'rustfmt', 'clippy')]
         components += ['rust-std-aarch64-apple-darwin', 'rust-std-x86_64-apple-darwin']
-        missing = os.environ.get('SNOW_TEST_MISSING_RUST_COMPONENT', '')
+        missing = '' if '--toolchain' in sys.argv else os.environ.get('SNOW_TEST_MISSING_RUST_COMPONENT', '')
         print('\\n'.join(component for component in components if component != missing))
     if (sys.argv[1:3] in (['toolchain', 'install'], ['component', 'add'], ['target', 'add'])
             and os.environ.get('FAIL_RUST_INSTALL')):
@@ -1191,7 +1186,9 @@ if name == 'openssl':
                     self.env.update(SNOW_TEST_HOST_ARCH=host, SNOW_TEST_RUST_VERSION=version)
                     calls = self.run_script('run-snow-shot.sh', f'snow-shot-macos-{target}-debug')
                     self.assertEqual([c for c in calls if c[0] == 'rustup'],
-                                     [['rustup', 'component', 'list', '--installed']])
+                                     [['rustup', 'component', 'list', '--installed'],
+                                      ['rustup', 'toolchain', 'list'],
+                                      ['rustup', 'component', 'list', '--toolchain', 'nightly-2026-09-08', '--installed']])
                     self.assertTrue(any('--build' in c for c in calls))
                     self.assertEqual(calls[-1][0], 'open')
                     self.log.unlink()
@@ -1205,6 +1202,8 @@ if name == 'openssl':
                 self.assertEqual([c for c in calls if c[0] == 'rustup'], [
                     ['rustup', 'component', 'list', '--installed'],
                     ['rustup', 'component', 'add', component],
+                    ['rustup', 'toolchain', 'list'],
+                    ['rustup', 'component', 'list', '--toolchain', 'nightly-2026-09-08', '--installed'],
                 ])
                 self.log.unlink()
 
@@ -1409,7 +1408,7 @@ if name == 'openssl':
         self.assertIn('if(NOT SNOW_SHOT_QT_STATIC)', macos)
         self.assertIn('if(NOT @SNOW_SHOT_QT_STATIC@)', deployment)
         self.assertIn('Static package contains a non-system dependency', deployment)
-        self.assertIn('--static-runtime', deployment)
+        self.assertNotIn('--static-runtime', deployment)
 
     def test_development_builds_provision_and_sign_a_stable_debug_identity(self):
         macos = (ROOT / 'cmake/SnowShotMacOS.cmake').read_text()
@@ -1704,7 +1703,7 @@ class MacOSSigningDeployment(unittest.TestCase):
         self.assertFalse(any(call[0] == 'macdeployqt' for call in calls))
         for command in ('finalize', 'verify'):
             call = next(call for call in calls if command in call)
-            self.assertIn('--static-runtime', call)
+            self.assertNotIn('--static-runtime', call)
         self.assertEqual(calls[-1][0:4], ['codesign', '--verify', '--deep', '--strict'])
 
     def test_x64_deployment_passes_architecture_to_finalization_and_verification(self):
@@ -1847,7 +1846,6 @@ if name == 'ocr' and 'verify' in sys.argv and '--app' in sys.argv:
                       'SNOW_SHOT_RELEASE_STATIC': 'ON' if (static if release_static is None
                                                           else release_static) else 'OFF',
                       'SNOW_SHOT_QT_STATIC': 'ON' if static else 'OFF',
-                      'SNOW_SHOT_OCR_STATIC_ONNXRUNTIME': 'ON' if static else 'OFF',
                       'Python3_EXECUTABLE': str(root / 'ocr'),
                       'SNOW_MACOS_OCR_TOOL': 'ocr.py', 'SNOW_MACOS_OCR_MANIFEST': 'manifest.json',
                       'SNOW_FFMPEG_ROOT': str(root / 'ffmpeg'), 'CMAKE_BINARY_DIR': str(root)}
@@ -1953,7 +1951,7 @@ class MacOSPackageStripping(unittest.TestCase):
                           'SNOW_MACDEPLOYQT': '', 'SNOW_MACOS_OCR_ASSETS_ENABLED': 'OFF',
                           'SNOW_MACOS_OCR_RUNTIME_ONLY': 'ON' if product == 'snow_shot_mini' else 'OFF',
                           'SNOW_SHOT_QT_STATIC': 'ON', 'SNOW_SHOT_RELEASE_STATIC': 'ON',
-                          'SNOW_SHOT_OCR_STATIC_ONNXRUNTIME': 'ON', 'Python3_EXECUTABLE': str(ocr),
+                          'Python3_EXECUTABLE': str(ocr),
                           'SNOW_MACOS_OCR_TOOL': 'ocr.py', 'SNOW_MACOS_OCR_MANIFEST': 'manifest.json',
                           'SNOW_FFMPEG_ROOT': str(root / 'ffmpeg'), 'CMAKE_BINARY_DIR': str(root)}
                 for key, value in values.items():

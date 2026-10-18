@@ -27,10 +27,6 @@
   ],
   "default-features": [
     "calib3d",
-    {
-      "name": "directml",
-      "platform": "windows & !uwp & !mingw"
-    },
     "dnn",
     {
       "name": "dshow",
@@ -127,10 +123,6 @@
       "dependencies": [
         "libdc1394"
       ]
-    },
-    "directml": {
-      "description": "Build with DirectML support",
-      "supports": "windows & !uwp & !mingw"
     },
     "dnn": {
       "description": "Enable dnn module (Snow Apps overlay: uses OpenCV's bundled protobuf, no flatbuffers)",

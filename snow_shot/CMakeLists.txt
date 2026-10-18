@@ -327,117 +327,11 @@ set(OpenCV_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4" CA
 find_package(OpenCV CONFIG REQUIRED)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/FetchSnowShotQrModels.cmake")
 snow_shot_fetch_qr_models(SNOW_SHOT_QR_MODELS_DIR)
-# ONNX Runtime backs the standalone OCR process: static release builds link
-# its closure into snow-ocr-process.exe, dynamic builds stage its DLL.
-find_package(onnxruntime CONFIG REQUIRED)
 find_package(minizip-ng CONFIG REQUIRED)
-
-if(WIN32)
-    set(SNOW_SHOT_DIRECTML_RUNTIME_DLL_RELEASE
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/DirectML.dll")
-    if(SNOW_SHOT_RELEASE_STATIC)
-        set(SNOW_SHOT_DIRECTML_RUNTIME_DLL_DEBUG
-            "${SNOW_SHOT_DIRECTML_RUNTIME_DLL_RELEASE}")
-        set(_snow_shot_directml_runtimes
-            "${SNOW_SHOT_DIRECTML_RUNTIME_DLL_RELEASE}")
-    else()
-        set(SNOW_SHOT_DIRECTML_RUNTIME_DLL_DEBUG
-            "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/bin/DirectML.dll")
-        set(_snow_shot_directml_runtimes
-            "${SNOW_SHOT_DIRECTML_RUNTIME_DLL_DEBUG}"
-            "${SNOW_SHOT_DIRECTML_RUNTIME_DLL_RELEASE}")
-    endif()
-    foreach(_snow_shot_directml_runtime IN LISTS _snow_shot_directml_runtimes)
-        if(NOT EXISTS "${_snow_shot_directml_runtime}")
-            message(FATAL_ERROR
-                "The DirectML-enabled ONNX Runtime package is incomplete: "
-                "${_snow_shot_directml_runtime} was not found.")
-        endif()
-    endforeach()
-    unset(_snow_shot_directml_runtime)
-    unset(_snow_shot_directml_runtimes)
-endif()
-
-# The standalone OCR process owns every OCR dependency. Static release builds
 include(SnowDiagnostics)
-
-# The standalone OCR process owns every OCR dependency. Static release builds
-# link the vcpkg ONNX Runtime closure into the executable itself; the dynamic
-# workspace builds keep loading the staged onnxruntime.dll at runtime.
-set(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME OFF)
-if(SNOW_SHOT_RELEASE_STATIC OR SNOW_APPS_RELEASE_STATIC)
-    set(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME ON)
-endif()
-
-# Depth-first walk of the onnxruntime::onnxruntime imported-target closure.
-# Depth-first expansion keeps every library behind its dependents, matching
-# the order the previous in-process C++ link received from CMake. Interface
-# libraries are header-only and contribute no linker input; configuration
-# generator expressions (Debug-only diagnostics helpers) are skipped.
-function(_snow_shot_onnxruntime_link_items out_items)
-    set(_pending onnxruntime::onnxruntime)
-    set(_visited)
-    set(_items)
-    while(_pending)
-        list(POP_FRONT _pending _current)
-        # A LINK_ONLY wrapper may carry either a library file or another
-        # target name; strip it before resolving the item.
-        string(REGEX REPLACE "^\\$<LINK_ONLY:(.+)>$" "\\1" _current "${_current}")
-        if("${_current}" IN_LIST _visited)
-            continue()
-        endif()
-        list(APPEND _visited "${_current}")
-        if(NOT TARGET "${_current}")
-            string(FIND "${_current}" "$<" _genex_pos)
-            if(NOT _current STREQUAL "" AND _genex_pos EQUAL -1)
-                list(APPEND _items "${_current}")
-            endif()
-            continue()
-        endif()
-        get_target_property(_current_type "${_current}" TYPE)
-        if(NOT _current_type STREQUAL "INTERFACE_LIBRARY")
-            list(APPEND _items "$<TARGET_FILE:${_current}>")
-        endif()
-        get_target_property(_current_deps "${_current}" INTERFACE_LINK_LIBRARIES)
-        if(_current_deps)
-            list(PREPEND _pending ${_current_deps})
-        endif()
-    endwhile()
-    get_target_property(_link_options onnxruntime::onnxruntime INTERFACE_LINK_OPTIONS)
-    if(_link_options)
-        foreach(_link_option IN LISTS _link_options)
-            list(APPEND _items "${_link_option}")
-        endforeach()
-    endif()
-    set(${out_items} "${_items}" PARENT_SCOPE)
-endfunction()
-
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowOcrToolchain.cmake")
 set(SNOW_SHOT_OCR_PROCESS_FEATURES)
-set(SNOW_SHOT_OCR_PROCESS_NO_DEFAULT_FEATURES)
 set(SNOW_SHOT_OCR_PROCESS_ENVIRONMENT)
-if(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
-    _snow_shot_onnxruntime_link_items(_snow_shot_onnxruntime_link_items)
-    if(NOT _snow_shot_onnxruntime_link_items)
-        message(FATAL_ERROR
-            "The static ONNX Runtime link closure for the OCR process is empty.")
-    endif()
-    list(JOIN _snow_shot_onnxruntime_link_items "\n" _snow_shot_onnxruntime_link_manifest)
-    file(GENERATE
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/snow-ocr-process-onnxruntime-$<CONFIG>.rsp"
-        CONTENT "${_snow_shot_onnxruntime_link_manifest}\n")
-    set(SNOW_SHOT_OCR_PROCESS_FEATURES static-onnx-runtime)
-    if(WIN32)
-        list(APPEND SNOW_SHOT_OCR_PROCESS_FEATURES directml-provider)
-    endif()
-    set(SNOW_SHOT_OCR_PROCESS_NO_DEFAULT_FEATURES NO_DEFAULT_FEATURES)
-    set(SNOW_SHOT_OCR_PROCESS_ENVIRONMENT
-        "SNOW_ONNXRUNTIME_LINK_FILE=${CMAKE_CURRENT_BINARY_DIR}/generated/snow-ocr-process-onnxruntime-$<CONFIG>.rsp")
-endif()
-
-if(APPLE AND NOT SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
-    set(SNOW_SHOT_OCR_PROCESS_NO_DEFAULT_FEATURES NO_DEFAULT_FEATURES)
-    set(SNOW_SHOT_OCR_PROCESS_FEATURES dynamic-onnx-runtime)
-endif()
 
 if(WIN32 OR APPLE)
     list(APPEND SNOW_SHOT_OCR_PROCESS_FEATURES crash-diagnostics)
@@ -456,7 +350,7 @@ snow_add_rust_executable(snow_ocr_process
     OUTPUT_NAME snow-ocr-process
     PERFORMANCE_PROFILE
     REPRODUCIBLE
-    ${SNOW_SHOT_OCR_PROCESS_NO_DEFAULT_FEATURES}
+    TOOLCHAIN "${SNOW_SHOT_OCR_TOOLCHAIN}"
     FEATURES ${SNOW_SHOT_OCR_PROCESS_FEATURES}
     ENVIRONMENT ${SNOW_SHOT_OCR_PROCESS_ENVIRONMENT}
 )
@@ -973,7 +867,6 @@ set(SNOW_SHOT_SETTINGS_SOURCES
     include/snow_shot/presentation/settings/settingsbackend.h
     include/snow_shot/presentation/settings/settingsruntimesession.h
     include/snow_shot/presentation/settings/applicationpriority.h
-    include/snow_shot/presentation/settings/textrecognitionacceleration.h
     include/snow_shot/presentation/styles/thememanager.h
     src/presentation/components/aboutpagewidget.cpp
     src/presentation/components/infotooltipicon.cpp
@@ -1010,7 +903,6 @@ set(SNOW_SHOT_SETTINGS_SOURCES
     src/presentation/settings/settingsbackend.cpp
     src/presentation/settings/settingsruntimesession.cpp
     src/presentation/settings/applicationpriority.cpp
-    src/presentation/settings/textrecognitionacceleration.cpp
     src/presentation/styles/buttonborder.cpp
     src/presentation/styles/mainwindowcomponenttoken.cpp
     src/presentation/styles/themecolorscheme.cpp
@@ -2097,9 +1989,6 @@ endif()
 target_compile_definitions(snow_shot PRIVATE
     SNOW_SHOT_API_BASE_URL=\"${SNOW_SHOT_API_BASE_URL}\"
 )
-if(APPLE AND SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
-    target_compile_definitions(snow_shot PRIVATE SNOW_SHOT_OCR_STATIC_ONNXRUNTIME=1)
-endif()
 if(WIN32)
     target_compile_definitions(snow_shot PRIVATE
         SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE=\"${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}\"
@@ -3277,8 +3166,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-translation-settings-tests --ocr-highlighting-only -platform offscreen)
     add_test(NAME snow-shot-ocr-highlighting-storage-tests
         COMMAND snow-shot-application-storage-tests --ocr-highlighting-only)
+    add_test(NAME snow-shot-ocr-settings-storage-tests
+        COMMAND snow-shot-application-storage-tests --ocr-settings-only)
     set_tests_properties(snow-shot-ocr-highlighting-settings-tests
-        snow-shot-ocr-highlighting-storage-tests PROPERTIES LABELS "unit" TIMEOUT 30
+        snow-shot-ocr-highlighting-storage-tests snow-shot-ocr-settings-storage-tests
+        PROPERTIES LABELS "unit" TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-text-detection-processing-settings-tests
         COMMAND snow-shot-translation-settings-tests --text-detection-processing-only -platform offscreen)
@@ -10081,42 +9973,6 @@ endif()
 snow_shot_add_translations(snow_shot)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowShotUpdateUiTests.cmake")
 
-if(WIN32)
-    # These DLLs are consumed by the standalone OCR process that is staged
-    # next to each host target, not by snow_shot itself. Static ONNX Runtime
-    # delay-loads DirectML; dynamic builds derive the complete non-system DLL
-    # closure from onnxruntime.dll instead of copying its entire bin directory.
-    foreach(_ocr_runtime_target IN ITEMS snow_shot snow-shot-ocr-recognition-service-tests)
-        if(TARGET ${_ocr_runtime_target})
-            if(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
-                add_custom_command(TARGET ${_ocr_runtime_target} POST_BUILD
-                    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                        "$<IF:$<CONFIG:Debug>,${SNOW_SHOT_DIRECTML_RUNTIME_DLL_DEBUG},${SNOW_SHOT_DIRECTML_RUNTIME_DLL_RELEASE}>"
-                        "$<TARGET_FILE_DIR:${_ocr_runtime_target}>/DirectML.dll"
-                    COMMENT "Staging DirectML for ${_ocr_runtime_target}"
-                    VERBATIM
-                )
-            else()
-                # Resolve only the DLLs actually imported by ONNX Runtime and
-                # its companions. This keeps unrelated vcpkg DLLs out of the
-                # application directory and fails the build on a broken closure.
-                _snow_shot_onnxruntime_link_items(_snow_shot_onnxruntime_dll_items)
-                add_custom_command(TARGET ${_ocr_runtime_target} POST_BUILD
-                    COMMAND "${CMAKE_COMMAND}"
-                        "-DCOPY_FROM=${_snow_shot_onnxruntime_dll_items}"
-                        "-DCOPY_DIR=$<TARGET_FILE_DIR:onnxruntime::onnxruntime>"
-                        "-DCOPY_TO=$<TARGET_FILE_DIR:${_ocr_runtime_target}>"
-                        -P "${CMAKE_CURRENT_SOURCE_DIR}/scripts/copy_runtime_dlls.cmake"
-                    COMMENT "Staging dynamic ONNX Runtime closure for ${_ocr_runtime_target}"
-                    VERBATIM
-                )
-                unset(_snow_shot_onnxruntime_dll_items)
-            endif()
-        endif()
-    endforeach()
-    unset(_ocr_runtime_target)
-endif()
-
 foreach(_ocr_process_host_target IN ITEMS snow_shot snow-shot-ocr-recognition-service-tests)
     if(TARGET ${_ocr_process_host_target})
         add_dependencies(${_ocr_process_host_target} snow_ocr_process)
@@ -10458,23 +10314,6 @@ if(NOT SNOW_SHOT_IMAGE_CODEC_BACKEND_STATIC)
         )
     endif()
 endif()
-if(WIN32 AND NOT SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
-    # Dynamic ONNX Runtime for the standalone OCR process; the static release
-    # links the runtime into snow-ocr-process.exe instead.
-    install(FILES "$<TARGET_FILE:onnxruntime::onnxruntime>"
-        DESTINATION ${CMAKE_INSTALL_BINDIR}
-    )
-endif()
-
-if(WIN32)
-    # DirectML remains a runtime dependency of the standalone OCR process;
-    # even the statically linked ONNX Runtime delay-loads it for the
-    # DirectML execution provider.
-    install(FILES "${SNOW_SHOT_DIRECTML_RUNTIME_DLL_RELEASE}"
-        DESTINATION ${CMAKE_INSTALL_BINDIR}
-    )
-endif()
-
 # WeChat QR models for the in-process barcode recognition service; the runtime
 # resolves them relative to the executable as assets/qrcode.
 install(FILES

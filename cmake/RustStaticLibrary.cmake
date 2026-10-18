@@ -388,7 +388,7 @@ endfunction()
 
 function(snow_add_rust_executable target_name)
     set(options PERFORMANCE_PROFILE NO_DEFAULT_FEATURES REPRODUCIBLE SIZE_OPTIMIZED)
-    set(oneValueArgs PACKAGE MANIFEST_DIR OUTPUT_NAME PRODUCTION_PROFILE)
+    set(oneValueArgs PACKAGE MANIFEST_DIR OUTPUT_NAME PRODUCTION_PROFILE TOOLCHAIN)
     set(multiValueArgs FEATURES ENVIRONMENT)
     cmake_parse_arguments(SNOW_RUST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     foreach(_required IN ITEMS PACKAGE MANIFEST_DIR)
@@ -443,6 +443,9 @@ function(snow_add_rust_executable target_name)
         "${SNOW_RUST_CARGO_TARGET_DIR}/${_rust_target}/${_selected_release_profile}/${SNOW_RUST_OUTPUT_NAME}${_binary_suffix}")
     set(_cargo_environment
         "CARGO_TARGET_DIR=${SNOW_RUST_CARGO_TARGET_DIR}")
+    if(SNOW_RUST_TOOLCHAIN)
+        list(APPEND _cargo_environment "RUSTUP_TOOLCHAIN=${SNOW_RUST_TOOLCHAIN}")
+    endif()
     snow_windows_rust_environment(_windows_cargo_environment "${_rust_target}")
     list(APPEND _cargo_environment ${_windows_cargo_environment})
     if(WIN32 AND (SNOW_LIBCLANG_BIN_DIR OR DEFINED ENV{LIBCLANG_PATH}))
@@ -557,6 +560,7 @@ function(snow_add_rust_executable target_name)
     set_target_properties("${target_name}" PROPERTIES
         SNOW_RUST_MANIFEST_DIR "${SNOW_RUST_MANIFEST_DIR}"
         SNOW_RUST_PACKAGE "${SNOW_RUST_PACKAGE}"
+        SNOW_RUST_TOOLCHAIN "${SNOW_RUST_TOOLCHAIN}"
         SNOW_RUST_FEATURES "${SNOW_RUST_FEATURES}"
         SNOW_RUST_NO_DEFAULT_FEATURES "${SNOW_RUST_NO_DEFAULT_FEATURES}"
         SNOW_RUST_TARGET "${_rust_target}")

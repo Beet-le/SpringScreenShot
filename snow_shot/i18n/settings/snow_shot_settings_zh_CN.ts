@@ -1845,8 +1845,8 @@
             <translation>配置网络请求的代理使用方式</translation>
         </message>
         <message>
-            <source>Configure text recognition models and acceleration</source>
-            <translation>配置文本识别模型和加速</translation>
+            <source>Configure text recognition models and processing</source>
+            <translation>配置文字识别模型和处理方式</translation>
         </message>
         <message>
             <source>Configure the screenshot, pinned, and recording toolbars</source>
@@ -2143,14 +2143,6 @@
         <message>
             <source>Destroy</source>
             <translation>销毁</translation>
-        </message>
-        <message>
-            <source>DirectML</source>
-            <translation>DirectML</translation>
-        </message>
-        <message>
-            <source>DirectML acceleration</source>
-            <translation>DirectML 加速</translation>
         </message>
         <message>
             <source>Disable global hotkeys</source>
@@ -2463,10 +2455,6 @@
         <message>
             <source>GIF, APNG and WebP resolution, frame rate and looping</source>
             <translation>GIF、APNG 和 WebP 的分辨率、帧率与循环播放</translation>
-        </message>
-        <message>
-            <source>GPU acceleration</source>
-            <translation>GPU 加速</translation>
         </message>
         <message>
             <source>General</source>
@@ -2863,14 +2851,6 @@
         <message>
             <source>Medium</source>
             <translation>中等</translation>
-        </message>
-        <message>
-            <source>Medium V4</source>
-            <translation>中型 V4</translation>
-        </message>
-        <message>
-            <source>Medium V5</source>
-            <translation>中型 V5</translation>
         </message>
         <message>
             <source>Medium V6</source>
@@ -4081,14 +4061,6 @@
             <translation>小</translation>
         </message>
         <message>
-            <source>Small V4</source>
-            <translation>小型 V4</translation>
-        </message>
-        <message>
-            <source>Small V5</source>
-            <translation>小型 V5</translation>
-        </message>
-        <message>
             <source>Small V6</source>
             <translation>小型 V6</translation>
         </message>
@@ -4519,10 +4491,6 @@
         <message>
             <source>Upload to Cloud</source>
             <translation>上传到云端</translation>
-        </message>
-        <message>
-            <source>Use DirectML for GPU-accelerated text recognition when available</source>
-            <translation>可用时使用 DirectML 通过 GPU 加速文本识别</translation>
         </message>
         <message>
             <source>Use global mouse gestures, select individual window elements, and translate selected text.</source>

@@ -365,7 +365,7 @@ only missing components or targets are downloaded into that toolchain.
 The run script rebuilds the `snow_shot` target before launching by default; pass
 `--no-build` to launch an existing build or `--clean` to request a clean rebuild.
 CMake installs native dependencies from the manifest. The first run builds
-FFmpeg, image codecs, OpenCV, and CPU ONNX Runtime and can take considerable time.
+FFmpeg, image codecs, and OpenCV and can take considerable time.
 Dynamic and static dependencies live in `.tools/macos/installed/{dynamic,static}`,
 isolated from Windows and the standalone macOS media harness. `LIBCLANG_PATH`
 can override Xcode's libclang.
@@ -653,13 +653,13 @@ rebuild; use the run script's local signing identity for subsequent builds to
 avoid that identity change. Switching from ad-hoc to certificate signing requires
 granting permission to the new identity once; later rebuilds retain that grant.
 
-macOS OCR uses CPU inference with all seven existing V4/V5/V6 models. Full on
-both architectures and Mini on ARM64 bundle their worker and ONNX Runtime.
+macOS OCR uses CPU inference with the three existing V6 models. Full on
+both architectures and Mini on ARM64 bundle their CPU worker.
 Full also bundles Small V6; Mini bundles no model files. Missing selected models download
 on demand into application storage. No OCR runtime code
 is downloaded on macOS. An Intel package built on Apple Silicon is validated
 through Rosetta; that validation does not establish native Intel hardware qualification.
-The Windows updater/installer and DirectML remain Windows-only.
+The Windows updater/installer remain Windows-only.
 
 macOS diagnostics use the shared rotating JSON log service and a bundled Crashpad
 handler. The handler captures native faults, stack overflow, fatal Qt errors,
@@ -686,16 +686,16 @@ remain available for media harness development.
 
 ## macOS OCR validation
 
-The runtime uses protocol 5. Its generated schema-3 manifest records
+The runtime uses protocol 6. Its generated schema-3 manifest records
 `macos-arm64` or `macos-x64`, `delivery: bundled`, static linkage, the executable
-name, and the size/SHA-256 of the worker. ONNX Runtime is linked into the worker in release
-packages; shared development builds still stage `libonnxruntime.dylib`. The
+name, and the size/SHA-256 of the worker. The worker uses simd-paddle-ocr-rs CPU inference without external inference
+libraries in either development or release builds. The
 existing Windows schema-2 manifest remains the
-source of the seven pinned model contracts; its Windows runtime is never staged
+source of the three pinned model contracts; its Windows runtime is never staged
 on macOS. Runtime binaries live in `Contents/MacOS`; models and the manifest are
 accessed through `Contents/MacOS/assets/ocr` (a resource link in signed bundles).
-Development workers load their adjacent ONNX library by absolute path,
-independent of the shell environment. A damaged runtime requires reinstalling
+The worker uses the submodule-pinned nightly compiler; other Rust packages
+continue using their existing compiler. Bootstrap provisions both toolchains. A damaged runtime requires reinstalling
 the ARM64 app; verified downloaded models remain reusable.
 
 Build staging checks content on every relevant target build, including a worker-only
@@ -717,8 +717,7 @@ Focused deterministic checks (the asset executable needs no worker or real model
 scripts/build.sh snow-shot-macos-arm64-performance --target snow-shot-ocr-assets-tests
 ctest --preset test-snow-shot-macos-arm64-performance -R '^snow-shot-ocr-assets-tests$'
 python3 scripts/test-snow-shot-macos-ocr.py
-scripts/check-rust.sh snow-ocr-process -- --no-default-features --features dynamic-onnx-runtime
-scripts/check-rust.sh rapid-ocr-rs -- --no-default-features --features dynamic-onnx-runtime
+scripts/check-rust.sh snow-ocr-process
 ```
 
 Build the recognition test target and fetch all verified models for the opt-in
@@ -737,7 +736,7 @@ OCR_TEST="$PWD/build/snow-shot-macos-arm64-performance/snow_shot/test-bin/snow-s
 "$OCR_TEST" --model-root="$PWD/build/ocr-versioned-models" --resident-models
 ```
 
-The seven-model run checks bilingual text, geometry, FIFO callbacks and repeated
+The three-model run checks bilingual text, geometry, FIFO callbacks and repeated
 inference. Measurements report the first cold request, the following request using
 the same session, and the worker's resident bytes sampled after each result (not
 peak RSS). Cold means a new worker/model session, without flushing the operating

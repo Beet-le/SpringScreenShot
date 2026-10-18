@@ -63,6 +63,23 @@ if [[ "$snow_rust_target" != "$rust_host" ]] &&
     rustup target add "$snow_rust_target"
 fi
 printf 'Using the active Rust toolchain with target %s.\n' "$snow_rust_target"
+ocr_pin="$snow_repo_root/snow-crates/crates/simd-paddle-ocr-rs/rust-toolchain.toml"
+[[ -f "$ocr_pin" ]] || snow_die 'Initialize Git submodules before building OCR.'
+ocr_toolchain="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' "$ocr_pin")"
+[[ "$ocr_toolchain" == nightly-* ]] || snow_die 'Invalid OCR toolchain pin.'
+if ! rustup toolchain list | grep -Fq "$ocr_toolchain-$rust_host"; then
+    rustup toolchain install "$ocr_toolchain" --profile minimal --component rustfmt,clippy --target "$snow_rust_target"
+else
+    ocr_components="$(rustup component list --toolchain "$ocr_toolchain" --installed)"
+    ocr_missing=()
+    for component in cargo rustc rust-std rustfmt clippy; do
+        if ! grep -Fqx "$component-$rust_host" <<< "$ocr_components"; then ocr_missing+=("$component"); fi
+    done
+    if [[ ${#ocr_missing[@]} -gt 0 ]]; then rustup component add --toolchain "$ocr_toolchain" "${ocr_missing[@]}"; fi
+    if ! grep -Fqx "rust-std-$snow_rust_target" <<< "$ocr_components"; then
+        rustup target add --toolchain "$ocr_toolchain" "$snow_rust_target"
+    fi
+fi
 # Use the same pinned registry baseline and isolated dynamic/static install roots as Windows.
 vcpkg_root="$snow_repo_root/.tools/vcpkg"
 vcpkg_baseline=4497409a47f19db373a410a0efb84eca4747adbf

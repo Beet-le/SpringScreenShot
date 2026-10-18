@@ -117,7 +117,6 @@ const QString kOcrDetectorResizePolicyKey =
     QStringLiteral("text_recognition/detector_resize_policy");
 const QString kOcrTextDetectionProcessingKey =
     QStringLiteral("text_recognition/text_detection_processing");
-const QString kOcrDirectMlKey = QStringLiteral("text_recognition/direct_ml_acceleration");
 const QString kMcpEnabledKey = QStringLiteral("mcp/enabled");
 
 QStringList stringList(const QJsonValue& value) {
@@ -353,14 +352,7 @@ class ApplicationController::Impl {
             applicationStorage.configuration().value(kOcrDetectorResizePolicyKey).toString());
         ocrOptions.textDetectionProcessing = screenshotOcrTextDetectionProcessingFromValue(
             applicationStorage.configuration().value(kOcrTextDetectionProcessingKey).toString());
-        const auto backendPreference =
-            applicationStorage.configuration()
-                    .value(QStringLiteral("text_recognition/direct_ml_acceleration"))
-                    .toBool()
-                ? ScreenshotOcrBackendPreference::DirectMl
-                : ScreenshotOcrBackendPreference::Cpu;
-        ocrRecognition =
-            std::make_unique<ScreenshotOcrRecognitionService>(ocrOptions, backendPreference, &q);
+        ocrRecognition = std::make_unique<ScreenshotOcrRecognitionService>(ocrOptions, &q);
         auto& configuration = applicationStorage.configuration();
         updates = new update::UpdateService(update::defaultUpdateServiceOptions(), &app);
         updates->setProgressAppearance(
@@ -688,9 +680,6 @@ class ApplicationController::Impl {
         const auto& configuration = storage::ApplicationStorage::instance().configuration();
         ocrRecognition->setRuntimeConfiguration(
             {screenshotOcrModelTypeFromValue(configuration.value(kOcrModelTypeKey).toString()),
-             configuration.value(kOcrDirectMlKey).toBool()
-                 ? ScreenshotOcrBackendPreference::DirectMl
-                 : ScreenshotOcrBackendPreference::Cpu,
              screenshotOcrDetectorResizePolicyFromValue(
                  configuration.value(kOcrDetectorResizePolicyKey).toString()),
              configuration.value(QStringLiteral("text_recognition/resident_process")).toBool(),
@@ -1557,8 +1546,8 @@ class ApplicationController::Impl {
             systemTray.setQuickActionChecked(
                 presentation::GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow,
                 value.toBool());
-        } else if (key == kOcrModelTypeKey || key == kOcrDirectMlKey ||
-                   key == kOcrDetectorResizePolicyKey || key == kOcrTextDetectionProcessingKey ||
+        } else if (key == kOcrModelTypeKey || key == kOcrDetectorResizePolicyKey ||
+                   key == kOcrTextDetectionProcessingKey ||
                    key == QStringLiteral("text_recognition/resident_process") ||
                    key == QStringLiteral("text_recognition/model_hot_start")) {
             if (started)

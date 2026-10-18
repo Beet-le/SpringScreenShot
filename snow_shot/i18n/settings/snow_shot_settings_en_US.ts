@@ -1845,8 +1845,8 @@
             <translation>Configure proxy use for network requests</translation>
         </message>
         <message>
-            <source>Configure text recognition models and acceleration</source>
-            <translation>Configure text recognition models and acceleration</translation>
+            <source>Configure text recognition models and processing</source>
+            <translation>Configure text recognition models and processing</translation>
         </message>
         <message>
             <source>Configure the screenshot, pinned, and recording toolbars</source>
@@ -2143,14 +2143,6 @@
         <message>
             <source>Destroy</source>
             <translation>Destroy</translation>
-        </message>
-        <message>
-            <source>DirectML</source>
-            <translation>DirectML</translation>
-        </message>
-        <message>
-            <source>DirectML acceleration</source>
-            <translation>DirectML acceleration</translation>
         </message>
         <message>
             <source>Disable global hotkeys</source>
@@ -2463,10 +2455,6 @@
         <message>
             <source>GIF, APNG and WebP resolution, frame rate and looping</source>
             <translation>GIF, APNG and WebP resolution, frame rate and looping</translation>
-        </message>
-        <message>
-            <source>GPU acceleration</source>
-            <translation>GPU acceleration</translation>
         </message>
         <message>
             <source>General</source>
@@ -2863,14 +2851,6 @@
         <message>
             <source>Medium</source>
             <translation>Medium</translation>
-        </message>
-        <message>
-            <source>Medium V4</source>
-            <translation>Medium V4</translation>
-        </message>
-        <message>
-            <source>Medium V5</source>
-            <translation>Medium V5</translation>
         </message>
         <message>
             <source>Medium V6</source>
@@ -4081,14 +4061,6 @@
             <translation>Small</translation>
         </message>
         <message>
-            <source>Small V4</source>
-            <translation>Small V4</translation>
-        </message>
-        <message>
-            <source>Small V5</source>
-            <translation>Small V5</translation>
-        </message>
-        <message>
             <source>Small V6</source>
             <translation>Small V6</translation>
         </message>
@@ -4519,10 +4491,6 @@
         <message>
             <source>Upload to Cloud</source>
             <translation>Upload to Cloud</translation>
-        </message>
-        <message>
-            <source>Use DirectML for GPU-accelerated text recognition when available</source>
-            <translation>Use DirectML for GPU-accelerated text recognition when available</translation>
         </message>
         <message>
             <source>Use global mouse gestures, select individual window elements, and translate selected text.</source>

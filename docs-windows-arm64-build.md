@@ -29,10 +29,6 @@ ARM64 MSVC builds use optimized native C/C++ objects without MSVC LTCG. The
 address, causing a CPU spin during sorting and preventing the running application
 from reopening. The application, static Qt, and static vcpkg triplet share this
 policy; `/GS`, `/sdl`, ordinary optimization, and Rust LLVM LTO remain enabled.
-The same compiler also miscompiled native ONNX Runtime MLAS 4-bit dequantization
-returns. The ONNX overlay disables inlining only for
-`sqnbitgemm_kernel_neon_fp32.cpp` on Windows ARM64 MSVC, retaining `/O2` and
-security checks. Matched native input tests reproduce the hang and verify this fix.
 Rebuild dependencies after the triplet change. Old ARM64 Qt kits stamped with
 `Ltcg: true` are rejected; use a distinct installation/build directory or `-Force`
 to rebuild the kit. Full and Mini packaging also audit every staged executable,
@@ -67,7 +63,7 @@ OpenCV's MSVC FP16/dot-product variants retain upstream's compiler restrictions.
 FFmpeg's unstable AArch64 scaler backend remains disabled because its host helper
 does not work with the current cross-toolchain setup; current conversions use
 the legacy API, which already has ARM assembly. Baseline OpenCV/FFmpeg NEON and
-ONNX Runtime NEON kernels remain available. These restrictions are separate from
+The simd-paddle-ocr-rs CPU kernels remain available. These restrictions are separate from
 the first-party backends and the compiler correctness workarounds above.
 
 The rotation, laser, real-time/GPU recording, paired recording comparison, and
@@ -134,7 +130,7 @@ The ARM64 OCR runtime must be built before its real hashes can be pinned:
 This builds the worker and stages a versioned ARM64 runtime archive, checksum,
 runtime report, and trusted asset manifest under `build/snow-shot-msvc-arm64-release`.
 It does not upload anything. The manifest preserves the existing model hashes and
-protocol 5, and records the actual ARM64 worker and DirectML bytes. A cross build
+protocol 6, and records the actual ARM64 worker bytes. A cross build
 is marked as requiring native validation.
 
 Use the prepared archive for local packaging:
@@ -183,7 +179,7 @@ proof files used by publication:
 
 This verifies archive inventories and executes startup, updater, and worker
 identity probes. Native release acceptance also requires OCR with CPU and
-DirectML, offline OCR without network access, clipboard fallback, capture,
+CPU inference, offline OCR without network access, clipboard fallback, capture,
 H.264/H.265 recording, crash handling, update recovery, and explicit installer
 replacement with settings/history retained. Check both editions on Windows 11
 ARM64 hardware; a successful static audit cannot establish these results.
@@ -221,3 +217,7 @@ the canonical public runtime archive and verify its pinned size and SHA-256; it
 also requires native validation evidence for the exact final package bytes.
 Committing the prepared descriptor does not satisfy these gates. Preparing local
 artifacts neither publishes the application nor changes the public update feeds.
+
+The OCR worker uses the submodule-pinned `nightly-2026-09-08` compiler and
+`aarch64-pc-windows-msvc` standard library. Bootstrap installs them separately
+from the Rust toolchain used by other packages. OCR 1.0.11 ships no inference DLLs.

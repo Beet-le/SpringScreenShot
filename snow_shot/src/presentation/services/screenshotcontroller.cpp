@@ -763,12 +763,6 @@ ScreenshotController::Impl::Impl(ScreenshotController& controller,
                     if (!m_interaction.inactive()) {
                         m_presentationServices->updateOverlayState();
                     }
-                } else if (key == QStringLiteral("text_recognition/direct_ml_acceleration") &&
-                           m_ocrRecognition != nullptr) {
-                    const auto preference = value.toBool()
-                                                ? ScreenshotOcrBackendPreference::DirectMl
-                                                : ScreenshotOcrBackendPreference::Cpu;
-                    m_ocrRecognition->setBackendPreference(preference);
                 } else if (key == QStringLiteral("text_recognition/model_type") &&
                            m_ocrRecognition != nullptr) {
                     m_ocrRecognition->setModelType(
@@ -1241,12 +1235,6 @@ bool ScreenshotController::Impl::ensureRecognitionFeature() {
 
     const QScopedValueRollback<bool> constructingGuard(m_constructingRecognitionFeature, true);
     auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
-    const auto backendPreference =
-        applicationStorage.configuration()
-                .value(QStringLiteral("text_recognition/direct_ml_acceleration"))
-                .toBool()
-            ? ScreenshotOcrBackendPreference::DirectMl
-            : ScreenshotOcrBackendPreference::Cpu;
     ScreenshotOcrRecognitionService::Options ocrOptions;
     ocrOptions.modelType =
         screenshotOcrModelTypeFromValue(applicationStorage.configuration()
@@ -1272,8 +1260,8 @@ bool ScreenshotController::Impl::ensureRecognitionFeature() {
             applicationStorage.configuration().value(QStringLiteral("network/proxy")).toString());
     }
     if (m_ocrRecognition == nullptr) {
-        m_ownedOcrRecognition = std::make_unique<ScreenshotOcrRecognitionService>(
-            ocrOptions, backendPreference, &owner);
+        m_ownedOcrRecognition =
+            std::make_unique<ScreenshotOcrRecognitionService>(ocrOptions, &owner);
         m_ocrRecognition = m_ownedOcrRecognition.get();
     }
 #if SNOW_SHOT_ENABLE_QR_RECOGNITION

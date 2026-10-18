@@ -94,8 +94,8 @@ class CatalogTranslator final : public QTranslator {
         if (source == QStringLiteral("Dark")) {
             return QStringLiteral("Night Mode");
         }
-        if (source == QStringLiteral("Small V4")) {
-            return QStringLiteral("Localized Small V4");
+        if (source == QStringLiteral("Small V6")) {
+            return QStringLiteral("Localized Small V6");
         }
         if (source == QStringLiteral("Appearance")) {
             return QStringLiteral("Visual Style");
@@ -571,7 +571,6 @@ void builtInCatalogIsCompleteAndValid() {
         QStringLiteral("screen-recording.api-mode"),
         QStringLiteral("screenshot.window-element-api"),
         QStringLiteral("screenshot.restore-original-screen-colors"),
-        QStringLiteral("text-recognition.direct-ml-acceleration"),
     };
     const QSet<QString> macOnlyItems{
         QStringLiteral("system.login-item-settings"),
@@ -1352,55 +1351,42 @@ void builtInCatalogIsCompleteAndValid() {
         textDetectionProcessing != nullptr
             ? std::get_if<settings::SettingsSelectDefinition>(&textDetectionProcessing->payload)
             : nullptr;
-    require(
-        systemPage != nullptr && systemPage->sections.size() == 3 &&
-            systemPage->sections.at(0).id == QStringLiteral("language") &&
-            systemPage->sections.at(1).id == QStringLiteral("system-general") &&
-            systemPage->sections.at(2).id == QStringLiteral("core") && proxy != nullptr &&
-            proxy->configurationKey == QStringLiteral("network/proxy") && proxySelect != nullptr &&
-            proxySelect->binding == settings::SettingsSelectBinding::Proxy &&
-            proxySelect->options.size() == 2 &&
-            proxySelect->options.at(0).value == QStringLiteral("none") &&
-            proxySelect->options.at(1).value == QStringLiteral("system") &&
-            textRecognition != nullptr &&
-            textRecognition->reset == settings::SettingsSectionReset::TextRecognition &&
-#ifdef Q_OS_MACOS
-            textRecognition->items.size() == 5 &&
-            catalog.item({QStringLiteral("text-recognition-translation"),
-                          QStringLiteral("text-recognition"),
-                          QStringLiteral("text-recognition.direct-ml-acceleration")}) == nullptr &&
-#else
-            textRecognition->items.size() == 6 &&
-            textRecognition->items.at(3).id ==
-                QStringLiteral("text-recognition.direct-ml-acceleration") &&
-#endif
-            textRecognition->items.at(0).id == QStringLiteral("text-recognition.model-type") &&
-            textRecognition->items.at(1).id ==
-                QStringLiteral("text-recognition.detector-resize-policy") &&
-            textRecognition->items.at(2).id ==
-                QStringLiteral("text-recognition.text-detection-processing") &&
-            resizePolicy != nullptr &&
-            resizePolicy->configurationKey ==
-                QStringLiteral("text_recognition/detector_resize_policy") &&
-            resizePolicySelect != nullptr &&
-            resizePolicySelect->binding ==
-                settings::SettingsSelectBinding::OcrDetectorResizePolicy &&
-            resizePolicySelect->options.size() == 2 &&
-            resizePolicySelect->options.at(0).value == QStringLiteral("max") &&
-            resizePolicySelect->options.at(1).value == QStringLiteral("min") &&
-            modelType != nullptr &&
-            modelType->configurationKey == QStringLiteral("text_recognition/model_type") &&
-            modelTypeSelect != nullptr &&
-            modelTypeSelect->binding == settings::SettingsSelectBinding::OcrModelType &&
-            modelTypeSelect->options.size() == 7 &&
-            modelTypeSelect->options.at(0).value == QStringLiteral("extra_small") &&
-            modelTypeSelect->options.at(1).value == QStringLiteral("small") &&
-            modelTypeSelect->options.at(2).value == QStringLiteral("medium") &&
-            modelTypeSelect->options.at(3).value == QStringLiteral("small_v5") &&
-            modelTypeSelect->options.at(4).value == QStringLiteral("medium_v5") &&
-            modelTypeSelect->options.at(5).value == QStringLiteral("small_v4") &&
-            modelTypeSelect->options.at(6).value == QStringLiteral("medium_v4"),
-        "System settings must expose the ordered OCR model and acceleration controls");
+    require(systemPage != nullptr && systemPage->sections.size() == 3 &&
+                systemPage->sections.at(0).id == QStringLiteral("language") &&
+                systemPage->sections.at(1).id == QStringLiteral("system-general") &&
+                systemPage->sections.at(2).id == QStringLiteral("core") && proxy != nullptr &&
+                proxy->configurationKey == QStringLiteral("network/proxy") &&
+                proxySelect != nullptr &&
+                proxySelect->binding == settings::SettingsSelectBinding::Proxy &&
+                proxySelect->options.size() == 2 &&
+                proxySelect->options.at(0).value == QStringLiteral("none") &&
+                proxySelect->options.at(1).value == QStringLiteral("system") &&
+                textRecognition != nullptr &&
+                textRecognition->reset == settings::SettingsSectionReset::TextRecognition &&
+                textRecognition->items.size() == 5 &&
+                textRecognition->items.at(0).id == QStringLiteral("text-recognition.model-type") &&
+                textRecognition->items.at(1).id ==
+                    QStringLiteral("text-recognition.detector-resize-policy") &&
+                textRecognition->items.at(2).id ==
+                    QStringLiteral("text-recognition.text-detection-processing") &&
+                resizePolicy != nullptr &&
+                resizePolicy->configurationKey ==
+                    QStringLiteral("text_recognition/detector_resize_policy") &&
+                resizePolicySelect != nullptr &&
+                resizePolicySelect->binding ==
+                    settings::SettingsSelectBinding::OcrDetectorResizePolicy &&
+                resizePolicySelect->options.size() == 2 &&
+                resizePolicySelect->options.at(0).value == QStringLiteral("max") &&
+                resizePolicySelect->options.at(1).value == QStringLiteral("min") &&
+                modelType != nullptr &&
+                modelType->configurationKey == QStringLiteral("text_recognition/model_type") &&
+                modelTypeSelect != nullptr &&
+                modelTypeSelect->binding == settings::SettingsSelectBinding::OcrModelType &&
+                modelTypeSelect->options.size() == 3 &&
+                modelTypeSelect->options.at(0).value == QStringLiteral("extra_small") &&
+                modelTypeSelect->options.at(1).value == QStringLiteral("small") &&
+                modelTypeSelect->options.at(2).value == QStringLiteral("medium"),
+            "System settings must expose the ordered OCR model and processing controls");
     require(
         textDetectionProcessing != nullptr &&
             textDetectionProcessing->title.translated() ==
@@ -1436,9 +1422,7 @@ void builtInCatalogIsCompleteAndValid() {
                               QStringLiteral("system.mcp-status")}) == nullptr,
             "MCP controls must live together below Core, outside General");
     const QStringList modelLabels{QStringLiteral("Ultra Small V6"), QStringLiteral("Small V6"),
-                                  QStringLiteral("Medium V6"),      QStringLiteral("Small V5"),
-                                  QStringLiteral("Medium V5"),      QStringLiteral("Small V4"),
-                                  QStringLiteral("Medium V4")};
+                                  QStringLiteral("Medium V6")};
     for (qsizetype index = 0; index < modelLabels.size(); ++index) {
         require(modelTypeSelect->options.at(index).label.translated() == modelLabels.at(index),
                 "OCR model labels must distinguish model generation and size");
@@ -3105,7 +3089,7 @@ void searchIndexRebuildsLocalizedFields() {
     CatalogTranslator translator;
     require(QCoreApplication::installTranslator(&translator), "test translator must install");
     index.rebuild();
-    const auto localizedModel = index.search(QStringLiteral("Localized Small V4"));
+    const auto localizedModel = index.search(QStringLiteral("Localized Small V6"));
     require(!localizedModel.isEmpty() && localizedModel.constFirst().location.itemId ==
                                              QStringLiteral("text-recognition.model-type"),
             "language changes must refresh versioned OCR model options in search");

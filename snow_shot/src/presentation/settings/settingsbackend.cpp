@@ -10,7 +10,6 @@
 #include "snow_shot/presentation/settings/settingsregistry.h"
 #include "snow_shot/presentation/settings/applicationpriority.h"
 #include "snow_shot/platform/applicationqos.h"
-#include "snow_shot/presentation/settings/textrecognitionacceleration.h"
 #include "snow_shot/platform/windows/autostartregistration.h"
 #ifdef Q_OS_MACOS
 #include "snow_shot/platform/macos/loginitemservice.h"
@@ -881,12 +880,6 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
             .configuration()
             .value(QStringLiteral("text_recognition/model_hot_start"))
             .toBool();
-    case SettingsSwitchBinding::DirectMlAcceleration:
-        return directMlTextRecognitionSupported() &&
-               storage::ApplicationStorage::instance()
-                   .configuration()
-                   .value(QStringLiteral("text_recognition/direct_ml_acceleration"))
-                   .toBool();
     case SettingsSwitchBinding::ScreenshotAreaTypeHint:
         return storage::ScreenshotUiSettings().screenshotAreaTypeHintEnabled();
     case SettingsSwitchBinding::ShowGuidesByDefault:
@@ -1121,8 +1114,7 @@ bool BuiltInSettingsBackend::switchEnabled(SettingsSwitchBinding binding) const 
                !platform::windows::administratorOperationPending();
 #endif
     }
-    return binding != SettingsSwitchBinding::DirectMlAcceleration ||
-           directMlTextRecognitionSupported();
+    return true;
 }
 
 bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, bool value) {
@@ -1167,18 +1159,6 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     }
     if (binding == SettingsSwitchBinding::SmartSelection) {
         return storage::ApplicationStorage::instance().requestSmartSelection(value);
-    }
-    if (binding == SettingsSwitchBinding::DirectMlAcceleration) {
-        if (!directMlTextRecognitionSupported()) {
-            return false;
-        }
-        auto& storage = storage::ApplicationStorage::instance();
-        const bool accepted = storage.configuration().setValue(
-            QStringLiteral("text_recognition/direct_ml_acceleration"), value);
-        if (accepted) {
-            emit synchronized();
-        }
-        return accepted;
     }
 
     if (binding == SettingsSwitchBinding::ScreenshotAreaTypeHint) {
@@ -1338,7 +1318,6 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
         return false;
     case SettingsSwitchBinding::OcrResidentProcess:
     case SettingsSwitchBinding::OcrModelHotStart:
-    case SettingsSwitchBinding::DirectMlAcceleration:
         return false;
     case SettingsSwitchBinding::ScreenshotAreaTypeHint:
     case SettingsSwitchBinding::ShowGuidesByDefault:
@@ -2996,9 +2975,6 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("text_recognition/text_detection_processing"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("text_recognition/text_detection_processing"))},
-            {QStringLiteral("text_recognition/direct_ml_acceleration"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("text_recognition/direct_ml_acceleration"))},
         });
         if (accepted) {
             emit synchronized();

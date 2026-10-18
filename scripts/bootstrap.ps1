@@ -223,6 +223,11 @@ if (-not $SkipDependencyInstall) {
     }
 }
 
+. (Join-Path $PSScriptRoot 'snow-ocr-toolchain.ps1')
+$ocrToolchain = Get-SnowOcrToolchain
+Invoke-Checked -Command $rustup.Source -Arguments @(
+    'toolchain', 'install', $ocrToolchain, '--profile', 'minimal', '--component', 'rustfmt,clippy', '--target', $rustTarget
+) -WorkingDirectory $repoRoot
 $rustToolchain = Get-SnowRustToolchainInfo
 Invoke-Checked -Command $rustup.Source -Arguments @(
     "component", "add", "rustfmt", "clippy"

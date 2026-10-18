@@ -52,15 +52,19 @@ $repoRoot = $script:SnowRepoRoot
 $rustup = [pscustomobject]@{ Source = 'rustup' }
 $cargo = [pscustomobject]@{ Source = 'cargo' }
 $rustTarget = 'aarch64-pc-windows-msvc'
+. (Join-Path $PSScriptRoot 'snow-ocr-toolchain.ps1')
+$ocrToolchain = Get-SnowOcrToolchain
 $commands = @($bootstrap.EndBlock.Statements | Where-Object {
     $_.Extent.Text -match 'Invoke-Checked -Command \$(rustup|cargo)\.Source'
 })
-Require ($commands.Count -eq 4) 'Exercise Rust components, target, and both workspace metadata calls.'
+Require ($commands.Count -eq 5) 'Exercise the worker pin, active Rust components, target, and both metadata calls.'
 foreach ($command in $commands) { & ([scriptblock]::Create($command.Extent.Text)) }
-Require (($script:Calls[0].Arguments -join ' ') -ceq 'component add rustfmt clippy') `
+Require (($script:Calls[1].Arguments -join ' ') -ceq 'component add rustfmt clippy') `
     'Add components to the active toolchain.'
-Require (($script:Calls[1].Arguments -join ' ') -ceq "target add $rustTarget") `
+Require (($script:Calls[2].Arguments -join ' ') -ceq "target add $rustTarget") `
     'Add the requested target to the active toolchain.'
+Require (($script:Calls[0].Arguments -join ' ') -ceq "toolchain install $ocrToolchain --profile minimal --component rustfmt,clippy --target $rustTarget") `
+    'Install the submodule-pinned OCR compiler without changing the default compiler.'
 foreach ($call in $script:Calls | Where-Object Command -CEQ cargo) {
     Require ($call.Arguments[0] -ceq 'metadata') 'Cargo must use the active toolchain without an exact-version override.'
 }
