@@ -992,6 +992,7 @@ set(SNOW_SHOT_SETTINGS_SOURCES
     include/snow_shot/presentation/components/pinnedwindowmanagementpagewidget.h
     src/presentation/components/pinnedwindowmanagementpagewidget.cpp
     src/presentation/services/screenshotclipboardcontent.cpp
+    src/presentation/services/pinnedcolorswatch.cpp
     src/presentation/services/imageimportsourcereader_p.h
     src/presentation/services/imageimportsourcereader_p.cpp
     src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp
@@ -1502,6 +1503,7 @@ if(SNOW_APPS_BUILD_BENCHMARKS)
     add_executable(snow-shot-collage-import-performance-benchmark
         tests/collage_import_performance_benchmark.cpp
         src/presentation/services/screenshotclipboardcontent.cpp
+        src/presentation/services/pinnedcolorswatch.cpp
         src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp)
     target_link_libraries(snow-shot-collage-import-performance-benchmark PRIVATE
         snow_shot_storage snow_shot_clipboard_placement snow_shot_image_codec
@@ -4971,6 +4973,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/services/screenshotcanvascolorsampler.cpp
         src/presentation/services/screenshotcanvascolorsamplerwindow.cpp
         src/presentation/services/screenshotclipboardcontent.cpp
+        src/presentation/services/pinnedcolorswatch.cpp
         src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp
         src/presentation/services/screenshotclipboardservice.cpp
         src/presentation/services/screenshotimagefileservice.cpp
@@ -5471,6 +5474,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/services/screenshotexportcoordinator.cpp
         include/snow_shot/presentation/screenshotexportcoordinator.h
         src/presentation/services/screenshotclipboardcontent.cpp
+        src/presentation/services/pinnedcolorswatch.cpp
         src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp
     )
     target_include_directories(snow-shot-file-pin-batch-tests PRIVATE
@@ -5530,6 +5534,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         tests/screenshot_clipboard_content_tests.cpp
         include/snow_shot/presentation/screenshotclipboardcontent.h
         src/presentation/services/screenshotclipboardcontent.cpp
+        src/presentation/services/pinnedcolorswatch.cpp
         src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp
     )
     target_include_directories(snow-shot-clipboard-content-tests PRIVATE
@@ -5570,6 +5575,7 @@ if(SNOW_SHOT_BUILD_TESTS)
             tests/screenshot_clipboard_roundtrip_tests.cpp
             src/presentation/services/screenshotclipboardservice.cpp
             src/presentation/services/screenshotclipboardcontent.cpp
+            src/presentation/services/pinnedcolorswatch.cpp
             src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp
         )
         target_include_directories(snow-shot-clipboard-roundtrip-tests PRIVATE
@@ -9237,6 +9243,7 @@ if(SNOW_SHOT_BUILD_BENCHMARKS)
     add_executable(snow-shot-memory-performance-benchmark
         tests/screenshot_memory_performance_benchmark.cpp
         src/presentation/services/screenshotclipboardcontent.cpp
+        src/presentation/services/pinnedcolorswatch.cpp
         src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp
         ${SNOW_SHOT_RECOGNITION_IMAGE_RENDER_SOURCES})
     target_include_directories(snow-shot-memory-performance-benchmark PRIVATE
@@ -9627,6 +9634,7 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         src/presentation/services/screenshotcanvascolorsampler.cpp
         src/presentation/services/screenshotcanvascolorsamplerwindow.cpp
         src/presentation/services/screenshotclipboardcontent.cpp
+        src/presentation/services/pinnedcolorswatch.cpp
         src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp
         src/presentation/services/screenshotclipboardservice.cpp
         src/presentation/services/screenshotimagefileservice.cpp
@@ -11384,7 +11392,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         add_executable(snow-shot-macos-clipboard-roundtrip-tests
             tests/macos_clipboard_roundtrip_tests.mm
             src/presentation/services/screenshotclipboardservice.cpp
-            src/presentation/services/screenshotclipboardcontent.cpp)
+            src/presentation/services/screenshotclipboardcontent.cpp
+            src/presentation/services/pinnedcolorswatch.cpp)
         target_include_directories(snow-shot-macos-clipboard-roundtrip-tests PRIVATE include)
         target_link_libraries(snow-shot-macos-clipboard-roundtrip-tests PRIVATE
             snow_shot_image_codec snow_shot_diagnostics Qt6::Widgets
@@ -11443,6 +11452,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         tests/screenshot_clipboard_placement_tests.cpp
         src/presentation/services/screenshotclipboardservice.cpp
         src/presentation/services/screenshotclipboardcontent.cpp
+        src/presentation/services/pinnedcolorswatch.cpp
         src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp)
     target_include_directories(snow-shot-clipboard-placement-tests PRIVATE include src/image)
     target_link_libraries(snow-shot-clipboard-placement-tests PRIVATE
@@ -11473,6 +11483,7 @@ if(SNOW_SHOT_BUILD_BENCHMARKS)
         tests/screenshot_clipboard_placement_benchmark.cpp
         src/presentation/services/screenshotclipboardservice.cpp
         src/presentation/services/screenshotclipboardcontent.cpp
+        src/presentation/services/pinnedcolorswatch.cpp
         src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp)
     target_include_directories(snow-shot-clipboard-placement-benchmark PRIVATE include src/image)
     target_link_libraries(snow-shot-clipboard-placement-benchmark PRIVATE
@@ -12432,4 +12443,22 @@ if(SNOW_APPS_BUILD_BENCHMARKS)
     target_link_libraries(snow-shot-layout-compaction-benchmark PRIVATE
         Qt6::Widgets snow_draw_engine_qt_canvas)
     snow_shot_import_offscreen_platform(snow-shot-layout-compaction-benchmark)
+endif()
+
+if(TARGET snow-shot-clipboard-content-tests)
+    add_test(NAME snow-shot-pinned-color-content-tests
+        COMMAND snow-shot-clipboard-content-tests --color-swatch-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-color-content-tests PROPERTIES
+        LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+if(TARGET snow-shot-pinned-window-tests)
+    add_test(NAME snow-shot-pinned-color-window-tests
+        COMMAND snow-shot-pinned-window-tests --color-swatch-only -platform offscreen)
+    add_test(NAME snow-shot-pinned-color-repository-tests
+        COMMAND snow-shot-pinned-window-repository-tests --color-swatch-only)
+    set_tests_properties(snow-shot-pinned-color-window-tests snow-shot-pinned-color-repository-tests
+        PROPERTIES LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 90
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

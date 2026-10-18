@@ -3,6 +3,7 @@
 
 #include <QColor>
 #include <QString>
+#include <QSize>
 
 namespace snow_shot::storage {
 
@@ -20,11 +21,16 @@ struct PinnedTextStyle final {
     int fontSize = 16;
     QColor textColor = Qt::black;
     QColor backgroundColor = Qt::white;
+    // Color cards retain their initial layout across restore and theme changes.
+    bool colorSwatch = false;
+    QSize colorSwatchSize = QSize(342, 210);
 
     [[nodiscard]] bool isValid() const {
         return maximumWidth >= 100 && maximumWidth <= 2000 && fontSize >= 8 && fontSize <= 96 &&
                !fontFamily.isEmpty() && fontFamily.size() <= 1024 && textColor.isValid() &&
-               backgroundColor.isValid();
+               backgroundColor.isValid() &&
+               (!colorSwatch || colorSwatchSize == QSize(342, 210) ||
+                colorSwatchSize == QSize(470, 288));
     }
 
     friend bool operator==(const PinnedTextStyle&, const PinnedTextStyle&) = default;

@@ -1210,10 +1210,11 @@ class ApplicationController::Impl {
                                                         : QString();
                                  sourceDone(std::move(result), error);
                              });
+            const auto swatchStyle = capturePinnedColorSwatchStyle();
             watcher->setFuture(mcp::runMcpWork(&mcpSourceWorkers, [source, clipboard, livePin,
                                                                    liveRecognition, livePinTool,
                                                                    params, canceled, budget,
-                                                                   rasterBytes] {
+                                                                   rasterBytes, swatchStyle] {
                 Source result;
                 if (canceled->load())
                     return result;
@@ -1257,7 +1258,8 @@ class ApplicationController::Impl {
                             record->recognitionResults));
                     if (record->sourceKind == storage::PinnedWindowSourceKind::ClipboardText) {
                         const auto content = ScreenshotClipboardContentReader::renderOriginalText(
-                            result.originalContent, record->firstCreationTextDpi, {}, budget);
+                            result.originalContent, record->firstCreationTextDpi, {}, budget,
+                            swatchStyle);
                         if (content)
                             result.image = content->image;
                     }

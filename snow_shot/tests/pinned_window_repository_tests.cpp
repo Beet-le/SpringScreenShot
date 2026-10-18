@@ -163,6 +163,72 @@ void pinnedTextStyleMetadataRoundTrips() {
             "records without style metadata keep legacy rendering semantics");
 }
 
+void pinnedColorSwatchMetadataRoundTrips() {
+    QTemporaryDir directory;
+    auto record = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), {});
+    record.sourceKind = storage::PinnedWindowSourceKind::ClipboardText;
+    record.originalText = QStringLiteral("#7DD35380");
+    record.initialWindowSize = QSize(342, 210);
+    record.nativeGeometry = QRect(0, 0, 342, 210);
+    record.canvasSourceRect = QRectF(0, 0, 342, 210);
+    record.contentCanvasRect = record.canvasSourceRect;
+    record.surfaceCanvasRect = record.canvasSourceRect;
+    storage::PinnedTextStyle style;
+    style.fontFamily = QStringLiteral("Arial");
+    style.fontSize = 16;
+    style.maximumWidth = 342;
+    style.colorSwatch = true;
+    record.textStyle = style;
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        require(repository.upsert(record).success && repository.flush().success, "save color card");
+    }
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        const auto restored = repository.loadRecord(record.id);
+        const auto preview = repository.loadPreviewSource(record.id);
+        require(restored && restored->textStyle == style && preview && preview->textStyle == style,
+                "color card layout survives repository and preview round trips");
+        record.textStyle->colorSwatchSize = QSize(470, 288);
+        record.textStyle->maximumWidth = 470;
+        record.initialWindowSize = QSize(470, 288);
+        record.nativeGeometry = QRect(0, 0, 470, 288);
+        record.canvasSourceRect = QRectF(record.nativeGeometry);
+        record.contentCanvasRect = record.canvasSourceRect;
+        record.surfaceCanvasRect = record.canvasSourceRect;
+        require(repository.upsert(record).success && repository.flush().success,
+                "save earlier swatch layout");
+    }
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        const auto restored = repository.loadRecord(record.id);
+        require(restored && restored->textStyle &&
+                    restored->textStyle->colorSwatchSize == QSize(470, 288),
+                "earlier swatch layout remains readable");
+    }
+    QFile file(directory.filePath(QStringLiteral("pinned_windows_v2/index.json")));
+    require(file.open(QIODevice::ReadOnly), "read color manifest");
+    auto root = QJsonDocument::fromJson(file.readAll()).object();
+    file.close();
+    auto records = root.value(QStringLiteral("records")).toArray();
+    auto legacy = records.at(0).toObject();
+    auto legacyStyle = legacy.value(QStringLiteral("text_style")).toObject();
+    legacyStyle.remove(QStringLiteral("color_swatch"));
+    legacyStyle.remove(QStringLiteral("color_swatch_width"));
+    legacyStyle.remove(QStringLiteral("color_swatch_height"));
+    legacy.insert(QStringLiteral("text_style"), legacyStyle);
+    records.replace(0, legacy);
+    root.insert(QStringLiteral("records"), records);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "write legacy color text");
+    file.write(QJsonDocument(root).toJson());
+    file.close();
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const auto restored = repository.loadRecord(record.id);
+    require(restored && restored->textStyle && !restored->textStyle->colorSwatch &&
+                restored->originalText == record.originalText,
+            "existing color-shaped text pins keep ordinary presentation");
+}
+
 void markdownFormatMetadataRoundTrips() {
     QTemporaryDir directory;
     const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -2907,6 +2973,10 @@ int main(int argc, char* argv[]) {
     }
     if (application.arguments().contains(QStringLiteral("--batch-group-only"))) {
         batchGroupAssignmentPreflightsAndNotifiesOnce();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--color-swatch-only"))) {
+        pinnedColorSwatchMetadataRoundTrips();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--text-style-only"))) {

@@ -1126,6 +1126,45 @@ Files:
         </message>
     </context>
     <context>
+        <name>PinnedColorSwatch</name>
+        <message>
+            <source>Color:</source>
+            <translation>Color:</translation>
+        </message>
+        <message>
+            <source>Copy HEX color</source>
+            <translation>Copy HEX color</translation>
+        </message>
+        <message>
+            <source>Copy HSL color</source>
+            <translation>Copy HSL color</translation>
+        </message>
+        <message>
+            <source>Copy RGB color</source>
+            <translation>Copy RGB color</translation>
+        </message>
+        <message>
+            <source>HEX:</source>
+            <translation>HEX:</translation>
+        </message>
+        <message>
+            <source>HSL:</source>
+            <translation>HSL:</translation>
+        </message>
+        <message>
+            <source>HSLA:</source>
+            <translation>HSLA:</translation>
+        </message>
+        <message>
+            <source>RGB:</source>
+            <translation>RGB:</translation>
+        </message>
+        <message>
+            <source>RGBA:</source>
+            <translation>RGBA:</translation>
+        </message>
+    </context>
+    <context>
         <name>PinnedWindowManagementPageWidget</name>
         <message>
             <source>%1-%2 of %3</source>

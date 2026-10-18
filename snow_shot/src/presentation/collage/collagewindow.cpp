@@ -802,7 +802,8 @@ struct CollageWindow::Impl {
         const auto historyReader = services.readHistory;
         job = ScreenshotExportCoordinator::shared().submit(
             &q, ScreenshotExportCoordinator::Priority::Background,
-            [request, decoded, historyReader](const ScreenshotExportCancellation& cancellation) {
+            [request, decoded, historyReader, swatchStyle = capturePinnedColorSwatchStyle()](
+                const ScreenshotExportCancellation& cancellation) {
                 QString error;
                 decoded->reservation =
                     request.reservation ? request.reservation : reserveCollageImport(0, &error);
@@ -835,11 +836,12 @@ struct CollageWindow::Impl {
                     if (result)
                         image = *result;
                 } else if (!request.pinnedId.isEmpty()) {
-                    image = readImageImportPinnedRecord(request.pinnedId, cancelled,
-                                                        [decoded, &error](qint64 bytes) {
-                                                            return decoded->reservation->resize(
-                                                                bytes, &error);
-                                                        })
+                    image = readImageImportPinnedRecord(
+                                request.pinnedId, cancelled,
+                                [decoded, &error](qint64 bytes) {
+                                    return decoded->reservation->resize(bytes, &error);
+                                },
+                                swatchStyle)
                                 .image;
                 } else {
                     image = readImageImportFile(

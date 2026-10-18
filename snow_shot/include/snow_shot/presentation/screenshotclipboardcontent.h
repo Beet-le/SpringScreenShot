@@ -3,6 +3,7 @@
 
 #include "snow_shot/storage/pinnedsourceidentity.h"
 #include "snow_shot/storage/pinnedtextstyle.h"
+#include "snow_shot/presentation/pinnedcolorswatch.h"
 #include "snow_shot/image/screenshotanimationsource.h"
 #include "snow_shot/presentation/screenshotclipboardplacement.h"
 #include "snow_shot/presentation/screenshotclipboardappearance.h"
@@ -100,6 +101,8 @@ struct ScreenshotClipboardNativeDib final {
 
 struct ScreenshotClipboardContentSnapshot final {
     std::optional<snow_shot::storage::PinnedTextStyle> textStyle;
+    // Present only at a pin boundary. Generic image imports do not recognize colors.
+    std::optional<PinnedColorSwatchStyle> colorSwatchStyle;
     QList<ScreenshotClipboardEncodedImage> encodedImages;
     std::optional<ScreenshotClipboardNativeDib> nativeDib;
     QImage detachedImage;
@@ -174,7 +177,8 @@ class ScreenshotClipboardContentReader final {
     // is the current display DPI.
     [[nodiscard]] static std::optional<ScreenshotClipboardContent>
     renderOriginalText(const ScreenshotClipboardOriginalContent& original, qreal devicePixelRatio,
-                       const QColor& baseColor = {}, AllocationCheck allocate = {});
+                       const QColor& baseColor = {}, AllocationCheck allocate = {},
+                       std::optional<PinnedColorSwatchStyle> colorSwatchStyle = {});
 };
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENSHOTCLIPBOARDCONTENT_H

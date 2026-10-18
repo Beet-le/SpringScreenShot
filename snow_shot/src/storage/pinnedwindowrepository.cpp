@@ -587,6 +587,9 @@ QJsonValue textStyleToJson(const std::optional<PinnedTextStyle>& style) {
         {QStringLiteral("maximum_width"), style->maximumWidth},
         {QStringLiteral("font_family"), style->fontFamily},
         {QStringLiteral("font_size"), style->fontSize},
+        {QStringLiteral("color_swatch"), style->colorSwatch},
+        {QStringLiteral("color_swatch_width"), style->colorSwatchSize.width()},
+        {QStringLiteral("color_swatch_height"), style->colorSwatchSize.height()},
         {QStringLiteral("text_color"), colorToRgbaString(style->textColor)},
         {QStringLiteral("background_color"), colorToRgbaString(style->backgroundColor)}};
 }
@@ -603,6 +606,18 @@ bool textStyleFromJson(const QJsonValue& value, std::optional<PinnedTextStyle>* 
     style.maximumWidth = object.value(QStringLiteral("maximum_width")).toInt(-1);
     style.fontFamily = object.value(QStringLiteral("font_family")).toString();
     style.fontSize = object.value(QStringLiteral("font_size")).toInt(-1);
+    const auto swatch = object.value(QStringLiteral("color_swatch"));
+    if (!swatch.isUndefined() && !swatch.isBool())
+        return false;
+    style.colorSwatch = swatch.toBool(false);
+    if (style.colorSwatch) {
+        const auto width = object.value(QStringLiteral("color_swatch_width"));
+        const auto height = object.value(QStringLiteral("color_swatch_height"));
+        style.colorSwatchSize = QSize(width.toInt(-1), height.toInt(-1));
+        if (width.toDouble(-1) != style.colorSwatchSize.width() ||
+            height.toDouble(-1) != style.colorSwatchSize.height())
+            return false;
+    }
     style.textColor = colorFromRgbaString(object.value(QStringLiteral("text_color")).toString());
     style.backgroundColor =
         colorFromRgbaString(object.value(QStringLiteral("background_color")).toString());
@@ -1877,13 +1892,18 @@ PinnedWindowRepository::loadPreviewSource(const QString& id,
                                      stored.record.textFormat};
 }
 
-std::optional<quint64> PinnedWindowRepository::previewSourceRevision(const QString& id) const {
+std::optional<quint64> PinnedWindowRepository::previewSourceRevision(const QString& id,
+                                                                     bool* colorSwatch) const {
+    if (colorSwatch)
+        *colorSwatch = false;
     std::lock_guard access(m_accessMutex);
     if (m_impl == nullptr || !safeId(id)) {
         return std::nullopt;
     }
     std::lock_guard locker(m_impl->mutex);
     const auto found = m_impl->records.constFind(id);
+    if (colorSwatch && found != m_impl->records.cend())
+        *colorSwatch = found->record.textStyle && found->record.textStyle->colorSwatch;
     return found == m_impl->records.cend() ? std::nullopt
                                            : std::optional<quint64>(found->previewSourceRevision);
 }

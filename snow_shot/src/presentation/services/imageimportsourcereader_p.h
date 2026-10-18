@@ -22,7 +22,8 @@ readImageImportFile(const QString& path,
 [[nodiscard]] ImageImportSource
 readImageImportPinnedRecord(const QString& recordId,
                             ScreenshotClipboardContentReader::CancellationCheck cancelled,
-                            ScreenshotClipboardContentReader::AllocationCheck allocate);
+                            ScreenshotClipboardContentReader::AllocationCheck allocate,
+                            std::optional<PinnedColorSwatchStyle> swatchStyle = {});
 
 [[nodiscard]] QImage
 readImageImportClipboard(ScreenshotClipboardContentSnapshot snapshot,

@@ -28,7 +28,8 @@ QImage readImageImportFile(const QString& path,
 ImageImportSource
 readImageImportPinnedRecord(const QString& recordId,
                             ScreenshotClipboardContentReader::CancellationCheck cancelled,
-                            ScreenshotClipboardContentReader::AllocationCheck allocate) {
+                            ScreenshotClipboardContentReader::AllocationCheck allocate,
+                            std::optional<PinnedColorSwatchStyle> swatchStyle) {
     ImageImportSource result;
     if (cancelled && cancelled())
         return result;
@@ -52,7 +53,7 @@ readImageImportPinnedRecord(const QString& recordId,
         original.textStyle = record->textStyle;
         original.textFormat = record->textFormat;
         auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
-            original, record->firstCreationTextDpi, {}, reserve);
+            original, record->firstCreationTextDpi, {}, reserve, std::move(swatchStyle));
         if (rendered)
             result.image = std::move(rendered->image);
     } else {

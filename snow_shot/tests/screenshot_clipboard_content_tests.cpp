@@ -1673,6 +1673,7 @@ void nativeDibMaskColoredPixelsRemainPixels() {
     }
 }
 #endif
+#include "pinned_color_swatch_content_tests.h"
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1685,6 +1686,10 @@ int main(int argc, char** argv) {
         "offscreen document tests require proportional and monospace fonts");
     QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
 #endif
+    if (application.arguments().contains(QStringLiteral("--color-swatch-only"))) {
+        pinnedColorSwatchContentTests();
+        return EXIT_SUCCESS;
+    }
     if (application.arguments().contains(QStringLiteral("--first-frame-only"))) {
         firstFrameFilesKeepCompositionProfilesAndRevisionChecks();
         bmpFilesPreservePixelsAndIdentity();

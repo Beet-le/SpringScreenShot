@@ -566,7 +566,8 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
                 const QColor& baseColor,
                 const ScreenshotClipboardContentReader::CancellationCheck& cancelled,
                 const AllocationCheck& allocate, qint64 retained, bool firstFrameOnly = false,
-                const std::optional<snow_shot::storage::PinnedTextStyle>& style = {}) {
+                const std::optional<snow_shot::storage::PinnedTextStyle>& style = {},
+                const std::optional<PinnedColorSwatchStyle>& colorSwatchStyle = {}) {
     const auto format =
         std::find_if(std::begin(kImageFileFormats), std::end(kImageFileFormats),
                      [&localImage](const ImageFileFormat& candidate) {
@@ -617,6 +618,7 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
         textSnapshot.devicePixelRatio = devicePixelRatio;
         textSnapshot.baseColor = baseColor;
         textSnapshot.textStyle = style;
+        textSnapshot.colorSwatchStyle = colorSwatchStyle;
         const AllocationCheck textAllocate = allocate ? AllocationCheck([&](qint64 bytes) {
             return allocate(retained + encoded.size() + bytes);
         })
@@ -1368,9 +1370,9 @@ ScreenshotClipboardContentReader::decode(ScreenshotClipboardContentSnapshot snap
     }
     if (snapshot.localImage.has_value()) {
         SNOW_SHOT_PIN_PERF_SCOPE("clipboard.decode_file_image");
-        if (auto result =
-                readFileContent(*snapshot.localImage, snapshot.devicePixelRatio, snapshot.baseColor,
-                                cancelled, checked, retained, false, snapshot.textStyle);
+        if (auto result = readFileContent(*snapshot.localImage, snapshot.devicePixelRatio,
+                                          snapshot.baseColor, cancelled, checked, retained, false,
+                                          snapshot.textStyle, snapshot.colorSwatchStyle);
             result.has_value()) {
             // Text pins persist their source text, so restoring them does not
             // depend on the external file or treat that file as an image.
@@ -1379,6 +1381,26 @@ ScreenshotClipboardContentReader::decode(ScreenshotClipboardContentSnapshot snap
             result->sourceIdentity = snapshot.localImage->sourceIdentity;
             return attachPlacement(std::move(result), &*snapshot.localImage);
         }
+    }
+    if (snapshot.colorSwatchStyle && snapshot.html.isEmpty() &&
+        snapshot.textFormat == PinnedTextFormat::PlainText &&
+        parsePinnedColorSwatch(snapshot.text)) {
+        ScreenshotClipboardOriginalContent original;
+        original.text = snapshot.text;
+        original.textStyle = snapshot.textStyle.value_or(snow_shot::storage::PinnedTextStyle{});
+        original.textStyle->colorSwatch = true;
+        original.textStyle->fontFamily = snapshot.colorSwatchStyle->font.family();
+        original.textStyle->fontSize = 16;
+        original.textStyle->colorSwatchSize = QSize(342, 210);
+        original.textStyle->maximumWidth = original.textStyle->colorSwatchSize.width();
+        original.textStyle->textColor = snapshot.colorSwatchStyle->foreground;
+        original.textStyle->backgroundColor = snapshot.colorSwatchStyle->background;
+        const AllocationCheck swatchAllocate =
+            checked ? AllocationCheck([&](qint64 bytes) { return checked(retained + bytes); })
+                    : AllocationCheck{};
+        auto result = renderOriginalText(original, snapshot.devicePixelRatio, snapshot.baseColor,
+                                         swatchAllocate, snapshot.colorSwatchStyle);
+        return cancellationRequested(cancelled) ? std::nullopt : std::move(result);
     }
     if (!snapshot.html.isEmpty()) {
         SNOW_SHOT_PIN_PERF_SCOPE("clipboard.decode_html_document");
@@ -1513,7 +1535,8 @@ bool ScreenshotClipboardContentReader::prepareAnimationDisplay(ScreenshotClipboa
 
 std::optional<ScreenshotClipboardContent> ScreenshotClipboardContentReader::renderOriginalText(
     const ScreenshotClipboardOriginalContent& original, qreal devicePixelRatio,
-    const QColor& baseColor, AllocationCheck allocate) {
+    const QColor& baseColor, AllocationCheck allocate,
+    std::optional<PinnedColorSwatchStyle> colorSwatchStyle) {
     if (!snow_shot::storage::isValidPinnedTextFormat(original.textFormat) ||
         (original.textStyle && !original.textStyle->isValid()) ||
         (original.html.isEmpty() && original.text.isEmpty())) {
@@ -1523,6 +1546,41 @@ std::optional<ScreenshotClipboardContent> ScreenshotClipboardContentReader::rend
     std::shared_ptr<QTextDocument> document;
     const auto retained = (original.html.size() + original.text.size()) * 2 +
                           (original.textStyle ? original.textStyle->fontFamily.size() * 2 : 0);
+    if (original.textStyle && original.textStyle->colorSwatch && original.html.isEmpty() &&
+        original.textFormat == PinnedTextFormat::PlainText) {
+        const auto values = parsePinnedColorSwatch(original.text);
+        const QSize logicalSize = original.textStyle->colorSwatchSize;
+        if (!values || !std::isfinite(devicePixelRatio) || devicePixelRatio <= 0 ||
+            devicePixelRatio > 16 ||
+            !admitImage(QSize(qCeil(logicalSize.width() * devicePixelRatio),
+                              qCeil(logicalSize.height() * devicePixelRatio)),
+                        retained + 32768, allocate))
+            return {};
+        PinnedColorSwatchStyle style = colorSwatchStyle.value_or(PinnedColorSwatchStyle{});
+        style.font.setFamily(original.textStyle->fontFamily);
+        if (!colorSwatchStyle) {
+            style.background = original.textStyle->backgroundColor;
+            style.foreground = original.textStyle->textColor;
+            style.secondary = style.foreground;
+            style.colorLabel = QCoreApplication::translate("PinnedColorSwatch", "Color:");
+            style.labels = {QCoreApplication::translate("PinnedColorSwatch", "HEX:"),
+                            QCoreApplication::translate("PinnedColorSwatch", "RGB:"),
+                            QCoreApplication::translate("PinnedColorSwatch", "HSL:")};
+            style.rgbaLabel = QCoreApplication::translate("PinnedColorSwatch", "RGBA:");
+            style.hslaLabel = QCoreApplication::translate("PinnedColorSwatch", "HSLA:");
+        }
+        auto rendered = renderPinnedColorSwatch(*values, style, devicePixelRatio, logicalSize);
+        if (rendered.image.isNull())
+            return {};
+        ScreenshotClipboardContent result;
+        result.kind = ScreenshotClipboardContentKind::FormattedText;
+        result.image = std::move(rendered.image);
+        result.formattedDocument = std::move(rendered.document);
+        result.plainText = result.formattedDocument->toPlainText();
+        result.formattedTextDevicePixelRatio = devicePixelRatio;
+        result.originalContent = original;
+        return result;
+    }
     if (!original.html.isEmpty()) {
         document =
             makeDocument(original.html, true, &plainText, allocate, retained, original.textStyle);

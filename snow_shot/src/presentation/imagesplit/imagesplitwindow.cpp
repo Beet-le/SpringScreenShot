@@ -700,7 +700,8 @@ void ImageSplitWindow::presentPinnedRecord(const QString& recordId) {
     auto loaded = std::make_shared<LoadedImage>();
     d.job = ScreenshotExportCoordinator::shared().submit(
         this, ScreenshotExportCoordinator::Priority::Background,
-        [recordId, loaded](const ScreenshotExportCancellation& cancellation) {
+        [recordId, loaded, swatchStyle = capturePinnedColorSwatchStyle()](
+            const ScreenshotExportCancellation& cancellation) {
             const auto cancelled = [&cancellation] {
                 return cancellation.isCancellationRequested();
             };
@@ -716,7 +717,7 @@ void ImageSplitWindow::presentPinnedRecord(const QString& recordId) {
                         "The image is too large or there is not enough memory to load it.";
                 return loaded->reservation != nullptr;
             };
-            auto source = readImageImportPinnedRecord(recordId, cancelled, allocate);
+            auto source = readImageImportPinnedRecord(recordId, cancelled, allocate, swatchStyle);
             loaded->originalFileName = std::move(source.originalFileName);
             loaded->createdUtc = source.createdUtc;
             if (loaded->errorSource)

@@ -127,6 +127,7 @@
     "ImageSplitExport",
     "ImageSplitPreviewCanvas",
     "ImageSplitWindow",
+    "PinnedColorSwatch",
     "PinnedWindowManagementPageWidget",
     "ScreenshotHistoryPageWidget",
     "ScreenshotPinnedWindow",

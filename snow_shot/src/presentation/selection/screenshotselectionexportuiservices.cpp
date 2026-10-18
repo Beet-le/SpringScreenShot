@@ -1483,7 +1483,8 @@ bool ScreenshotSelectionExportUiServices::presentRestoredRecord(
         original.textStyle = record.textStyle;
         original.textFormat = record.textFormat;
         const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
-            original, record.firstCreationTextDpi, QApplication::palette().color(QPalette::Base));
+            original, record.firstCreationTextDpi, QApplication::palette().color(QPalette::Base),
+            {}, capturePinnedColorSwatchStyle());
         if (!rendered.has_value() || !rendered->isValid()) {
             return false;
         }

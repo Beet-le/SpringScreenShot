@@ -88,7 +88,8 @@ void applyPinnedRowBackground(QFrame* row, const QString& cardStyle,
                  scheme.map.colorPrimaryBorder.name()));
 }
 
-QImage loadPinnedImage(storage::PinnedWindowRepository* repository, const QString& id) {
+QImage loadPinnedImage(storage::PinnedWindowRepository* repository, const QString& id,
+                       const PinnedColorSwatchStyle& swatchStyle) {
     const auto record = repository->loadRecord(id);
     if (!record) {
         return {};
@@ -100,7 +101,7 @@ QImage loadPinnedImage(storage::PinnedWindowRepository* repository, const QStrin
         content.textStyle = record->textStyle;
         content.textFormat = record->textFormat;
         const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
-            content, record->firstCreationTextDpi);
+            content, record->firstCreationTextDpi, {}, {}, swatchStyle);
         if (rendered) {
             return rendered->image;
         }
@@ -108,7 +109,8 @@ QImage loadPinnedImage(storage::PinnedWindowRepository* repository, const QStrin
     return record->image;
 }
 
-QImage loadPinnedPreview(storage::PinnedWindowRepository* repository, const QString& id) {
+QImage loadPinnedPreview(storage::PinnedWindowRepository* repository, const QString& id,
+                         const PinnedColorSwatchStyle& swatchStyle) {
     const auto source = repository->loadPreviewSource(id);
     if (!source) {
         return {};
@@ -120,7 +122,7 @@ QImage loadPinnedPreview(storage::PinnedWindowRepository* repository, const QStr
         content.textStyle = source->textStyle;
         content.textFormat = source->textFormat;
         const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
-            content, source->firstCreationTextDpi);
+            content, source->firstCreationTextDpi, {}, {}, swatchStyle);
         return rendered ? rendered->image : QImage{};
     }
     return source->image;
@@ -131,11 +133,33 @@ struct PinnedPreviewCacheEntry {
     QSize naturalSize;
 };
 
+QString swatchAppearanceKey(const PinnedColorSwatchStyle& style) {
+    return QStringList{QStringLiteral("swatch-v2"),
+                       style.font.toString(),
+                       style.background.name(QColor::HexArgb),
+                       style.foreground.name(QColor::HexArgb),
+                       style.secondary.name(QColor::HexArgb),
+                       style.link.name(QColor::HexArgb),
+                       style.colorLabel,
+                       style.labels[0],
+                       style.labels[1],
+                       style.labels[2],
+                       style.rgbaLabel,
+                       style.hslaLabel}
+        .join(u'|');
+}
+
 class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSource {
   public:
     explicit ApplicationPinnedDataSource(QObject* parent)
         : PinnedWindowManagementDataSource(parent) {
         m_previewCache.setMaxCost(32 * 1024);
+        connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged,
+                this, [this] {
+                    cancelPreviews();
+                    m_previewCache.clear();
+                    emit changed();
+                });
         connect(&storage::ApplicationStorage::instance(),
                 &storage::ApplicationStorage::pinnedWindowsChanged, this,
                 &PinnedWindowManagementDataSource::changed);
@@ -171,7 +195,14 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
     }
 
     std::optional<quint64> previewRevision(const QString& id) const override {
-        return storage::ApplicationStorage::instance().pinnedWindows().previewSourceRevision(id);
+        bool colorSwatch = false;
+        const auto revision =
+            storage::ApplicationStorage::instance().pinnedWindows().previewSourceRevision(
+                id, &colorSwatch);
+        return revision && colorSwatch
+                   ? std::optional<quint64>(qHashMulti(
+                         *revision, swatchAppearanceKey(capturePinnedColorSwatchStyle())))
+                   : revision;
     }
 
     void cancelPreviews() override {
@@ -190,7 +221,8 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
             return;
         }
         auto* repository = &applicationStorage.pinnedWindows();
-        const auto revision = repository->previewSourceRevision(id);
+        bool colorSwatch = false;
+        const auto revision = repository->previewSourceRevision(id, &colorSwatch);
         if (!revision) {
             emit previewReady(id, requestId, {}, {});
             return;
@@ -198,9 +230,12 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
         const QSize boundedSize = targetSize.isValid() && !targetSize.isEmpty()
                                       ? targetSize
                                       : QSize(kPinnedPreviewWidth, kPinnedPreviewHeight);
-        const QString cacheKey = id + u':' + QString::number(*revision) + u':' +
-                                 QString::number(boundedSize.width()) + u'x' +
-                                 QString::number(boundedSize.height());
+        const auto swatchStyle = capturePinnedColorSwatchStyle();
+        QString cacheKey = id + u':' + QString::number(*revision) + u':' +
+                           QString::number(boundedSize.width()) + u'x' +
+                           QString::number(boundedSize.height());
+        if (colorSwatch)
+            cacheKey += u':' + swatchAppearanceKey(swatchStyle);
         if (const PinnedPreviewCacheEntry* cached = m_previewCache.object(cacheKey)) {
             emit previewReady(id, requestId, cached->image, cached->naturalSize);
             return;
@@ -213,7 +248,7 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
         auto* receiver = this;
         applicationStorage.pinnedPreviewPool().start(snow_shot::runtime::trackRuntimeWork(
             [alive, previewEpoch, requestedEpoch, receiver, repository, id, requestId, boundedSize,
-             cacheKey, cachePath, storageGeneration, retryAllowed]() {
+             cacheKey, cachePath, storageGeneration, retryAllowed, swatchStyle]() {
                 snow_shot::platform::applyApplicationQoSToCurrentThread();
                 if (!alive->load() || previewEpoch->load() != requestedEpoch) {
                     return;
@@ -222,7 +257,7 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
                 QImage image = std::move(thumbnail.image);
                 QSize naturalSize = thumbnail.naturalSize;
                 if (image.isNull()) {
-                    image = loadPinnedPreview(repository, id);
+                    image = loadPinnedPreview(repository, id, swatchStyle);
                     naturalSize = image.size();
                     if (!image.isNull() && (image.width() > boundedSize.width() ||
                                             image.height() > boundedSize.height())) {
@@ -274,12 +309,13 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
         const auto alive = m_alive;
         auto* receiver = this;
         applicationStorage.pinnedFullImagePool().start(
-            snow_shot::runtime::trackRuntimeWork([alive, receiver, repository, id, requestId]() {
+            snow_shot::runtime::trackRuntimeWork([alive, receiver, repository, id, requestId,
+                                                  swatchStyle = capturePinnedColorSwatchStyle()]() {
                 snow_shot::platform::applyApplicationQoSToCurrentThread();
                 if (!alive->load()) {
                     return;
                 }
-                const QImage image = loadPinnedImage(repository, id);
+                const QImage image = loadPinnedImage(repository, id, swatchStyle);
                 if (!alive->load()) {
                     return;
                 }

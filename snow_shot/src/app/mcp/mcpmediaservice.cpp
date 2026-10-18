@@ -268,8 +268,11 @@ class McpMediaService::Impl {
             return;
         }
         const auto textStyle = ScreenshotClipboardContentReader::capturePinnedTextStyle();
-        if (snapshot)
+        const auto colorSwatchStyle = capturePinnedColorSwatchStyle();
+        if (snapshot) {
             snapshot->textStyle = textStyle;
+            snapshot->colorSwatchStyle = colorSwatchStyle;
+        }
         auto content = std::make_shared<std::optional<ScreenshotClipboardContent>>();
         const QString token = uuid();
         const auto id = r.params.value(QStringLiteral("id")).toString();
@@ -295,7 +298,8 @@ class McpMediaService::Impl {
         auto job = ScreenshotExportCoordinator::shared().submit(
             &q, ScreenshotExportCoordinator::Priority::Foreground,
             [snapshot = std::move(snapshot), path, kind, content, dpr, replace,
-             replacementTransform, textStyle](const ScreenshotExportCancellation& cancel) mutable {
+             replacementTransform, textStyle,
+             colorSwatchStyle](const ScreenshotExportCancellation& cancel) mutable {
                 if (kind == QStringLiteral("file")) {
                     const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles({path});
                     if (files.size() != 1)
@@ -305,6 +309,7 @@ class McpMediaService::Impl {
                     ScreenshotClipboardContentSnapshot file;
                     file.localImage = files.front();
                     file.textStyle = textStyle;
+                    file.colorSwatchStyle = colorSwatchStyle;
                     file.devicePixelRatio = dpr;
                     snapshot = std::move(file);
                 }

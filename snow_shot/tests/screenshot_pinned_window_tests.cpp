@@ -658,6 +658,12 @@ class ScreenshotPinnedWindowTestAccess {
     static void editForHideTest(ScreenshotPinnedWindow& window) {
         window.setEditMode(true);
     }
+    static void endSwatchEditing(ScreenshotPinnedWindow& window) {
+        window.setEditMode(false);
+    }
+    static void toggleSwatchHideToTop(ScreenshotPinnedWindow& window) {
+        window.toggleHideToTop();
+    }
     static void recognitionForHideTest(ScreenshotPinnedWindow& window) {
         window.activateRecognitionMode(0);
     }
@@ -25081,6 +25087,8 @@ void pinnedAnimatedImages(bool transformsOnly = false) {
     }
 }
 
+#include "pinned_color_swatch_window_tests.h"
+
 int main(int argc, char* argv[]) {
 
     PinnedWindowTestApplication app(argc, argv);
@@ -25097,6 +25105,11 @@ int main(int argc, char* argv[]) {
         // without this, lazily initialized storage lands in the developer's
         // real AppData (see IsolatedPinnedStorage).
         IsolatedPinnedStorage processStorage;
+        if (app.arguments().contains(QStringLiteral("--color-swatch-only"))) {
+            pinnedColorSwatchWindowTests();
+            ScreenshotExportCoordinator::shared().shutdown();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--mcp-workflow-lifetime-only"))) {
             pinnedMcpWorkflowOwnershipEndsWithWork();
             pinnedDrawingExitCancelsPendingAutoFilterAutomation();
