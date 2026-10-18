@@ -52,6 +52,7 @@
 #ifdef SNOW_SHOT_MCP_TEST_FIXTURE
 #include "snow_shot/storage/capturehistoryrepository.h"
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
+int runMcpApplicationLifecycleTests(int argc, char** argv);
 #endif
 #ifdef Q_OS_MACOS
 #include "snow_shot/platform/macos/loginitemservice.h"
@@ -125,6 +126,8 @@ int main(int argc, char* argv[]) {
     }
 #endif
 #ifdef SNOW_SHOT_MCP_TEST_FIXTURE
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == u"--mcp-lifecycle-tests")
+        return runMcpApplicationLifecycleTests(argc, argv);
     // Only test builds expose this isolated production-router fixture. It bypasses
     // singleton acquisition, startup registration, and the user's configuration.
     if (argc >= 3 && QString::fromLocal8Bit(argv[1]) == u"--mcp-fixture") {

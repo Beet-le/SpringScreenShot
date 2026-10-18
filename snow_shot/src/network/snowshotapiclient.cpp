@@ -934,6 +934,8 @@ void SnowShotApiClient::setCustomModels(const snow_shot::CustomAiModels& models)
             const auto* request = m_requests.value(token);
             if (request != nullptr && request->model == id && (changed || request->imageResponse)) {
                 cancel(token);
+                if (!guard)
+                    return;
             }
         }
         emit customModelInvalidated(id, changed, vision);
@@ -1410,6 +1412,8 @@ void SnowShotApiClient::pumpCustomChatStreams() {
         const auto* model = customModel(request->model);
         if (!model) {
             cancel(token);
+            if (!guard)
+                return;
             continue;
         }
         if (active.value(request->model) >= model->concurrency)
@@ -1673,9 +1677,12 @@ void SnowShotApiClient::cancel(RequestToken token) {
         [token](QHash<QString, RequestToken>::iterator item) { return item.value() == token; });
     const bool translation = request->textTranslation;
     const bool custom = request->custom;
+    const QPointer<SnowShotApiClient> guard(this);
     m_translationQueue.removeAll(token);
     m_customChatQueue.removeAll(token);
     cleanupRequest(request);
+    if (!guard)
+        return;
     if (catalogOwner != 0) {
         auto catalog = m_modelCatalogSubscribers.find(catalogOwner);
         if (catalog != m_modelCatalogSubscribers.end()) {
@@ -1683,11 +1690,16 @@ void SnowShotApiClient::cancel(RequestToken token) {
             if (catalog->isEmpty()) {
                 m_modelCatalogSubscribers.erase(catalog);
                 cancel(catalogOwner);
+                if (!guard)
+                    return;
             }
         }
     }
-    for (const auto subscriber : subscribers)
+    for (const auto subscriber : subscribers) {
         cancel(subscriber);
+        if (!guard)
+            return;
+    }
     if (translation)
         QTimer::singleShot(0, this, &SnowShotApiClient::pumpTextTranslations);
     if (custom)
@@ -1704,8 +1716,9 @@ void SnowShotApiClient::finish(RequestToken token, SnowShotTableResult result) {
                     result.httpStatus);
     const QPointer<QObject> receiver = request->receiver;
     Completion completion = std::move(request->completion);
+    const QPointer<SnowShotApiClient> guard(this);
     cleanupRequest(request);
-    if (receiver && completion) {
+    if (guard && receiver && completion) {
         completion(std::move(result));
     }
 }
@@ -1720,8 +1733,9 @@ void SnowShotApiClient::finishLatex(RequestToken token, SnowShotLatexResult resu
                     result.httpStatus);
     const QPointer<QObject> receiver = request->receiver;
     LatexCompletion completion = std::move(request->latexCompletion);
+    const QPointer<SnowShotApiClient> guard(this);
     cleanupRequest(request);
-    if (receiver && completion) {
+    if (guard && receiver && completion) {
         completion(std::move(result));
     }
 }
@@ -1739,8 +1753,9 @@ void SnowShotApiClient::finishChatModels(RequestToken token, SnowShotChatModelsR
     m_requests.erase(it);
     const QPointer<QObject> receiver = request->receiver;
     ChatModelsCompletion completion = std::move(request->chatModelsCompletion);
+    const QPointer<SnowShotApiClient> guard(this);
     cleanupRequest(request);
-    if (receiver != nullptr && completion) {
+    if (guard && receiver != nullptr && completion) {
         completion(std::move(result));
     }
 }
@@ -1775,6 +1790,7 @@ void SnowShotApiClient::finishTranslation(RequestToken token, SnowShotTranslatio
     m_requests.erase(it);
     const QPointer<QObject> receiver = request->receiver;
     TranslationCompletion completion = std::move(request->translationCompletion);
+    const QPointer<SnowShotApiClient> guard(this);
     const bool translation = request->textTranslation;
     const bool custom = request->custom;
     m_customChatQueue.removeAll(token);
@@ -1785,7 +1801,7 @@ void SnowShotApiClient::finishTranslation(RequestToken token, SnowShotTranslatio
     // An SSE error can arrive before HTTP completion. Release its connection before
     // the consumer starts another request in the newly available queue slot.
     cleanupRequest(request);
-    if (receiver != nullptr && completion) {
+    if (guard && receiver != nullptr && completion) {
         completion(std::move(result));
     }
 }
@@ -1827,8 +1843,11 @@ void SnowShotApiClient::setTextTranslationConfigurations(
         const auto tokens = m_requests.keys();
         for (const auto token : tokens) {
             const auto* request = m_requests.value(token);
-            if (request != nullptr && request->model == old.selectionId())
+            if (request != nullptr && request->model == old.selectionId()) {
                 cancel(token);
+                if (!guard)
+                    return;
+            }
         }
         emit customModelInvalidated(old.selectionId(), true, false);
         if (!guard)

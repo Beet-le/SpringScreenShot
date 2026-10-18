@@ -2710,8 +2710,54 @@ void modelNotificationsAllowClientDestruction() {
     }
 }
 
+void abortObserversMayDestroyApiClient() {
+    for (int variant = 0; variant < 3; ++variant) {
+        translation_tests::Server provider;
+        provider.streamPath = QByteArrayLiteral("/chat/completions");
+        auto client = std::make_unique<SnowShotApiClient>(provider.url());
+        snow_shot::CustomAiModelConfiguration model{
+            QUuid::createUuid().toString(QUuid::WithoutBraces),
+            QStringLiteral("Lifetime"),
+            provider.url(),
+            {},
+            QStringLiteral("fixture"),
+            false,
+            false};
+        client->setCustomModels({model});
+        QObject receiver;
+        int completions = 0;
+        const auto token = client->streamTranslation(
+            {model.selectionId(), {}, {}, QStringLiteral("Hello")}, &receiver,
+            [](const QString&) {}, [&](auto) { ++completions; });
+        require(token != 0, "abort lifetime fixture starts one custom stream");
+        translation_tests::waitUntil([&] { return provider.streams.size() == 1; },
+                                     "abort lifetime fixture reaches its provider");
+        auto* manager = client->findChild<QNetworkAccessManager*>();
+        const auto replies = manager->findChildren<QNetworkReply*>();
+        require(replies.size() == 1 && replies.first()->isRunning(),
+                "abort lifetime fixture holds its HTTP reply open");
+        QObject::connect(replies.first(), &QNetworkReply::finished, &receiver,
+                         [&] { client.reset(); });
+        if (variant == 0)
+            client->cancel(token);
+        else if (variant == 1)
+            client->setCustomModels({});
+        else
+            provider.fail(0);
+        translation_tests::waitUntil([&] { return !client; }, "reply abort retires its API client");
+        translation_tests::flushEvents();
+        require(completions == 0,
+                "retired API clients neither continue cleanup nor deliver replies");
+    }
+}
+
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+
+    if (application.arguments().contains(QStringLiteral("--cancel-destruction-only"))) {
+        abortObserversMayDestroyApiClient();
+        return 0;
+    }
 
     if (application.arguments().contains(QStringLiteral("--stream-lifetime-only"))) {
         finishedChatStreamFailuresReleaseRepliesAndActivity();
@@ -2720,6 +2766,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     modelNotificationsAllowClientDestruction();
+    abortObserversMayDestroyApiClient();
     if (application.arguments().contains(QStringLiteral("--lifetime-only")))
         return 0;
 

@@ -2,12 +2,20 @@
 #include "snow_shot/presentation/screenshotrecognitionimage.h"
 #include "snow_shot/presentation/screenshotselectionbackground.h"
 #include "snow_shot/presentation/screenshotocrtextlayout.h"
+#include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
 #include <QPainter>
+#include <QScopeGuard>
 #include <cmath>
 #include <utility>
 
 QImage renderScreenshotRecognitionImage(const ScreenshotRecognitionImageSnapshot& snapshot,
                                         const std::function<bool()>& cancelled) {
+    const auto releaseCaches = qScopeGuard([&] {
+        ScreenshotSelectionShadowRenderer::resetCacheForCurrentThread();
+        resetScreenshotLayoutCompactionCache();
+        if (snapshot.resultStyle.region)
+            snapshot.resultStyle.region->clearDerivedCache();
+    });
     const auto stopped = [&]() { return cancelled && cancelled(); };
     const QRectF rect = snapshot.canvasRect;
     if (snapshot.image.isNull() || !rect.isValid() || rect.isEmpty() || !std::isfinite(rect.x()) ||

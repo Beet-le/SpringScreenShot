@@ -10,6 +10,8 @@
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/presentation/screenshotselectionbackground.h"
 #include "snow_shot/presentation/screenshotselectioncomposition.h"
+#include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
+#include "snow_shot/image/screenshotlayoutcompaction.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotrecognitionsessioncontroller.h"
@@ -522,6 +524,12 @@ class DocumentWorker final : public QObject {
     }
     WorkerResult request(const ScreenshotMcpRequest& request,
                          std::shared_ptr<std::atomic_bool> canceled = {}) {
+        // Lanes outlive documents. Release compositor state on its rendering
+        // thread before publishing results, including cached output and failures.
+        const auto releaseRenderCaches = qScopeGuard([] {
+            ScreenshotSelectionShadowRenderer::resetCacheForCurrentThread();
+            resetScreenshotLayoutCompactionCache();
+        });
         const auto document =
             documents.value(request.params.value(QStringLiteral("document_id")).toString());
         if (!document || document->owner != request.connectionId)
@@ -1159,6 +1167,7 @@ struct McpDocumentService::Impl {
         ScreenshotMcpRequest request;
         std::shared_ptr<std::atomic_bool> canceled;
         ScreenshotMcpServer::Completion completion;
+        bool replayAlias = false;
         // Queued work separately protects any tail after the logical request completes.
         runtime::RuntimeActivityLease activity =
             runtime::RuntimeActivityTracker::shared().acquire();
@@ -1230,14 +1239,24 @@ struct McpDocumentService::Impl {
     QHash<QString, RetainedRecognition> retainedRecognition;
     QHash<QString, ScreenshotExportJobHandle> textExports;
     struct Replay {
+        struct Waiter {
+            QString requestId;
+            ScreenshotMcpServer::Completion completion;
+        };
         QByteArray fingerprint;
+        QString originalRequestId;
         std::optional<ScreenshotMcpResponse> response;
-        QVector<ScreenshotMcpServer::Completion> waiters;
+        QVector<Waiter> waiters;
         qsizetype bytes = 0;
     };
     QHash<QString, Replay> replay;
     QQueue<QString> replayOrder;
     qsizetype replayBytes = 0;
+    void pruneCompletedReplays() {
+        while (!replayOrder.isEmpty() &&
+               (replayOrder.size() > 64 || replayBytes > 32 * 1024 * 1024))
+            replayBytes -= replay.take(replayOrder.dequeue()).bytes;
+    }
     bool stopped = false;
     bool workersDrained = false;
     Impl(McpDocumentService& owner, Ports options) : q(owner), ports(std::move(options)) {
@@ -1416,11 +1435,9 @@ struct McpDocumentService::Impl {
         auto cancel =
             start(*port, [this, guard, key, request, canceled, response = std::move(response),
                           done](ScreenshotClipboardCommitResult result) mutable {
-                if (!guard)
+                if (!guard || canceled->load())
                     return;
                 clipboard.remove(key);
-                if (canceled->load())
-                    return;
                 if (!result.succeeded()) {
                     done(failure(request, QStringLiteral("clipboard_failed")));
                     return;
@@ -2014,8 +2031,10 @@ struct McpDocumentService::Impl {
                 return result;
             },
             [this, key, canceled, request, deliver](ScreenshotExportTaskResult result) mutable {
+                if (canceled->load())
+                    return;
                 textExports.remove(key);
-                if (!canceled->load() && *deliver) {
+                if (*deliver) {
                     auto publish = std::exchange(*deliver, {});
                     publish(result.succeeded()
                                 ? success(request, {{QStringLiteral("path"), result.savedPath}})
@@ -2088,12 +2107,13 @@ struct McpDocumentService::Impl {
                     encodedCacheHit);
         artifacts.insert(outputId, artifact);
         const auto canceled = requestToken(request);
-        const auto finish = [this, outputId, canceled,
+        const auto finish = [this, guard = QPointer<McpDocumentService>(&q), outputId, canceled,
                              done = std::move(done)](ScreenshotMcpResponse response) {
+            if (!guard || canceled->load())
+                return;
             artifacts.remove(outputId);
             clipboard.remove(outputId);
-            if (!canceled->load())
-                done(std::move(response));
+            done(std::move(response));
         };
         if (request.method == QStringLiteral("snow_shot_document_pin")) {
             if (!ports.pin) {
@@ -2574,12 +2594,15 @@ void McpDocumentService::request(const ScreenshotMcpRequest& request,
         done(failure(request, QStringLiteral("queue_full")));
         return;
     }
-    s.activeRequests.insert(
-        activeKey,
-        Impl::ActiveRequest{request, std::make_shared<std::atomic_bool>(false), std::move(done)});
-    done = [this, activeKey](ScreenshotMcpResponse response) {
+    const auto requestCanceled = std::make_shared<std::atomic_bool>(false);
+    s.activeRequests.insert(activeKey,
+                            Impl::ActiveRequest{request, requestCanceled, std::move(done)});
+    done = [this, guard = QPointer<McpDocumentService>(this), activeKey,
+            requestCanceled](ScreenshotMcpResponse response) {
+        if (!guard)
+            return;
         auto active = m_impl->activeRequests.find(activeKey);
-        if (active == m_impl->activeRequests.end())
+        if (active == m_impl->activeRequests.end() || active->canceled != requestCanceled)
             return;
         const auto request = active->request;
         const auto activity = std::move(active->activity);
@@ -2589,7 +2612,8 @@ void McpDocumentService::request(const ScreenshotMcpRequest& request,
             response.result.value(QStringLiteral("document_id")).isString())
             emit changed(request.connectionId,
                          response.result.value(QStringLiteral("document_id")).toString());
-        completion(std::move(response));
+        if (guard)
+            completion(std::move(response));
     };
     if (s.stopped || !handles(request.method) || request.connectionId == 0) {
         done(failure(request,
@@ -2628,11 +2652,13 @@ void McpDocumentService::request(const ScreenshotMcpRequest& request,
             response.requestId = request.requestId;
             done(std::move(response));
         } else if (found->waiters.size() < 8) {
-            found->waiters.append([done = std::move(done),
-                                   id = request.requestId](ScreenshotMcpResponse response) mutable {
-                response.requestId = id;
-                done(std::move(response));
-            });
+            s.activeRequests.find(activeKey)->replayAlias = true;
+            found->waiters.append(
+                {request.requestId, [done = std::move(done), id = request.requestId](
+                                        ScreenshotMcpResponse response) mutable {
+                     response.requestId = id;
+                     done(std::move(response));
+                 }});
         } else
             done(failure(request, QStringLiteral("queue_full")));
         return;
@@ -2641,11 +2667,13 @@ void McpDocumentService::request(const ScreenshotMcpRequest& request,
         done(failure(request, QStringLiteral("queue_full")));
         return;
     }
-    s.replay.insert(key, Impl::Replay{fingerprint, {}, {}, 0});
-    s.execute(request, [this, key, done = std::move(done)](ScreenshotMcpResponse response) mutable {
+    s.replay.insert(key, Impl::Replay{fingerprint, request.requestId, {}, {}, 0});
+    s.execute(request, [this, key, originalRequestId = request.requestId,
+                        done = std::move(done)](ScreenshotMcpResponse response) mutable {
         auto& s = *m_impl;
         auto entry = s.replay.find(key);
-        if (entry == s.replay.end() || entry->response)
+        if (entry == s.replay.end() || entry->originalRequestId != originalRequestId ||
+            entry->response)
             return;
         auto waiters = std::move(entry->waiters);
         entry->response = response;
@@ -2653,12 +2681,10 @@ void McpDocumentService::request(const ScreenshotMcpRequest& request,
                        response.attachment.size() + 1024;
         s.replayBytes += entry->bytes;
         s.replayOrder.enqueue(key);
-        while (!s.replayOrder.isEmpty() &&
-               (s.replayOrder.size() > 64 || s.replayBytes > 32 * 1024 * 1024))
-            s.replayBytes -= s.replay.take(s.replayOrder.dequeue()).bytes;
+        s.pruneCompletedReplays();
         done(response);
         for (auto& waiter : waiters)
-            waiter(response);
+            waiter.completion(response);
     });
 }
 void McpDocumentService::disconnected(quint64 owner) {
@@ -2778,21 +2804,35 @@ bool McpDocumentService::cancelRequest(quint64 owner, const QString& requestId) 
     auto active = std::move(*found);
     s.activeRequests.erase(found);
     active.canceled->store(true);
-    if (const auto cancelSource = s.ports.cancelSource)
-        cancelSource(owner, requestId);
-    if (!guard)
-        return true;
     auto response = failure(active.request, QStringLiteral("canceled"));
     response.errorDetails.insert(QStringLiteral("outcome_may_have_completed"), true);
     const QString replayKey = QString::number(owner) + u':' + active.request.idempotencyKey;
     auto replay = s.replay.find(replayKey);
-    QVector<ScreenshotMcpServer::Completion> waiters;
-    if (replay != s.replay.end() && !replay->response) {
+    if (active.replayAlias) {
+        // Aliases borrow the original operation. Cancel only their subscription,
+        // releasing its waiter slot without canceling or terminalizing shared work.
+        if (replay != s.replay.end())
+            for (auto waiter = replay->waiters.begin(); waiter != replay->waiters.end(); ++waiter)
+                if (waiter->requestId == requestId) {
+                    replay->waiters.erase(waiter);
+                    break;
+                }
+        active.completion(response);
+        return true;
+    }
+    if (const auto cancelSource = s.ports.cancelSource)
+        cancelSource(owner, requestId);
+    if (!guard)
+        return true;
+    replay = s.replay.find(replayKey);
+    QVector<Impl::Replay::Waiter> waiters;
+    if (replay != s.replay.end() && replay->originalRequestId == requestId && !replay->response) {
         waiters = std::move(replay->waiters);
         replay->response = response;
         replay->bytes = 1024;
         s.replayBytes += replay->bytes;
         s.replayOrder.enqueue(replayKey);
+        s.pruneCompletedReplays();
     }
     if (const auto artifact = s.artifacts.take(key)) {
         bool shared = false;
@@ -2810,7 +2850,7 @@ bool McpDocumentService::cancelRequest(quint64 owner, const QString& requestId) 
     s.textExports.take(key).cancel();
     active.completion(response);
     for (auto& waiter : waiters)
-        waiter(response);
+        waiter.completion(response);
     return true;
 }
 void McpDocumentService::shutdown() {

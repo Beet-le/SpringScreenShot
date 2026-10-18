@@ -1970,7 +1970,8 @@ snow_shot_link_macos_window_platform(snow_shot)
 if(SNOW_SHOT_BUILD_TESTS)
     target_compile_definitions(snow_shot PRIVATE SNOW_SHOT_MCP_TEST_FIXTURE=1)
     target_compile_definitions(snow_shot PRIVATE SNOW_SHOT_CONTROLLER_LIFETIME_TESTS=1)
-    target_sources(snow_shot PRIVATE tests/screenshot_controller_lifetime_tests.cpp)
+    target_sources(snow_shot PRIVATE tests/screenshot_controller_lifetime_tests.cpp
+        tests/mcp_application_lifecycle_tests.cpp)
     snow_shot_import_offscreen_platform(snow_shot)
 endif()
 
@@ -5863,6 +5864,13 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_link_libraries(snow-shot-export-artifact-tests PRIVATE user32)
     endif()
     add_test(NAME snow-shot-export-artifact-tests COMMAND snow-shot-export-artifact-tests)
+    add_test(NAME snow-shot-export-compositor-cache-tests
+        COMMAND snow-shot-export-artifact-tests --compositor-cache-only -platform offscreen)
+    add_test(NAME snow-shot-export-subscriber-lifecycle-tests
+        COMMAND snow-shot-export-artifact-tests --subscriber-lifecycle-only -platform offscreen)
+    set_tests_properties(snow-shot-export-compositor-cache-tests snow-shot-export-subscriber-lifecycle-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-export-window-variables-tests
         COMMAND snow-shot-export-artifact-tests --window-variables-only)
     set_tests_properties(snow-shot-export-window-variables-tests PROPERTIES LABELS unit RUN_SERIAL TRUE)
@@ -5920,6 +5928,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-mcp-tests)
     add_test(NAME snow-shot-mcp-tests COMMAND snow-shot-mcp-tests -platform offscreen)
+    add_test(NAME snow-shot-mcp-replay-lifecycle-tests
+        COMMAND snow-shot-mcp-tests --replay-lifecycle-only -platform offscreen)
+    set_tests_properties(snow-shot-mcp-replay-lifecycle-tests PROPERTIES LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-stroke-rendering-mcp-tests
         COMMAND snow-shot-mcp-tests --stroke-rendering-only -platform offscreen)
     set_tests_properties(snow-shot-stroke-rendering-mcp-tests PROPERTIES
@@ -8611,6 +8623,15 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-mcp-eraser-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-mcp-application-tests
         COMMAND snow-shot-mcp-document-tests --application-only -platform offscreen)
+    add_test(NAME snow-shot-mcp-application-replay-tests
+        COMMAND snow-shot-mcp-document-tests --application-replay-only -platform offscreen)
+    add_test(NAME snow-shot-mcp-document-replay-tests
+        COMMAND snow-shot-mcp-document-tests --replay-cache-only -platform offscreen)
+    add_test(NAME snow-shot-mcp-document-render-cache-tests
+        COMMAND snow-shot-mcp-document-tests --render-cache-cleanup-only -platform offscreen)
+    set_tests_properties(snow-shot-mcp-application-replay-tests snow-shot-mcp-document-replay-tests
+        snow-shot-mcp-document-render-cache-tests PROPERTIES LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-recording-auto-hide-mcp-settings-tests
         COMMAND snow-shot-mcp-document-tests --application-only --auto-hide-settings-only -platform offscreen)
     set_tests_properties(snow-shot-recording-auto-hide-mcp-settings-tests PROPERTIES
@@ -8620,6 +8641,13 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-mcp-translation-tests PROPERTIES LABELS "unit" TIMEOUT 30
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    if(SNOW_SHOT_ENABLE_MCP)
+        add_test(NAME snow-shot-mcp-application-lifecycle-tests
+            COMMAND snow_shot --mcp-lifecycle-tests)
+        set_tests_properties(snow-shot-mcp-application-lifecycle-tests PROPERTIES
+            LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 30
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    endif()
     if(Python3_Interpreter_FOUND AND SNOW_SHOT_ENABLE_MCP)
         add_test(NAME snow-shot-mcp-fixture-tests
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/mcp_fixture_tests.py"

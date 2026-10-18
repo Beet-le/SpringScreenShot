@@ -2141,6 +2141,15 @@ void pinnedMcpWorkflowOwnershipEndsWithWork() {
     require(owners.size() == 0 && recognition.pending.isEmpty() &&
                 recognition.cancelled == beforeCancel + 1 && !window->automationWorkflowBusy(),
             "disconnecting the current owner cancels its still outstanding provider request");
+    start(window, 73);
+    const auto detached = owners.take(73);
+    require(owners.size() == 0 && detached.size() == 1 && window->automationWorkflowBusy(),
+            "media cleanup can retire ownership before invoking cancellation callbacks");
+    for (const auto& pending : detached)
+        if (pending)
+            pending->cancelAutomationRecognition();
+    require(recognition.pending.isEmpty() && !window->automationWorkflowBusy(),
+            "detached workflow work remains cancelable after ownership retirement");
     window->close();
     require(processUntilDeleted(window, 3000), "close the disconnected workflow pin");
 }

@@ -1,5 +1,6 @@
 #include "snow_shot/presentation/screenshotrecognitionimage.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
 #include "../../test-support/virtualmemory.h"
 #include <QGuiApplication>
 #include <QFontDatabase>
@@ -113,6 +114,27 @@ void compactionFollowsRecognitionRendering() {
                     "recognition compaction must preserve text coordinates and every shadow pixel");
         }
     }
+}
+
+void completedRenderingReleasesCompositorCaches() {
+    auto snapshot = fixture();
+    snapshot.resultStyle = {
+        6, 3, Qt::black,
+        ScreenshotRegionGeometry(QRegion(0, 0, 100, 180).united(QRegion(220, 0, 100, 180)))};
+    snapshot.layoutCompaction = {true, 4};
+    const auto verify = [snapshot] {
+        const auto rendered = renderScreenshotRecognitionImage(snapshot);
+        const auto caches = ScreenshotSelectionShadowRenderer::diagnosticsForCurrentThread();
+        require(!rendered.isNull() && caches.retainedBytes == 0 &&
+                    caches.regionCacheRetainedBytes == 0 && caches.regionPathCacheElements == 0 &&
+                    !screenshotLayoutCompactionCache.plan,
+                "completed recognition rendering releases worker compositor caches");
+        require(renderScreenshotRecognitionImage(snapshot, [] { return true; }).isNull(),
+                "canceled recognition rendering publishes no image");
+        require(!screenshotLayoutCompactionCache.plan,
+                "canceled rendering leaves no worker layout cache");
+    };
+    std::async(std::launch::async, verify).get();
 }
 
 void retainedBackgroundUsesOriginalCapture() {
@@ -262,6 +284,7 @@ int main(int argc, char** argv) {
         displayedBackgroundAndEffectsAreAppliedOnce();
         compoundSelectionClipsRecognizedText();
         compactionFollowsRecognitionRendering();
+        completedRenderingReleasesCompositorCaches();
         retainedBackgroundUsesOriginalCapture();
         layoutModesAndTransformsRenderOnWorkers();
         sourceRowsSurviveImageExportOnWorkers();

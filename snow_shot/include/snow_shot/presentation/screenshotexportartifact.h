@@ -176,6 +176,8 @@ class ScreenshotExportArtifact final : public QObject {
     [[nodiscard]] bool requestQuickSave(QObject* receiver,
                                         ScreenshotExportCoordinator::Completion callback,
                                         QDateTime requestedAt = {});
+    // Retire pending and queued deliveries on every receiver thread. Callbacks that
+    // have already started may finish; cancellation never waits for consumer code.
     void cancel();
 
     [[nodiscard]] bool isValid() const;

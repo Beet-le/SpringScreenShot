@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/screenshotexportartifact.h"
+#include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
 #include "snowimageqtcodec.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -15,6 +16,7 @@
 #include "../../test-support/virtualmemory.h"
 
 #include <QCoreApplication>
+#include <QEvent>
 #include <QEventLoop>
 #include <QImage>
 #include <QThread>
@@ -2075,6 +2077,264 @@ void cancellationSuppressesPendingCallbacks() {
             "cancelled artifact delivered a pending callback");
 }
 
+void subscriberCallbacksMayRetireArtifact() {
+    for (const bool rows : {false, true}) {
+        for (const bool destroy : {false, true}) {
+            std::function<void(QImage)> finishLoad;
+            auto artifact = std::make_unique<ScreenshotExportArtifact>(
+                ScreenshotExportSource::fromImageLoader([&](QObject*, auto completion) {
+                    finishLoad = std::move(completion);
+                    return true;
+                }));
+            QObject receiver;
+            int callbacks = 0;
+            int retiredCallbacks = 0;
+            const auto retire = [&] {
+                ++callbacks;
+                if (destroy)
+                    artifact.reset();
+                else
+                    artifact->cancel();
+            };
+            if (rows) {
+                require(artifact->requestRowSource(&receiver,
+                                                   [&](auto source, auto error) {
+                                                       require(source.isValid() && error.isEmpty(),
+                                                               "first row subscriber succeeds");
+                                                       retire();
+                                                   }) &&
+                            artifact->requestRowSource(&receiver,
+                                                       [&](auto, auto) { ++retiredCallbacks; }),
+                        "row subscribers join the same deferred image");
+            } else {
+                require(artifact->requestImage(&receiver,
+                                               [&](auto result) {
+                                                   require(result.succeeded(),
+                                                           "first image subscriber succeeds");
+                                                   retire();
+                                               }) &&
+                            artifact->requestImage(&receiver, [&](auto) { ++retiredCallbacks; }),
+                        "image subscribers join the same deferred image");
+            }
+            finishLoad(testImage());
+            processUntil([&] { return callbacks == 1; });
+            require(retiredCallbacks == 0,
+                    "canceling or destroying an artifact suppresses the remaining subscribers");
+        }
+    }
+}
+
+void queuedSubscribersRespectArtifactRetirement() {
+    enum class Output { Image, Rows, Png };
+    for (const auto output : {Output::Image, Output::Rows, Output::Png}) {
+        for (const bool cached : {false, true}) {
+            for (const bool failed : {false, true}) {
+                if (cached && failed && output == Output::Png)
+                    continue; // Failed PNG encodings are intentionally not cached.
+                for (const bool destroy : {false, true}) {
+                    std::function<void(QImage)> finishLoad;
+                    auto artifact = std::make_unique<ScreenshotExportArtifact>(
+                        ScreenshotExportSource::fromImageLoader([&](QObject*, auto completion) {
+                            finishLoad = std::move(completion);
+                            return true;
+                        }));
+                    const auto request = [&](QObject* receiver, std::function<void(bool)> done) {
+                        switch (output) {
+                        case Output::Image:
+                            return artifact->requestImage(
+                                receiver, [done](auto result) { done(result.succeeded()); });
+                        case Output::Rows:
+                            return artifact->requestRowSource(
+                                receiver, [done](auto rows, auto error) {
+                                    done(rows.isValid() && error.isEmpty());
+                                });
+                        case Output::Png:
+                            return artifact->requestCanonicalPng(
+                                receiver, [done](auto result) { done(result.succeeded()); });
+                        }
+                        return false;
+                    };
+                    QObject owner;
+                    if (cached) {
+                        bool warmed = false;
+                        require(request(&owner,
+                                        [&](bool ok) {
+                                            require(ok == !failed,
+                                                    "warm the expected cached output outcome");
+                                            warmed = true;
+                                        }),
+                                "warm the output cache before queued subscriptions");
+                        finishLoad(failed ? QImage{} : testImage());
+                        processUntil([&] { return warmed; });
+                    }
+                    QThread thread;
+                    auto* receiver = new QObject;
+                    receiver->moveToThread(&thread);
+                    QObject::connect(&thread, &QThread::finished, receiver, &QObject::deleteLater);
+                    int callbacks = 0;
+                    bool validResult = true;
+                    const auto completed = [&](bool ok) {
+                        validResult = validResult && ok == !failed;
+                        if (++callbacks == 1)
+                            QMetaObject::invokeMethod(
+                                &owner,
+                                [&] {
+                                    if (destroy)
+                                        artifact.reset();
+                                    else
+                                        artifact->cancel();
+                                },
+                                Qt::BlockingQueuedConnection);
+                    };
+                    require(request(receiver, completed) && request(receiver, completed),
+                            "two queued subscribers share the same output");
+                    bool dispatched = false;
+                    require(request(&owner,
+                                    [&](bool ok) {
+                                        require(ok == !failed,
+                                                "owner observes the expected output outcome");
+                                        dispatched = true;
+                                    }),
+                            "observe completion after both worker deliveries are queued");
+                    if (!cached)
+                        finishLoad(failed ? QImage{} : testImage());
+                    processUntil([&] { return dispatched; });
+                    // The stopped receiver thread makes the scheduling/execution boundary exact.
+                    QMetaObject::invokeMethod(
+                        receiver, [&] { thread.quit(); }, Qt::QueuedConnection);
+                    thread.start();
+                    processUntil([&] { return thread.isFinished(); });
+                    thread.wait();
+                    require(
+                        validResult && callbacks == 1,
+                        "retiring an artifact in the first queued callback suppresses the rest");
+                }
+            }
+        }
+    }
+}
+
+void queuedOutputCallbacksRespectArtifactRetirement() {
+    // Pause a posted call before its functor executes, so retirement always happens
+    // after scheduling and before delivery, regardless of encoder timing.
+    class Receiver final : public QObject {
+      public:
+        Receiver(QSemaphore& entered, QSemaphore& resume) : m_entered(entered), m_resume(resume) {}
+
+      protected:
+        bool event(QEvent* event) override {
+            if (event->type() == QEvent::MetaCall && !m_paused) {
+                m_paused = true;
+                m_entered.release();
+                m_resume.acquire();
+            }
+            return QObject::event(event);
+        }
+
+      private:
+        QSemaphore& m_entered;
+        QSemaphore& m_resume;
+        bool m_paused = false;
+    };
+    QTemporaryDir directory;
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    require(directory.isValid() &&
+                storage.initialize({directory.path(), directory.path(), 60000}).success,
+            "isolated queued export settings");
+    const auto shutdown = qScopeGuard([&] { storage.shutdown(); });
+    require(snow_shot::storage::ScreenshotSettings().setImageSaveDirectory({}),
+            "quick save fixture has no configured directory");
+    enum class Output {
+        ColdClipboard,
+        CachedClipboard,
+        Save,
+        AutomaticSave,
+        ClipboardFile,
+        QuickSave
+    };
+    enum class Retirement { Keep, Cancel, Destroy };
+    for (const auto output : {Output::ColdClipboard, Output::CachedClipboard, Output::Save,
+                              Output::AutomaticSave, Output::ClipboardFile, Output::QuickSave}) {
+        for (const auto retirement : {Retirement::Keep, Retirement::Cancel, Retirement::Destroy}) {
+            auto artifact = std::make_unique<ScreenshotExportArtifact>(
+                ScreenshotExportSource::fromImage(testImage()));
+            if (output == Output::CachedClipboard) {
+                QObject owner;
+                bool warmed = false;
+                require(artifact->requestCanonicalPng(
+                            &owner,
+                            [&](auto result) {
+                                require(result.succeeded(),
+                                        "warm canonical PNG for separate clipboard preparation");
+                                warmed = true;
+                            }),
+                        "warm the clipboard encoding");
+                processUntil([&] { return warmed; });
+            }
+            QSemaphore entered;
+            QSemaphore resume;
+            QThread thread;
+            auto* receiver = new Receiver(entered, resume);
+            receiver->moveToThread(&thread);
+            QObject::connect(&thread, &QThread::finished, receiver, &QObject::deleteLater);
+            const auto stop = qScopeGuard([&] {
+                resume.release();
+                thread.quit();
+                thread.wait();
+            });
+            int callbacks = 0;
+            bool expectedResult = false;
+            const auto completed = [&](bool ok) {
+                ++callbacks;
+                expectedResult = ok == (output != Output::QuickSave);
+            };
+            bool accepted = false;
+            switch (output) {
+            case Output::ColdClipboard:
+            case Output::CachedClipboard:
+                accepted = artifact->requestClipboard(
+                    receiver, [completed](auto result) { completed(result.succeeded()); });
+                break;
+            case Output::Save:
+                accepted = artifact->requestSaveToPath(
+                    receiver, directory.filePath(QStringLiteral("queued.png")),
+                    ScreenshotImageFileFormat::Png, {},
+                    [completed](auto result) { completed(result.succeeded()); });
+                break;
+            case Output::AutomaticSave:
+                accepted = artifact->requestAutomaticSave(
+                    receiver, {directory.path()}, ScreenshotImageFileFormat::Png,
+                    QStringLiteral("queued-auto"), {},
+                    [completed](auto result) { completed(result.succeeded()); });
+                break;
+            case Output::ClipboardFile:
+                accepted = artifact->requestClipboardFile(
+                    receiver, ScreenshotImageFileFormat::Png, QStringLiteral("queued-file"), {},
+                    [completed](auto mime, auto error) { completed(mime && error.isEmpty()); });
+                break;
+            case Output::QuickSave:
+                accepted = artifact->requestQuickSave(
+                    receiver, [completed](auto result) { completed(result.succeeded()); });
+                break;
+            }
+            require(accepted, "queue the requested output");
+            thread.start();
+            processUntil([&] { return entered.available() != 0; });
+            if (retirement == Retirement::Destroy)
+                artifact.reset();
+            else if (retirement == Retirement::Cancel)
+                artifact->cancel();
+            QMetaObject::invokeMethod(receiver, [&] { thread.quit(); }, Qt::QueuedConnection);
+            resume.release();
+            processUntil([&] { return thread.isFinished(); });
+            thread.wait();
+            require(retirement == Retirement::Keep ? callbacks == 1 && expectedResult
+                                                   : callbacks == 0,
+                    "all queued output paths respect artifact retirement at delivery time");
+        }
+    }
+}
+
 void cancelledEncodersRetainEveryConsumerLease() {
     QTemporaryDir directory;
     QObject receiver;
@@ -2150,6 +2410,47 @@ void pinnedViewportSourceRendersExpectedPixels() {
                 rendered.pixelColor(rendered.width() / 2, rendered.height() / 2) ==
                     QColor(12, 24, 36, 255),
             "pinned viewport artifact did not return the rendered pixels");
+}
+
+void pinnedViewportRenderingReleasesCompositorCaches() {
+    struct Observation {
+        uchar* pixels = nullptr;
+        std::atomic_bool released = false;
+        std::atomic_bool cachesEmpty = false;
+    } observation;
+    observation.pixels = new uchar[64 * 48 * 4];
+    QImage background(
+        observation.pixels, 64, 48, 64 * 4, QImage::Format_ARGB32_Premultiplied,
+        [](void* data) {
+            auto& result = *static_cast<Observation*>(data);
+            const auto caches = ScreenshotSelectionShadowRenderer::diagnosticsForCurrentThread();
+            result.cachesEmpty = caches.retainedBytes == 0 &&
+                                 caches.regionCacheRetainedBytes == 0 &&
+                                 caches.regionPathCacheElements == 0;
+            delete[] result.pixels;
+            result.released = true;
+        },
+        &observation);
+    background.fill(Qt::green);
+    ScreenshotPinnedViewportExportSource source{
+        {}, std::move(background), QRectF(0, 0, 64, 48), QSize(64, 48), {}, {}, 1.0};
+    source.resultStyle = {
+        4, 3, Qt::black,
+        ScreenshotRegionGeometry(QRegion(0, 0, 20, 48).united(QRegion(44, 0, 20, 48)))};
+    ScreenshotExportArtifact artifact(
+        ScreenshotExportSource::fromPinnedViewport(std::move(source)));
+    QObject receiver;
+    bool completed = false;
+    require(artifact.requestImage(&receiver,
+                                  [&](ScreenshotExportImageResult result) {
+                                      require(result.succeeded(),
+                                              "pinned compositor fixture renders");
+                                      completed = true;
+                                  }),
+            "pinned compositor fixture is admitted");
+    processUntil([&] { return completed && observation.released.load(); });
+    require(observation.cachesEmpty,
+            "pinned rendering releases compositor caches before retiring its source snapshot");
 }
 
 void emptyPinnedSourceMatchesCanvasProjection() {
@@ -2545,6 +2846,18 @@ int main(int argc, char** argv) {
         require(diagnostics.initialize(logging), "export diagnostics must initialize");
         if (application.arguments().contains(QStringLiteral("--window-variables-only"))) {
             windowNamesSurviveAsynchronousFileExports();
+            diagnostics.shutdown();
+            return EXIT_SUCCESS;
+        }
+        if (application.arguments().contains(QStringLiteral("--compositor-cache-only"))) {
+            pinnedViewportRenderingReleasesCompositorCaches();
+            diagnostics.shutdown();
+            return EXIT_SUCCESS;
+        }
+        if (application.arguments().contains(QStringLiteral("--subscriber-lifecycle-only"))) {
+            subscriberCallbacksMayRetireArtifact();
+            queuedSubscribersRespectArtifactRetirement();
+            queuedOutputCallbacksRespectArtifactRetirement();
             diagnostics.shutdown();
             return EXIT_SUCCESS;
         }

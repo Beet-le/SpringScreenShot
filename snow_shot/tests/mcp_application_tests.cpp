@@ -166,6 +166,81 @@ void translationRetries(Call&& call, translation::TranslationService& translatio
 }
 } // namespace
 
+void runMcpApplicationReplayTests() {
+    auto& storage = storage::ApplicationStorage::instance();
+    presentation::GlobalShortcutManager shortcuts;
+    const auto suspended = shortcuts.suspendRegistrations();
+    Q_UNUSED(suspended);
+    const auto registry = settings::buildBuiltInSettingsRegistry();
+    settings::BuiltInSettingsBackend backend(shortcuts);
+    settings::SettingsRuntimeSession settingsSession(registry, backend);
+    McpJobRegistry jobs;
+    McpApplicationService::Ports ports;
+    ports.storage = &storage;
+    ports.settings = &settingsSession;
+    ports.jobs = &jobs;
+    QTemporaryDir directory;
+    require(directory.isValid(), "isolated application replay output");
+    ScreenshotMcpRequest original;
+    original.connectionId = 71;
+    original.requestId = QStringLiteral("application-original");
+    original.idempotencyKey = QStringLiteral("application-export");
+    original.method = QStringLiteral("snow_shot_configuration_export");
+    original.params = {
+        {QStringLiteral("path"), directory.filePath(QStringLiteral("settings.json"))}};
+    auto service = std::make_unique<McpApplicationService>(ports);
+    std::optional<ScreenshotMcpResponse> exported;
+    service->request(original, [&](auto response) { exported = std::move(response); });
+    require(!exported, "background export remains pending until its response is delivered");
+    for (int index = 0; index < 12; ++index) {
+        auto alias = original;
+        alias.requestId = QStringLiteral("application-alias-%1").arg(index);
+        int completions = 0;
+        service->request(alias, [&](auto response) {
+            require(response.errorCode == QStringLiteral("canceled") &&
+                        response.requestId == alias.requestId,
+                    "application alias cancellation has its own response");
+            ++completions;
+        });
+        require(service->cancelRequest(71, alias.requestId) && completions == 1 && !exported,
+                "canceling an application alias releases its slot and preserves shared work");
+    }
+    translation_tests::waitUntil([&] { return exported.has_value(); }, "original export completes");
+    require(exported->ok && QFileInfo::exists(directory.filePath(QStringLiteral("settings.json"))),
+            "shared application export succeeds after its aliases are canceled");
+
+    original.requestId = original.idempotencyKey = QStringLiteral("application-disconnect");
+    int disconnectedCompletions = 0;
+    service->request(original, [&](auto) { ++disconnectedCompletions; });
+    service->disconnected(71);
+    service->shutdown();
+    translation_tests::flushEvents();
+    require(disconnectedCompletions == 0,
+            "retired application requests cannot publish late replies");
+    service.reset();
+
+    service = std::make_unique<McpApplicationService>(ports);
+    original.requestId = original.idempotencyKey = QStringLiteral("application-lifetime");
+    int completionsAfterDestruction = 0;
+    int settled = 0;
+    service->request(original, [&](auto response) {
+        require(response.ok, "application lifetime fixture completes");
+        ++settled;
+    });
+    auto alias = original;
+    alias.requestId = QStringLiteral("application-destroying-alias");
+    service->request(alias, [&](auto) {
+        ++settled;
+        service.reset();
+    });
+    alias.requestId = QStringLiteral("application-retired-alias");
+    service->request(alias, [&](auto) { ++completionsAfterDestruction; });
+    translation_tests::waitUntil([&] { return !service; },
+                                 "application callback destroys its service");
+    require(settled == 2 && completionsAfterDestruction == 0,
+            "application destruction suppresses the remaining shared callbacks");
+}
+
 void runMcpApplicationTests() {
     auto& storage = storage::ApplicationStorage::instance();
     auto& configuration = storage.configuration();
@@ -181,6 +256,8 @@ void runMcpApplicationTests() {
     updateOptions.applicationDirectory = updateDirectory.filePath(QStringLiteral("missing-helper"));
     updateOptions.root = updateDirectory.path();
     updateOptions.cacheDirectory = updateDirectory.filePath(QStringLiteral("cache"));
+    updateOptions.githubApiUrl = QUrl(QStringLiteral("http://127.0.0.1/releases"));
+    updateOptions.giteeApiUrl = QUrl(QStringLiteral("http://127.0.0.1/releases"));
     // macOS rejects non-HTTPS before network access; Windows lacks its packaged helper here.
     update::UpdateService updates(std::move(updateOptions));
     translation_tests::Server provider;
@@ -738,7 +815,7 @@ void runMcpApplicationTests() {
             return jobs.get(71, updateJob)->value(QStringLiteral("status")) ==
                    QStringLiteral("failed");
         },
-        "missing updater helper reports terminal job failure");
+        "unavailable update transport reports terminal job failure");
     require(!jobs.get(72, updateJob), "update job status remains private to its requester");
     // Responses are synchronous callback boundaries: their consumer may retire the service.
     for (int variant = 0; variant < 5; ++variant) {

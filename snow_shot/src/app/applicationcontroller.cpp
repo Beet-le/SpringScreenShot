@@ -951,7 +951,8 @@ class ApplicationController::Impl {
                              mcpSession.get(), &mcp::ScreenshotMcpSession::captureTerminated);
             QObject::connect(controller, &ScreenshotController::mcpCanvasChanged, mcpSession.get(),
                              &mcp::ScreenshotMcpSession::observe);
-            QObject::connect(&app, &QCoreApplication::aboutToQuit, &q, [this] { stopMcp(); });
+            QObject::connect(&app, &QCoreApplication::aboutToQuit, mcpSession.get(),
+                             [this] { stopMcp(); });
         }
         if (!mcpServer) {
             mcpServer = std::make_unique<mcp::ScreenshotMcpServer>(&q);
@@ -1044,6 +1045,8 @@ class ApplicationController::Impl {
             mcpJobs->shutdown();
         mcpSourceWorkers.waitForDone();
         mcpSourceWork = 0;
+        // Shutdown is terminal. A new server run needs fresh session ownership and callbacks.
+        mcpSession.reset();
         mcpDocuments.reset();
         mcpMedia.reset();
         mcpApplication.reset();
