@@ -19,6 +19,7 @@ mod animation;
 pub mod ffmpeg_util;
 #[cfg(any(test, feature = "bench-experiments"))]
 mod frame_converter;
+mod gif_encoder;
 mod gif_palette;
 mod output_scaler;
 pub(crate) use snow_recording_model::video_quality;

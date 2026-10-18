@@ -37,6 +37,10 @@ Recording crop speed control uses FFmpeg's libavfilter audio buffer and tempo
 filters for streaming pitch-preserving audio. These components are covered by
 the existing FFmpeg license notices in the generated vcpkg dependency bundle.
 
+Recording GIF exports use the Rust `gif` and `weezl` crates (MIT OR Apache-2.0)
+for palette-indexed frame encoding and LZW compression. Their license texts are
+included in the generated Rust dependency notice bundle.
+
 Parallel screenshot stitching uses Rayon (Apache-2.0 OR MIT). Its license
 texts and resolved dependencies are included in the generated Rust dependency
 notice bundle.

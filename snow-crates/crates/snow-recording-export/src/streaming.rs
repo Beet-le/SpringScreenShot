@@ -429,8 +429,11 @@ pub struct StreamingEncoder {
     recovery: Option<recovery::RecoveryState>,
     audio_output: Option<ffmpeg::format::context::Output>,
     output: Option<ffmpeg::format::context::Output>,
+    // For GIF this context supplies muxer parameters and the shared time base;
+    // frame packets come from the RGB-difference encoder below.
     encoder: ffmpeg::encoder::video::Encoder,
-    gif_delta: crate::gif_palette::GifDeltaState,
+    gif: Option<crate::gif_encoder::GifEncoder>,
+    gif_packet: Option<ffmpeg::Packet>,
     stream_index: usize,
     stream_time_base: ffmpeg::Rational,
     #[cfg(any(test, feature = "bench-experiments"))]
@@ -962,6 +965,18 @@ impl StreamingEncoder {
         } else {
             ffmpeg::format::Pixel::RGBA
         };
+        // Keep source colors until GIF submission, including prepared frames
+        // from editing. Quantizing in a scaler would lose RGB change identity.
+        let gif = if config.format == ExportFormat::Gif {
+            pixel_format = ffmpeg::format::Pixel::RGB24;
+            Some(crate::gif_encoder::GifEncoder::new(
+                config.width,
+                config.height,
+                config.video.quality,
+            )?)
+        } else {
+            None
+        };
         let mut scaler = if gpu_enabled {
             None
         } else {
@@ -1018,7 +1033,8 @@ impl StreamingEncoder {
             audio_output: None,
             output: Some(output),
             encoder,
-            gif_delta: crate::gif_palette::GifDeltaState::default(),
+            gif,
+            gif_packet: None,
             stream_index,
             stream_time_base,
             scaler,
@@ -1101,11 +1117,6 @@ impl StreamingEncoder {
         if self.pending.is_some() || self.report.encoded_frames != 0 || threads > 4 {
             return Err(RecordingExportError::InvalidConfig(
                 "conversion workers require an unstarted encoder and at most four threads".into(),
-            ));
-        }
-        if threads != 0 && self.encode_frame.format() == ffmpeg::format::Pixel::PAL8 {
-            return Err(RecordingExportError::InvalidConfig(
-                "GIF uses adaptive palette conversion instead of swscale workers".into(),
             ));
         }
         self.frame_converter = if threads == 0 {
@@ -1502,9 +1513,13 @@ impl StreamingEncoder {
         Ok(())
     }
 
-    /// The exact CPU transport pixel format selected by the opened encoder.
+    /// The exact CPU transport pixel format accepted by this encoding backend.
     pub fn input_pixel_format(&self) -> ffmpeg::format::Pixel {
-        self.encoder.format()
+        if self.gif.is_some() {
+            ffmpeg::format::Pixel::RGB24
+        } else {
+            self.encoder.format()
+        }
     }
 
     /// Convert a borrowed RGBA image through the normal encoder color pipeline.
@@ -1556,7 +1571,7 @@ impl StreamingEncoder {
             || self.output.is_none()
             || frame.width() != self.width
             || frame.height() != self.height
-            || frame.format() != self.encoder.format()
+            || frame.format() != self.input_pixel_format()
         {
             return Err(RecordingExportError::InvalidConfig(
                 "prepared frame does not match encoder".into(),
@@ -1631,9 +1646,6 @@ impl StreamingEncoder {
         pts: i64,
         duration: i64,
     ) -> Result<()> {
-        if frame.format() == ffmpeg::format::Pixel::PAL8 {
-            self.gif_delta.prepare(&mut self.encoder, &frame)?;
-        }
         #[cfg(any(test, feature = "bench-experiments"))]
         self.check_injected_failure(GpuFailureStage::Submission)?;
         frame.set_pts(Some(pts));
@@ -1659,11 +1671,18 @@ impl StreamingEncoder {
         let send_started = std::time::Instant::now();
         #[cfg(feature = "bench-timing")]
         self.report.timings.submissions.push((pts, send_started));
-        retry_send(
-            self,
-            |state| state.encoder.send_frame(&frame),
-            |state| state.drain_available_packets(),
-        )?;
+        if let Some(gif) = &mut self.gif {
+            let mut packet = gif.encode(&frame)?;
+            packet.set_pts(Some(pts));
+            packet.set_dts(Some(pts));
+            self.gif_packet = Some(packet);
+        } else {
+            retry_send(
+                self,
+                |state| state.encoder.send_frame(&frame),
+                |state| state.drain_available_packets(),
+            )?;
+        }
         #[cfg(feature = "bench-timing")]
         {
             #[cfg(target_os = "macos")]
@@ -1705,19 +1724,29 @@ impl StreamingEncoder {
             .as_mut()
             .ok_or_else(|| RecordingExportError::Encode("streaming output is closed".into()))?;
         loop {
-            let mut packet = ffmpeg::Packet::empty();
-            match self.encoder.receive_packet(&mut packet) {
-                Ok(()) => {}
-                Err(ffmpeg::Error::Eof) => return Ok(()),
-                Err(cause) if crate::ffmpeg_util::is_eagain(&cause) && !flushing => return Ok(()),
-                // After accepted EOF the codec must progress to EOF. Never spin
-                // indefinitely on a broken driver during asynchronous stop.
-                Err(cause) => {
-                    return Err(RecordingExportError::Encode(format!(
-                        "video packet drain: {cause}"
-                    )));
+            let mut packet = if self.gif.is_some() {
+                match self.gif_packet.take() {
+                    Some(packet) => packet,
+                    None => return Ok(()),
                 }
-            }
+            } else {
+                let mut packet = ffmpeg::Packet::empty();
+                match self.encoder.receive_packet(&mut packet) {
+                    Ok(()) => {}
+                    Err(ffmpeg::Error::Eof) => return Ok(()),
+                    Err(cause) if crate::ffmpeg_util::is_eagain(&cause) && !flushing => {
+                        return Ok(());
+                    }
+                    // After accepted EOF the codec must progress to EOF. Never spin
+                    // indefinitely on a broken driver during asynchronous stop.
+                    Err(cause) => {
+                        return Err(RecordingExportError::Encode(format!(
+                            "video packet drain: {cause}"
+                        )));
+                    }
+                }
+                packet
+            };
             if flushing && self.report.encoded_frames <= 2 && self.report.video_encoder == "libx265"
             {
                 // x265's B-pyramid delay is initialized by the third input.
@@ -2129,15 +2158,20 @@ impl StreamingEncoder {
             .push((pending.pts, std::time::Instant::now()));
         #[cfg(feature = "bench-timing")]
         let send_started = std::time::Instant::now();
-        self.gif_delta
-            .prepare(&mut self.encoder, &self.encode_frame)?;
-        self.encoder
-            .send_frame(&self.encode_frame)
-            .map_err(|error| {
-                RecordingExportError::Encode(format!(
-                    "failed to send streaming video frame: {error}"
-                ))
-            })?;
+        if let Some(gif) = &mut self.gif {
+            let mut packet = gif.encode(&self.encode_frame)?;
+            packet.set_pts(Some(pending.pts));
+            packet.set_dts(Some(pending.pts));
+            self.gif_packet = Some(packet);
+        } else {
+            self.encoder
+                .send_frame(&self.encode_frame)
+                .map_err(|error| {
+                    RecordingExportError::Encode(format!(
+                        "failed to send streaming video frame: {error}"
+                    ))
+                })?;
+        }
         #[cfg(feature = "bench-timing")]
         self.report.timings.record("encode.send", send_started);
         #[cfg(feature = "bench-timing")]

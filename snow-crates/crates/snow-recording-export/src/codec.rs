@@ -34,7 +34,8 @@ pub(crate) fn choose_video_pixel_format(
     mode: ExportExecutionMode,
 ) -> ffmpeg::format::Pixel {
     let preferred = match format {
-        // GIF must use the adaptive palette converter even for RGB8 sources.
+        // FFmpeg's GIF context supplies stream parameters to the muxer. The
+        // streaming GIF backend accepts RGB24 and quantizes changed pixels.
         ExportFormat::Gif => return ffmpeg::format::Pixel::PAL8,
         ExportFormat::Apng => [
             ffmpeg::format::Pixel::RGBA,
