@@ -148,6 +148,19 @@ class MacOSOcrAssets(unittest.TestCase):
         ocr.finalize(self.source, self.runtime)
         ocr.verify_assets(self.source, self.runtime)
 
+    def test_packaging_rejects_same_size_runtime_and_model_corruption(self):
+        ocr.finalize(self.source, self.runtime)
+        for path in (self.runtime / 'snow-ocr-process', self.model / 'det.onnx',
+                     self.model / 'rec.onnx', self.model / 'dict.txt'):
+            with self.subTest(file=path.name):
+                original = path.read_bytes()
+                path.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+                with self.assertRaisesRegex(
+                        ValueError, 'finalized runtime bytes|Missing or corrupt bundled model'):
+                    ocr.verify_assets(self.source, self.runtime)
+                path.write_bytes(original)
+        ocr.verify_assets(self.source, self.runtime)
+
     def test_x64_stage_finalization_and_report_use_the_target_architecture(self):
         for name in ocr.RUNTIME_FILES:
             (self.runtime / name).write_bytes(ocr.X64_HEADER + bytes(24) + name.encode())

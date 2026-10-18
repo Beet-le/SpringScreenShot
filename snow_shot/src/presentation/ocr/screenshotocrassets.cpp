@@ -169,7 +169,7 @@ QByteArray sha256File(const QString& path, QString* error) {
     return hash.result();
 }
 
-bool verifyFile(const QString& path, const FileDescriptor& descriptor, QString* error) {
+bool validateFileMetadata(const QString& path, const FileDescriptor& descriptor, QString* error) {
     const QFileInfo info(path);
     if (!info.isFile() || info.isSymLink()) {
         if (error != nullptr)
@@ -185,6 +185,12 @@ bool verifyFile(const QString& path, const FileDescriptor& descriptor, QString* 
         }
         return false;
     }
+    return true;
+}
+
+bool verifyFile(const QString& path, const FileDescriptor& descriptor, QString* error) {
+    if (!validateFileMetadata(path, descriptor, error))
+        return false;
     QString hashError;
     const QByteArray actual = sha256File(path, &hashError);
     if (actual.isEmpty() || actual != descriptor.sha256) {
@@ -398,11 +404,20 @@ bool validateCompletionMarker(const QString& directory, const QString& component
 
 bool validateComponent(const QString& directory, const QList<FileDescriptor>& files,
                        const QString& component, bool requireMarker, QString* error) {
+    // Installed assets were hashed before publication. Startup checks their metadata
+    // and completion marker without rereading the full runtime and model payloads.
     const bool filesValid =
         std::all_of(files.cbegin(), files.cend(), [&](const FileDescriptor& file) {
-            return verifyFile(QDir(directory).filePath(file.name), file, error);
+            return validateFileMetadata(QDir(directory).filePath(file.name), file, error);
         });
     return filesValid && (!requireMarker || validateCompletionMarker(directory, component, error));
+}
+
+bool verifyComponentIntegrity(const QString& directory, const QList<FileDescriptor>& files,
+                              QString* error) {
+    return std::all_of(files.cbegin(), files.cend(), [&](const FileDescriptor& file) {
+        return verifyFile(QDir(directory).filePath(file.name), file, error);
+    });
 }
 
 bool validateBundledRuntime(const QString& directory, const Descriptor& descriptor,
@@ -1097,8 +1112,7 @@ class ScreenshotOcrAssets::Impl final {
                                ? options.extractOverride(archive, staging, error)
                                : extractRuntime(archive, staging, descriptor.runtimeFiles, error));
         if (!downloaded || !extracted ||
-            !validateComponent(staging, descriptor.runtimeFiles, descriptor.runtimeVersion, false,
-                               error) ||
+            !verifyComponentIntegrity(staging, descriptor.runtimeFiles, error) ||
             !writeCompletionMarker(staging, descriptor.runtimeVersion, error) ||
             !promoteDirectory(staging, destination, error)) {
             QFile::remove(archive);

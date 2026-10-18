@@ -1,14 +1,17 @@
 use super::{Config, DetectorResizePolicy, TextDetectionProcessing};
 use simd_paddle_ocr_rs::{
-    OcrModelSet,
-    cpu::CpuContext,
-    detector::DetResizePolicy,
-    image::{ImageResult, ImageView, PixelFormat},
-    ocr::Ocr,
-    recognizer::{RecognitionScoreMode, RecognizerOptions},
+    cpu::{CpuContext, CpuOptions},
+    detector::{DetResizePolicy, Detector, DetectorOptions},
+    error::ErrorKind,
+    image::{ImageError, ImageResult, ImageView, PixelFormat},
+    lines::{LineOptions, OrientedLineExtractor},
+    model::Model,
+    ocr::{Ocr, OcrOptions},
+    recognizer::{Dictionary, RecognitionScoreMode, Recognizer, RecognizerOptions},
+    runtime::{CompiledModel, ExecutionLimits},
 };
 use snow_memory::RasterBuffer;
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, thread};
 
 pub(super) struct InputImage {
     pub width: usize,
@@ -68,6 +71,16 @@ pub(super) struct Engine {
 }
 
 impl Engine {
+    pub fn recreate(self) -> ImageResult<Self> {
+        // into_factory consumes the old request before allocating its replacement.
+        // No image, activation arena, crop slab or decoding buffer survives.
+        let factory = self.request.into_factory();
+        Ok(Self {
+            request: factory()?,
+            policy: self.policy,
+        })
+    }
+
     pub fn run(&mut self, input: &InputImage) -> ImageResult<Vec<OcrLine>> {
         self.request
             .extractor_mut()
@@ -115,23 +128,118 @@ pub(super) fn make_engine_for_models(
     policy: DetectorResizePolicy,
     processing: TextDetectionProcessing,
 ) -> ImageResult<Engine> {
-    let models = OcrModelSet::from_paths(detector, recognizer, dictionary, None)?;
-    let request = models
-        .builder()
-        .cpu_context(Arc::new(CpuContext::new(thread_budget.max(1))?))
-        .direction_classification(false)
-        .recognizer_options(RecognizerOptions {
+    let (detection, recognition) = prepare_pair(
+        thread_budget > 1,
+        || load_compiled(detector, "detection"),
+        || load_compiled(recognizer, "recognition"),
+    )?;
+    let bytes = std::fs::read(dictionary)
+        .map_err(|error| ImageError::caused_by(ErrorKind::Io, "dictionary", error))?;
+    let dictionary = Arc::new(Dictionary::from_utf8(&bytes)?);
+    let cpu = Arc::new(CpuContext::new(thread_budget.max(1))?);
+    let detector = Detector::new(
+        detection,
+        DetectorOptions::default(),
+        ExecutionLimits::default(),
+    )?;
+    let extractor = OrientedLineExtractor::new(detector, None, LineOptions::default())?;
+    let recognizer = Recognizer::new(
+        recognition,
+        dictionary,
+        RecognizerOptions {
             min_width: processing.recognition_width(),
             score_mode: RecognitionScoreMode::Probability,
             ..Default::default()
-        })
-        .build()?;
+        },
+        ExecutionLimits::default(),
+    )?;
+    let request = Ocr::new_with_execution(
+        extractor,
+        recognizer,
+        OcrOptions::default(),
+        cpu,
+        CpuOptions::default(),
+    )?;
     Ok(Engine { request, policy })
+}
+
+fn load_compiled(path: &Path, stage: &str) -> ImageResult<Arc<CompiledModel>> {
+    let model = Model::load_path(path)
+        .map_err(|error| ImageError::caused_by(error.kind(), format!("{stage} model"), error))?;
+    CompiledModel::new(Arc::new(model))
+        .map(Arc::new)
+        .map_err(|error| ImageError::caused_by(error.kind(), format!("{stage} compilation"), error))
+}
+
+fn prepare_pair<A: Send, B>(
+    parallel: bool,
+    first: impl FnOnce() -> ImageResult<A> + Send,
+    second: impl FnOnce() -> ImageResult<B>,
+) -> ImageResult<(A, B)> {
+    if !parallel {
+        return Ok((first()?, second()?));
+    }
+    // One extra loader overlaps both parsing and compilation. Join even on
+    // failure: no model allocation or background task escapes preparation.
+    thread::scope(|scope| {
+        let worker = thread::Builder::new()
+            .name("snow-ocr-model".into())
+            .spawn_scoped(scope, first)
+            .map_err(|error| ImageError::caused_by(ErrorKind::Io, "model loader thread", error))?;
+        let second = second();
+        let first = worker.join().map_err(|_| {
+            ImageError::with_kind(ErrorKind::Execution, "model loader thread panicked")
+        })?;
+        Ok((first?, second?))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_preparation_overlaps_tasks_and_preserves_result_order() {
+        let barrier = std::sync::Barrier::new(2);
+        assert_eq!(
+            prepare_pair(
+                true,
+                || {
+                    barrier.wait();
+                    Ok(1)
+                },
+                || {
+                    barrier.wait();
+                    Ok(2)
+                }
+            )
+            .unwrap(),
+            (1, 2)
+        );
+        assert_eq!(prepare_pair(false, || Ok(1), || Ok(2)).unwrap(), (1, 2));
+    }
+
+    #[test]
+    fn model_preparation_joins_and_drops_successful_peer_on_failure() {
+        struct ModelResource(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for ModelResource {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+        for fail_first in [false, true] {
+            let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let load = |fail| {
+                if fail {
+                    Err(ImageError::new("invalid model"))
+                } else {
+                    Ok(ModelResource(dropped.clone()))
+                }
+            };
+            assert!(prepare_pair(true, || load(fail_first), || load(!fail_first)).is_err());
+            assert!(dropped.load(std::sync::atomic::Ordering::Acquire));
+        }
+    }
 
     #[test]
     fn result_filter_keeps_geometry_and_owned_utf8_text() {

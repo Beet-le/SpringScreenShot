@@ -560,6 +560,7 @@ void ocrProcessLifecycleTests() {
         const int initialLoads = countEvent("prepare ");
         const int initialTransfers = countEvent("transfer ");
         const int initialBuffers = countEvent("attach ");
+        const int initialReleases = countEvent("release");
         ScreenshotOcrRecognitionService service(options);
         ScreenshotOcrRuntimeConfiguration configuration;
         configuration.modelHotStart = true;
@@ -605,15 +606,16 @@ void ocrProcessLifecycleTests() {
         const auto warmedPid = service.processId();
         require(pid == 0 || pid == warmedPid, "warm-up must preserve process identity");
         const auto before = events();
-        int releaseIndex = -1, lastPrepare = -1;
+        int detachIndex = -1, lastPrepare = -1;
         for (int i = 0; i < before.size(); ++i) {
-            if (before[i] == "release")
-                releaseIndex = i;
+            if (before[i] == "detach")
+                detachIndex = i;
             if (before[i].startsWith("prepare "))
                 lastPrepare = i;
         }
-        require(releaseIndex >= 0 && releaseIndex < lastPrepare,
-                "the old engine must be released before the next warm session is created");
+        require(detachIndex >= 0 && detachIndex < lastPrepare &&
+                    countEvent("release") == initialReleases,
+                "hot reset must detach the image mapping and preserve compiled models");
         require(
             before.at(lastPrepare).startsWith("prepare 0000"),
             "default warm session must request max-side detection and accuracy-first processing");
@@ -628,6 +630,8 @@ void ocrProcessLifecycleTests() {
         }
         require(latestPrepare.startsWith("prepare 0100") && service.processId() == warmedPid,
                 "the min-side detector policy must reach the existing worker process");
+        require(countEvent("release") == initialReleases + 1,
+                "configuration changes must release the previous model session before loading");
         configuration.textDetectionProcessing = ScreenshotOcrTextDetectionProcessing::SpeedFirst;
         service.setRuntimeConfiguration(configuration);
         require(waitUntil([&] { return countEvent("prepare ") == initialLoads + 4; }),

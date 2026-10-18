@@ -271,14 +271,17 @@ void residentRuntimeRebuildsWarmSessions(
     logging.mirrorToConsole = false;
     auto& diagnostics = DiagnosticsService::instance();
     require(diagnostics.initialize(logging), "resident diagnostics must initialize");
-    const auto count = [&](const QString& event) {
+    const auto count = [&](const QString& event, const QString& stage = QString()) {
         require(diagnostics.flush(), "resident diagnostics must flush");
         QFile log(diagnostics.status().currentFile);
         require(log.open(QIODevice::ReadOnly), "resident diagnostics must be readable");
         int found = 0;
         for (const auto& line : log.readAll().split('\n')) {
             const auto record = QJsonDocument::fromJson(line).object();
-            if (record.value(QStringLiteral("event")) == event)
+            if (record.value(QStringLiteral("event")) == event &&
+                (stage.isEmpty() ||
+                 record.value(QStringLiteral("fields")).toObject().value(QStringLiteral("stage")) ==
+                     stage))
                 ++found;
         }
         return found;
@@ -325,13 +328,29 @@ void residentRuntimeRebuildsWarmSessions(
                                    count(QStringLiteral("ocr.engine_ready")) == cycle + 1;
                         },
                         kRecognitionTimeoutMs),
-                    "each inference cycle must end with a newly loaded warm engine");
+                    "each inference cycle must end with a fresh warm request");
+            require(
+                count(QStringLiteral("ocr.engine_ready"), QStringLiteral("initialization")) == 1 &&
+                    count(QStringLiteral("ocr.engine_ready"), QStringLiteral("request_reset")) ==
+                        cycle,
+                "hot reset must reuse compiled models after each real inference");
             require(service.processId() == pid &&
                         count(QStringLiteral("ocr.buffer_released")) == cycle,
                     "warm cycles must retain the process and release every transfer mapping");
         }
         configuration.modelHotStart = false;
         service.setRuntimeConfiguration(configuration);
+        const auto image = whiteImage();
+        service.recognize({image, QRectF(0, 0, image.width(), image.height())}, &receiver,
+                          [&](ScreenshotOcrRecognitionResult result) {
+                              require(result.error.isEmpty(), "resident-only request must succeed");
+                              ++completed;
+                          });
+        require(waitUntil([&] { return completed == 3; }, kRecognitionTimeoutMs),
+                "resident-only request must complete after hot start is disabled");
+        require(count(QStringLiteral("ocr.engine_ready"), QStringLiteral("initialization")) == 2 &&
+                    count(QStringLiteral("ocr.engine_ready"), QStringLiteral("request_reset")) == 2,
+                "disabling hot start must discard retained models before the next preparation");
         configuration.residentProcess = false;
         service.setRuntimeConfiguration(configuration);
         require(waitUntil([&] { return service.processId() == 0; }, 5000),

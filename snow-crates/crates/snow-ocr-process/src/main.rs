@@ -22,7 +22,7 @@ use std::{
     time::Instant,
 };
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 struct Config {
     detector_resize_policy: DetectorResizePolicy,
     text_detection_processing: TextDetectionProcessing,
@@ -89,6 +89,23 @@ struct Completion {
     cancelled: bool,
 }
 
+enum Event {
+    Command(protocol::Frame),
+    Completed(WorkResult),
+    CommandsClosed,
+}
+
+fn read_commands(mut reader: impl io::Read, tx: mpsc::Sender<Event>) {
+    while let Ok(frame) = read_frame(&mut reader) {
+        if tx.send(Event::Command(frame)).is_err() {
+            return;
+        }
+    }
+    // The worker also owns a sender, so command EOF must explicitly wake the
+    // event loop instead of waiting for every sender to disconnect.
+    let _ = tx.send(Event::CommandsClosed);
+}
+
 fn run_unless_cancelled<T>(
     cancelled: &AtomicBool,
     work: impl FnOnce() -> Result<T, String>,
@@ -122,17 +139,23 @@ fn worker_event(
 fn initialize_engine(
     config: &Config,
     thread_budget: usize,
-    operation: u64,
-    cancelled: &AtomicBool,
+    previous: Option<Engine>,
 ) -> Option<Engine> {
     let started = Instant::now();
-    let result = run_unless_cancelled(cancelled, || {
-        make_engine(config, thread_budget).map_err(|e| e.to_string())
-    });
+    let reused = previous.is_some();
+    let result = match previous {
+        Some(engine) => engine.recreate(),
+        None => make_engine(config, thread_budget),
+    }
+    .map_err(|e| e.to_string());
     worker_event(
         "ocr.engine_ready",
-        operation,
-        "initialization",
+        0,
+        if reused {
+            "request_reset"
+        } else {
+            "initialization"
+        },
         "simd-paddle-ocr-rs",
         if result.is_ok() {
             "succeeded"
@@ -290,47 +313,41 @@ fn main() -> io::Result<()> {
         return Err(io::Error::other("invalid OCR hello"));
     }
     let (work_tx, work_rx) = mpsc::channel();
-    let (result_tx, result_rx) = mpsc::channel();
+    let (event_tx, event_rx) = mpsc::channel();
+    let result_tx = event_tx.clone();
     let worker = thread::Builder::new()
         .name("snow-ocr-inference".into())
         .spawn(move || worker_loop(work_rx, result_tx))?;
     write_frame(&mut writer, Kind::Ready, 0, &ready_payload())?;
-    let (command_tx, command_rx) = mpsc::channel();
-    thread::spawn(move || {
-        while let Ok(frame) = read_frame(&mut reader) {
-            if command_tx.send(frame).is_err() {
-                break;
-            }
-        }
-    });
+    thread::spawn(move || read_commands(reader, event_tx));
     let mut shared: Option<(u64, SharedImage)> = None;
     let mut staged: Option<(u64, InputImage)> = None;
     let mut active: Option<(u64, Arc<AtomicBool>)> = None;
     let mut last_sequence = 0;
     loop {
-        while let Ok(result) = result_rx.try_recv() {
-            match result {
-                WorkResult::Prepared(id, ok) => {
-                    write_frame(&mut writer, Kind::SessionReady, id, &[u8::from(ok)])?
+        let frame = match event_rx.recv() {
+            Ok(Event::Command(frame)) => frame,
+            Ok(Event::Completed(result)) => {
+                match result {
+                    WorkResult::Prepared(id, ok) => {
+                        write_frame(&mut writer, Kind::SessionReady, id, &[u8::from(ok)])?
+                    }
+                    WorkResult::Released(id) => {
+                        write_frame(&mut writer, Kind::SessionReleased, id, &[])?
+                    }
+                    WorkResult::Complete(completion) => {
+                        active = None;
+                        write_frame(
+                            &mut writer,
+                            Kind::Complete,
+                            completion.id,
+                            &completion_payload(&completion),
+                        )?;
+                    }
                 }
-                WorkResult::Released(id) => {
-                    write_frame(&mut writer, Kind::SessionReleased, id, &[])?
-                }
-                WorkResult::Complete(completion) => {
-                    active = None;
-                    write_frame(
-                        &mut writer,
-                        Kind::Complete,
-                        completion.id,
-                        &completion_payload(&completion),
-                    )?;
-                }
+                continue;
             }
-        }
-        let frame = match command_rx.recv_timeout(std::time::Duration::from_millis(5)) {
-            Ok(frame) => frame,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(Event::CommandsClosed) | Err(_) => break,
         };
         match frame.kind {
             Kind::AttachBuffer => {
@@ -464,6 +481,39 @@ fn main() -> io::Result<()> {
 mod tests {
     use super::{DetectorResizePolicy, TextDetectionProcessing, session_config};
     use crate::protocol::{put_string, put_u8};
+
+    #[test]
+    fn command_eof_is_an_event_even_while_the_worker_sender_is_alive() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker_sender = tx.clone();
+        let mut commands = Vec::new();
+        super::write_frame(&mut commands, super::Kind::ReleaseSession, 17, &[]).unwrap();
+        super::read_commands(std::io::Cursor::new(commands), tx);
+        assert!(matches!(rx.recv().unwrap(), super::Event::Command(frame)
+            if frame.kind == super::Kind::ReleaseSession && frame.request_id == 17));
+        assert!(matches!(rx.recv().unwrap(), super::Event::CommandsClosed));
+        drop(worker_sender);
+        assert!(rx.recv().is_err());
+    }
+
+    #[test]
+    fn worker_results_wake_the_same_channel_without_another_command() {
+        let (work_tx, work_rx) = std::sync::mpsc::channel();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let command_sender = event_tx.clone();
+        let worker = std::thread::spawn(move || super::worker_loop(work_rx, event_tx));
+        work_tx.send(super::Work::Release(42)).unwrap();
+        assert!(matches!(
+            event_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            super::Event::Completed(super::WorkResult::Released(42))
+        ));
+        drop(work_tx);
+        worker.join().unwrap();
+        drop(command_sender);
+        assert!(event_rx.recv().is_err());
+    }
 
     fn session_payload(detector_resize_policy: u8, text_detection_processing: u8) -> Vec<u8> {
         let mut payload = Vec::new();

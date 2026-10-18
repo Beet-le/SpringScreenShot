@@ -34,11 +34,20 @@ can copy the next image during inference. There is at most one active inference
 and one staged, child-owned image. `Recognize` consumes that staged image using
 the currently acknowledged session. The parent decides dispatch order and when
 an idle cycle begins; an empty child command queue alone is not an idle signal.
+Commands and executor completions wake the same event channel; reporting model
+readiness and inference completion does not depend on a polling timeout.
 
-Session replacement drops the previous engine before creating the next one.
-Idle hot start is `ReleaseSession`, acknowledgement, then `PrepareSession` for
-the latest configuration. Session preparation accepts no image. CPU inference uses simd-paddle-ocr-rs with a
+Session replacement drops the previous request's mutable storage before creating
+the next one. Repeating `PrepareSession` with the same configuration may share
+immutable compiled models, packed weights, dictionary and CPU context. Idle hot
+start detaches the image mapping, then sends `PrepareSession` directly when the
+configuration is unchanged. `ReleaseSession` always drops all model resources;
+configuration changes and disabling hot start still use it. The frame format is
+unchanged, and older protocol-6 workers can satisfy direct preparation by fully
+reloading. Session preparation accepts no image. CPU inference uses simd-paddle-ocr-rs with a
 bounded context and local V6 models, without orientation classification.
+On multi-core workers, detector and recognizer parsing/compilation overlap on
+two bounded tasks. Both are joined before preparation succeeds or fails.
 Text detection processing selects the recognizer input-width floor: accuracy first uses
 320, while speed first uses 48 before the existing 32-pixel width alignment.
 Accuracy first is the default. Protocol 6 removes the backend byte from

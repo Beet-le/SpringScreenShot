@@ -820,6 +820,14 @@ class ScreenshotOcrRecognitionService::Impl final {
              (m_sessionWarm && m_invalidateWarmSession) ||
              (idle && (m_sessionUsed || !m_sessionWarm ||
                        m_sessionIdleGeneration != m_idleGeneration || !hotEffective())))) {
+            if (idle && hotEffective() && !m_invalidateWarmSession &&
+                m_sessionGeneration == m_configurationGeneration) {
+                // Replace mutable inference storage while retaining immutable models.
+                // Like initial warm-up, reset starts only after the mapping is detached.
+                if (m_bufferState == BufferState::Empty)
+                    prepareSession(true);
+                return;
+            }
             releaseSession();
             return;
         }

@@ -109,6 +109,16 @@ void writeFixture(const QString& path, const QByteArray& contents) {
     require(file.write(contents) == contents.size(), "OCR asset fixture write should complete");
 }
 
+void changeFixtureContentsWithoutResizing(const QString& path) {
+    QFile file(path);
+    require(file.open(QIODevice::ReadOnly), "the content-change fixture should be readable");
+    QByteArray contents = file.readAll();
+    file.close();
+    require(!contents.isEmpty(), "the content-change fixture must not be empty");
+    contents.back() = char(contents.back() ^ 1);
+    writeFixture(path, contents);
+}
+
 void writeAssetManifest(const QString& root, bool completePayload) {
     const QByteArray process("process");
     const QByteArray runtimeManifest("runtime");
@@ -301,8 +311,205 @@ void validOfflineAssetsAreSelectedWithoutNetwork() {
     assets.prepare();
     require(waitUntil([&]() { return ready || failed; }, 5'000),
             "offline OCR asset validation should complete");
-    require(ready && !failed, "a complete hash-valid offline payload should be selected");
+    require(ready && !failed, "a complete offline payload should be selected");
     require(downloads == 0, "valid offline OCR assets must not use the network");
+}
+
+void installedAssetsUseLightweightChecks() {
+    for (const bool cached : {false, true}) {
+        for (const auto& mutation :
+             {QStringLiteral("contents"), QStringLiteral("missing"), QStringLiteral("size"),
+              QStringLiteral("directory"), QStringLiteral("link"), QStringLiteral("marker"),
+              QStringLiteral("component"), QStringLiteral("schema")}) {
+            QTemporaryDir offline;
+            QTemporaryDir cache;
+            require(offline.isValid() && cache.isValid(),
+                    "temporary installed OCR roots should be available");
+            writeAssetManifest(offline.path(), !cached);
+            if (cached)
+                writeAssetManifest(cache.path(), true);
+            const QString payloadRoot = cached ? cache.path() : offline.path();
+            const QDir model(
+                QDir(payloadRoot).filePath(QStringLiteral("models/ppocrv6-small-463ea9f")));
+            // Changed content with unchanged sizes must pass startup checks for every
+            // model role and runtime file. Keep the macOS executable header intact.
+            for (const auto& name :
+                 {QStringLiteral("PP-OCRv6_det_small.onnx"),
+                  QStringLiteral("PP-OCRv6_rec_small.onnx"), QStringLiteral("ppocrv6_dict.txt")})
+                changeFixtureContentsWithoutResizing(model.filePath(name));
+#ifdef Q_OS_MACOS
+            changeFixtureContentsWithoutResizing(QDir(offline.path()).filePath(kWorkerName));
+#else
+            const QDir runtime(
+                QDir(payloadRoot)
+                    .filePath(QStringLiteral("runtimes/1.0.11/%1").arg(kWindowsPlatform)));
+            changeFixtureContentsWithoutResizing(runtime.filePath(kWindowsWorkerName));
+            changeFixtureContentsWithoutResizing(
+                runtime.filePath(QStringLiteral("runtime-manifest.json")));
+#endif
+            const QString detector = model.filePath(QStringLiteral("PP-OCRv6_det_small.onnx"));
+            const QString marker = model.filePath(QStringLiteral(".complete.json"));
+            if (mutation == QStringLiteral("missing")) {
+                require(QFile::remove(detector), "the detector fixture should be removable");
+            } else if (mutation == QStringLiteral("size")) {
+                writeFixture(detector, "short");
+            } else if (mutation == QStringLiteral("directory")) {
+                require(QFile::remove(detector) && QDir().mkpath(detector),
+                        "a directory should replace the detector fixture");
+            } else if (mutation == QStringLiteral("link")) {
+                const QString target = model.filePath(QStringLiteral("linked-detector"));
+                require(QFile::rename(detector, target) && QFile::link(target, detector),
+                        "a link should replace the detector fixture");
+            } else if (mutation == QStringLiteral("marker")) {
+                require(QFile::remove(marker), "the completion marker should be removable");
+            } else if (mutation == QStringLiteral("component")) {
+                writeFixture(marker, R"({"schema":1,"component":"wrong-model"})");
+            } else if (mutation == QStringLiteral("schema")) {
+                writeFixture(marker, R"({"schema":2,"component":"ppocrv6-small-463ea9f"})");
+            }
+
+            ScreenshotOcrAssets::Options options;
+            options.offlineRoot = offline.path();
+            options.bundledRuntimeRoot = offline.path();
+            options.cacheRoot = cache.path();
+            std::atomic<int> downloads = 0;
+            options.downloadOverride = [&](const QString&, const QString&, QString* error) {
+                ++downloads;
+                *error = QStringLiteral("fixture download stopped");
+                return false;
+            };
+            ScreenshotOcrAssets assets(options);
+            bool ready = false, failed = false;
+            QObject::connect(&assets, &ScreenshotOcrAssets::ready, &assets,
+                             [&](const ScreenshotOcrResolvedAssets& result) {
+                                 require(result.valid() && result.offline == !cached,
+                                         "startup should resolve the selected installed payload");
+                                 ready = true;
+                             });
+            QObject::connect(&assets, &ScreenshotOcrAssets::failed, &assets,
+                             [&](const QString&) { failed = true; });
+            assets.prepare();
+            require(waitUntil([&] { return ready || failed; }, 5'000),
+                    "installed OCR metadata validation should complete");
+            if (mutation == QStringLiteral("contents")) {
+                require(ready && !failed && downloads == 0,
+                        "startup must reuse same-size installed files without hashing contents");
+            } else {
+                require(failed && !ready && downloads == 1,
+                        "invalid installed metadata must trigger acquisition instead of reuse");
+            }
+        }
+    }
+}
+
+void downloadedModelsStillRequireMatchingHashes() {
+    for (const auto& corruptName :
+         {QStringLiteral("PP-OCRv6_det_small.onnx"), QStringLiteral("PP-OCRv6_rec_small.onnx"),
+          QStringLiteral("ppocrv6_dict.txt")}) {
+        QTemporaryDir offline;
+        QTemporaryDir cache;
+        require(offline.isValid() && cache.isValid(),
+                "temporary OCR download integrity roots should be available");
+        writeAssetManifest(offline.path(), false);
+        ScreenshotOcrAssets::Options options;
+        options.offlineRoot = offline.path();
+        options.bundledRuntimeRoot = offline.path();
+        options.cacheRoot = cache.path();
+        options.downloadOverride = [&](const QString&, const QString& destination, QString* error) {
+            if (!writeDownloadedModelFixture(destination, error))
+                return false;
+            if (QFileInfo(destination).fileName() == corruptName)
+                changeFixtureContentsWithoutResizing(destination);
+            return true;
+        };
+        ScreenshotOcrAssets assets(options);
+        bool ready = false;
+        QString failure;
+        QObject::connect(&assets, &ScreenshotOcrAssets::ready, &assets,
+                         [&](const ScreenshotOcrResolvedAssets&) { ready = true; });
+        QObject::connect(&assets, &ScreenshotOcrAssets::failed, &assets,
+                         [&](const QString& error) { failure = error; });
+        assets.prepare();
+        require(waitUntil([&] { return ready || !failure.isEmpty(); }, 5'000),
+                "downloaded model hash validation should complete");
+        require(!ready && failure.contains(QStringLiteral("invalid SHA-256")),
+                "same-size corruption in any downloaded model role must fail SHA-256 validation");
+        require(!QDir(cache.path()).exists(QStringLiteral("models/ppocrv6-small-463ea9f")) &&
+                    QDir(QDir(cache.path()).filePath(QStringLiteral(".staging")))
+                        .entryList(QDir::NoDotAndDotDot | QDir::AllEntries)
+                        .isEmpty(),
+                "corrupt downloaded models must never be published or retain staging files");
+    }
+}
+
+void acquiredRuntimeStillRequiresMatchingHashes() {
+#ifdef Q_OS_WIN
+    for (const auto& stage :
+         {QStringLiteral("archive"), QStringLiteral("entry"), QStringLiteral("override")}) {
+        QTemporaryDir offline;
+        QTemporaryDir cache;
+        require(offline.isValid() && cache.isValid(),
+                "temporary OCR runtime integrity roots should be available");
+        writeAssetManifest(offline.path(), false);
+        const QByteArray archive = buildRuntimeArchiveBytes();
+        const QString manifestPath =
+            QDir(offline.path()).filePath(QStringLiteral("asset-manifest.json"));
+        QFile input(manifestPath);
+        require(input.open(QIODevice::ReadOnly), "the runtime fixture manifest should open");
+        auto manifest = QJsonDocument::fromJson(input.readAll()).object();
+        input.close();
+        auto runtime = manifest.value(QStringLiteral("runtime")).toObject();
+        runtime.insert(QStringLiteral("archive"),
+                       assetFile(kWindowsArchiveName, archive,
+                                 QStringLiteral("https://example.invalid/runtime")));
+        if (stage == QStringLiteral("entry")) {
+            auto files = runtime.value(QStringLiteral("files")).toArray();
+            files.replace(0, assetFile(kWindowsWorkerName, QByteArray("Process")));
+            runtime.insert(QStringLiteral("files"), files);
+        }
+        manifest.insert(QStringLiteral("runtime"), runtime);
+        writeFixture(manifestPath, QJsonDocument(manifest).toJson(QJsonDocument::Compact));
+        ScreenshotOcrAssets::Options options;
+        options.offlineRoot = offline.path();
+        options.cacheRoot = cache.path();
+        options.downloadOverride = [&](const QString& url, const QString& destination,
+                                       QString* error) {
+            if (url != QStringLiteral("https://example.invalid/runtime"))
+                return writeDownloadedModelFixture(destination, error);
+            writeFixture(destination, archive);
+            if (stage == QStringLiteral("archive"))
+                changeFixtureContentsWithoutResizing(destination);
+            return true;
+        };
+        if (stage == QStringLiteral("override")) {
+            options.extractOverride = [](const QString&, const QString& destination, QString*) {
+                writeFixture(QDir(destination).filePath(kWindowsWorkerName), "Process");
+                writeFixture(QDir(destination).filePath(QStringLiteral("runtime-manifest.json")),
+                             "runtime");
+                return true;
+            };
+        }
+        ScreenshotOcrAssets assets(options);
+        bool ready = false;
+        QString failure;
+        QObject::connect(&assets, &ScreenshotOcrAssets::ready, &assets,
+                         [&](const ScreenshotOcrResolvedAssets&) { ready = true; });
+        QObject::connect(&assets, &ScreenshotOcrAssets::failed, &assets,
+                         [&](const QString& error) { failure = error; });
+        assets.prepare();
+        require(waitUntil([&] { return ready || !failure.isEmpty(); }, 5'000),
+                "runtime acquisition integrity validation should complete");
+        require(!ready && failure.contains(QStringLiteral("invalid SHA-256")),
+                "runtime archives, extracted entries, and staged overrides must match SHA-256");
+        require(!QDir(cache.path())
+                        .exists(QStringLiteral("runtimes/1.0.11/%1/.complete.json")
+                                    .arg(kWindowsPlatform)) &&
+                    QDir(QDir(cache.path()).filePath(QStringLiteral(".staging")))
+                        .entryList(QDir::NoDotAndDotDot | QDir::AllEntries)
+                        .isEmpty(),
+                "corrupt runtimes must never be published or retain staging files");
+    }
+#endif
 }
 
 void incompleteOfflineAssetsFallBackToOnlineAcquisition() {
@@ -1043,6 +1250,9 @@ int main(int argc, char** argv) {
         return application.exec();
     }
     validOfflineAssetsAreSelectedWithoutNetwork();
+    installedAssetsUseLightweightChecks();
+    downloadedModelsStillRequireMatchingHashes();
+    acquiredRuntimeStillRequiresMatchingHashes();
     incompleteOfflineAssetsFallBackToOnlineAcquisition();
     everyModelMapsToItsOwnFilesAndCachesAreRetained();
     selectedModelFailureNeverFallsBackToSmallAndCanRetry();

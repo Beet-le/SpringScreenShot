@@ -41,20 +41,26 @@ fn infer(job: Job, engine: &mut Option<Engine>) -> Completion {
     }
 }
 
-pub(super) fn worker_loop(rx: mpsc::Receiver<Work>, tx: mpsc::Sender<WorkResult>) {
+pub(super) fn worker_loop(rx: mpsc::Receiver<Work>, tx: mpsc::Sender<Event>) {
     let mut session = crate::session::Session::empty();
+    let mut configuration = None;
     let thread_budget = num_cpus::get_physical().max(1);
     for work in rx {
         let result = match work {
             Work::Prepare(id, next) => {
-                // Drop before loading: warm-up never retains an inference-used engine.
-                let ready = session.prepare(|| {
-                    initialize_engine(&next, thread_budget, 0, &AtomicBool::new(false))
-                });
+                let ready = if configuration.as_ref() == Some(&next) {
+                    session.recreate(|previous| {
+                        initialize_engine(&next, thread_budget, Some(previous))
+                    })
+                } else {
+                    session.prepare(|| initialize_engine(&next, thread_budget, None))
+                };
+                configuration = ready.then_some(next);
                 WorkResult::Prepared(id, ready)
             }
             Work::Release(id) => {
                 session.release();
+                configuration = None;
                 WorkResult::Released(id)
             }
             Work::Recognize(job) => {
@@ -62,7 +68,7 @@ pub(super) fn worker_loop(rx: mpsc::Receiver<Work>, tx: mpsc::Sender<WorkResult>
                 WorkResult::Complete(Box::new(completion))
             }
         };
-        if tx.send(result).is_err() {
+        if tx.send(Event::Completed(result)).is_err() {
             break;
         }
     }
