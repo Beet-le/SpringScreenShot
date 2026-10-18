@@ -16,6 +16,7 @@
 #include "snow_shot/presentation/screenshotimagefileservice.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "snowimageqtcodec.h"
+#include "snow_draw_engine_qt/snow_canvas_runtime.h"
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -556,7 +557,8 @@ void documentReservations(const QString& directory) {
         service.shutdown();
     }
 }
-void compactedDocumentsKeepEditingCoordinates(const QString& directory, int opacity = 0) {
+void compactedDocumentsKeepEditingCoordinates(const QString& directory, int opacity = 0,
+                                              bool annotations = false) {
     FixtureOcr ocr;
     McpJobRegistry jobs;
     McpDocumentService::Ports ports;
@@ -567,16 +569,29 @@ void compactedDocumentsKeepEditingCoordinates(const QString& directory, int opac
     ScreenshotSelectionParams selection;
     selection.selection = QRect(5, 5, 70, 40);
     selection.region = QRegion(5, 5, 20, 40).united(QRegion(55, 5, 20, 40));
+    if (annotations)
+        selection.region = selection.region->subtracted(QRect(10, 15, 10, 15));
     selection.radius = 4;
     selection.shadowWidth = 2;
     selection.layoutCompaction = {true, 5};
     selection.backgroundOpacityPercent = opacity;
-    ports.resolveSource = [selection](const ScreenshotMcpRequest&, auto done, auto budget) {
+    ports.resolveSource = [selection, annotations](const ScreenshotMcpRequest&, auto done,
+                                                   auto budget) {
         require(budget(80 * 60 * 4), "compacted document source reservation");
         McpDocumentService::Source source;
         source.image = QImage(80, 60, QImage::Format_ARGB32_Premultiplied);
         source.image.fill(Qt::white);
         source.selection = selection;
+        if (annotations) {
+            SnowCanvasRuntime runtime;
+            require(
+                !runtime
+                     .applyAnnotationTransaction(
+                         R"({"version":1,"operations":[{"type":"rectangle","bounds":[0,18,80,4],"style":{"fill":[230,30,70,255],"stroke":[0,0,0,0]}}]})")
+                     .isEmpty(),
+                "document hole annotation fixture");
+            source.documentSession = runtime.serializeDocumentSession();
+        }
         done(std::move(source), {});
     };
     QImage pinned;
@@ -620,6 +635,9 @@ void compactedDocumentsKeepEditingCoordinates(const QString& directory, int opac
             "document render must retain background opacity in compressed gaps");
     require(pixels.size() == QSize(53, 44),
             "document render reserves each region's shadow footprint during compaction");
+    if (annotations)
+        require(pixels.pixelColor(12, 17) == QColor(230, 30, 70),
+                "document render preserves annotations inside a compacted selection's hole");
     call(QStringLiteral("copy"));
     require(QImage::fromData(clipboard->png) == pixels, "document copy matches rendered pixels");
     const auto path =
@@ -2754,6 +2772,8 @@ int main(int argc, char** argv) {
     if (application.arguments().contains(QStringLiteral("--compaction-only"))) {
         compactedDocumentsKeepEditingCoordinates(temporary.path());
         compactedDocumentsKeepEditingCoordinates(temporary.path(), 50);
+        compactedDocumentsKeepEditingCoordinates(temporary.path(), 0, true);
+        compactedDocumentsKeepEditingCoordinates(temporary.path(), 50, true);
         documentCacheWork(temporary.path());
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;

@@ -289,6 +289,7 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     void refreshBaseImageSources();
     void paintSelectionBackground(QPainter& painter, const SnowCanvasRenderContext& context,
                                   const QRectF& bounds);
+    void paintSelectionPreview(QPainter& painter, const SnowCanvasRenderContext& context);
     void maskSelectionPreview(QPainter& painter, const SnowCanvasRenderContext& context,
                               const QRectF& bounds);
     void paintBackground(QPainter& painter, const SnowCanvasRenderContext& context,

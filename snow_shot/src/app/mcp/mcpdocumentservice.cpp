@@ -9,6 +9,7 @@
 #include "snow_shot/app/mcp/mcpimageexportoptions.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/presentation/screenshotselectionbackground.h"
+#include "snow_shot/presentation/screenshotselectioncomposition.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotrecognitionsessioncontroller.h"
@@ -269,6 +270,18 @@ QImage renderDocumentResult(Document& document, const QSize& size, qreal scale,
     const auto outputSize = plan ? plan->outputSize : size;
     if (!validSize(outputSize))
         return {};
+    auto style = document.selection.resultStyle();
+    if (!includeBackground)
+        style.backgroundOpacityPercent = 0;
+    style.regionScale *= scale;
+    style.cornerRadius = qRound(style.cornerRadius * scale);
+    style.shadowWidth = qRound(style.shadowWidth * scale);
+    if (plan && plan->changed)
+        style = compactedScreenshotResultStyle(style, *plan);
+    if (style.region && document.runtime.hasDocumentContent())
+        return renderAnnotatedScreenshotSelection(document.runtime,
+                                                  document.selection.pixelSelection(), size,
+                                                  document.sources, style, plan.get());
     QImage image;
     if (plan && plan->changed) {
         QList<CanvasExportTile> tiles;
@@ -280,14 +293,6 @@ QImage renderDocumentResult(Document& document, const QSize& size, qreal scale,
         image = document.runtime.renderToImage(document.selection.pixelSelection(), size,
                                                document.sources);
     }
-    auto style = document.selection.resultStyle();
-    if (!includeBackground)
-        style.backgroundOpacityPercent = 0;
-    style.regionScale *= scale;
-    style.cornerRadius = qRound(style.cornerRadius * scale);
-    style.shadowWidth = qRound(style.shadowWidth * scale);
-    if (plan && plan->changed)
-        style = compactedScreenshotResultStyle(style, *plan);
     const auto background = renderScreenshotSelectionBackground(
         document.sources, document.selection.pixelSelection(), size, style, plan.get());
     if (style.backgroundOpacityPercent > 0 && background.isNull())

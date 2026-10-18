@@ -611,6 +611,76 @@ void pointSelectionRetainsBackingPixelsAndScalesEffects() {
 }
 } // namespace
 
+void compoundExportsPreserveAnnotationsInGaps() {
+    for (bool points : {false, true}) {
+        ExportFixture fixture(points);
+        require(
+            !fixture.runtime()
+                 .applyAnnotationTransaction(
+                     R"({"version":1,"operations":[{"type":"rectangle","bounds":[0,12,40,6],"style":{"fill":[230,30,70,128],"stroke":[0,0,0,0]}}]})")
+                 .isEmpty(),
+            "gap annotation fixture");
+        const QRect selection(5, 5, 30, 20);
+        const int scale = points ? 2 : 1;
+        const auto ink = fixture.runtime().renderToImage(selection, selection.size() * scale, {});
+        for (bool hole : {false, true}) {
+            ScreenshotResultStyle style;
+            style.region = hole ? QRegion(QRect(0, 0, 30, 20)).subtracted(QRect(8, 4, 14, 12))
+                                : QRegion(QRect(0, 0, 8, 20)) + QRect(22, 0, 8, 20);
+            const auto result = waitForResult(
+                [&](QObject* receiver, auto callback) {
+                    return fixture.service().requestSelectionResult(selection, style, receiver,
+                                                                    std::move(callback));
+                },
+                [](QImage image) { return image; });
+            const QPoint gap(15 * scale, 10 * scale);
+            require(ink.pixelColor(gap).alpha() > 0 && ink.pixelColor(gap).alpha() < 255,
+                    "fixture must draw translucent ink across the gap");
+            require(result.pixelColor(gap) == ink.pixelColor(gap),
+                    "compound export must retain translucent annotations within overall bounds");
+            require(result.pixelColor(15 * scale, 5 * scale).alpha() == 0,
+                    "unannotated gaps must remain transparent");
+            require(result.size() == selection.size() * scale,
+                    "crossing annotations must remain clipped to overall selection bounds");
+            const auto clipboard = waitForResult(
+                [&](QObject* receiver, auto callback) {
+                    return fixture.service().requestSelectionClipboard(selection, style, receiver,
+                                                                       std::move(callback));
+                },
+                [](ScreenshotSelectionClipboardResult value) { return value.image; });
+            const auto pin = fixture.service().preparePinnedSelection(selection, style);
+            require(pin && hasSamePixels(clipboard, result) &&
+                        hasSamePixels(waitForPinnedResult(fixture.service(), *pin), result),
+                    "copy and pin must preserve the same gap annotations");
+            for (int opacity : {0, 50, 100}) {
+                style.backgroundOpacityPercent = opacity;
+                style.shadowWidth = 2;
+                style.cornerRadius = 3;
+                require(fixture.runtime().undo(), "hide annotations for capture reference");
+                auto expected = waitForResult(
+                    [&](QObject* receiver, auto callback) {
+                        return fixture.service().requestSelectionResult(selection, style, receiver,
+                                                                        std::move(callback));
+                    },
+                    [](QImage image) { return image; });
+                require(fixture.runtime().redo(), "restore gap annotations");
+                QPainter painter(&expected);
+                painter.drawImage(QPoint(2 * scale, 2 * scale), ink);
+                painter.end();
+                const auto actual = waitForResult(
+                    [&](QObject* receiver, auto callback) {
+                        return fixture.service().requestSelectionResult(selection, style, receiver,
+                                                                        std::move(callback));
+                    },
+                    [](QImage image) { return image; });
+                require(
+                    hasSamePixels(actual, expected),
+                    "annotations must blend once over styled captures and stop at their bounds");
+            }
+        }
+    }
+}
+
 void compoundExportsSnapshotTheirGeometry() {
     for (bool points : {false, true}) {
         ExportFixture fixture(points);
@@ -983,8 +1053,21 @@ void compactionPreservesSamplingEffects() {
         region += QRect(40, 0, 20, 45);
         const ScreenshotResultStyle style{0, 0, Qt::black, ScreenshotRegionGeometry(region)};
         const QList<CanvasExportSource> sources{{fixture.displaySnapshot(), QRectF(0, 0, 80, 60)}};
-        const auto expected = compactedReference(fixture.runtime(), selection, selection.size(),
-                                                 sources, style, 1, {true, 3});
+        // Regions clip the capture before document rendering. Compare tiled
+        // filtering against a full scene using that same transparent backdrop,
+        // preserving the original source frame and filter phase before compaction.
+        const auto backdrop =
+            ScreenshotResultCompositor::compose(fixture.displaySnapshot().copy(selection), style);
+        const auto full =
+            fixture.runtime().renderToImage(selection, selection.size(), sources, backdrop);
+        const auto plan =
+            makeScreenshotLayoutCompactionPlan(*style.region, selection.size(), 1, {true, 3});
+        QImage expected(plan.outputSize, QImage::Format_ARGB32_Premultiplied);
+        expected.fill(Qt::transparent);
+        QPainter painter(&expected);
+        for (const auto& tile : plan.tiles)
+            painter.drawImage(tile.destination, full, tile.source);
+        painter.end();
         const auto actual = waitForResult(
             [&](QObject* receiver, auto callback) {
                 return fixture.service().requestSelectionResult(selection, style, receiver,
@@ -1001,6 +1084,10 @@ void compactionPreservesSamplingEffects() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    if (app.arguments().contains(QStringLiteral("--gap-annotations-only"))) {
+        compoundExportsPreserveAnnotationsInGaps();
+        return EXIT_SUCCESS;
+    }
     if (app.arguments().contains(QStringLiteral("--compaction-only"))) {
         compactionOutputsAgree();
         compactionAcrossMixedDpiSources();
@@ -1018,6 +1105,7 @@ int main(int argc, char** argv) {
     exportWorkerReleasesSharedDerivedContours();
     exportWorkerReleasesDocumentSnapshotsBeforeCompletion();
     compoundExportsSnapshotTheirGeometry();
+    compoundExportsPreserveAnnotationsInGaps();
     pointSelectionRetainsBackingPixelsAndScalesEffects();
     styledClipboardResultRetainsPngTransparency();
     selectionClipboardPreservesEffects();

@@ -10,6 +10,7 @@
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/presentation/screenshotresultcompositor.h"
 #include "snow_shot/presentation/screenshotselectionbackground.h"
+#include "snow_shot/presentation/screenshotselectioncomposition.h"
 #include "snow_shot/presentation/screenshotselectionpin.h"
 #include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
 
@@ -86,6 +87,17 @@ QImage composeSelectionResultFromRuntime(SnowCanvasRuntime& runtime, const QRect
     }
 
     const auto pixelSize = spec.isValid() ? spec.pixelSize : selection.size();
+    ScreenshotResultStyle outputStyle = style;
+    outputStyle.regionScale = style.regionScale * spec.scale;
+    outputStyle.cornerRadius = qRound(style.cornerRadius * spec.scale);
+    outputStyle.shadowWidth =
+        screenshotSelectionRenderedShadowPixels(style.shadowWidth, spec.scale);
+    if (plan && plan->changed)
+        outputStyle = compactedScreenshotResultStyle(outputStyle, *plan);
+
+    if (style.region && runtime.hasDocumentContent())
+        return renderAnnotatedScreenshotSelection(runtime, selection, pixelSize, sources,
+                                                  outputStyle, plan.get());
     QImage content;
     {
         SNOW_SHOT_CLIPBOARD_PERF_SCOPE("export.render_canvas");
@@ -114,13 +126,6 @@ QImage composeSelectionResultFromRuntime(SnowCanvasRuntime& runtime, const QRect
     SNOW_SHOT_CLIPBOARD_PERF_COUNTER("export.rendered_bytes", content.sizeInBytes());
     SNOW_SHOT_CLIPBOARD_PERF_SCOPE("export.compose_result");
     SNOW_SHOT_PIN_PERF_SCOPE("export.compose_result");
-    ScreenshotResultStyle outputStyle = style;
-    outputStyle.regionScale = style.regionScale * spec.scale;
-    outputStyle.cornerRadius = qRound(style.cornerRadius * spec.scale);
-    outputStyle.shadowWidth =
-        screenshotSelectionRenderedShadowPixels(style.shadowWidth, spec.scale);
-    if (plan && plan->changed)
-        outputStyle = compactedScreenshotResultStyle(outputStyle, *plan);
     const QImage background =
         renderScreenshotSelectionBackground(sources, selection, pixelSize, outputStyle, plan.get());
     if (outputStyle.backgroundOpacityPercent > 0 && background.isNull())

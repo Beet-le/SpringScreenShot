@@ -2806,6 +2806,12 @@ void ScreenshotCanvasRenderer::applySelectionState(const ScreenshotSelectionVisu
     }
     const ScreenshotSelectionVisualState previous = m_selectionState;
     m_selectionState = next;
+    // Compound previews now form the scene backdrop. Refresh retained filter
+    // tiles when it changes, while keeping pristine capture/eraser sources stable.
+    if (m_renderMode == RenderMode::Standard &&
+        ((previous.region && selectionEffectsPreviewVisible(previous)) ||
+         (next.region && selectionEffectsPreviewVisible(next))))
+        invalidateCachedContent(false);
     // Appearance and editor decorations do not change the cached selection paths.
     if (previous.bounds != next.bounds || previous.present != next.present ||
         previous.cornerRadius != next.cornerRadius || previous.region != next.region ||
@@ -3271,6 +3277,12 @@ ScreenshotOcrTextLayer* ScreenshotCanvasRenderer::ensureOcrTextLayer() {
 void ScreenshotCanvasRenderer::renderBeforeCanvas(QPainter& painter,
                                                   const SnowCanvasRenderContext& context) {
     paintBackground(painter, context, false);
+    if (m_renderMode == RenderMode::Standard && m_selectionState.region &&
+        selectionEffectsPreviewVisible(m_selectionState)) {
+        selectionViewGeometry(context, m_selectionState.cornerRadius,
+                              m_ocrPresentation == nullptr ? m_selectionState.cornerRadius : 0);
+        paintSelectionPreview(painter, context);
+    }
 }
 
 QRectF
@@ -3684,6 +3696,39 @@ ScreenshotCanvasRenderer::selectionViewGeometry(const SnowCanvasRenderContext& c
     return geometry;
 }
 
+void ScreenshotCanvasRenderer::paintSelectionPreview(QPainter& painter,
+                                                     const SnowCanvasRenderContext& context) {
+    const QRectF previewBounds =
+        selectionPreviewBounds(m_selectionState, context.canvasToViewTransform);
+    const QRectF selectionView = context.canvasToViewTransform.mapRect(m_selectionState.bounds);
+    painter.save();
+    painter.setClipRect(previewBounds, Qt::IntersectClip);
+    maskSelectionPreview(painter, context, previewBounds);
+    painter.setCompositionMode(QPainter::CompositionMode_DestinationOver);
+    if (m_selectionState.region) {
+        m_regionShadowRenderer.render(painter, *m_selectionState.region,
+                                      m_selectionState.cornerRadius, m_selectionState.shadowWidth,
+                                      m_selectionState.shadowColor, context.canvasToViewTransform,
+                                      context.exposedRegion);
+    } else {
+        const qreal scale =
+            std::max<qreal>(1.0e-6, std::min(std::hypot(context.canvasToViewTransform.m11(),
+                                                        context.canvasToViewTransform.m12()),
+                                             std::hypot(context.canvasToViewTransform.m21(),
+                                                        context.canvasToViewTransform.m22())));
+        ScreenshotSelectionShadowRenderer::renderResultShadow(
+            painter, selectionView, m_selectionState.cornerRadius * scale,
+            m_selectionState.shadowWidth * scale, m_selectionState.shadowColor,
+            context.devicePixelRatio);
+    }
+    if (m_selectionState.backgroundOpacityPercent > 0) {
+        painter.setOpacity(m_selectionState.backgroundOpacityPercent / 100.0);
+        paintSelectionBackground(painter, context, previewBounds);
+        painter.setOpacity(1.0);
+    }
+    painter.restore();
+}
+
 void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
                                                  const SnowCanvasRenderContext& context) {
     if (m_renderMode == RenderMode::PinnedResult) {
@@ -3835,31 +3880,28 @@ void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
         const QColor selectionAccent = m_selectionBorderColor;
         const QRectF selectionView = context.canvasToViewTransform.mapRect(m_selectionState.bounds);
         if (effectsPreview) {
+            if (!shaped) {
+                paintSelectionPreview(painter, context);
+            } else if (m_selectionState.shadowWidth > 0) {
+                // Annotations belong to the overall content bounds, not the
+                // added shadow margin. Restore only that margin after drawing.
+                painter.save();
+                QPainterPath margin;
+                margin.addRect(previewBounds);
+                margin.addRect(selectionView);
+                margin.setFillRule(Qt::OddEvenFill);
+                painter.setClipPath(margin, Qt::IntersectClip);
+                painter.setCompositionMode(QPainter::CompositionMode_Source);
+                painter.fillRect(previewBounds, Qt::transparent);
+                painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                paintBackground(painter, context, false);
+                paintSelectionPreview(painter, context);
+                painter.restore();
+            }
+            // Checkerboard is a display aid, never a filter's sampling backdrop.
             painter.save();
             painter.setClipRect(previewBounds, Qt::IntersectClip);
-            maskSelectionPreview(painter, context, previewBounds);
             painter.setCompositionMode(QPainter::CompositionMode_DestinationOver);
-            if (shaped) {
-                m_regionShadowRenderer.render(painter, *m_selectionState.region,
-                                              visibleCornerRadius, m_selectionState.shadowWidth,
-                                              m_selectionState.shadowColor,
-                                              context.canvasToViewTransform, context.exposedRegion);
-            } else {
-                const qreal scale = std::max<qreal>(
-                    1.0e-6, std::min(std::hypot(context.canvasToViewTransform.m11(),
-                                                context.canvasToViewTransform.m12()),
-                                     std::hypot(context.canvasToViewTransform.m21(),
-                                                context.canvasToViewTransform.m22())));
-                ScreenshotSelectionShadowRenderer::renderResultShadow(
-                    painter, selectionView, visibleCornerRadius * scale,
-                    m_selectionState.shadowWidth * scale, m_selectionState.shadowColor,
-                    context.devicePixelRatio);
-            }
-            if (m_selectionState.backgroundOpacityPercent > 0) {
-                painter.setOpacity(m_selectionState.backgroundOpacityPercent / 100.0);
-                paintSelectionBackground(painter, context, previewBounds);
-                painter.setOpacity(1.0);
-            }
             painter.fillRect(previewBounds, adqt::widgets::themedCheckerboardBrush(&m_canvas));
             painter.restore();
         }

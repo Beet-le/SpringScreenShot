@@ -233,9 +233,11 @@ void resetDiagnosticsForCurrentThread() {
 
 QImage renderToImage(SnowRuntime runtime, const QRectF& virtualSelectionRect,
                      const QSize& outputSize, const QList<CanvasExportSource>& sources,
-                     const SnowCanvasSmartEraseSnapshot& smartErase) {
+                     const SnowCanvasSmartEraseSnapshot& smartErase,
+                     const QImage& preparedBackground) {
     const ExportProjection projection{virtualSelectionRect, outputSize};
-    if (outputSize.width() <= 0 || outputSize.height() <= 0) {
+    if (outputSize.width() <= 0 || outputSize.height() <= 0 ||
+        (!preparedBackground.isNull() && preparedBackground.size() != outputSize)) {
         return {};
     }
 
@@ -264,7 +266,10 @@ QImage renderToImage(SnowRuntime runtime, const QRectF& virtualSelectionRect,
         synchronizeRuntimeScene(runtime, projection, viewport, displayCache, state);
     if (!synchronized || (!requiresBackgroundRaster(displayCache) &&
                           !snow_canvas_smart_erase::hasItems(smartErase))) {
-        renderSources(painter, projection, sources);
+        if (preparedBackground.isNull())
+            renderSources(painter, projection, sources);
+        else
+            painter.drawImage(QRect(QPoint(), outputSize), preparedBackground);
         if (synchronized) {
             ++g_renderDiagnostics.directSourceFastPathCount;
             if (hasDocumentDrawing(displayCache))
@@ -279,9 +284,10 @@ QImage renderToImage(SnowRuntime runtime, const QRectF& virtualSelectionRect,
     }
 
     const QSize sceneSize = outputSize;
-    QImage background = snowCanvasAllocateImage(sceneSize, QImage::Format_ARGB32_Premultiplied);
-    background.fill(Qt::transparent);
-    {
+    QImage background = preparedBackground;
+    if (background.isNull()) {
+        background = snowCanvasAllocateImage(sceneSize, QImage::Format_ARGB32_Premultiplied);
+        background.fill(Qt::transparent);
         QPainter backgroundPainter(&background);
         backgroundPainter.setRenderHint(QPainter::Antialiasing, true);
         backgroundPainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -306,9 +312,25 @@ QImage renderToImage(SnowRuntime runtime, const QRectF& virtualSelectionRect,
 class ExportSourceRenderer final : public SnowCanvasCustomRenderer {
   public:
     ExportSourceRenderer(const QList<CanvasExportSource>& sources,
-                         const ExportProjection& projection, bool sampled)
-        : m_sources(sources), m_projection(projection), m_sampled(sampled) {}
+                         const ExportProjection& projection, bool sampled, const QImage& background,
+                         const QList<CanvasExportTile>& tiles)
+        : m_sources(sources), m_projection(projection), m_sampled(sampled),
+          m_background(background), m_tiles(tiles) {}
     void renderBeforeCanvas(QPainter& painter, const SnowCanvasRenderContext& context) override {
+        if (!m_background.isNull()) {
+            // Project the compact backdrop back into the original scene frame,
+            // including neighboring retained tiles needed by filter sampling halos.
+            for (const auto& tile : m_tiles) {
+                const QRectF target(tile.sourcePixels.x() / m_projection.scaleX(),
+                                    tile.sourcePixels.y() / m_projection.scaleY(),
+                                    tile.sourcePixels.width() / m_projection.scaleX(),
+                                    tile.sourcePixels.height() / m_projection.scaleY());
+                if (context.exposedRegion.intersects(target.toAlignedRect()))
+                    painter.drawImage(target, m_background,
+                                      QRect(tile.destination, tile.sourcePixels.size()));
+            }
+            return;
+        }
         if (m_sampled) {
             // Match the normal export's pre-scaled background, including its
             // transparent frame boundary. Render only the requested sampling halo.
@@ -364,15 +386,19 @@ class ExportSourceRenderer final : public SnowCanvasCustomRenderer {
     const QList<CanvasExportSource>& m_sources;
     const ExportProjection& m_projection;
     bool m_sampled;
+    const QImage& m_background;
+    const QList<CanvasExportTile>& m_tiles;
 };
 
 QImage renderTilesToImage(SnowRuntime runtime, const QRectF& sourceFrame,
                           const QSize& sourcePixelSize, const QSize& outputSize,
                           const QList<CanvasExportTile>& tiles,
                           const QList<CanvasExportSource>& sources,
-                          const SnowCanvasSmartEraseSnapshot& smartErase) {
+                          const SnowCanvasSmartEraseSnapshot& smartErase,
+                          const QImage& preparedBackground) {
     const ExportProjection projection{sourceFrame, sourcePixelSize};
     if (!projection.isValid() || outputSize.isEmpty() || tiles.isEmpty() ||
+        (!preparedBackground.isNull() && preparedBackground.size() != outputSize) ||
         !std::isfinite(sourceFrame.x()) || !std::isfinite(sourceFrame.y()) ||
         !std::isfinite(sourceFrame.width()) || !std::isfinite(sourceFrame.height()) ||
         sourceFrame.width() > std::numeric_limits<int>::max() ||
@@ -395,6 +421,11 @@ QImage renderTilesToImage(SnowRuntime runtime, const QRectF& sourceFrame,
     QImage output = snowCanvasAllocateZeroedImage(outputSize, QImage::Format_ARGB32_Premultiplied);
     if (output.isNull())
         return {};
+    // Spacing has no source tile, but still retains its prepared background.
+    if (!preparedBackground.isNull()) {
+        QPainter backgroundPainter(&output);
+        backgroundPainter.drawImage(output.rect(), preparedBackground);
+    }
     const qreal rasterScale = qMax(1.0, qMin(projection.scaleX(), projection.scaleY()));
     output.setDevicePixelRatio(rasterScale);
     SnowCanvasViewport viewport;
@@ -411,7 +442,7 @@ QImage renderTilesToImage(SnowRuntime runtime, const QRectF& sourceFrame,
         baseSources.append({source.image, source.canvasRect, {}});
     const bool boundedScratch =
         requiresBackgroundRaster(displayCache) || snow_canvas_smart_erase::hasItems(smartErase);
-    ExportSourceRenderer background(sources, projection, boundedScratch);
+    ExportSourceRenderer background(sources, projection, boundedScratch, preparedBackground, tiles);
     SnowCanvasRenderContext context;
     context.viewportRect = QRect(QPoint(), sourceFrame.size().toSize());
     context.canvasToViewTransform.translate(-sourceFrame.x(), -sourceFrame.y());
@@ -440,6 +471,14 @@ QImage renderTilesToImage(SnowRuntime runtime, const QRectF& sourceFrame,
                 painter.setClipRect(QRect(destination, source.size()));
                 painter.translate(destination - source.topLeft());
                 if (drawing) {
+                    if (!preparedBackground.isNull()) {
+                        // renderRuntimeScene paints the background itself. Clear this
+                        // tile first so translucent backdrop pixels are not doubled.
+                        painter.save();
+                        painter.setCompositionMode(QPainter::CompositionMode_Source);
+                        painter.fillRect(source, Qt::transparent);
+                        painter.restore();
+                    }
                     const QRectF logical(source.x() / projection.scaleX(),
                                          source.y() / projection.scaleY(),
                                          source.width() / projection.scaleX(),
@@ -448,7 +487,7 @@ QImage renderTilesToImage(SnowRuntime runtime, const QRectF& sourceFrame,
                     renderRuntimeScene(painter, projection, {}, displayCache, smartErase,
                                        baseSources, &context.exposedRegion, &background, &context,
                                        &*scene);
-                } else {
+                } else if (preparedBackground.isNull()) {
                     renderSources(painter, projection, sources, &source);
                 }
                 painter.restore();

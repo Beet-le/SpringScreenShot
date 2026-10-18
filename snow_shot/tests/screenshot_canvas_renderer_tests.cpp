@@ -9064,6 +9064,7 @@ void largeCoveragePreviewRetainsOnlyBoundaryTiles() {
             image.fill(QColor(40, 100, 180));
             QPainter painter(&image);
             painter.setClipRegion(damage);
+            renderer.renderBeforeCanvas(painter, context);
             renderer.renderAfterCanvas(painter, context);
             return image;
         };
@@ -9348,6 +9349,60 @@ void selectionBackgroundPreviewMatchesComposition() {
     setSources();
     require(renderCanvas(canvas).pixelColor(80, 70) != old.pixelColor(80, 70),
             "capture-source changes must invalidate the flattened preview cache");
+    canvas.setCustomRenderer(nullptr);
+}
+
+void compoundSelectionPreviewPreservesGapAnnotations() {
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    canvas.resize(120, 120);
+    canvas.setClearBackgroundEnabled(false);
+    require(canvas.setViewportCamera(60, 60, 1), "gap annotation preview camera");
+    ScreenshotCanvasRenderer renderer(canvas);
+    canvas.setCustomRenderer(&renderer);
+    QImage background(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    background.fill(Qt::white);
+    renderer.setImage(background, QRectF(background.rect()));
+    renderer.setMaskVisible(true);
+    require(
+        !runtime
+             .applyAnnotationTransaction(
+                 R"({"version":1,"operations":[{"type":"rectangle","bounds":[0,55,120,10],"style":{"fill":[230,30,70,128],"stroke":[0,0,0,0]}}]})")
+             .isEmpty(),
+        "preview gap annotation fixture");
+    for (bool hole : {false, true}) {
+        ScreenshotSelectionVisualState state;
+        state.region = hole ? QRegion(QRect(10, 10, 100, 100)).subtracted(QRect(40, 40, 40, 40))
+                            : QRegion(QRect(10, 10, 30, 100)) + QRect(80, 10, 30, 100);
+        state.bounds = state.region->boundingRect();
+        state.confirmedRegion = *state.region;
+        state.present = true;
+        state.handlesVisible = false;
+        state.shadowWidth = 4;
+        for (int opacity : {0, 50, 100}) {
+            state.backgroundOpacityPercent = opacity;
+            for (bool hovered : {true, false, true}) {
+                state.toolbarHovered = hovered;
+                renderer.applySelectionState(state);
+                if (!hovered)
+                    continue;
+                require(runtime.undo(), "hide preview annotation for background reference");
+                QImage expected = renderCanvas(canvas);
+                const QColor margin = expected.pixelColor(7, 60);
+                require(runtime.redo(), "restore preview annotation");
+                const auto actual = renderCanvas(canvas);
+                QPainter painter(&expected);
+                painter.fillRect(QRect(0, 55, 120, 10), QColor(230, 30, 70, 128));
+                painter.end();
+                const auto a = actual.pixelColor(60, 60), e = expected.pixelColor(60, 60);
+                require(std::abs(a.red() - e.red()) <= 2 && std::abs(a.green() - e.green()) <= 2 &&
+                            std::abs(a.blue() - e.blue()) <= 2,
+                        "preview must preserve translucent annotations across gaps and holes");
+                require(actual.pixelColor(7, 60) == margin,
+                        "preview must clip crossing annotations out of the shadow margin");
+            }
+        }
+    }
     canvas.setCustomRenderer(nullptr);
 }
 
@@ -9738,6 +9793,7 @@ void runScreenshotOcrHighlightingBenchmark();
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     if (application.arguments().contains(QStringLiteral("--background-opacity-only"))) {
+        compoundSelectionPreviewPreservesGapAnnotations();
         tiledBackgroundMatchesExportAtFractionalDpi();
         largeOpacityPreviewRetainsExposedTiles();
         largeCoveragePreviewRetainsOnlyBoundaryTiles();
@@ -9898,6 +9954,7 @@ int main(int argc, char** argv) {
         translatedRasterCachesMatchDirectPainting();
         compoundSelectionRendersUnifiedMaskAndOutline();
         addingShapedRegionRepaintsRectangleHandles();
+        compoundSelectionPreviewPreservesGapAnnotations();
         hoveredCompoundSelectionShowsCheckerboardInTransparentGaps();
         compoundSelectionDamageCoversChangedPixels();
         nonRectangularSelectionDraftLeavesInteriorUnchanged();
@@ -10097,6 +10154,7 @@ int main(int argc, char** argv) {
     addingShapedRegionRepaintsRectangleHandles();
     compoundBackgroundPreviewDamageCoversTransitions();
     selectionBackgroundChangesPreserveDecorationDamage();
+    compoundSelectionPreviewPreservesGapAnnotations();
     hoveredCompoundSelectionShowsCheckerboardInTransparentGaps();
     compoundSelectionDamageCoversChangedPixels();
     nonRectangularSelectionDraftLeavesInteriorUnchanged();
