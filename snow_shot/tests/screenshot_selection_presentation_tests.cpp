@@ -581,12 +581,13 @@ void animationFramesOnlyChangeDisplayedGeometry() {
     const QRectF firstFrame = fixture.displayedSelection();
     require(firstFrame != initial && firstFrame != target,
             "an eight-millisecond presentation frame must interpolate the selection");
-    const qreal remainingAfterEightMs = std::exp(-32.0 * 0.008);
+    const qreal remainingProgress = 1.0 - 8.0 / 101.0;
+    const qreal remainingAfterEightMs = remainingProgress * remainingProgress;
     require(std::abs(firstFrame.x() - (target.x() + (initial.x() - target.x()) *
                                                         remainingAfterEightMs)) < 0.000001 &&
                 std::abs(firstFrame.y() - (target.y() + (initial.y() - target.y()) *
                                                             remainingAfterEightMs)) < 0.000001,
-            "Soft presentation frames must follow at 32 per second using the scheduler clock");
+            "Soft presentation frames must preserve the 101 ms quadratic curve on the scheduler");
     require(fixture.selection.normalizedSelection() == target,
             "display interpolation must preserve the capture target");
     fixture.advanceClock(8);
@@ -605,24 +606,34 @@ void animationFramesOnlyChangeDisplayedGeometry() {
     require(fixture.hintTranslations.requests == 0,
             "animation frames must not translate and format unchanged shortcut rows");
     require(!fixture.services->frameSchedulerForTesting().active(),
-            "the presentation scheduler must become idle once all selection edges converge");
+            "the presentation scheduler must become idle once the transition finishes");
 }
 
-void animationPreferencesSelectRatesAndDisableRunningFrames() {
+void animationPreferencesSelectDurationsAndDisableRunningFrames() {
     using Animation = snow_shot::SelectionTransitionAnimation;
     for (const auto animation : {Animation::Fast, Animation::Soft}) {
         Fixture fixture;
         fixture.preferences.selectionTransitionAnimation = animation;
         fixture.services->setUiPreferences(fixture.preferences);
         const QRectF initial = fixture.displayedSelection();
-        const QRectF target = initial.translated(160.0, 120.0);
+        const QRectF target(initial.x() + 160.0, initial.y() + 120.0, initial.width() + 80.0,
+                            initial.height() + 60.0);
         fixture.requestSelection(target);
         fixture.flushFrame();
         fixture.advanceClock(16);
         fixture.flushFrame();
-        const qreal rate = animation == Animation::Fast ? 72.0 : 32.0;
-        const qreal expectedX = target.x() + (initial.x() - target.x()) * std::exp(-rate * 0.016);
-        require(std::abs(fixture.displayedSelection().x() - expectedX) < 0.000001 &&
+        const int durationMs = animation == Animation::Fast ? 67 : 101;
+        const qreal progress = 16.0 / durationMs;
+        const qreal eased = 1.0 - (1.0 - progress) * (1.0 - progress);
+        const QRectF expected(initial.x() + (target.x() - initial.x()) * eased,
+                              initial.y() + (target.y() - initial.y()) * eased,
+                              initial.width() + (target.width() - initial.width()) * eased,
+                              initial.height() + (target.height() - initial.height()) * eased);
+        const QRectF displayed = fixture.displayedSelection();
+        require(std::abs(displayed.x() - expected.x()) < 0.000001 &&
+                    std::abs(displayed.y() - expected.y()) < 0.000001 &&
+                    std::abs(displayed.width() - expected.width()) < 0.000001 &&
+                    std::abs(displayed.height() - expected.height()) < 0.000001 &&
                     fixture.selection.normalizedSelection() == target,
                 "selected animation speeds must reach the shared scheduler without changing "
                 "capture geometry");
@@ -2043,7 +2054,7 @@ int main(int argc, char* argv[]) {
     displayRebindingReappliesSelectionAfterRendererReset();
     endingSelectionMovementRefreshesTheDeferredToolbarContent();
     animationFramesOnlyChangeDisplayedGeometry();
-    animationPreferencesSelectRatesAndDisableRunningFrames();
+    animationPreferencesSelectDurationsAndDisableRunningFrames();
     hiddenSelectionToolbarDefersPresentationUntilReveal();
     modeAndSessionChangesCancelOldAnimation();
     anEpochChangeDiscardsPendingWorkWithoutAnotherStateUpdate();

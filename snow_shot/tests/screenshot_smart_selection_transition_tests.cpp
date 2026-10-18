@@ -22,8 +22,8 @@ bool nearRect(const QRectF& actual, const QRectF& expected) {
            std::abs(actual.height() - expected.height()) < tolerance;
 }
 
-QRectF followed(const QRectF& start, const QRectF& target, qreal elapsedMs, qreal rate = 32.0) {
-    const qreal eased = 1.0 - std::exp(-rate * elapsedMs / 1000.0);
+QRectF interpolated(const QRectF& start, const QRectF& target, qreal progress) {
+    const qreal eased = 1.0 - (1.0 - progress) * (1.0 - progress);
     return QRectF(start.x() + (target.x() - start.x()) * eased,
                   start.y() + (target.y() - start.y()) * eased,
                   start.width() + (target.width() - start.width()) * eased,
@@ -47,7 +47,7 @@ void firstSmartSelectionIsPresentedDirectly() {
     require(!transition.advance(2000), "direct selection must not produce later frames");
 }
 
-void framesUseElapsedTimeForExponentialFollowing() {
+void framesUseAbsoluteTimeAndQuadraticEasing() {
     QRectF presented;
     int updateCount = 0;
     ScreenshotSmartSelectionTransition transition([&](const QRectF& selection) {
@@ -64,11 +64,11 @@ void framesUseElapsedTimeForExponentialFollowing() {
     require(!transition.advance(1100), "transition start must not repeat the previous frame");
 
     require(transition.advance(1108), "an eight-millisecond frame must advance presentation");
-    require(nearRect(presented, followed(first, second, 8.0)),
-            "Soft must follow the target at 32 per second using elapsed time");
+    require(nearRect(presented, interpolated(first, second, 8.0 / 101.0)),
+            "Soft must preserve the previous 101 ms quadratic geometry calculation");
     require(transition.advance(1116), "high-refresh frames must not wait for a second timer");
-    require(nearRect(presented, followed(first, second, 16.0)),
-            "high-refresh frames must preserve the chase rate");
+    require(nearRect(presented, interpolated(first, second, 16.0 / 101.0)),
+            "high-refresh frames must preserve the configured duration");
     require(presented.left() < first.left() + (second.left() - first.left()) * 0.5,
             "the first sixteen milliseconds must leave most of the motion for users to track");
     const int updatesAfterFrame = updateCount;
@@ -77,18 +77,16 @@ void framesUseElapsedTimeForExponentialFollowing() {
     require(updateCount == updatesAfterFrame, "repeated or older frames must leave callbacks idle");
 
     require(transition.advance(1148), "a delayed frame must use all elapsed time");
-    require(nearRect(presented, followed(first, second, 48.0)),
+    require(nearRect(presented, interpolated(first, second, 48.0 / 101.0)),
             "a delayed frame must catch up without assuming a fixed tick interval");
-    require(transition.isRunning(),
-            "following must continue while an edge is outside snap tolerance");
+    require(transition.isRunning(), "the transition must continue until its configured duration");
     require(transition.advance(1200),
-            "following must continue through the first hundred milliseconds");
-    require(
-        nearRect(presented, followed(first, second, 100.0)) && transition.isRunning(),
-        "larger selection changes must retain a visible transition after one hundred milliseconds");
-    require(transition.advance(1380), "a converged frame must reach the target exactly");
-    require(!transition.isRunning(),
-            "following must stop once every edge is within snap tolerance");
+            "the transition must continue through the first hundred milliseconds");
+    require(nearRect(presented, interpolated(first, second, 100.0 / 101.0)) &&
+                transition.isRunning(),
+            "the previous size calculation must remain active until the full 101 ms duration");
+    require(transition.advance(1201), "the final frame must reach the target exactly");
+    require(!transition.isRunning(), "the transition must stop at its configured duration");
     require(presented == second, "smart selection transition must end at its exact target");
     require(!transition.advance(100000), "completed transition must not emit extra frames");
 }
@@ -109,7 +107,7 @@ void frameCadenceDoesNotChangeTheTrajectory() {
         static_cast<void>(irregular.advance(1100 + elapsedMs));
     static_cast<void>(delayed.advance(1164));
 
-    const QRectF expected = followed(first, target, 64.0);
+    const QRectF expected = interpolated(first, target, 64.0 / 101.0);
     require(nearRect(regular.displayedSelection(), expected) &&
                 nearRect(irregular.displayedSelection(), expected) &&
                 nearRect(delayed.displayedSelection(), expected),
@@ -127,13 +125,13 @@ void retargetingSamplesTheCurrentTrajectory() {
     static_cast<void>(transition.update(first, true, 1000));
     static_cast<void>(transition.update(second, true, 1100));
     static_cast<void>(transition.update(third, true, 1150));
-    const QRectF retargetStart = followed(first, second, 50.0);
+    const QRectF retargetStart = interpolated(first, second, 50.0 / 101.0);
     require(nearRect(presented, retargetStart),
             "retargeting must sample the preceding trajectory at the supplied timestamp");
 
     static_cast<void>(transition.advance(1200));
-    require(nearRect(presented, followed(retargetStart, third, 50.0)),
-            "retargeted animation must follow from the current rectangle at the same chase rate");
+    require(nearRect(presented, interpolated(retargetStart, third, 50.0 / 101.0)),
+            "retargeted animation must use the current rectangle as its new start");
     static_cast<void>(transition.advance(100000));
     require(presented == third, "a delayed frame must finish at the latest target");
     require(!transition.isRunning(), "a delayed final frame must stop the transition");
@@ -152,7 +150,7 @@ void retargetingDoesNotRewindTheClock() {
     require(transition.displayedSelection() == current,
             "retargeting with an old timestamp must not reverse the displayed trajectory");
     static_cast<void>(transition.advance(1124));
-    require(nearRect(transition.displayedSelection(), followed(current, third, 8.0)),
+    require(nearRect(transition.displayedSelection(), interpolated(current, third, 8.0 / 101.0)),
             "retargeting with an old timestamp must not count already consumed time again");
 }
 
@@ -169,21 +167,21 @@ void subpixelTargetChangesSnapImmediately() {
             "snapped target changes must notify exactly once and leave no animation frames");
 }
 
-void snappingWaitsForEveryEdge() {
+void immediateSnappingChecksEveryEdge() {
     const QRectF first(0.0, 0.0, 100.0, 100.0);
     for (const QRectF& target : {QRectF(0.25, 0.0, 100.25, 100.0), QRectF(0.0, 0.25, 100.0, 100.25),
                                  QRectF(0.5, 0.0, 99.75, 100.0), QRectF(0.0, 0.5, 100.0, 99.75)}) {
         ScreenshotSmartSelectionTransition transition({});
         static_cast<void>(transition.update(first, true, 1000));
         static_cast<void>(transition.update(target, true, 1100));
-        require(transition.isRunning(), "any edge outside 0.4 pixels must keep following active");
+        require(transition.isRunning(), "any edge outside 0.4 pixels must start a transition");
         static_cast<void>(transition.advance(1101));
-        require(transition.isRunning() &&
-                    nearRect(transition.displayedSelection(), followed(first, target, 1.0)),
+        require(transition.isRunning() && nearRect(transition.displayedSelection(),
+                                                   interpolated(first, target, 1.0 / 101.0)),
                 "snapping must check all four edges rather than position and size separately");
-        static_cast<void>(transition.advance(1112));
+        static_cast<void>(transition.advance(1201));
         require(!transition.isRunning() && transition.displayedSelection() == target,
-                "converged edges must snap to the exact target and stop animation");
+                "small animated changes must still finish at the exact target");
     }
 }
 
@@ -285,65 +283,113 @@ void unchangedTargetsAndDirectGeometryDoNotEmitUpdates() {
     require(updateCount == 2, "direct geometry repeats must leave presentation callbacks idle");
 }
 
-void fastAndSoftUseTheirSelectedRates() {
+void fastAndSoftUseFixedDurationsRegardlessOfDistance() {
     const QRectF first(10.0, 20.0, 300.0, 200.0);
-    const QRectF target(110.0, 70.0, 500.0, 400.0);
     for (const auto animation : {Animation::Fast, Animation::Soft}) {
-        ScreenshotSmartSelectionTransition transition({});
-        transition.setAnimation(animation, 1000);
-        static_cast<void>(transition.update(first, true, 1000));
-        static_cast<void>(transition.update(target, true, 1100));
-        static_cast<void>(transition.advance(1116));
-        const qreal rate = animation == Animation::Fast ? 72.0 : 32.0;
-        require(nearRect(transition.displayedSelection(), followed(first, target, 16.0, rate)),
-                "Fast and Soft must follow at 72 and 32 per second respectively");
+        const int durationMs = animation == Animation::Fast ? 67 : 101;
+        for (const QRectF& target :
+             {first.translated(1.0, -1.0), QRectF(-10000.0, -5000.0, 20000.0, 12000.0)}) {
+            ScreenshotSmartSelectionTransition transition({});
+            transition.setAnimation(animation, 1000);
+            static_cast<void>(transition.update(first, true, 1000));
+            static_cast<void>(transition.update(target, true, 1100));
+            static_cast<void>(transition.advance(1116));
+            require(nearRect(transition.displayedSelection(),
+                             interpolated(first, target, 16.0 / durationMs)),
+                    "Fast and Soft must use quadratic geometry with 67 and 101 ms durations");
+            static_cast<void>(transition.advance(1100 + durationMs - 1));
+            require(transition.isRunning() &&
+                        nearRect(transition.displayedSelection(),
+                                 interpolated(first, target, (durationMs - 1.0) / durationMs)),
+                    "selection distance must not change the animation duration");
+            require(transition.advance(1100 + durationMs) && !transition.isRunning() &&
+                        transition.displayedSelection() == target,
+                    "every selection size must reach the exact target at the selected duration");
+            require(!transition.advance(100000), "completed animations must leave callbacks idle");
+        }
     }
 }
 
-void changingAnimationSamplesThePreviousRateBeforeSwitching() {
+void changingAnimationPreservesProgressBeforeSwitchingDuration() {
     ScreenshotSmartSelectionTransition transition({});
     const QRectF first(10.0, 20.0, 300.0, 200.0);
     const QRectF target(110.0, 70.0, 500.0, 400.0);
     static_cast<void>(transition.update(first, true, 1000));
     static_cast<void>(transition.update(target, true, 1100));
     transition.setAnimation(Animation::Fast, 1124);
-    const QRectF current = followed(first, target, 24.0);
+    const QRectF current = interpolated(first, target, 24.0 / 101.0);
     require(nearRect(transition.displayedSelection(), current),
-            "changing speed must consume elapsed time at the previous rate");
+            "changing speed must consume elapsed time at the previous duration");
     static_cast<void>(transition.advance(1132));
-    require(nearRect(transition.displayedSelection(), followed(current, target, 8.0, 72.0)),
-            "the selected rate must apply only to time after the speed change");
+    require(nearRect(transition.displayedSelection(),
+                     interpolated(first, target, 24.0 / 101.0 + 8.0 / 67.0)),
+            "speed changes must preserve quadratic progress and apply the new duration afterward");
     transition.setAnimation(Animation::Fast, 1140);
     static_cast<void>(transition.advance(1148));
-    require(nearRect(transition.displayedSelection(), followed(current, target, 24.0, 72.0)),
+    require(nearRect(transition.displayedSelection(),
+                     interpolated(first, target, 24.0 / 101.0 + 24.0 / 67.0)),
             "reapplying the same speed must not reset elapsed time");
 
     transition.setAnimation(Animation::Disabled, 1148);
     transition.setAnimation(Animation::Soft, 1200);
     static_cast<void>(transition.update(first, true, 1200));
     static_cast<void>(transition.advance(1216));
-    require(nearRect(transition.displayedSelection(), followed(target, first, 16.0)),
-            "reenabling animation must follow from the last directly presented target");
+    require(nearRect(transition.displayedSelection(), interpolated(target, first, 16.0 / 101.0)),
+            "reenabling animation must start from the last directly presented target");
     transition.setAnimation(Animation::Fast, 1216);
     transition.setAnimation(static_cast<Animation>(-1), 1216);
     require(transition.animation() == Animation::Soft,
             "invalid animation modes must fall back to Soft");
 }
+
+void speedChangesKeepTheClockMonotonicAndRetargetingResetsProgress() {
+    const QRectF first(10.0, 20.0, 300.0, 200.0);
+    const QRectF target(110.0, 70.0, 500.0, 400.0);
+    const QRectF nextTarget(-100.0, -200.0, 80.0, 60.0);
+    for (const auto animation : {Animation::Fast, Animation::Soft}) {
+        ScreenshotSmartSelectionTransition transition({});
+        transition.setAnimation(animation, 1000);
+        static_cast<void>(transition.update(first, true, 1000));
+        static_cast<void>(transition.update(target, true, 1100));
+        static_cast<void>(transition.advance(1116));
+        const QRectF beforeSwitch = transition.displayedSelection();
+        const auto nextAnimation = animation == Animation::Fast ? Animation::Soft : Animation::Fast;
+        const int durationMs = animation == Animation::Fast ? 67 : 101;
+        const int nextDurationMs = nextAnimation == Animation::Fast ? 67 : 101;
+        transition.setAnimation(nextAnimation, 1108);
+        require(transition.displayedSelection() == beforeSwitch,
+                "an older speed-change timestamp must not rewind the curve");
+        static_cast<void>(transition.advance(1124));
+        const QRectF current =
+            interpolated(first, target, 16.0 / durationMs + 8.0 / nextDurationMs);
+        require(nearRect(transition.displayedSelection(), current),
+                "both speed-change directions must preserve progress without recounting time");
+        static_cast<void>(transition.update(nextTarget, true, 1124));
+        static_cast<void>(transition.advance(1132));
+        require(nearRect(transition.displayedSelection(),
+                         interpolated(current, nextTarget, 8.0 / nextDurationMs)),
+                "retargeting after a speed change must start a new curve with zero progress");
+        static_cast<void>(transition.advance(1124 + nextDurationMs));
+        require(transition.displayedSelection() == nextTarget && !transition.isRunning(),
+                "retargeting must finish at the selected duration after a speed change");
+    }
+}
 } // namespace
 
 int main() {
     firstSmartSelectionIsPresentedDirectly();
-    framesUseElapsedTimeForExponentialFollowing();
+    framesUseAbsoluteTimeAndQuadraticEasing();
     frameCadenceDoesNotChangeTheTrajectory();
     retargetingSamplesTheCurrentTrajectory();
     retargetingDoesNotRewindTheClock();
     subpixelTargetChangesSnapImmediately();
-    snappingWaitsForEveryEdge();
+    immediateSnappingChecksEveryEdge();
     disabledTransitionPresentsSmartSelectionsDirectly();
     disablingRunningTransitionPresentsItsTargetDirectly();
     leavingSmartFramingAndClearingResetTheFirstResultRule();
     unchangedTargetsAndDirectGeometryDoNotEmitUpdates();
-    fastAndSoftUseTheirSelectedRates();
-    changingAnimationSamplesThePreviousRateBeforeSwitching();
+    fastAndSoftUseFixedDurationsRegardlessOfDistance();
+    changingAnimationPreservesProgressBeforeSwitchingDuration();
+    speedChangesKeepTheClockMonotonicAndRetargetingResetsProgress();
     return 0;
 }

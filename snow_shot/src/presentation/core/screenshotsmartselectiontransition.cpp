@@ -24,7 +24,13 @@ void ScreenshotSmartSelectionTransition::setAnimation(
         return;
     }
     static_cast<void>(advance(nowMs));
-    m_lastAdvancedAtMs = std::max(nowMs, m_lastAdvancedAtMs);
+    nowMs = std::max(nowMs, m_lastAdvancedAtMs);
+    if (m_running) {
+        // Preserve the curve's progress; only the remaining time uses the new duration.
+        m_progressAtStart = progressAt(nowMs);
+        m_startedAtMs = nowMs;
+    }
+    m_lastAdvancedAtMs = nowMs;
     m_animation = animation;
     if (m_animation == snow_shot::SelectionTransitionAnimation::Disabled && m_running) {
         static_cast<void>(presentDirectly(m_targetSelection));
@@ -53,10 +59,13 @@ bool ScreenshotSmartSelectionTransition::update(const QRectF& selection, bool sm
         return false;
     }
 
-    // Consume elapsed time against the preceding target before following the new one.
+    // Sample the preceding trajectory before starting a curve toward the new target.
     // Presentation owns the clock and decides when frames are committed.
     static_cast<void>(advance(nowMs));
     m_lastAdvancedAtMs = std::max(nowMs, m_lastAdvancedAtMs);
+    m_startedAtMs = m_lastAdvancedAtMs;
+    m_progressAtStart = 0.0;
+    m_startSelection = m_displayedSelection;
     m_targetSelection = selection;
     if (withinSnapTolerance(m_displayedSelection, m_targetSelection)) {
         static_cast<void>(presentDirectly(selection));
@@ -70,19 +79,21 @@ bool ScreenshotSmartSelectionTransition::advance(qint64 nowMs) {
     if (!m_running || nowMs <= m_lastAdvancedAtMs) {
         return false;
     }
-    const qreal elapsedSeconds = static_cast<qreal>(nowMs - m_lastAdvancedAtMs) / 1000.0;
     m_lastAdvancedAtMs = nowMs;
-    const qreal amount = -std::expm1(-static_cast<int>(m_animation) * elapsedSeconds);
-    const auto follow = [amount](qreal current, qreal target) {
-        return current + (target - current) * amount;
-    };
-    QRectF selection(QPointF(follow(m_displayedSelection.left(), m_targetSelection.left()),
-                             follow(m_displayedSelection.top(), m_targetSelection.top())),
-                     QPointF(follow(m_displayedSelection.right(), m_targetSelection.right()),
-                             follow(m_displayedSelection.bottom(), m_targetSelection.bottom())));
-    if (withinSnapTolerance(selection, m_targetSelection)) {
+    const qreal progress = progressAt(nowMs);
+    QRectF selection;
+    if (progress >= 1.0) {
         m_running = false;
         selection = m_targetSelection;
+    } else {
+        const qreal easedProgress = progress * (2.0 - progress);
+        selection = QRectF(
+            m_startSelection.x() + (m_targetSelection.x() - m_startSelection.x()) * easedProgress,
+            m_startSelection.y() + (m_targetSelection.y() - m_startSelection.y()) * easedProgress,
+            m_startSelection.width() +
+                (m_targetSelection.width() - m_startSelection.width()) * easedProgress,
+            m_startSelection.height() +
+                (m_targetSelection.height() - m_startSelection.height()) * easedProgress);
     }
     if (selection == m_displayedSelection) {
         return false;
@@ -98,6 +109,15 @@ bool ScreenshotSmartSelectionTransition::isRunning() const {
 
 QRectF ScreenshotSmartSelectionTransition::displayedSelection() const {
     return m_displayedSelection;
+}
+
+int ScreenshotSmartSelectionTransition::durationMs() const {
+    return m_animation == snow_shot::SelectionTransitionAnimation::Fast ? kFastDurationMs
+                                                                        : kDurationMs;
+}
+
+qreal ScreenshotSmartSelectionTransition::progressAt(qint64 nowMs) const {
+    return m_progressAtStart + static_cast<qreal>(nowMs - m_startedAtMs) / durationMs();
 }
 
 bool ScreenshotSmartSelectionTransition::presentDirectly(const QRectF& selection) {

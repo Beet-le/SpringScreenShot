@@ -10,6 +10,8 @@
 
 class ScreenshotSmartSelectionTransition final {
   public:
+    static constexpr int kDurationMs = 101;
+    static constexpr int kFastDurationMs = 67;
     static constexpr qreal kSnapTolerance = 0.4;
 
     using UpdateCallback = std::function<void(const QRectF&)>;
@@ -30,13 +32,18 @@ class ScreenshotSmartSelectionTransition final {
     [[nodiscard]] QRectF displayedSelection() const;
 
   private:
+    [[nodiscard]] int durationMs() const;
+    [[nodiscard]] qreal progressAt(qint64 nowMs) const;
     [[nodiscard]] bool presentDirectly(const QRectF& selection);
     void notifyUpdate();
 
     UpdateCallback m_update;
     QRectF m_displayedSelection;
+    QRectF m_startSelection;
     QRectF m_targetSelection;
+    qint64 m_startedAtMs = 0;
     qint64 m_lastAdvancedAtMs = 0;
+    qreal m_progressAtStart = 0.0;
     bool m_running = false;
     bool m_hasPresentedSmartSelection = false;
     snow_shot::SelectionTransitionAnimation m_animation =
