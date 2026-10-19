@@ -81,6 +81,8 @@ class ScreenshotController : public QObject {
 
     void setPrintService(ScreenshotPrintService* service);
     void setRecordingPermissionCheck(std::function<bool(bool, bool, bool)> check);
+    void prepareForSessionEnd(int timeoutMs);
+    void offerRecordingRecovery();
 
     [[nodiscard]] QJsonObject mcpState() const;
     using McpCompletion = std::function<void(QJsonObject, QString)>;

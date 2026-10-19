@@ -20,6 +20,10 @@
             <translation>仅 Windows 支持以管理员身份启动。</translation>
         </message>
         <message>
+            <source>Administrator launch is unavailable in the Microsoft Store version.</source>
+            <translation>Microsoft Store 版本不支持以管理员身份启动。</translation>
+        </message>
+        <message>
             <source>An interrupted startup change needs administrator authorization. Reapply your startup setting.</source>
             <translation>中断的自启动设置更改需要管理员授权。请重新应用自启动设置。</translation>
         </message>
@@ -129,6 +133,21 @@
         <message>
             <source>Screen &amp; System Audio Recording</source>
             <translation>屏幕与系统音频录制</translation>
+        </message>
+    </context>
+    <context>
+        <name>AutoStartRegistration</name>
+        <message>
+            <source>Enable Snow Shot in Windows Settings &gt; Apps &gt; Startup.</source>
+            <translation>请在 Windows 设置 &gt; 应用 &gt; 启动中启用 Snow Shot。</translation>
+        </message>
+        <message>
+            <source>Startup is managed by your organization.</source>
+            <translation>启动设置由您的组织管理。</translation>
+        </message>
+        <message>
+            <source>Windows startup settings are unavailable.</source>
+            <translation>Windows 启动设置不可用。</translation>
         </message>
     </context>
     <context>
@@ -4161,6 +4180,10 @@
             <translation>独立翻译窗口</translation>
         </message>
         <message>
+            <source>Start Snow Shot in the background at sign‑in. Updates and file associations are managed by Windows.</source>
+            <translation>登录时在后台启动 Snow Shot。更新和文件关联由 Windows 管理。</translation>
+        </message>
+        <message>
             <source>Start Snow Shot in the background when Windows starts</source>
             <translation>Windows 启动时在后台启动 Snow Shot</translation>
         </message>
@@ -4906,6 +4929,10 @@ Unavailable: %2</source>
         <message>
             <source>The storage directory is not writable.</source>
             <translation>存储目录不可写。</translation>
+        </message>
+        <message>
+            <source>The storage directory path is empty</source>
+            <translation>存储目录路径为空</translation>
         </message>
         <message>
             <source>Verification failed for %1.</source>

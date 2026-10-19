@@ -1,3 +1,4 @@
+#include "snow_shot/app/distribution.h"
 #include "snow_shot/shortcuts/screenshotshortcutcontext.h"
 #include "snow_shot/presentation/globalmousemanager.h"
 #include "snow_shot/presentation/settings/settingsbackend.h"
@@ -223,6 +224,8 @@ storage::CaptureHistoryPolicy defaultHistoryPolicy() {
 platform::windows::AdministratorResult
 applyNativeStartupSettings(bool enabled, bool elevated,
                            platform::macos::LoginItemService* loginItems) {
+    if (app::distribution::isStoreManaged())
+        elevated = false;
 #ifdef Q_OS_MACOS
     Q_UNUSED(elevated);
     const auto result = loginItems->setEnabled(enabled);
@@ -291,6 +294,12 @@ BuiltInSettingsBackend::BuiltInSettingsBackend(
     if (m_mouseManager)
         connect(m_mouseManager, &GlobalMouseManager::permissionStateChanged, this,
                 &SettingsBackend::globalMousePermissionChanged);
+    if (app::distribution::isStoreManaged())
+        connect(qApp, &QGuiApplication::applicationStateChanged, this,
+                [this](Qt::ApplicationState state) {
+                    if (state == Qt::ApplicationActive)
+                        emit synchronized();
+                });
     observeAppearanceChanges();
 
     auto& languageManager = LanguageManager::instance();
@@ -358,6 +367,8 @@ bool BuiltInSettingsBackend::eventFilter(QObject* watched, QEvent* event) {
 
 platform::windows::AdministratorResult BuiltInSettingsBackend::applyStartupSettings(bool enabled,
                                                                                     bool elevated) {
+    if (app::distribution::isStoreManaged())
+        elevated = false;
     return m_startupSettingsApply ? m_startupSettingsApply(enabled, elevated)
                                   : applyNativeStartupSettings(enabled, elevated, m_loginItems);
 }
@@ -429,6 +440,9 @@ QString BuiltInSettingsBackend::selectOptionsError(SettingsSelectBinding binding
 }
 
 bool BuiltInSettingsBackend::selectEnabled(SettingsSelectBinding binding) const {
+    if (app::distribution::isStoreManaged() && (binding == SettingsSelectBinding::UpdateMode ||
+                                                binding == SettingsSelectBinding::ContextMenuMode))
+        return false;
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     return binding != SettingsSelectBinding::TranslationService || m_translationService != nullptr;
 #else
@@ -769,6 +783,8 @@ bool BuiltInSettingsBackend::applySelectValue(SettingsSelectBinding binding,
     case SettingsSelectBinding::Proxy:
         return storage::NetworkSettings().setProxy(value.toString());
     case SettingsSelectBinding::UpdateMode:
+        if (app::distribution::isStoreManaged())
+            return false;
         return storage::ApplicationStorage::instance().configuration().setValue(
             QStringLiteral("updates/mode"), value.toString());
     case SettingsSelectBinding::OcrModelType:
@@ -983,10 +999,13 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
 #ifdef Q_OS_MACOS
         return m_loginItems->snapshot().requested();
 #else
-        return storage::SystemSettings().autoStartAtBoot();
+        return app::distribution::isStoreManaged()
+                   ? platform::windows::AutoStartRegistration::snapshot().exists
+                   : storage::SystemSettings().autoStartAtBoot();
 #endif
     case SettingsSwitchBinding::LaunchAsAdministrator:
-        return storage::SystemSettings().launchAsAdministrator();
+        return !app::distribution::isStoreManaged() &&
+               storage::SystemSettings().launchAsAdministrator();
     case SettingsSwitchBinding::DrawingRememberLastUsedTool:
         return storage::DrawingSettings().rememberLastUsedTool();
     case SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton:
@@ -997,6 +1016,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
 
 bool BuiltInSettingsBackend::applyContextMenuSettings(const QJsonValue& mode,
                                                       const QJsonValue& shortcutValue) {
+    if (app::distribution::isStoreManaged())
+        return false;
 #ifdef Q_OS_WIN
     const auto requestedMode = storage::ConfigurationSchema::normalize(kContextMenuModeKey, mode);
     const auto requestedShortcuts =
@@ -1039,6 +1060,8 @@ bool BuiltInSettingsBackend::applyContextMenuSettings(const QJsonValue& mode,
 }
 
 void BuiltInSettingsBackend::refreshPlatformSettings() {
+    if (app::distribution::isStoreManaged())
+        return;
 #ifdef Q_OS_MACOS
     m_loginItems->refresh();
 #endif
@@ -1064,6 +1087,8 @@ bool BuiltInSettingsBackend::fieldPending(const QString& fieldId) const {
             fieldId == u"system.restart-as-administrator");
 }
 QString BuiltInSettingsBackend::switchHint(SettingsSwitchBinding binding) const {
+    if (app::distribution::isStoreManaged() && binding == SettingsSwitchBinding::AutoStartAtBoot)
+        return platform::windows::AutoStartRegistration::hint();
 #ifdef Q_OS_MACOS
     if (binding == SettingsSwitchBinding::AutoStartAtBoot)
         return m_loginItems->hint();
@@ -1076,6 +1101,14 @@ QString BuiltInSettingsBackend::switchHint(SettingsSwitchBinding binding) const 
         .launchHint;
 }
 bool BuiltInSettingsBackend::switchEnabled(SettingsSwitchBinding binding) const {
+    if (app::distribution::isStoreManaged()) {
+        if (binding == SettingsSwitchBinding::LaunchAsAdministrator)
+            return false;
+        if (binding == SettingsSwitchBinding::AutoStartAtBoot) {
+            const auto state = platform::windows::AutoStartRegistration::snapshot().state;
+            return platform::windows::AutoStartRegistration::canChangeState(state);
+        }
+    }
 #if !SNOW_SHOT_ENABLE_EXTENDED_FEATURES
     if (binding == SettingsSwitchBinding::TranslationPageEnabled ||
         binding == SettingsSwitchBinding::StandaloneTranslationWindow ||
@@ -2282,8 +2315,10 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
             storage::ConfigurationSchema::normalize(key, values.value(key, fallback));
         return normalized.valid ? normalized.value : fallback;
     };
-    const auto requestedEnabled = importedValue(enabledKey);
-    const auto requestedElevated = importedValue(elevatedKey);
+    const auto requestedEnabled = app::distribution::isStoreManaged() ? previous.value(enabledKey)
+                                                                      : importedValue(enabledKey);
+    const auto requestedElevated =
+        app::distribution::isStoreManaged() ? QJsonValue(false) : importedValue(elevatedKey);
 #ifdef Q_OS_WIN
     const auto requestedContextMenu = importedValue(contextMenuKey);
     const auto requestedContextMenuShortcuts = importedValue(kContextMenuShortcutKey);
@@ -2292,7 +2327,11 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
     // configuration baseline intact even if querying the OS during rollback fails.
     auto staged = values;
     staged.insert(enabledKey, previous.value(enabledKey));
-    staged.insert(elevatedKey, previous.value(elevatedKey));
+    staged.insert(elevatedKey, app::distribution::isStoreManaged() ? QJsonValue(false)
+                                                                   : previous.value(elevatedKey));
+    if (app::distribution::isStoreManaged())
+        staged.insert(QStringLiteral("updates/mode"),
+                      previous.value(QStringLiteral("updates/mode")));
 #ifdef Q_OS_WIN
     staged.insert(contextMenuKey, previous.value(contextMenuKey));
     staged.insert(kContextMenuShortcutKey, previous.value(kContextMenuShortcutKey));
@@ -2332,15 +2371,17 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
         return applySelectValue(SettingsSelectBinding::ApplicationPriority, value.toVariant());
     });
 #endif
-    if (previous.value(enabledKey) != requestedEnabled ||
-        previous.value(elevatedKey) != requestedElevated) {
+    if (!app::distribution::isStoreManaged() &&
+        (previous.value(enabledKey) != requestedEnabled ||
+         previous.value(elevatedKey) != requestedElevated)) {
         const auto result =
             applyStartupSettings(requestedEnabled.toBool(), requestedElevated.toBool());
         accepted = accepted && result.success;
     }
 #ifdef Q_OS_WIN
-    if (previous.value(contextMenuKey) != requestedContextMenu ||
-        previous.value(kContextMenuShortcutKey) != requestedContextMenuShortcuts)
+    if (!app::distribution::isStoreManaged() &&
+        (previous.value(contextMenuKey) != requestedContextMenu ||
+         previous.value(kContextMenuShortcutKey) != requestedContextMenuShortcuts))
         accepted = applyContextMenuSettings(requestedContextMenu, requestedContextMenuShortcuts) &&
                    accepted;
 #endif
@@ -2884,6 +2925,8 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                 QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window"))
                 .toBool());
     case SettingsSectionReset::SystemGeneral: {
+        if (app::distribution::isStoreManaged())
+            return true;
         emit synchronized();
         const auto result = applyStartupSettings(
             storage::ConfigurationSchema::defaultValue(QStringLiteral("system/auto_start_at_boot"))

@@ -151,6 +151,8 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
                                        int highlightRadius, uint32_t playbackOverlay,
                                        const QColor& progressBarColor, SnowWebcam* webcam,
                                        int webcamSize, uint32_t webcamShape) {
+    if (m_sessionEnding)
+        return;
     if (m_capture == capture && m_output == output && m_trail == trail && m_click == click &&
         m_keyboard == keyboard && m_trailDurationMs == trailDurationMs &&
         m_keyboardBackground == keyboardBackground && m_keyboardForeground == keyboardForeground &&
@@ -192,6 +194,8 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
 }
 
 void RecordingEffectPreview::setEligible(bool eligible) {
+    if (m_sessionEnding)
+        return;
     if (m_eligible == eligible) {
         return;
     }
@@ -205,6 +209,8 @@ void RecordingEffectPreview::setEligible(bool eligible) {
 }
 
 void RecordingEffectPreview::synchronize() {
+    if (m_sessionEnding)
+        return;
     SNOW_SHOT_RECORDING_PERF_SCOPE("preview.synchronize");
     const bool enabled = m_eligible && m_area.isVisible() && !m_windowBlocked &&
                          QApplication::activeModalWidget() == nullptr && m_capture.isValid() &&
@@ -335,7 +341,7 @@ void RecordingEffectPreview::stopAndClear(bool present) {
 }
 
 void RecordingEffectPreview::receiveFrame() {
-    if (!m_running) {
+    if (m_sessionEnding || !m_running) {
         return;
     }
     auto frame = m_source->acquire();
@@ -362,6 +368,16 @@ void RecordingEffectPreview::receiveFrame() {
         m_area.canvas()->update(damage);
     }
     updateReadout();
+}
+
+void RecordingEffectPreview::prepareForSessionEnd() {
+    m_sessionEnding = true;
+    m_configurationTimer.stop();
+    reportError = {};
+    qApp->removeEventFilter(this);
+    disconnect(&snow_shot::presentation::styles::ThemeManager::instance(), nullptr, this, nullptr);
+    // Native source teardown joins its observer. The retained UI session keeps it alive until
+    // process termination instead of invoking stopAndClear() on the session-ending thread.
 }
 
 void RecordingEffectPreview::clearFrame() {

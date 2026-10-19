@@ -124,6 +124,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QProcessEnvironment>
+#include "snow_shot/app/distribution.h"
 #include <QPointer>
 #include <QRectF>
 #include <QScreen>
@@ -6515,6 +6516,20 @@ void ScreenshotController::setRecordingPermissionCheck(
     m_impl->m_recordingPermissionCheck = std::move(check);
     if (m_impl->m_screenRecordingController)
         m_impl->m_screenRecordingController->setPermissionCheck(m_impl->m_recordingPermissionCheck);
+}
+
+void ScreenshotController::prepareForSessionEnd(int timeoutMs) {
+    if (m_impl->m_screenRecordingController)
+        m_impl->m_screenRecordingController->prepareForSessionEnd(timeoutMs);
+}
+
+void ScreenshotController::offerRecordingRecovery() {
+    const auto directory = snow_shot::app::distribution::writableDataDirectory();
+    if (directory.isEmpty() ||
+        !QFileInfo::exists(QDir(directory).filePath(QStringLiteral("recording-recovery.json"))))
+        return;
+    if (m_impl->ensureRecordingFeature())
+        m_impl->m_screenRecordingController->offerRecordingRecovery();
 }
 
 void ScreenshotController::captureAndStartScreenRecording() {

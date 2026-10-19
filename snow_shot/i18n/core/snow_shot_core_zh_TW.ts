@@ -162,6 +162,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>官方網站</translation>
         </message>
         <message>
+            <source>Open Microsoft Store</source>
+            <translation>開啟 Microsoft Store</translation>
+        </message>
+        <message>
             <source>Pin to screen</source>
             <translation>固定到螢幕</translation>
         </message>
@@ -172,6 +176,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Preview</source>
             <translation>預覽版</translation>
+        </message>
+        <message>
+            <source>Privacy policy</source>
+            <translation>隱私權政策</translation>
         </message>
         <message>
             <source>QQ Group 3</source>
@@ -236,6 +244,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Update failed: %1</source>
             <translation>更新失敗：%1</translation>
+        </message>
+        <message>
+            <source>Updates are managed by Microsoft Store.</source>
+            <translation>更新由 Microsoft Store 管理。</translation>
         </message>
         <message>
             <source>Verifying update…</source>

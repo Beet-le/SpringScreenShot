@@ -120,7 +120,9 @@ QJsonObject updateJson(update::UpdateService* service) {
 #ifdef Q_OS_MACOS
             {QStringLiteral("installation"), QStringLiteral("official_website")}
 #else
-            {QStringLiteral("installation"), QStringLiteral("native_updater")}
+            {QStringLiteral("installation"), service->managedByStore()
+                                                 ? QStringLiteral("microsoft_store")
+                                                 : QStringLiteral("native_updater")}
 #endif
     };
 }
@@ -781,7 +783,7 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
     } else if (method == u"snow_shot_updates_status") {
         finish(updateJson(ports.updates));
     } else if (method == u"snow_shot_updates_action") {
-        if (!ports.updates) {
+        if (!ports.updates || ports.updates->managedByStore()) {
             error(QStringLiteral("unsupported"));
             return;
         }

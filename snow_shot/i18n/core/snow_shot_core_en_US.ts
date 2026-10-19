@@ -162,6 +162,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Official website</translation>
         </message>
         <message>
+            <source>Open Microsoft Store</source>
+            <translation>Open Microsoft Store</translation>
+        </message>
+        <message>
             <source>Pin to screen</source>
             <translation>Pin to screen</translation>
         </message>
@@ -172,6 +176,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Preview</source>
             <translation>Preview</translation>
+        </message>
+        <message>
+            <source>Privacy policy</source>
+            <translation>Privacy policy</translation>
         </message>
         <message>
             <source>QQ Group 3</source>
@@ -236,6 +244,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Update failed: %1</source>
             <translation>Update failed: %1</translation>
+        </message>
+        <message>
+            <source>Updates are managed by Microsoft Store.</source>
+            <translation>Updates are managed by Microsoft Store.</translation>
         </message>
         <message>
             <source>Verifying update…</source>

@@ -2032,10 +2032,14 @@ snow_shot::storage::PinnedWindowRecord ScreenshotPinnedWindow::persistenceSnapsh
 }
 
 void ScreenshotPinnedWindow::suspendStorageWrites() {
+    checkpointStorage();
+    m_storageWritesSuspended = true;
+}
+
+void ScreenshotPinnedWindow::checkpointStorage() {
     if (m_persistenceTimer)
         m_persistenceTimer->stop();
     persistNow();
-    m_storageWritesSuspended = true;
 }
 
 void ScreenshotPinnedWindow::resumeStorageWrites(const QString& oldRoot, const QString& newRoot) {

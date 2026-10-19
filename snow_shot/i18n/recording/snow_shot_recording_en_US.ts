@@ -164,12 +164,28 @@
     <context>
         <name>ScreenRecordingController</name>
         <message>
+            <source>A recording was interrupted when Windows ended the session. Recover the saved recording or open its folder.</source>
+            <translation>A recording was interrupted when Windows ended the session. Recover the saved recording or open its folder.</translation>
+        </message>
+        <message>
             <source>Keyboard recording failed: %1</source>
             <translation>Keyboard recording failed: %1</translation>
         </message>
         <message>
             <source>Motion preview unavailable: %1</source>
             <translation>Motion preview unavailable: %1</translation>
+        </message>
+        <message>
+            <source>Open folder</source>
+            <translation>Open folder</translation>
+        </message>
+        <message>
+            <source>Recording recovery</source>
+            <translation>Recording recovery</translation>
+        </message>
+        <message>
+            <source>Recover</source>
+            <translation>Recover</translation>
         </message>
         <message>
             <source>Screen recording</source>

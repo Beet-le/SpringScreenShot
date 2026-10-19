@@ -15,6 +15,7 @@
 #include "snow_shot/presentation/settings/applicationpriority.h"
 #include "snow_shot/platform/windows/autostartregistration.h"
 #include "snow_shot/platform/windows/administratorlaunch.h"
+#include "snow_shot/app/distribution.h"
 #include "snow_shot/platform/windows/shellcontextmenuregistration.h"
 #include "widgets/message.h"
 #include "widgets/platform_compatibility.h"
@@ -37,6 +38,9 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QDebug>
 #include <QFileInfo>
 #include <QRegularExpression>
@@ -47,6 +51,7 @@
 #include <QSysInfo>
 #include <optional>
 #include <utility>
+#include <cstdio>
 #include "snow_capture.h"
 #include "snow_recording.h"
 #ifdef SNOW_SHOT_MCP_TEST_FIXTURE
@@ -75,6 +80,36 @@ int runScreenshotControllerLifetimeTests(int argc, char** argv);
 #endif
 
 namespace {
+snow_shot::diagnostics::DiagnosticsOptions
+startupDiagnosticsOptions(const QString& selectedDirectory, const QString& applicationName) {
+    snow_shot::diagnostics::DiagnosticsOptions options;
+    const bool storeManaged = snow_shot::app::distribution::isStoreManaged();
+    const QString stableRoot =
+        storeManaged ? snow_shot::app::distribution::writableDataDirectory()
+                     : QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    // A missing package data root must never turn a relative path into a writable log
+    // directory in the current working directory or the standalone application's state.
+    if (storeManaged && !QDir::isAbsolutePath(stableRoot))
+        return options;
+    if (!selectedDirectory.isEmpty())
+        options.directories.append(QDir(selectedDirectory).filePath(QStringLiteral("logs")));
+    options.directories.append(QDir(stableRoot).filePath(QStringLiteral("logs")));
+    // Crashpad registers process-wide exception resources once. Its live database must
+    // stay at a stable path while the user-selected data/log directory is migrated.
+    options.crashCaptureDirectory = QDir(stableRoot).filePath(QStringLiteral("logs/crashes"));
+    const QString temporaryRoot =
+        QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).canonicalPath();
+    if (!storeManaged || QDir::isAbsolutePath(temporaryRoot)) {
+        const QString relative =
+            storeManaged
+                ? QStringLiteral("SnowShot/%1/%2/logs")
+                      .arg(applicationName, snow_shot::app::distribution::packageFamilyName())
+                : QStringLiteral("SnowShot/%1/logs").arg(applicationName);
+        options.directories.append(QDir(temporaryRoot).filePath(relative));
+    }
+    return options;
+}
+
 #ifndef Q_OS_MACOS
 QString updateInstallationRoot(const QString& executableDirectory) {
     return QFileInfo(executableDirectory).dir().absolutePath();
@@ -99,6 +134,34 @@ std::optional<bool> updateTransactionPending(const QString& helperPath, const QS
 } // namespace
 
 int main(int argc, char* argv[]) {
+    if (argc > 1 && QByteArray(argv[1]) == "--distribution-probe") {
+        if (argc != 2)
+            return 64;
+        QCoreApplication probe(argc, argv);
+        QCoreApplication::setOrganizationName(snow_shot::app::edition::registryName());
+        QCoreApplication::setApplicationName(snow_shot::app::edition::applicationName());
+        const auto policy = snow_shot::app::distribution::policy();
+        const auto diagnostics =
+            startupDiagnosticsOptions({}, snow_shot::app::edition::applicationName());
+        const QByteArray output =
+            QJsonDocument(
+                QJsonObject{
+                    {QStringLiteral("channel"), SNOW_SHOT_STORE_BUILD
+                                                    ? QStringLiteral("store")
+                                                    : QStringLiteral("standalone")},
+                    {QStringLiteral("compiledStore"), SNOW_SHOT_STORE_BUILD != 0},
+                    {QStringLiteral("managedByStore"), policy.managedByStore},
+                    {QStringLiteral("packageFamily"), policy.packageFamily},
+                    {QStringLiteral("diagnosticDirectories"),
+                     QJsonArray::fromStringList(diagnostics.directories)},
+                    {QStringLiteral("crashCaptureDirectory"), diagnostics.crashCaptureDirectory},
+                })
+                .toJson(QJsonDocument::Compact);
+        return std::fwrite(output.constData(), 1, static_cast<size_t>(output.size()), stdout) ==
+                       static_cast<size_t>(output.size())
+                   ? 0
+                   : 1;
+    }
     QCoreApplication::setOrganizationName(snow_shot::app::edition::registryName());
     QString applicationName = snow_shot::app::edition::applicationName();
     QString e2eInstanceId;
@@ -193,6 +256,8 @@ int main(int argc, char* argv[]) {
     }
     bool administratorRestart = false;
     if (argc > 1 && QString::fromLocal8Bit(argv[1]) == u"--administrator-helper") {
+        if (snow_shot::app::distribution::isStoreManaged())
+            return 2;
         QCoreApplication helper(argc, argv);
         const int result =
             snow_shot::platform::windows::dispatchAdministratorHelper(helper.arguments());
@@ -361,57 +426,59 @@ int main(int argc, char* argv[]) {
     }
 #ifndef Q_OS_MACOS
     // macOS updates use a downloaded DMG, not the standalone transaction helper.
-    QString executablePath = QString::fromLocal8Bit(argv[0]);
+    if (!snow_shot::app::distribution::isStoreManaged()) {
+        QString executablePath = QString::fromLocal8Bit(argv[0]);
 #ifdef Q_OS_WIN
-    wchar_t modulePath[32768]{};
-    const DWORD moduleLength = GetModuleFileNameW(nullptr, modulePath, 32768);
-    if (moduleLength > 0 && moduleLength < 32768) {
-        executablePath = QString::fromWCharArray(modulePath, static_cast<int>(moduleLength));
-    }
+        wchar_t modulePath[32768]{};
+        const DWORD moduleLength = GetModuleFileNameW(nullptr, modulePath, 32768);
+        if (moduleLength > 0 && moduleLength < 32768) {
+            executablePath = QString::fromWCharArray(modulePath, static_cast<int>(moduleLength));
+        }
 #endif
-    const QString updateRoot = updateInstallationRoot(QFileInfo(executablePath).absolutePath());
-    const QString updateHelper = QDir(QFileInfo(executablePath).absolutePath())
-                                     .filePath(snow_shot::app::edition::updaterName());
-    const auto pendingUpdate = updateTransactionPending(updateHelper, updateRoot);
-    if (!pendingUpdate.has_value()) {
-        return 6;
-    }
-    if (*pendingUpdate) {
-        QCoreApplication recovery(argc, argv);
-        const QString root = updateInstallationRoot(QCoreApplication::applicationDirPath());
-        const QString pipe =
-            QStringLiteral("snow-shot-recover-") + QUuid::createUuid().toString(QUuid::Id128);
-        QLocalServer server;
-        server.setSocketOptions(QLocalServer::UserAccessOption);
-        if (!server.listen(pipe)) {
+        const QString updateRoot = updateInstallationRoot(QFileInfo(executablePath).absolutePath());
+        const QString updateHelper = QDir(QFileInfo(executablePath).absolutePath())
+                                         .filePath(snow_shot::app::edition::updaterName());
+        const auto pendingUpdate = updateTransactionPending(updateHelper, updateRoot);
+        if (!pendingUpdate.has_value()) {
             return 6;
         }
-        const QString result =
-            QDir(QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
-                     .canonicalPath())
-                .filePath(pipe + QStringLiteral(".txt"));
-        const QStringList args{
-            QStringLiteral("--launch"), QStringLiteral("--recovery"),
-            QStringLiteral("--target"), root,
-            QStringLiteral("--parent"), QString::number(QCoreApplication::applicationPid()),
-            QStringLiteral("--pipe"),   pipe,
-            QStringLiteral("--result"), result};
-        if (!QProcess::startDetached(updateHelper, args)) {
-            return 6;
+        if (*pendingUpdate) {
+            QCoreApplication recovery(argc, argv);
+            const QString root = updateInstallationRoot(QCoreApplication::applicationDirPath());
+            const QString pipe =
+                QStringLiteral("snow-shot-recover-") + QUuid::createUuid().toString(QUuid::Id128);
+            QLocalServer server;
+            server.setSocketOptions(QLocalServer::UserAccessOption);
+            if (!server.listen(pipe)) {
+                return 6;
+            }
+            const QString result =
+                QDir(QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
+                         .canonicalPath())
+                    .filePath(pipe + QStringLiteral(".txt"));
+            const QStringList args{
+                QStringLiteral("--launch"), QStringLiteral("--recovery"),
+                QStringLiteral("--target"), root,
+                QStringLiteral("--parent"), QString::number(QCoreApplication::applicationPid()),
+                QStringLiteral("--pipe"),   pipe,
+                QStringLiteral("--result"), result};
+            if (!QProcess::startDetached(updateHelper, args)) {
+                return 6;
+            }
+            if (!server.waitForNewConnection(180000)) {
+                return 6;
+            }
+            auto* socket = server.nextPendingConnection();
+            if (!socket->canReadLine() && !socket->waitForReadyRead(10000)) {
+                return 6;
+            }
+            if (socket->readLine().trimmed() != "ready") {
+                return 6;
+            }
+            socket->write("go\n");
+            socket->waitForBytesWritten(5000);
+            return 0;
         }
-        if (!server.waitForNewConnection(180000)) {
-            return 6;
-        }
-        auto* socket = server.nextPendingConnection();
-        if (!socket->canReadLine() && !socket->waitForReadyRead(10000)) {
-            return 6;
-        }
-        if (socket->readLine().trimmed() != "ready") {
-            return 6;
-        }
-        socket->write("go\n");
-        socket->waitForBytesWritten(5000);
-        return 0;
     }
 #endif
 #ifdef Q_OS_MACOS
@@ -433,23 +500,9 @@ int main(int argc, char* argv[]) {
     storageOptions.resolvedDirectory =
         std::make_shared<snow_shot::storage::StorageDirectorySelection>(
             snow_shot::storage::ApplicationStorage::resolveDirectory());
-    snow_shot::diagnostics::DiagnosticsOptions diagnosticsOptions;
     const auto& selectedStorage = *storageOptions.resolvedDirectory;
-    if (!selectedStorage.effectiveDirectory.isEmpty()) {
-        diagnosticsOptions.directories.append(
-            QDir(selectedStorage.effectiveDirectory).filePath(QStringLiteral("logs")));
-    }
-    diagnosticsOptions.directories.append(
-        QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
-            .filePath(QStringLiteral("logs")));
-    // Crashpad registers process-wide exception resources once. Its live database must
-    // stay at a stable path while the user-selected data/log directory is migrated.
-    diagnosticsOptions.crashCaptureDirectory =
-        QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
-            .filePath(QStringLiteral("logs/crashes"));
-    diagnosticsOptions.directories.append(
-        QDir(QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).canonicalPath())
-            .filePath(QStringLiteral("SnowShot/%1/logs").arg(applicationName)));
+    auto diagnosticsOptions =
+        startupDiagnosticsOptions(selectedStorage.effectiveDirectory, applicationName);
 #ifdef Q_OS_MACOS
     diagnosticsOptions.handlerPath =
         QDir(selectedStorage.executableDirectory).filePath(QStringLiteral("crashpad_handler"));
@@ -577,7 +630,7 @@ int main(int argc, char* argv[]) {
     snow_shot::presentation::styles::ThemeManager::instance().initialize(app);
 #ifdef Q_OS_WIN
     auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
-    if (!updaterRelaunch &&
+    if (!snow_shot::app::distribution::isStoreManaged() && !updaterRelaunch &&
         applicationStorage.configuration().value(QStringLiteral("updates/mode")).toString() ==
             u"next_launch") {
         snow_shot::update::UpdateService startupUpdate(

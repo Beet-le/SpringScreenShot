@@ -133,6 +133,10 @@
             <translation>The bundled text recognition runtime is damaged or incompatible. Reinstall Snow Shot for this Mac.</translation>
         </message>
         <message>
+            <source>The packaged text recognition runtime is missing or damaged. Repair or reinstall Snow Shot from Microsoft Store.</source>
+            <translation>The packaged text recognition runtime is missing or damaged. Repair or reinstall Snow Shot from Microsoft Store.</translation>
+        </message>
+        <message>
             <source>Unable to open the recognized link</source>
             <translation>Unable to open the recognized link</translation>
         </message>

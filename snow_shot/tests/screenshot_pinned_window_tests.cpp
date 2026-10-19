@@ -10343,7 +10343,8 @@ void closeRestoredPinnedWindow(ScreenshotPinnedWindow* window, const QString& re
 
 void restoredStateSavePreservesSourceRevision() {
     IsolatedPinnedStorage isolated;
-    auto& repository = snow_shot::storage::ApplicationStorage::instance().pinnedWindows();
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    auto& repository = storage.pinnedWindows();
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen, "restored state persistence requires a screen");
     auto record = savedPinnedRecord(*screen, 1.0, QSize(160, 100), 100.0, QPoint(40, 40));
@@ -10383,16 +10384,51 @@ void restoredStateSavePreservesSourceRevision() {
              .isEmpty(),
         "edit restored document before its state save");
     const auto expected = window->persistenceSnapshot();
-    ScreenshotPinnedWindowTestAccess::persistNow(*window);
+    const auto beforeCheckpoint = repository.loadRecord(record.id);
+    require(ScreenshotPinnedWindowTestAccess::persistencePending(*window) && beforeCheckpoint &&
+                beforeCheckpoint->opacityPercent != expected.opacityPercent &&
+                beforeCheckpoint->canvasSession != expected.canvasSession,
+            "live pin edits must still be waiting for their debounced save before checkpoint");
+    window->checkpointStorage();
+    require(!ScreenshotPinnedWindowTestAccess::persistencePending(*window),
+            "Store checkpoint submits pending edits immediately and stops the debounce timer");
     require(repository.previewSourceRevision(record.id) == sourceRevision,
             "restored state saves must not replace the immutable source or invalidate previews");
-    require(repository.flush().success, "commit restored state save");
+    require(storage.flushNow().success,
+            "flush the real Store checkpoint through application storage");
     const auto saved = repository.loadRecord(record.id);
     require(saved && saved->image == committed->image,
             "state-only saves preserve committed source pixels");
     require(saved->opacityPercent == 75, "state-only saves persist window state");
     require(saved->canvasSession == expected.canvasSession,
             "state-only saves persist document changes");
+    {
+        snow_shot::storage::PinnedWindowRepository reloaded(storage.configurationDirectory(),
+                                                            false);
+        const auto checkpointed = reloaded.loadRecord(record.id);
+        require(checkpointed && checkpointed->opacityPercent == expected.opacityPercent &&
+                    checkpointed->canvasSession == expected.canvasSession,
+                "pending pin edits survive a disk reload after the Store checkpoint");
+    }
+    require(window->automationUpdate({{QStringLiteral("opacity_percent"), 65}}, &error),
+            "edit the pin again after a checkpoint that Windows could later cancel");
+    require(
+        !ScreenshotPinnedWindowTestAccess::applyAnnotationTransaction(
+             *window, R"({"version":1,"operations":[{"type":"rectangle","bounds":[40,20,12,18]}]})")
+             .isEmpty(),
+        "add another document edit after the checkpoint");
+    const auto afterCheckpoint = window->persistenceSnapshot();
+    require(ScreenshotPinnedWindowTestAccess::persistencePending(*window) &&
+                afterCheckpoint.canvasSession != expected.canvasSession,
+            "checkpointing must leave later document edits scheduled for normal persistence");
+    translation_tests::waitUntil(
+        [&] {
+            const auto latest = repository.loadRecord(record.id);
+            return latest && latest->opacityPercent == afterCheckpoint.opacityPercent &&
+                   latest->canvasSession == afterCheckpoint.canvasSession;
+        },
+        "normal debounce persists later edits without a resume or another checkpoint");
+    require(storage.flushNow().success, "commit normal pin writes after the Store checkpoint");
     ScreenshotClipboardContent replacement;
     replacement.image = QImage(record.image.size(), QImage::Format_RGB32);
     replacement.image.fill(QColor(90, 180, 120));

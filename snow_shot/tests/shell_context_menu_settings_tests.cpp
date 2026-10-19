@@ -1,4 +1,5 @@
 #include "shell_context_menu_test_registry.h"
+#include "snow_shot/app/distribution.h"
 #include "snow_shot/presentation/globalshortcutmanager.h"
 #include "snow_shot/presentation/languagemanager.h"
 #include "snow_shot/presentation/settings/settingsbackend.h"
@@ -388,6 +389,47 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QTemporaryDir temporary;
     require(temporary.isValid(), "create isolated settings test storage");
+    if (snow_shot::app::distribution::isStoreManaged()) {
+        auto& storage = storage::ApplicationStorage::instance();
+        require(storage.initialize({temporary.path(), temporary.path(), 60000}).success,
+                "initialize isolated Store settings");
+        Registry registry;
+        windows::ShellContextMenuRegistration shell(registry.options());
+        snow_shot::presentation::GlobalShortcutManager shortcuts;
+        int nativeStartupChanges = 0;
+        settings::BuiltInSettingsBackend backend(
+            shortcuts, nullptr, nullptr, nullptr, nullptr, &shell, [&](bool, bool) {
+                ++nativeStartupChanges;
+                return windows::AdministratorResult{true, false, {}};
+            });
+        const auto previous = storage.configuration().snapshot();
+        auto imported = previous;
+        imported.insert(QStringLiteral("system/launch_as_administrator"), true);
+        imported.insert(QStringLiteral("system/auto_start_at_boot"), true);
+        imported.insert(kKey, QStringLiteral("disabled"));
+        imported.insert(QStringLiteral("updates/mode"), QStringLiteral("next_launch"));
+        require(backend.importConfigurationSnapshot(
+                    imported, storage::ConfigurationSchema::currentVersion()) &&
+                    nativeStartupChanges == 0 && registry.writes == 0 &&
+                    storage.configuration().value(kKey) == previous.value(kKey) &&
+                    storage.configuration().value(QStringLiteral("updates/mode")) ==
+                        previous.value(QStringLiteral("updates/mode")) &&
+                    !storage.configuration()
+                         .value(QStringLiteral("system/launch_as_administrator"))
+                         .toBool(),
+                "Store imports preserve OS-owned choices and cannot restore native integration");
+        require(backend.resetSection(settings::SettingsSectionReset::SystemGeneral) &&
+                    nativeStartupChanges == 0 && registry.writes == 0 &&
+                    !backend.applySelectValue(settings::SettingsSelectBinding::UpdateMode,
+                                              QStringLiteral("automatic")) &&
+                    !backend.applySelectValue(kBinding, QStringLiteral("image_files")) &&
+                    !backend.applyLocalShortcuts(
+                        kScope, kShortcutId,
+                        {snow_shot::shortcuts::ShortcutBinding{QStringLiteral("E")}}),
+                "Store resets and direct bindings cannot modify native integrations");
+        storage.shutdown();
+        return 0;
+    }
     catalogAndDefaults(temporary.filePath(QStringLiteral("existing.json")));
     accessKeySchemaValidation();
     auto& applicationStorage = storage::ApplicationStorage::instance();

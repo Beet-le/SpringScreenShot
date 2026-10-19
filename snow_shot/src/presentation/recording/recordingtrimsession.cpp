@@ -424,6 +424,23 @@ void RecordingTrimSession::detach() {
     if (!m_export && !m_publishFuture.valid() && !m_openFuture.valid())
         releaseMedia();
 }
+void RecordingTrimSession::prepareForSessionEnd() {
+    m_timer.stop();
+    reportError = {};
+    exported = {};
+    m_detached = true;
+    if (m_dialog)
+        m_dialog->cancel = {};
+    // Keep pending native open/export/publication owners alive until process exit. Their
+    // destructors may cancel work or join, which is unsuitable during session termination.
+    setParent(nullptr);
+}
+QString RecordingTrimSession::sourcePath() const {
+    return m_sourcePath;
+}
+QString RecordingTrimSession::outputPath() const {
+    return m_destination.isEmpty() ? m_outputPath : m_destination;
+}
 void RecordingTrimSession::releaseMedia() {
     m_timer.stop();
     deleteLater();

@@ -7,6 +7,7 @@
 #include "snow_shot/presentation/styles/mainwindowcomponenttoken.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/update/updateservice.h"
+#include "snow_shot/app/distribution.h"
 
 #include "antd_icons.h"
 #include "icon_renderer.h"
@@ -352,6 +353,7 @@ struct AboutPageWidget::Ui {
     QBoxLayout* versionActions = nullptr;
     AdButton* releaseNotes = nullptr;
     AdButton* copyButton = nullptr;
+    AdButton* privacyPolicy = nullptr;
     QTimer* copyFeedbackTimer = nullptr;
     snow_shot::update::UpdateService* updates = nullptr;
     QLabel* updateStatus = nullptr;
@@ -558,6 +560,10 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
         connect(m_ui->updateCancel, &adqt::widgets::AdButton::clicked, m_ui->updates,
                 &snow_shot::update::UpdateService::cancel);
         connect(m_ui->updateAction, &adqt::widgets::AdButton::clicked, this, [this] {
+            if (m_ui->updates->managedByStore()) {
+                openProjectLink(QUrl(QStringLiteral("ms-windows-store://downloadsandupdates")));
+                return;
+            }
             using snow_shot::update::UpdateState;
             switch (m_ui->updates->status().state) {
             case UpdateState::Available:
@@ -604,6 +610,16 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
     footerText->addLayout(community);
     m_ui->license = aboutLabel(QStringLiteral("aboutLicense"), m_ui->body);
     footerText->addWidget(m_ui->license);
+    m_ui->privacyPolicy = new AdButton(m_ui->body);
+    m_ui->privacyPolicy->setObjectName(QStringLiteral("aboutPrivacyPolicy"));
+    m_ui->privacyPolicy->setButtonStyle(AdButton::ButtonStyle::Link);
+    m_ui->privacyPolicy->setIconRef(outlined::Export());
+    m_ui->privacyPolicy->setIconPosition(AdButton::IconPosition::Trailing);
+    m_ui->privacyPolicy->setContentPaddingEnabled(false);
+    m_ui->privacyPolicy->setSizeClass(AdButton::SizeClass::Small);
+    m_ui->privacyPolicy->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    m_ui->privacyPolicy->setFocusPolicy(Qt::StrongFocus);
+    footerText->addWidget(m_ui->privacyPolicy, 0, Qt::AlignLeft);
     m_ui->footerLayout->addLayout(footerText, 1);
     auto* legalWidget = new QWidget(m_ui->body);
     auto* legal = new QVBoxLayout(legalWidget);
@@ -642,6 +658,8 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
             [this]() { openProjectLink(aboutProjectUrl(QStringLiteral("/issues"))); });
     connect(m_ui->resources[3], &QAbstractButton::clicked, this,
             [this]() { openProjectLink(QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_3_URL))); });
+    connect(m_ui->privacyPolicy, &AdButton::clicked, this,
+            [this] { openProjectLink(QUrl(snow_shot::app::distribution::privacyPolicyUrl())); });
     connect(&themeManager, &styles::ThemeManager::themeChanged, this, &AboutPageWidget::applyTheme);
     connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
             [this] { updateSkinBackgrounds(); });
@@ -715,6 +733,10 @@ void AboutPageWidget::applyTheme(const styles::ThemeColorScheme& scheme) {
     for (QLabel* label : {m_ui->license, m_ui->slogan}) {
         styleAboutLabel(label, metric.fontSizeSM - 2, QFont::Normal, colors.colorTextTertiary);
     }
+    adqt::theme::ThemeOverride privacyTheme;
+    privacyTheme.fontSize = metric.fontSizeSM;
+    adqt::theme::ThemeManager::instance().setScopeOverride(m_ui->privacyPolicy, privacyTheme);
+    m_ui->privacyPolicy->setIconSize(QSize(metric.fontSizeSM, metric.fontSizeSM));
     styleAboutLabel(m_ui->linkError, metric.fontSizeSM, QFont::Normal, colors.colorErrorText);
     const int logoSize = metric.controlHeight;
     m_ui->logo->setFixedSize(logoSize, logoSize);
@@ -850,6 +872,10 @@ void AboutPageWidget::retranslateUi() {
     m_ui->license->setText(
         tr("%1 · %2").arg(tr("GNU General Public License v3.0 or later"),
                           tr("Free and open-source software. Distributed without any warranty.")));
+    m_ui->privacyPolicy->setText(tr("Privacy policy"));
+    m_ui->privacyPolicy->setAccessibleName(tr("Privacy policy"));
+    m_ui->privacyPolicy->setToolTip(
+        QUrl(snow_shot::app::distribution::privacyPolicyUrl()).toDisplayString());
     m_ui->copyright->setText(
         tr("Copyright © %1 %2").arg(QStringLiteral("2025–2026"), QStringLiteral("mg-chao")));
     m_ui->slogan->setText(
@@ -981,6 +1007,7 @@ void AboutPageWidget::refreshUpdateStatus() {
     }
     using snow_shot::update::UpdateState;
     const auto& status = m_ui->updates->status();
+    const bool storeManaged = m_ui->updates->managedByStore();
     const auto& colors = m_ui->scheme.map;
     QColor statusColor = colors.colorTextSecondary;
     auto statusIcon = outlined::InfoCircle();
@@ -1047,6 +1074,13 @@ void AboutPageWidget::refreshUpdateStatus() {
         statusColor = colors.colorErrorText;
         break;
     }
+    if (storeManaged) {
+        text = tr("Updates are managed by Microsoft Store.");
+        action = tr("Open Microsoft Store");
+        statusIcon = outlined::InfoCircle();
+        actionIcon = outlined::Link();
+        statusColor = colors.colorTextSecondary;
+    }
     if (!status.error.isEmpty() && status.state == UpdateState::Ready) {
         text += u'\n' + status.error;
         statusIcon = outlined::ExclamationCircle();
@@ -1069,10 +1103,12 @@ void AboutPageWidget::refreshUpdateStatus() {
     m_ui->updateAction->setAccentRole(primaryAction ? AdButton::AccentRole::Primary
                                                     : AdButton::AccentRole::Neutral);
     m_ui->updateAction->setEnabled(
-        status.state == UpdateState::Idle || status.state == UpdateState::Failed ||
+        storeManaged || status.state == UpdateState::Idle || status.state == UpdateState::Failed ||
         status.state == UpdateState::Available || status.state == UpdateState::Ready);
+    m_ui->updateAction->setToolTip(
+        storeManaged ? QStringLiteral("ms-windows-store://downloadsandupdates") : QString());
     m_ui->updateCancel->setText(tr("Cancel download"));
-    const bool downloading = status.state == UpdateState::Downloading;
+    const bool downloading = !storeManaged && status.state == UpdateState::Downloading;
     QWidget* currentAction = m_ui->updateActionBlank;
     if (downloading) {
         currentAction = m_ui->updateCancel;

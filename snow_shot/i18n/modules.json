@@ -22,6 +22,7 @@
   ],
   "settings": [
     "AdministratorLaunch",
+    "AutoStartRegistration",
     "AppPermissions",
     "CloudUploadSettingsWidget",
     "CustomAiModelsSettingsWidget",

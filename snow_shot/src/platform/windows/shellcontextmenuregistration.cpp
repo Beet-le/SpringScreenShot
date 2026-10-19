@@ -1,6 +1,7 @@
 #include "snow_shot/platform/windows/shellcontextmenuregistration.h"
 
 #include "snow_shot/app/edition.h"
+#include "snow_shot/app/distribution.h"
 #include "snow_shot/app/supportedpinfiles.h"
 #include "snow_shot/shortcuts/menuaccesskey.h"
 
@@ -281,7 +282,7 @@ ShellContextMenuRegistration::ShellContextMenuRegistration(Options options)
 
 bool ShellContextMenuRegistration::isSupported() {
 #ifdef Q_OS_WIN
-    return true;
+    return !app::distribution::isStoreManaged();
 #else
     return false;
 #endif
@@ -298,6 +299,10 @@ bool ShellContextMenuRegistration::ownedByProduct(const ShellContextMenuRegistry
 
 ShellContextMenuRegistrationSnapshot ShellContextMenuRegistration::snapshot() const {
     ShellContextMenuRegistrationSnapshot result;
+    if (app::distribution::isStoreManaged()) {
+        result.valid = true;
+        return result;
+    }
     if (!m_registry.childKeys || !m_registry.read || !m_registry.replace) {
         result.error = contextMenuText(
             QT_TRANSLATE_NOOP("ShellContextMenuRegistration",
@@ -377,6 +382,8 @@ bool ShellContextMenuRegistration::apply(bool enabled, const QString& accessKey,
 
 bool ShellContextMenuRegistration::restore(const ShellContextMenuRegistrationSnapshot& previous,
                                            QString* error) const {
+    if (app::distribution::isStoreManaged())
+        return true;
     if (!previous.valid || !m_registry.read || !m_registry.replace) {
         if (error)
             *error = contextMenuText(
@@ -413,6 +420,8 @@ ShellContextMenuRegistration::changeEnabled(bool enabled,
 ShellContextMenuResult
 ShellContextMenuRegistration::changeEnabled(bool enabled, const QString& accessKey,
                                             const std::function<bool()>& commitPreference) const {
+    if (app::distribution::isStoreManaged())
+        return {true, {}};
     const QString canonicalKey = shortcuts::canonicalMenuAccessKey(accessKey);
     if (!accessKey.isEmpty() && canonicalKey.isEmpty())
         return {false, invalidAccessKeyError()};

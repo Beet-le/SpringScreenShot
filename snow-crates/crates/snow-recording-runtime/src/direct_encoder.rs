@@ -55,8 +55,10 @@ struct OwnedEncoder {
 
 impl OwnedEncoder {
     fn preserve_failure(&mut self, cause: ScreenRecorderError) -> ScreenRecorderError {
+        let message = cause.to_string();
         self.encoder
-            .preserve_recovery_failure(&cause.to_string())
+            .preserve_recovery_failure(&message)
+            .or_else(|| self.encoder.preserve_staging_failure(&message))
             .map(ScreenRecorderError::from)
             .unwrap_or(cause)
     }
@@ -69,18 +71,20 @@ impl OwnedEncoder {
         bench: (u8, bool),
     ) -> Result<Self> {
         #[cfg(feature = "bench-synthetic-input")]
-        let encoder = config
-            .force_hardware_failure(bench.1)
-            .create()
-            .and_then(|mut encoder| {
-                encoder.set_conversion_threads(bench.0)?;
-                Ok(encoder)
-            })?;
+        let mut encoder =
+            config
+                .force_hardware_failure(bench.1)
+                .create()
+                .and_then(|mut encoder| {
+                    encoder.set_conversion_threads(bench.0)?;
+                    Ok(encoder)
+                })?;
         #[cfg(not(feature = "bench-synthetic-input"))]
-        let encoder = {
+        let mut encoder = {
             let _ = bench;
             config.create()?
         };
+        encoder.retain_failed_output();
         let mixer = encoder
             .has_audio()
             .then(|| LiveAudioMixer::new(selection.0, selection.1));
@@ -679,6 +683,42 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn ordinary_audio_finalization_failure_retains_staging_video() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("unpublished.mp4");
+        let mut owned = OwnedEncoder::new(
+            StreamingEncoder::builder(config(path.clone())),
+            None,
+            (false, false),
+            RecordingClock::new(Instant::now() - Duration::from_millis(100)),
+            (0, false),
+        )
+        .unwrap();
+        for pts in 0..96 {
+            owned
+                .encoder
+                .push_owned_rgba_frame_at_pts(pts, vec![80; 16 * 16 * 4])
+                .unwrap();
+        }
+        owned.mixer = Some(LiveAudioMixer::new(true, false));
+        let error = owned.finish(100, None).unwrap_err().to_string();
+        assert!(
+            error.contains("unknown streaming audio track: system"),
+            "{error}"
+        );
+        assert!(error.contains("recoverable media is retained"), "{error}");
+        assert!(!path.exists());
+        let retained = std::fs::read_dir(directory.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert!(retained.join("unpublished.mp4").is_file());
+        assert!(retained.join("timeline.txt").is_file());
     }
 
     #[test]

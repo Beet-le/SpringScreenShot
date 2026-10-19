@@ -10,6 +10,9 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "recordingcolorsampler.h"
 #include "recordingrenderjob.h"
+#include "recordingrecovery.h"
+#include "snow_shot/app/distribution.h"
+#include "snow_shot/platform/filemanager.h"
 #include "widgets/message.h"
 #include "recordingeffectstyle.h"
 #include "screenrecordingperfinstrumentation.h"
@@ -60,6 +63,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QMimeData>
 #include <QTimer>
 #include <QWindow>
@@ -445,6 +449,8 @@ struct ScreenRecordingController::Impl {
         emit owner.captureActivityChanged(active);
     }
     void open(const QRect& requestedRegion) {
+        if (sessionEnding)
+            return;
         const QRect region =
             snow_shot::presentation::recording::screenRecordingNormalizedRegion(requestedRegion);
         if (!region.isValid() || region.isEmpty() || (trimRequested && uiSession) ||
@@ -952,6 +958,8 @@ struct ScreenRecordingController::Impl {
     }
 
     void start() {
+        if (sessionEnding)
+            return;
         if (trimRequested && !exitTrim())
             return;
         if (!isOpen() || !recordingOptionsEditable()) {
@@ -1190,6 +1198,8 @@ struct ScreenRecordingController::Impl {
             const bool keyboard = showKeyboard || recordMouseClicks;
             const QString requestedPath =
                 automationOptions.value(QStringLiteral("path")).toString();
+            startupRecovery =
+                std::make_shared<snow_shot::presentation::recording::StartupRecovery>();
             // Session creation blocks on capture, audio, hooks, and encoder
             // initialization; keep it off the GUI thread so the busy state can
             // paint. The FFI error string is thread-local, so it is read here.
@@ -1198,7 +1208,8 @@ struct ScreenRecordingController::Impl {
                 snow_shot::runtime::trackRuntimeWork(
                     [config, excludedWindowIds, directories, baseName, extension, keyboard,
                      keyboardFont, requestedPath, previewRetirement, deferred = sessionDeferred,
-                     overlay, barColor, webcamLease = webcam]() mutable -> StartAttemptResult {
+                     overlay, barColor, recovery = startupRecovery,
+                     webcamLease = webcam]() mutable -> StartAttemptResult {
                         Q_UNUSED(webcamLease);
                         if (previewRetirement.valid())
                             previewRetirement.wait();
@@ -1220,6 +1231,7 @@ struct ScreenRecordingController::Impl {
                                 "Unable to create the recording directory");
                             return result;
                         }
+                        static_cast<void>(recovery->publishOutput(result.outputPath));
                         const QByteArray outputUtf8 =
                             QDir::toNativeSeparators(result.outputPath).toUtf8();
                         const RecordingKeyboardLabels labels(keyboard);
@@ -1583,6 +1595,87 @@ struct ScreenRecordingController::Impl {
             snow_shot::presentation::recording::openScreenRecordingFolder(sessionWindowNames));
     }
 
+    void offerRecovery() {
+        using namespace snow_shot::presentation::recording;
+        if (recoveryOffered || sessionEnding)
+            return;
+        recoveryOffered = true;
+        const QString directory = snow_shot::app::distribution::writableDataDirectory();
+        if (directory.isEmpty())
+            return;
+        const QString marker = QDir(directory).filePath(QStringLiteral("recording-recovery.json"));
+        auto record = loadRecovery(marker);
+        if (!record)
+            return;
+        *record = refreshRecoveryStaging(std::move(*record));
+        const QString existing = QFileInfo(record->sourcePath).isFile()   ? record->sourcePath
+                                 : QFileInfo(record->outputPath).isFile() ? record->outputPath
+                                                                          : QString();
+        const QString folder = recoveryDirectory(*record);
+        const QString openTarget = !existing.isEmpty()                ? existing
+                                   : record->stagingPaths.size() == 1 ? record->stagingPaths.front()
+                                                                      : folder;
+        if (existing.isEmpty() && !QFileInfo(folder).isDir())
+            return;
+        auto* notice =
+            new QMessageBox(QMessageBox::Information, tr("Recording recovery"),
+                            tr("A recording was interrupted when Windows ended the "
+                               "session. Recover the saved recording or open its folder."),
+                            QMessageBox::NoButton, QApplication::activeWindow());
+        notice->setAttribute(Qt::WA_DeleteOnClose);
+        QStringList details{record->sourcePath, record->outputPath, folder};
+        details.append(record->stagingPaths);
+        details.removeAll(QString());
+        details.removeDuplicates();
+        notice->setDetailedText(details.join(QLatin1Char('\n')));
+        QAbstractButton* recover = nullptr;
+        if (QFileInfo(record->sourcePath).isFile() &&
+            record->sourcePath.endsWith(QStringLiteral(".snowrec"), Qt::CaseInsensitive))
+            recover = notice->addButton(tr("Recover"), QMessageBox::AcceptRole);
+        auto* openFolder = notice->addButton(tr("Open folder"), QMessageBox::ActionRole);
+        notice->addButton(QMessageBox::Close);
+        QObject::connect(
+            notice, &QMessageBox::buttonClicked, &owner,
+            [this, record = *record, marker, openTarget, recover,
+             openFolder](QAbstractButton* button) {
+                if (button == openFolder) {
+                    static_cast<void>(snow_shot::platform::revealInFileManager(openTarget));
+                    return;
+                }
+                if (button != recover || sessionEnding || isOpen())
+                    return;
+                auto* screen = QGuiApplication::primaryScreen();
+                if (!screen)
+                    return;
+#ifdef Q_OS_MACOS
+                const QRect region = screen->availableGeometry();
+#else
+                const QRect region = ScreenshotGeometryMapper::physicalRectForScreen(*screen);
+#endif
+                open(region);
+                if (!uiSession)
+                    return;
+                trimRequested = true;
+                retainedSourcePath = record.sourcePath;
+                pendingOutputPath =
+                    record.outputPath.isEmpty()
+                        ? QFileInfo(record.sourcePath)
+                              .dir()
+                              .filePath(QFileInfo(record.sourcePath).completeBaseName() +
+                                        QStringLiteral(".mp4"))
+                        : record.outputPath;
+                uiSession->preview->stopAndClear();
+                trimSession = new RecordingTrimSession(areaWindow, toolbarWindow, &owner);
+                trimSession->reportError = [this](const QString& error) { showError(error); };
+                trimSession->exported = [this, marker, record](const QString& path) {
+                    static_cast<void>(clearRecovery(marker, record));
+                    notifyExportCompleted(path);
+                };
+                trimSession->open(record.sourcePath, pendingOutputPath, {}, true, false, {});
+            });
+        notice->open();
+    }
+
     snow_shot::storage::ScreenshotWindowNames exportWindowNames(const QString& directory,
                                                                 const QString& filename) const {
         const auto fields = snow_shot::storage::screenshotWindowNameFields(directory, filename);
@@ -1648,6 +1741,8 @@ struct ScreenRecordingController::Impl {
     }
 
     void close() {
+        if (sessionEnding)
+            return;
         // Snapshot the preference for an in-flight start while its UI still
         // exists. Repeated Close commands must not change that decision.
         if (startFuture.valid() && uiSession != nullptr) {
@@ -2245,6 +2340,8 @@ struct ScreenRecordingController::Impl {
     }
 
     PermissionCheck permissionCheck;
+    bool sessionEnding = false;
+    bool recoveryOffered = false;
     QJsonObject automationOptions;
     QString automationError;
     QString finalizedOutputPath;
@@ -2291,6 +2388,8 @@ struct ScreenRecordingController::Impl {
     QString postProcessingEffect = QStringLiteral("progress_bar");
     QColor progressBarColor{22, 119, 255};
     std::future<StartAttemptResult> startFuture;
+    std::shared_ptr<snow_shot::presentation::recording::StartupRecovery> startupRecovery =
+        std::make_shared<snow_shot::presentation::recording::StartupRecovery>();
     ScreenshotToolPalette::RecordingSessionStatus sessionStatus =
         ScreenshotToolPalette::RecordingSessionStatus::idle();
     qint64 durationMilliseconds = 0;
@@ -2379,7 +2478,13 @@ ScreenRecordingController::ScreenRecordingController(EffectsSourceFactory factor
 ScreenRecordingController::~ScreenRecordingController() {
     // Capture-activity observers can query the controller during final UI retirement.
     // Keep m_impl available until those notifications and worker transfers have completed.
-    m_impl->shutdown();
+    if (m_impl->sessionEnding) {
+        // Process termination owns the remaining native/preview resources. Ordinary shutdown
+        // cancellation could remove recoverable staging or join an unfinished native worker.
+        static_cast<void>(m_impl.release());
+    } else {
+        m_impl->shutdown();
+    }
 }
 
 void ScreenRecordingController::setPermissionCheck(PermissionCheck check) {
@@ -2413,6 +2518,8 @@ void ScreenRecordingController::startRecording() {
 }
 
 void ScreenRecordingController::stopRecordingAndCopy() {
+    if (m_impl->sessionEnding)
+        return;
     if (m_impl->trimSession)
         m_impl->trimSession->exportClip(false);
     else
@@ -2421,6 +2528,117 @@ void ScreenRecordingController::stopRecordingAndCopy() {
 
 void ScreenRecordingController::openRecordingFolder() {
     m_impl->openFolder();
+}
+
+void ScreenRecordingController::prepareForSessionEnd(int timeoutMs) {
+    auto& s = *m_impl;
+    if (s.sessionEnding)
+        return;
+    s.sessionEnding = true;
+    const bool hasUnfinishedRecording = s.recordingSession || s.startFuture.valid() ||
+                                        s.finalizationFuture.valid() || s.renderJob ||
+                                        s.trimSession;
+    s.durationTimer.stop();
+    s.finalizationPollTimer.stop();
+    s.startPollTimer.stop();
+    s.countdownTimer.stop();
+    s.exclusionPollTimer.stop();
+    s.audioMeterTimer.stop();
+    s.webcamTimer.stop();
+#ifdef Q_OS_MACOS
+    s.dimensionsPollTimer.stop();
+#endif
+    s.startScheduled = false;
+    if (s.uiSession) {
+        // QObject's ordinary child destruction would join preview workers even though Impl is
+        // retained. Retain its UI owners too, and prevent callbacks into the retiring controller.
+        s.uiSession->setParent(nullptr);
+        s.uiSession->connections.reset();
+        s.uiSession->shortcuts.reset();
+        s.uiSession->preview->prepareForSessionEnd();
+    }
+    if (!hasUnfinishedRecording)
+        return;
+    const QString directory = snow_shot::app::distribution::writableDataDirectory();
+    const QString marker =
+        directory.isEmpty() ? QString()
+                            : QDir(directory).filePath(QStringLiteral("recording-recovery.json"));
+    QString sourcePath = s.retainedSourcePath;
+    QString outputPath = s.pendingOutputPath;
+    if (s.trimSession) {
+        if (!s.trimSession->sourcePath().isEmpty())
+            sourcePath = s.trimSession->sourcePath();
+        if (!s.trimSession->outputPath().isEmpty())
+            outputPath = s.trimSession->outputPath();
+        s.trimSession->prepareForSessionEnd();
+        s.trimSession = nullptr;
+    }
+    if (s.renderJob) {
+        sourcePath = s.renderJob->sourcePath();
+        s.renderJob->prepareForSessionEnd();
+        s.renderJob = nullptr;
+    }
+    using namespace snow_shot::presentation::recording;
+    // Publish known durable locations before waiting for native finalization. On a forced
+    // deadline the worker retains every borrowed handle; the GUI never destroys its future.
+    // Keep native owners in the terminal Impl until the worker starts. Allocating its task or
+    // completion state can fail; unwinding a closure that already owns futures could join here.
+    auto* terminal = &s;
+    static_cast<void>(runBoundedPreservation(
+        [terminal, deferred = s.sessionDeferred, marker, sourcePath, outputPath,
+         recovery = s.startupRecovery]() mutable {
+            auto start = std::move(terminal->startFuture);
+            auto finish = std::move(terminal->finalizationFuture);
+            auto discard = std::move(terminal->discardFuture);
+            auto session = std::move(terminal->recordingSession);
+            snow_shot::platform::applyApplicationQoSToCurrentThread();
+            struct PreserveSessionOnFailure {
+                RecordingSessionHandle& session;
+                ~PreserveSessionOnFailure() {
+                    static_cast<void>(session.release());
+                }
+            } preserveOnFailure{session};
+            static_cast<void>(recovery->beginPreservation(marker, {sourcePath, outputPath, {}}));
+            if (start.valid()) {
+                auto started = start.get();
+                if (!started.outputPath.isEmpty())
+                    outputPath = started.outputPath;
+                if (started.session && !session)
+                    session = std::move(started.session);
+                static_cast<void>(
+                    recovery->beginPreservation(marker, {sourcePath, outputPath, {}}));
+            }
+            FinalizationResult result;
+            if (finish.valid()) {
+                result = finish.get();
+            } else if (session) {
+                static_cast<void>(snow_recording_session_request_stop(session.get()));
+                result.ok =
+                    (deferred
+                         ? snow_recording_session_finalize_deferred(session.get(), &result.source)
+                         : snow_recording_session_stop(session.get())) == SNOW_RECORDING_RESULT_OK;
+            }
+            if (result.source) {
+                const auto length = snow_recording_source_path(result.source, nullptr, 0);
+                if (length > 0 && length < 1024 * 1024) {
+                    QByteArray path(static_cast<qsizetype>(length), '\0');
+                    snow_recording_source_path(result.source, path.data(), length);
+                    sourcePath = QString::fromUtf8(path.constData());
+                }
+                // Dropping a finalized source preserves its self-contained .snowrec bundle.
+                snow_recording_source_destroy(result.source);
+            }
+            static_cast<void>(recovery->beginPreservation(marker, {sourcePath, outputPath, {}}));
+            if (discard.valid())
+                discard.wait();
+            if (result.ok)
+                session.reset();
+        },
+        timeoutMs));
+}
+
+void ScreenRecordingController::offerRecordingRecovery() {
+    QTimer::singleShot(0, this, [this] { m_impl->offerRecovery(); });
 }
 
 QJsonObject ScreenRecordingController::automationState() const {
@@ -2484,7 +2702,8 @@ bool ScreenRecordingController::startAutomation(const QRect& region, const QJson
         return false;
     };
     auto& s = *m_impl;
-    if (s.isOpen() || s.sessionStatus.busy() || s.recordingSession || s.startScheduled)
+    if (s.sessionEnding || s.isOpen() || s.sessionStatus.busy() || s.recordingSession ||
+        s.startScheduled)
         return fail("busy");
     if (!region.isValid() || region.width() > 32768 || region.height() > 32768)
         return fail("invalid_region");
@@ -2635,6 +2854,8 @@ bool ScreenRecordingController::controlAutomation(const QString& action, const Q
             *error = QString::fromLatin1(code);
         return false;
     };
+    if (s.sessionEnding)
+        return fail("busy");
     if (s.renderJob) {
         bool ok = false;
         if (action == QStringLiteral("cancel_render"))
@@ -2709,6 +2930,6 @@ bool ScreenRecordingController::controlAutomation(const QString& action, const Q
 }
 
 void ScreenRecordingController::detachAutomation() {
-    if (m_impl->automationOwned)
+    if (m_impl->automationOwned && !m_impl->sessionEnding)
         m_impl->close();
 }

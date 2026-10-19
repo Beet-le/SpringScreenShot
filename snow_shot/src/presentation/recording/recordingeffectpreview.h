@@ -57,6 +57,7 @@ class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRend
                    SnowWebcam* webcam = nullptr, int webcamSize = 150, uint32_t webcamShape = 0);
     void setEligible(bool eligible);
     void stopAndClear(bool present = false);
+    void prepareForSessionEnd();
     [[nodiscard]] bool active() const;
     [[nodiscard]] quint64 generation() const;
     [[nodiscard]] bool hasFrame() const;
@@ -100,6 +101,7 @@ class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRend
     uint32_t m_webcamShape = 0;
     bool m_eligible = false;
     bool m_running = false;
+    bool m_sessionEnding = false;
     bool m_failed = false;
     bool m_configurationDirty = true;
     bool m_windowBlocked = false;

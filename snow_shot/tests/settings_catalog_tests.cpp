@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/settings/settingscatalog.h"
+#include "snow_shot/app/distribution.h"
 #include "snow_shot/ocrtextoptions.h"
 #include "snow_shot/presentation/settings/settingsregistry.h"
 #include "snow_shot/presentation/settings/settingssearchindex.h"
@@ -3681,6 +3682,28 @@ void memoryOptimizationPolicyCatalog() {
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    if (snow_shot::app::distribution::isStoreManaged()) {
+        const auto& registry = settings::builtInSettingsRegistry();
+        require(registry.isValid(), "Store settings retain a valid registry");
+        const auto* startup =
+            registry.catalog().item({QStringLiteral("general"), QStringLiteral("system-general"),
+                                     QStringLiteral("system.auto-start-at-boot")});
+        require(startup && QString::fromUtf8(startup->description.source) ==
+                               u"Start Snow Shot in the background at sign‑in. Updates and file "
+                               u"associations are managed by Windows.",
+                "Store startup description explains Windows-managed updates and file associations");
+        require(
+            registry.fieldForSwitch(settings::SettingsSwitchBinding::AutoStartAtBoot) &&
+                !registry.fieldForSwitch(settings::SettingsSwitchBinding::LaunchAsAdministrator) &&
+                !registry.fieldForSelect(settings::SettingsSelectBinding::UpdateMode) &&
+                !registry.fieldForSelect(settings::SettingsSelectBinding::ContextMenuMode),
+            "Store settings expose OS startup and omit native elevation, updater and registry "
+            "controls");
+        require(
+            !registry.field(QStringLiteral("windows-context-menu-shortcut.edit_with_snow_shot")),
+            "Store settings omit native Explorer access keys");
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--translation-confidence-only"))) {
         translationConfidenceCatalog();
         return 0;

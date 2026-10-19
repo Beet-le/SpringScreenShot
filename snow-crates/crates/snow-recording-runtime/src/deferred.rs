@@ -423,6 +423,7 @@ fn run_recording(
     let directory = tempfile::Builder::new()
         .prefix(".snow-deferred-")
         .tempdir_in(&parent)?;
+    let accepted_stop = Arc::clone(&stop_boundary);
     #[cfg(not(target_os = "macos"))]
     let product = run_capture(
         &config,
@@ -433,7 +434,7 @@ fn run_recording(
         stop_boundary,
         control_clock,
         capture_controls,
-    )?;
+    );
     #[cfg(target_os = "macos")]
     let product = crate::macos::deferred::run_capture(
         &config,
@@ -444,9 +445,41 @@ fn run_recording(
         stop_boundary,
         control_clock,
         capture_controls,
-    )?;
+    );
+    let stopping = accepted_stop
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_some();
+    let (directory, product) = finish_capture(directory, product, stopping)?;
     webcam_capture.stop();
     finalize_source(directory, product, config, parent, options.playback_overlay)
+}
+
+fn finish_capture<T>(
+    directory: tempfile::TempDir,
+    result: Result<T>,
+    stopping: bool,
+) -> Result<(tempfile::TempDir, T)> {
+    match result {
+        Ok(product) => Ok((directory, product)),
+        Err(error) if stopping && !matches!(error, ScreenRecorderError::ExportCanceled) => {
+            // A failed encoder/audio/input teardown must not erase capture media after an
+            // accepted Stop. Cancellation and startup failures retain their existing cleanup.
+            Err(retain_source_failure(directory, error))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn retain_source_failure(
+    directory: tempfile::TempDir,
+    error: ScreenRecorderError,
+) -> ScreenRecorderError {
+    let path = directory.keep();
+    ScreenRecorderError::Export(format!(
+        "{error}; recorded source files are retained in {}",
+        path.display()
+    ))
 }
 
 fn finalize_source(
@@ -459,13 +492,7 @@ fn finalize_source(
     let result = pack_source(directory.path(), product, config, parent, overlay);
     match result {
         Ok(source) => Ok(source),
-        Err(error) => {
-            let path = directory.keep();
-            Err(ScreenRecorderError::Export(format!(
-                "{error}; recorded source files are retained in {}",
-                path.display()
-            )))
-        }
+        Err(error) => Err(retain_source_failure(directory, error)),
     }
 }
 
@@ -905,7 +932,13 @@ fn run_capture(
         webcam.finish(duration_ms);
     }
     capture.stop();
-    input.drain(&clock, true, fresh_since, Some(stop))?;
+    encoder.retain_failed_output();
+    if let Err(error) = input.drain(&clock, true, fresh_since, Some(stop)) {
+        return Err(encoder
+            .preserve_staging_failure(&error.to_string())
+            .map(ScreenRecorderError::from)
+            .unwrap_or(error));
+    }
     if !admitted {
         return Err(ScreenRecorderError::Encode(
             "no screen frame was captured".into(),
@@ -1773,6 +1806,95 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn stopped_capture_mux_failure_retains_video_inside_kept_staging() {
+        let parent = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir_in(parent.path()).unwrap();
+        let retained = directory.path().to_path_buf();
+        let source = retained.join("source.mp4");
+        let mut encoder = StreamingEncoder::builder(test_config(source.clone()).streaming_config())
+            .recording_source()
+            .software_only()
+            .create()
+            .unwrap();
+        for pts in 0..96 {
+            encoder
+                .push_owned_rgba_frame_at_pts(pts, vec![80; 16 * 16 * 4])
+                .unwrap();
+        }
+        std::fs::create_dir(&source).unwrap();
+        encoder.retain_failed_output();
+        let result = encoder
+            .finish_at_duration_ms(3200)
+            .map_err(ScreenRecorderError::from);
+        let error = finish_capture(directory, result, true).unwrap_err();
+        assert!(error.to_string().contains("recoverable media is retained"));
+        let recovery = std::fs::read_dir(&retained)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|value| value == "recovery"))
+            .expect("native mux failure must retain encoded media");
+        assert!(recovery.join("source.mp4").is_file());
+        assert!(recovery.join("timeline.txt").is_file());
+    }
+
+    #[test]
+    fn stopped_capture_failure_preserves_staging_before_packing() {
+        let parent = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir_in(parent.path()).unwrap();
+        let retained = directory.path().to_path_buf();
+        let video = retained.join("source.mp4");
+        std::fs::write(&video, b"captured media before teardown failed").unwrap();
+        let error = finish_capture::<()>(
+            directory,
+            Err(ScreenRecorderError::Encode(
+                "encoder teardown failed".into(),
+            )),
+            true,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("encoder teardown failed"));
+        assert!(error.to_string().contains(&retained.display().to_string()));
+        assert_eq!(
+            std::fs::read(video).unwrap(),
+            b"captured media before teardown failed"
+        );
+    }
+
+    #[test]
+    fn capture_cancellation_and_startup_failure_keep_normal_staging_cleanup() {
+        let parent = tempfile::tempdir().unwrap();
+        for (stopping, error) in [
+            (true, ScreenRecorderError::ExportCanceled),
+            (false, ScreenRecorderError::ExportCanceled),
+            (
+                false,
+                ScreenRecorderError::Encode("capture startup failed".into()),
+            ),
+        ] {
+            let directory = tempfile::tempdir_in(parent.path()).unwrap();
+            let path = directory.path().to_path_buf();
+            std::fs::write(path.join("source.mp4"), b"discarded fixture").unwrap();
+            let message = error.to_string();
+            let error = finish_capture::<()>(directory, Err(error), stopping).unwrap_err();
+            assert_eq!(error.to_string(), message);
+            assert!(!path.exists());
+        }
+    }
+
+    #[test]
+    fn successful_capture_keeps_staging_scoped_until_packing() {
+        let parent = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir_in(parent.path()).unwrap();
+        let path = directory.path().to_path_buf();
+        let (directory, product) = finish_capture(directory, Ok(7), true).unwrap();
+        assert_eq!(product, 7);
+        assert!(path.is_dir());
+        drop(directory);
+        assert!(!path.exists());
     }
 
     #[test]

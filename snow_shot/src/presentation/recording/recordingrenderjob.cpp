@@ -324,6 +324,20 @@ RecordingRenderJob::~RecordingRenderJob() {
 void RecordingRenderJob::start() {
     m_impl->start();
 }
+void RecordingRenderJob::prepareForSessionEnd() {
+    m_impl->timer.stop();
+    changed = {};
+    finished = {};
+    if (m_impl->dialog) {
+        m_impl->dialog->cancel = {};
+        m_impl->dialog->retry = {};
+        m_impl->dialog->keep = {};
+        m_impl->dialog->discard = {};
+    }
+    // This process is ending. Native render destruction cancels and joins, so the complete
+    // owner is deliberately retained rather than entering ordinary cancellation/cleanup.
+    setParent(nullptr);
+}
 void RecordingRenderJob::detachWindowOwner() {
     auto& s = *m_impl;
     if (!s.windowOwner)

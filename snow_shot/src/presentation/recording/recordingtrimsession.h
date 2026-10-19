@@ -28,6 +28,9 @@ class RecordingTrimSession final : public QObject {
               snow_shot::storage::ScreenshotWindowNames windowNames);
     void exportClip(bool save);
     void detach();
+    void prepareForSessionEnd();
+    [[nodiscard]] QString sourcePath() const;
+    [[nodiscard]] QString outputPath() const;
     [[nodiscard]] bool ready() const;
     [[nodiscard]] QString phase() const;
     std::function<void(const QString&)> reportError;

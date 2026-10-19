@@ -133,6 +133,10 @@
             <translation>內建文字辨識執行階段已損壞或不相容。請重新安裝適用於此 Mac 的 Snow Shot。</translation>
         </message>
         <message>
+            <source>The packaged text recognition runtime is missing or damaged. Repair or reinstall Snow Shot from Microsoft Store.</source>
+            <translation>套件中的文字辨識執行階段遺失或已損壞。請透過 Microsoft Store 修復或重新安裝 Snow Shot。</translation>
+        </message>
+        <message>
             <source>Unable to open the recognized link</source>
             <translation>無法開啟辨識出的連結</translation>
         </message>

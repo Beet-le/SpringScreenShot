@@ -20,6 +20,10 @@
             <translation>Administrator launch is only supported on Windows.</translation>
         </message>
         <message>
+            <source>Administrator launch is unavailable in the Microsoft Store version.</source>
+            <translation>Administrator launch is unavailable in the Microsoft Store version.</translation>
+        </message>
+        <message>
             <source>An interrupted startup change needs administrator authorization. Reapply your startup setting.</source>
             <translation>An interrupted startup change needs administrator authorization. Reapply your startup setting.</translation>
         </message>
@@ -129,6 +133,21 @@
         <message>
             <source>Screen &amp; System Audio Recording</source>
             <translation>Screen &amp; System Audio Recording</translation>
+        </message>
+    </context>
+    <context>
+        <name>AutoStartRegistration</name>
+        <message>
+            <source>Enable Snow Shot in Windows Settings &gt; Apps &gt; Startup.</source>
+            <translation>Enable Snow Shot in Windows Settings &gt; Apps &gt; Startup.</translation>
+        </message>
+        <message>
+            <source>Startup is managed by your organization.</source>
+            <translation>Startup is managed by your organization.</translation>
+        </message>
+        <message>
+            <source>Windows startup settings are unavailable.</source>
+            <translation>Windows startup settings are unavailable.</translation>
         </message>
     </context>
     <context>
@@ -4161,6 +4180,10 @@
             <translation>Standalone Translation Window</translation>
         </message>
         <message>
+            <source>Start Snow Shot in the background at sign‑in. Updates and file associations are managed by Windows.</source>
+            <translation>Start Snow Shot in the background at sign‑in. Updates and file associations are managed by Windows.</translation>
+        </message>
+        <message>
             <source>Start Snow Shot in the background when Windows starts</source>
             <translation>Start Snow Shot in the background when Windows starts</translation>
         </message>
@@ -4906,6 +4929,10 @@ Unavailable: %2</translation>
         <message>
             <source>The storage directory is not writable.</source>
             <translation>The storage directory is not writable.</translation>
+        </message>
+        <message>
+            <source>The storage directory path is empty</source>
+            <translation>The storage directory path is empty</translation>
         </message>
         <message>
             <source>Verification failed for %1.</source>

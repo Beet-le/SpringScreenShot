@@ -258,6 +258,7 @@ void runMcpApplicationTests() {
     updateOptions.cacheDirectory = updateDirectory.filePath(QStringLiteral("cache"));
     updateOptions.githubApiUrl = QUrl(QStringLiteral("http://127.0.0.1/releases"));
     updateOptions.giteeApiUrl = QUrl(QStringLiteral("http://127.0.0.1/releases"));
+    updateOptions.storeManaged = false;
     // macOS rejects non-HTTPS before network access; Windows lacks its packaged helper here.
     update::UpdateService updates(std::move(updateOptions));
     translation_tests::Server provider;
@@ -292,6 +293,39 @@ void runMcpApplicationTests() {
         return true;
     };
     McpApplicationService service(ports);
+#ifdef Q_OS_WIN
+    {
+        update::UpdateService::Options storeOptions;
+        storeOptions.storeManaged = true;
+        update::UpdateService storeUpdates(std::move(storeOptions));
+        McpJobRegistry storeJobs;
+        auto storePorts = ports;
+        storePorts.updates = &storeUpdates;
+        storePorts.jobs = &storeJobs;
+        McpApplicationService storeService(storePorts);
+        ScreenshotMcpRequest request;
+        request.connectionId = 71;
+        request.requestId = QStringLiteral("store-status");
+        request.method = QStringLiteral("snow_shot_updates_status");
+        std::optional<ScreenshotMcpResponse> response;
+        storeService.request(request, [&](auto result) { response = std::move(result); });
+        require(response && response->ok &&
+                    response->result.value(QStringLiteral("installation")) ==
+                        QStringLiteral("microsoft_store"),
+                "Store update discovery identifies the Store provider");
+        request.method = QStringLiteral("snow_shot_updates_action");
+        for (const auto* action : {"check", "download", "apply", "cancel"}) {
+            request.requestId = QStringLiteral("store-") + QString::fromLatin1(action);
+            request.params = {{QStringLiteral("action"), QString::fromLatin1(action)}};
+            response.reset();
+            storeService.request(request, [&](auto result) { response = std::move(result); });
+            require(response && response->errorCode == QStringLiteral("unsupported") &&
+                        !response->result.contains(QStringLiteral("job_id")) &&
+                        !storeJobs.hasRunningJobs() && !storeUpdates.busy(),
+                    "Store native update actions are rejected before creating work");
+        }
+    }
+#endif
     quint64 sequence = 0;
     const auto call = [&](const QString& method, QJsonObject params = {},
                           std::optional<quint64> revision = {}, QString key = {},

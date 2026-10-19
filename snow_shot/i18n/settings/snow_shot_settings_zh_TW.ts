@@ -20,6 +20,10 @@
             <translation>僅 Windows 支援以系統管理員身分啟動。</translation>
         </message>
         <message>
+            <source>Administrator launch is unavailable in the Microsoft Store version.</source>
+            <translation>Microsoft Store 版本不支援以系統管理員身分啟動。</translation>
+        </message>
+        <message>
             <source>An interrupted startup change needs administrator authorization. Reapply your startup setting.</source>
             <translation>中斷的自動啟動設定變更需要系統管理員授權。請重新套用自動啟動設定。</translation>
         </message>
@@ -129,6 +133,21 @@
         <message>
             <source>Screen &amp; System Audio Recording</source>
             <translation>螢幕與系統音訊錄製</translation>
+        </message>
+    </context>
+    <context>
+        <name>AutoStartRegistration</name>
+        <message>
+            <source>Enable Snow Shot in Windows Settings &gt; Apps &gt; Startup.</source>
+            <translation>請在 Windows 設定 &gt; 應用程式 &gt; 啟動中啟用 Snow Shot。</translation>
+        </message>
+        <message>
+            <source>Startup is managed by your organization.</source>
+            <translation>啟動設定由您的組織管理。</translation>
+        </message>
+        <message>
+            <source>Windows startup settings are unavailable.</source>
+            <translation>Windows 啟動設定無法使用。</translation>
         </message>
     </context>
     <context>
@@ -4161,6 +4180,10 @@
             <translation>獨立翻譯視窗</translation>
         </message>
         <message>
+            <source>Start Snow Shot in the background at sign‑in. Updates and file associations are managed by Windows.</source>
+            <translation>登入時在背景啟動 Snow Shot。更新與檔案關聯由 Windows 管理。</translation>
+        </message>
+        <message>
             <source>Start Snow Shot in the background when Windows starts</source>
             <translation>Windows 啟動時在背景啟動 Snow Shot</translation>
         </message>
@@ -4906,6 +4929,10 @@ Unavailable: %2</source>
         <message>
             <source>The storage directory is not writable.</source>
             <translation>儲存目錄無法寫入。</translation>
+        </message>
+        <message>
+            <source>The storage directory path is empty</source>
+            <translation>儲存目錄路徑為空</translation>
         </message>
         <message>
             <source>Verification failed for %1.</source>

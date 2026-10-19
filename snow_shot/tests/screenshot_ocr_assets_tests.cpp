@@ -1013,6 +1013,79 @@ void runtimeArchivesExtractThroughUnicodeCachePaths() {
 #endif
 }
 
+void storeRuntimeNeverFallsBackToCachedCode() {
+#ifndef Q_OS_MACOS
+    for (const bool corrupt : {false, true}) {
+        QTemporaryDir offline;
+        QTemporaryDir cache;
+        writeAssetManifest(offline.path(), true);
+        writeAssetManifest(cache.path(), true);
+        const QString worker = QDir(offline.path())
+                                   .filePath(QStringLiteral("runtimes/1.1.0/%1/%2")
+                                                 .arg(kWindowsPlatform, kWindowsWorkerName));
+        if (corrupt)
+            changeFixtureContentsWithoutResizing(worker);
+        else
+            require(QFile::remove(worker), "the packaged worker fixture should be removable");
+        ScreenshotOcrAssets::Options options;
+        options.offlineRoot = offline.path();
+        options.cacheRoot = cache.path();
+        options.requireBundledRuntime = true;
+        int downloads = 0;
+        options.downloadOverride = [&](const QString&, const QString&, QString*) {
+            ++downloads;
+            return false;
+        };
+        ScreenshotOcrAssets assets(options);
+        QString failure;
+        bool ready = false;
+        QObject::connect(&assets, &ScreenshotOcrAssets::failed, &assets,
+                         [&](const QString& error) { failure = error; });
+        QObject::connect(&assets, &ScreenshotOcrAssets::ready, &assets,
+                         [&](const ScreenshotOcrResolvedAssets&) { ready = true; });
+        assets.prepare();
+        require(waitUntil([&] { return ready || !failure.isEmpty(); }, 5000),
+                "Store runtime validation should complete");
+        require(!ready && failure == QStringLiteral("store_runtime_invalid") && downloads == 0,
+                "missing or corrupt packaged code must fail before cache or network fallback");
+    }
+#endif
+}
+
+void storeRuntimeCanAcquireModelData() {
+#ifndef Q_OS_MACOS
+    QTemporaryDir offline;
+    QTemporaryDir cache;
+    writeAssetManifest(offline.path(), true);
+    require(QDir(QDir(offline.path()).filePath(QStringLiteral("models"))).removeRecursively(),
+            "the model fixture should be removable");
+    ScreenshotOcrAssets::Options options;
+    options.offlineRoot = offline.path();
+    options.cacheRoot = cache.path();
+    options.requireBundledRuntime = true;
+    int downloads = 0;
+    options.downloadOverride = [&](const QString& url, const QString& destination, QString* error) {
+        require(url != QStringLiteral("https://example.invalid/runtime"),
+                "Store acquisition must never request executable code");
+        ++downloads;
+        return writeDownloadedModelFixture(destination, error);
+    };
+    ScreenshotOcrAssets assets(options);
+    ScreenshotOcrResolvedAssets result;
+    bool failed = false;
+    QObject::connect(&assets, &ScreenshotOcrAssets::ready, &assets,
+                     [&](const ScreenshotOcrResolvedAssets& value) { result = value; });
+    QObject::connect(&assets, &ScreenshotOcrAssets::failed, &assets,
+                     [&](const QString&) { failed = true; });
+    assets.prepare();
+    require(waitUntil([&] { return failed || result.valid(); }, 5000) && !failed && downloads == 3,
+            "Store acquisition should download only the selected model data");
+    require(result.processPath.startsWith(offline.path()) &&
+                result.detectorModelPath.startsWith(cache.path()),
+            "Store OCR must combine packaged code with verified cached model data");
+#endif
+}
+
 void macosRuntimeOnlyBundleAcquiresAndReusesDefaultModel() {
 #ifdef Q_OS_MACOS
     QTemporaryDir bundle;
@@ -1262,6 +1335,8 @@ int main(int argc, char** argv) {
     assetDestructionInterruptsTheCacheLockWait();
     concurrentAcquisitionAndInterruptedDownload();
     runtimeArchivesExtractThroughUnicodeCachePaths();
+    storeRuntimeNeverFallsBackToCachedCode();
+    storeRuntimeCanAcquireModelData();
     macosRuntimeOnlyBundleAcquiresAndReusesDefaultModel();
     macosBundledRuntimeTests();
     return 0;

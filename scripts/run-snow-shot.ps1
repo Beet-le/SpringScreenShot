@@ -5,6 +5,7 @@ param(
         "windows-msvc-performance",
         "snow-shot-msvc-release",
         "snow-shot-msvc-fast",
+        "snow-shot-msvc-store-release",
         "snow-shot-msvc-arm64-debug",
         "snow-shot-msvc-arm64-performance",
         "snow-shot-msvc-arm64-release",

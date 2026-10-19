@@ -2,6 +2,8 @@
 #include "eraser_toolbar_test_support.h"
 #include "window_close_shortcut_test_support.h"
 #include "../src/presentation/recording/recordingrenderjob.h"
+#include "../src/presentation/recording/recordingrecovery.h"
+#include "snow_shot/app/distribution.h"
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include "recording_effect_test_source.h"
@@ -57,6 +59,8 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QTemporaryDir>
+#include <QProcess>
+#include <QProcessEnvironment>
 #ifdef Q_OS_WIN
 #include "toolbar_capture_exclusion_native_tests.h"
 #endif
@@ -1753,6 +1757,20 @@ void effectsPreviewLifecycle() {
     preview.setEligible(true);
     pumpPreview();
     require(state->active, "a fresh activation must recover after preview failure");
+    const int startsBeforeTermination = state->starts;
+    const int stopsBeforeTermination = state->stops;
+    preview.prepareForSessionEnd();
+    state->frame->error = QStringLiteral("late native failure");
+    state->notify();
+    preview.setEligible(false);
+    preview.configure(area.recordingRegion(), QSize(320, 240), Qt::transparent, Qt::transparent,
+                      false);
+    area.hide();
+    area.show();
+    pumpPreview();
+    require(state->active && state->starts == startsBeforeTermination &&
+                state->stops == stopsBeforeTermination && failures == 1,
+            "terminal preview retains native ownership without joins, restarts, or late UI errors");
 }
 
 void recordingKeyboardFontFollowsApplication() {
@@ -6142,6 +6160,108 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
+void recordingSessionEndPreservationCase(const QString& mode, const QString& directory) {
+    using namespace snow_shot::presentation::recording;
+    using snow_shot::storage::RecordingSettings;
+    const bool deferred = mode == u"deferred";
+    const bool failed = mode == u"failed";
+    const bool timedOut = mode == u"timeout";
+    require(deferred || failed || timedOut || mode == u"direct",
+            "terminal recording case must be recognized");
+    qputenv("LOCALAPPDATA", directory.toUtf8());
+    const RecordingSettings settings;
+    require(settings.setStartDelaySeconds(0) && settings.setPostProcessingEnabled(deferred) &&
+                settings.setDeleteFilesOnRecordingClose(false),
+            "terminal recording fixture must configure its pipeline without a countdown");
+    recordingFileFixture = true;
+    failExport = failed;
+    const QString sourcePath = QDir(directory).filePath(QStringLiteral("retained.snowrec"));
+    renderSourcePath = sourcePath.toUtf8();
+    if (deferred) {
+        QFile source(sourcePath);
+        require(source.open(QIODevice::WriteOnly) && source.write("deferred media") == 14,
+                "deferred fixture needs a durable source file");
+    }
+    auto controller = std::make_unique<ScreenRecordingController>(testEffectsSource);
+    controller->open(QRect(40, 40, 320, 240));
+    controller->startRecording();
+    waitForRecording(*controller);
+    const QString output = QDir::fromNativeSeparators(recordingOutputPath);
+    const QString staging = session.stagingFile;
+    require(starts == 1 && !output.isEmpty() && QFile::exists(staging),
+            "terminal preservation must begin with a live fake native session");
+    const int beforeDestroyed = destroyedSessions.load();
+    const int beforeSources = sourceDestroys.load();
+    std::promise<void> release;
+    std::promise<void> entered;
+    auto enteredFuture = entered.get_future();
+    if (timedOut) {
+        exportGate = release.get_future().share();
+        exportEntered = &entered;
+    }
+    controller->prepareForSessionEnd(timedOut ? 0 : 2000);
+    if (timedOut) {
+        require(enteredFuture.wait_for(std::chrono::seconds(3)) == std::future_status::ready &&
+                    destroyedSessions == beforeDestroyed && exports == 0 && QFile::exists(staging),
+                "expired terminal budget must retain a native owner while finalization is blocked");
+    }
+    const auto markerDirectory = snow_shot::app::distribution::writableDataDirectory();
+    const QString marker =
+        QDir(markerDirectory).filePath(QStringLiteral("recording-recovery.json"));
+    if (snow_shot::app::distribution::isStoreManaged()) {
+        const auto record = loadRecovery(marker);
+        require(record && record->outputPath == output &&
+                    record->sourcePath == (deferred ? sourcePath : QString()),
+                "terminal controller must publish its actual output and deferred recovery paths");
+    }
+    if (timedOut) {
+        release.set_value();
+        QElapsedTimer wait;
+        wait.start();
+        while (destroyedSessions == beforeDestroyed && wait.elapsed() < 3000)
+            QThread::msleep(1);
+        require(destroyedSessions == beforeDestroyed + 1,
+                "terminal worker must eventually release a successfully finalized native owner");
+    }
+    require(recordingStopRequested && exports == 1 && renderStarts == 0 && sourceDiscards == 0,
+            "terminal preparation must freeze and finalize once without rendering or discarding");
+    require(
+        destroyedSessions == beforeDestroyed + (failed ? 0 : 1) &&
+            QFile::exists(staging) == failed && QFile::exists(output) == !failed,
+        "successful stop publishes output while failed stop retains native staging and ownership");
+    require(sourceDestroys == beforeSources + (deferred ? 1 : 0) &&
+                (!deferred || QFileInfo::exists(sourcePath)),
+            "deferred finalization must release its source handle while retaining durable media");
+    controller->prepareForSessionEnd(0);
+    controller.reset();
+    require(
+        exports == 1 && destroyedSessions == beforeDestroyed + (failed ? 0 : 1),
+        "repeated terminal preparation and controller destruction cannot stop or destroy twice");
+}
+
+void recordingSessionEndPreservation() {
+    QTemporaryDir fixture;
+    require(fixture.isValid(), "terminal subprocesses need parent-owned temporary storage");
+    auto environment = QProcessEnvironment::systemEnvironment();
+    for (const auto* key : {"TEMP", "TMP", "TMPDIR"})
+        environment.insert(QString::fromLatin1(key), fixture.path());
+    for (const auto* mode : {"direct", "failed", "deferred", "timeout"}) {
+        QProcess child;
+        child.setProcessEnvironment(environment);
+        child.start(QCoreApplication::applicationFilePath(),
+                    {QStringLiteral("--store-preservation-case=") + QString::fromLatin1(mode),
+                     QStringLiteral("-platform"), QStringLiteral("offscreen")});
+        const bool passed = child.waitForStarted() && child.waitForFinished(15000) &&
+                            child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0;
+        if (!passed) {
+            std::cerr << mode << ": " << child.readAllStandardError().constData();
+            child.kill();
+            child.waitForFinished();
+        }
+        require(passed, "terminal recording integration subprocess must pass");
+    }
+}
+
 int main(int argc, char** argv) {
 #ifdef SNOW_RECORDING_EFFECTS_BENCHMARK
     RecordingEffectsBenchmarkApplication app(argc, argv);
@@ -6223,6 +6343,21 @@ int main(int argc, char** argv) {
     QApplication::setFont(testFont);
     QFontDatabase::setApplicationFallbackFontFamilies(QChar::Script_Han,
                                                       {QStringLiteral("Snow Recording Test Han")});
+    const QString preservationPrefix = QStringLiteral("--store-preservation-case=");
+    for (const auto& argument : app.arguments()) {
+        if (argument.startsWith(preservationPrefix)) {
+            recordingSessionEndPreservationCase(argument.sliced(preservationPrefix.size()),
+                                                temporary.path());
+            // The terminal controller intentionally retains its Impl/UI owners. Each case owns
+            // one process, matching the native end-session callback's termination semantics.
+            std::_Exit(EXIT_SUCCESS);
+        }
+    }
+    if (app.arguments().contains(QStringLiteral("--store-preservation-only"))) {
+        recordingSessionEndPreservation();
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     const bool trimUiOnly = app.arguments().contains(QStringLiteral("--trim-ui-only"));
     if (app.arguments().contains(QStringLiteral("--export-naming-only"))) {
         QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);

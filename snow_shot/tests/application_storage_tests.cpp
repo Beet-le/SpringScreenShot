@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/globalmousetypes.h"
+#include "snow_shot/app/distribution.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/configurationstore.h"
@@ -18,6 +19,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStandardPaths>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QUuid>
@@ -423,6 +425,8 @@ void autoSaveAfterExecutionSettingsMigrateAndPersist() {
 void markerResolutionAndStatus() {
     QTemporaryDir temporary;
     require(temporary.isValid(), "failed to create marker test directory");
+    const auto storageCleanup =
+        qScopeGuard([] { storage::ApplicationStorage::instance().shutdown(); });
     const QString executable = QDir(temporary.path()).filePath(QStringLiteral("bin"));
     const QString fallback = QDir(temporary.path()).filePath(QStringLiteral("fallback"));
     require(QDir().mkpath(executable), "failed to create executable directory");
@@ -435,6 +439,14 @@ void markerResolutionAndStatus() {
     const QString marker = QDir(executable).filePath(QStringLiteral("__data_directory"));
     writeBytes(marker, QByteArrayLiteral("portable"));
     auto& portable = initialize(executable, fallback);
+    if (snow_shot::app::distribution::isStoreManaged()) {
+        require(
+            portable.configurationDirectory() == QDir::cleanPath(fallback) &&
+                portable.status().effectiveMode == storage::StorageMode::ApplicationData &&
+                !QFileInfo::exists(QDir(executable).filePath(QStringLiteral("portable"))),
+            "packaged storage ignores portable markers and preserves explicit writable fixtures");
+        return;
+    }
     require(portable.configurationDirectory() ==
                     QDir(executable).filePath(QStringLiteral("portable")) &&
                 portable.status().effectiveMode == storage::StorageMode::Portable,
@@ -447,6 +459,72 @@ void markerResolutionAndStatus() {
     require(fallbackStorage.configurationDirectory() == QDir::cleanPath(fallback) &&
                 !fallbackStorage.status().fallbackReason.isEmpty(),
             "unwritable portable target did not report fallback");
+}
+
+void distributionStoragePaths() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "distribution storage checks require an isolated fixture");
+    const bool hadLocalData = qEnvironmentVariableIsSet("LOCALAPPDATA");
+    const QByteArray previousLocalData = qgetenv("LOCALAPPDATA");
+    const auto restoreEnvironment = qScopeGuard([&] {
+        storage::ApplicationStorage::instance().shutdown();
+        if (hadLocalData)
+            qputenv("LOCALAPPDATA", previousLocalData);
+        else
+            qunsetenv("LOCALAPPDATA");
+    });
+    const QString executable = temporary.filePath(QStringLiteral("package-1.0-x64/bin"));
+    const QString updatedExecutable = temporary.filePath(QStringLiteral("package-2.0-arm64/bin"));
+    const QString explicitData = temporary.filePath(QStringLiteral("explicit-data"));
+    const QString localData = temporary.filePath(QStringLiteral("local-app-data"));
+    require(qputenv("LOCALAPPDATA", localData.toUtf8()), "set fixture local application data");
+    const auto explicitSelection =
+        storage::ApplicationStorage::resolveDirectory({executable, explicitData, 60000});
+    require(explicitSelection.effectiveDirectory == explicitData &&
+                explicitSelection.mode == storage::StorageMode::ApplicationData,
+            "both distributions must preserve an explicitly supplied writable test directory");
+    if (!snow_shot::app::distribution::isStoreManaged()) {
+        require(snow_shot::app::distribution::writableDataDirectory().isEmpty() &&
+                    snow_shot::app::distribution::installationIdentity().isEmpty(),
+                "standalone storage retains its native application-data and marker policy");
+        return;
+    }
+    const QString family = snow_shot::app::distribution::packageFamilyName();
+    const QString expected =
+        QDir(localData).filePath(QStringLiteral("Packages/%1/LocalState").arg(family));
+    require(
+        !family.isEmpty() && snow_shot::app::distribution::writableDataDirectory() == expected &&
+            expected != QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) &&
+            expected != explicitData,
+        "Store data must use its package family LocalState and remain separate from native data");
+    require(QDir().mkpath(executable), "create package directory for a portable-marker fixture");
+    writeBytes(QDir(executable).filePath(QStringLiteral("__data_directory")),
+               QByteArrayLiteral("portable"));
+    const auto selected = storage::ApplicationStorage::resolveDirectory({executable, {}, 60000});
+    const auto updated =
+        storage::ApplicationStorage::resolveDirectory({updatedExecutable, {}, 60000});
+    require(selected.effectiveDirectory == expected && updated.effectiveDirectory == expected &&
+                selected.mode == storage::StorageMode::ApplicationData &&
+                !QFileInfo::exists(QDir(executable).filePath(QStringLiteral("portable"))) &&
+                snow_shot::app::distribution::mcpRuntimeDirectory() ==
+                    QDir(expected).filePath(QStringLiteral("mcp")),
+            "package updates and portable markers cannot redirect Store data or its MCP endpoint");
+    auto& appStorage = storage::ApplicationStorage::instance();
+    require(appStorage.initialize({executable, {}, 60000}).success &&
+                appStorage.configurationDirectory() == expected,
+            "default Store initialization must open the selected LocalState directory");
+    appStorage.shutdown();
+    require(qunsetenv("LOCALAPPDATA"), "remove fixture local application data");
+    const auto unavailable = storage::ApplicationStorage::resolveDirectory({executable, {}, 60000});
+    require(snow_shot::app::distribution::writableDataDirectory().isEmpty() &&
+                unavailable.requestedDirectory.isEmpty() &&
+                unavailable.effectiveDirectory.isEmpty() &&
+                unavailable.mode == storage::StorageMode::Degraded &&
+                !unavailable.fallbackReason.isEmpty(),
+            "missing Store local application data must fail closed without a relative fallback");
+    require(storage::ApplicationStorage::resolveDirectory({executable, explicitData, 60000})
+                    .effectiveDirectory == explicitData,
+            "explicit writable fixtures remain usable when the Store environment is unavailable");
 }
 
 void defaultsAndTypedRoundTrip() {
@@ -3168,6 +3246,21 @@ void pendingClosedPinsReceiveBackgroundRetentionCleanup() {
 void appUsageScanAndCacheCleanup() {
     QTemporaryDir temporary;
     require(temporary.isValid(), "failed to create app usage directory");
+    const bool store = snow_shot::app::distribution::isStoreManaged();
+    const bool hadLocal = qEnvironmentVariableIsSet("LOCALAPPDATA");
+    const QByteArray previousLocal = qgetenv("LOCALAPPDATA");
+    const auto restoreLocal = qScopeGuard([&] {
+        if (store) {
+            storage::ApplicationStorage::instance().shutdown();
+            if (hadLocal)
+                qputenv("LOCALAPPDATA", previousLocal);
+            else
+                qunsetenv("LOCALAPPDATA");
+        }
+    });
+    if (store)
+        require(qputenv("LOCALAPPDATA", temporary.path().toUtf8()),
+                "Store usage test must isolate package caches");
     const QString executable = QDir(temporary.path()).filePath(QStringLiteral("bin"));
     const QString root = QDir(temporary.path()).filePath(QStringLiteral("root"));
     auto& applicationStorage = initialize(executable, root, 60000);
@@ -3175,8 +3268,8 @@ void appUsageScanAndCacheCleanup() {
     require(!applicationStorage.status().appUsage.scanning,
             "a flushed storage must not report scanning");
 
-    // The cache locations come from QStandardPaths; the test process uses a
-    // dedicated organization and application name, so they belong to this run.
+    // Standalone caches use the test application name. Store package caches use
+    // the fixture LOCALAPPDATA root so cleanup never touches installed app data.
     const QString thumbnailCache = storage::StorageUsageTracker::defaultThumbnailCacheDirectory();
     const QString recordingTemp = storage::StorageUsageTracker::defaultRecordingTempDirectory();
     QDir(thumbnailCache).removeRecursively();
@@ -3688,6 +3781,12 @@ int main(int argc, char** argv) {
     }
 #endif
     LifetimeObservedApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--distribution-paths-only"))) {
+        markerResolutionAndStatus();
+        storage::ApplicationStorage::instance().shutdown();
+        distributionStoragePaths();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--selection-transition-animation-only"))) {
         defaultsAndTypedRoundTrip();
         selectionTransitionAnimationMigratesAndPersists();

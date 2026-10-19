@@ -164,12 +164,28 @@
     <context>
         <name>ScreenRecordingController</name>
         <message>
+            <source>A recording was interrupted when Windows ended the session. Recover the saved recording or open its folder.</source>
+            <translation>Windows 結束工作階段時中斷了螢幕錄製。您可以復原已儲存的錄製內容或開啟其資料夾。</translation>
+        </message>
+        <message>
             <source>Keyboard recording failed: %1</source>
             <translation>鍵盤錄製失敗：%1</translation>
         </message>
         <message>
             <source>Motion preview unavailable: %1</source>
             <translation>無法預覽動效：%1</translation>
+        </message>
+        <message>
+            <source>Open folder</source>
+            <translation>開啟資料夾</translation>
+        </message>
+        <message>
+            <source>Recording recovery</source>
+            <translation>錄製復原</translation>
+        </message>
+        <message>
+            <source>Recover</source>
+            <translation>復原</translation>
         </message>
         <message>
             <source>Screen recording</source>
