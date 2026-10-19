@@ -753,9 +753,12 @@ ScreenshotRecognitionSessionController::recognitionResultsSnapshot() const {
 
 QHash<QString, QByteArray> ScreenshotRecognitionSessionController::contentCheckpoints() const {
     QHash<QString, QByteArray> result;
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION || SNOW_SHOT_ENABLE_QR_RECOGNITION ||                       \
+    SNOW_SHOT_ENABLE_IMAGE_CONVERSION
     const auto add = [&result](const QString& key, const QString& text) {
         result.insert(key, QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha256));
     };
+#endif
     if (const auto entry = m_textCache.constFind(m_target.key); entry != m_textCache.cend()) {
         if (entry->editingSession)
             result.insert(QStringLiteral("text"), entry->editingSession->contentCheckpoint());
