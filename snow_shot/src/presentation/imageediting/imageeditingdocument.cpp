@@ -64,13 +64,13 @@ QImage removeStrip(const QImage& image, const ImageEditingDocument::Crop& crop,
         uchar* destination = result.scanLine(y);
         if (rows) {
             std::memcpy(destination, image.constScanLine(y < crop.start ? y : y + crop.length),
-                        result.width() * pixelBytes);
+                        static_cast<std::size_t>(result.width() * pixelBytes));
         } else {
             const uchar* source = image.constScanLine(y);
-            std::memcpy(destination, source, crop.start * pixelBytes);
+            std::memcpy(destination, source, static_cast<std::size_t>(crop.start * pixelBytes));
             std::memcpy(destination + crop.start * pixelBytes,
                         source + (crop.start + crop.length) * pixelBytes,
-                        (result.width() - crop.start) * pixelBytes);
+                        static_cast<std::size_t>((result.width() - crop.start) * pixelBytes));
         }
     }
     return result;
@@ -95,15 +95,16 @@ QImage joinStrip(const QImage& current, const ImageEditingDocument::Crop& crop,
                                   : y < crop.start + crop.length
                                       ? crop.removed.constScanLine(y - crop.start)
                                       : current.constScanLine(y - crop.length);
-            std::memcpy(destination, source, restored.width() * pixelBytes);
+            std::memcpy(destination, source,
+                        static_cast<std::size_t>(restored.width() * pixelBytes));
         } else {
             const uchar* source = current.constScanLine(y);
-            std::memcpy(destination, source, crop.start * pixelBytes);
+            std::memcpy(destination, source, static_cast<std::size_t>(crop.start * pixelBytes));
             std::memcpy(destination + crop.start * pixelBytes, crop.removed.constScanLine(y),
-                        crop.length * pixelBytes);
+                        static_cast<std::size_t>(crop.length * pixelBytes));
             std::memcpy(destination + (crop.start + crop.length) * pixelBytes,
                         source + crop.start * pixelBytes,
-                        (current.width() - crop.start) * pixelBytes);
+                        static_cast<std::size_t>((current.width() - crop.start) * pixelBytes));
         }
     }
     return restored;
