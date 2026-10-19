@@ -11,7 +11,6 @@
 #include <QBackingStore>
 #include <QFont>
 #include <QFontMetrics>
-#include <QGraphicsOpacityEffect>
 #include <QEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -203,9 +202,6 @@ ScreenshotColorPickerWindow::ScreenshotColorPickerWindow(QWidget* parent)
     connect(&themeManager, &snow_shot::presentation::styles::ThemeManager::themeChanged, this,
             applyTheme);
 
-    m_opacityEffect = new QGraphicsOpacityEffect(this);
-    m_opacityEffect->setOpacity(0.0);
-    setGraphicsEffect(m_opacityEffect);
     hide();
 }
 
@@ -309,16 +305,15 @@ void ScreenshotColorPickerWindow::setCaptureImage(const QImage& image, const QRe
 }
 
 void ScreenshotColorPickerWindow::updatePicker(
-    const QPoint& physicalPoint, const QPointF& overlayLocalPosition, qreal opacity,
+    const QPoint& physicalPoint, const QPointF& overlayLocalPosition, bool visible,
     std::optional<ScreenshotCoordinateDisplayValues> displayValues) {
     if (m_captureImage.isNull() || m_physicalRect.isNull()) {
         hidePicker();
         return;
     }
 
-    opacity = std::clamp<qreal>(opacity, 0.0, 1.0);
     const bool previewChanged =
-        opacity > 0.0 ? updatePreview(physicalPoint) : updateColorSample(physicalPoint);
+        visible ? updatePreview(physicalPoint) : updateColorSample(physicalPoint);
     auto values = displayValues.value_or(ScreenshotCoordinateDisplayValues{
         QPointF(m_currentPhysicalPoint), ScreenshotSelectionDisplayUnit::PhysicalPixels, false});
     // The readout uses whole pixels; subpixel changes do not invalidate text layout.
@@ -327,7 +322,7 @@ void ScreenshotColorPickerWindow::updatePicker(
         values.relativePosition = QPointF(std::round(values.relativePosition->x()),
                                           std::round(values.relativePosition->y()));
     }
-    if (opacity <= 0.0) {
+    if (!visible) {
         if (m_displayValues != values) {
             m_displayValues = values;
             m_positionText.reset();
@@ -342,20 +337,13 @@ void ScreenshotColorPickerWindow::updatePicker(
     }
     const bool coordinatesChanged = previousPositionText != currentPositionText();
     static_cast<void>(updatePosition(overlayLocalPosition));
-    bool opacityChanged = false;
-    if (m_opacityEffect != nullptr) {
-        opacityChanged = std::abs(m_opacityEffect->opacity() - opacity) > 0.0001;
-        if (opacityChanged) {
-            m_opacityEffect->setOpacity(opacity);
-        }
-    }
 
     const bool wasVisible = isVisible();
     if (!wasVisible) {
         show();
         raise();
     }
-    if (previewChanged || opacityChanged || coordinatesChanged) {
+    if (previewChanged || coordinatesChanged) {
         update();
     }
 }
@@ -373,9 +361,6 @@ QString ScreenshotColorPickerWindow::currentPositionText() const {
 }
 
 void ScreenshotColorPickerWindow::hidePicker() {
-    if (m_opacityEffect != nullptr && m_opacityEffect->opacity() != 0.0) {
-        m_opacityEffect->setOpacity(0.0);
-    }
     if (!isHidden())
         hide();
 }

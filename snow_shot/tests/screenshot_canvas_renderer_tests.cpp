@@ -1922,31 +1922,34 @@ void screenshotUiPreferencesNormalizeAndApplyPickerVisibilityPolicies() {
     state.manualSelecting = true;
     state.hasSelection = true;
     state.pointInsideSelection = false;
-    require(screenshotColorPickerOpacity(ScreenshotColorPickerDisplayMode::HideOutsideSelection,
-                                         state) == 0.0,
+    require(!screenshotColorPickerVisible(ScreenshotColorPickerDisplayMode::HideOutsideSelection,
+                                          state),
             "hide-outside-selection mode must hide the picker outside the selection");
-    require(screenshotColorPickerOpacity(ScreenshotColorPickerDisplayMode::AlwaysShow, state) ==
-                1.0,
+    require(screenshotColorPickerVisible(ScreenshotColorPickerDisplayMode::AlwaysShow, state),
             "always-show mode must keep the picker visible outside the selection");
 
     state.manualSelecting = false;
     state.intelligentSelecting = true;
-    require(screenshotColorPickerOpacity(ScreenshotColorPickerDisplayMode::HideOutsideSelection,
-                                         state) == 1.0,
-            "intelligent box selection must keep the magnifier visible outside the live box");
-    require(screenshotColorPickerOpacity(ScreenshotColorPickerDisplayMode::AlwaysHide, state) ==
-                0.0,
+    require(
+        screenshotColorPickerVisible(ScreenshotColorPickerDisplayMode::HideOutsideSelection, state),
+        "intelligent box selection must keep the magnifier visible outside the live box");
+    require(!screenshotColorPickerVisible(ScreenshotColorPickerDisplayMode::AlwaysHide, state),
             "always-hide mode must keep the magnifier hidden during intelligent selection");
     state.intelligentSelecting = false;
-    state.movingSelection = true;
-    require(screenshotColorPickerOpacity(ScreenshotColorPickerDisplayMode::HideOutsideSelection,
-                                         state) == 0.0,
+    require(!screenshotColorPickerVisible(ScreenshotColorPickerDisplayMode::HideOutsideSelection,
+                                          state),
             "confirmed selections must still hide the magnifier outside their bounds");
 
     state.dragging = true;
-    state.selectionDrag = true;
-    require(screenshotColorPickerOpacity(ScreenshotColorPickerDisplayMode::AlwaysHide, state) ==
-                0.0,
+    state.manualSelecting = true;
+    require(
+        screenshotColorPickerVisible(ScreenshotColorPickerDisplayMode::HideOutsideSelection, state),
+        "active selection drags must keep the picker visible outside the current selection");
+    state.hasSelection = false;
+    require(
+        screenshotColorPickerVisible(ScreenshotColorPickerDisplayMode::HideOutsideSelection, state),
+        "starting a marquee must keep the picker visible before a selection exists");
+    require(!screenshotColorPickerVisible(ScreenshotColorPickerDisplayMode::AlwaysHide, state),
             "always-hide mode must override selection-drag picker visibility without changing "
             "the underlying color-sampling feature");
 }

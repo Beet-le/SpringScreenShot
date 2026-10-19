@@ -37,7 +37,7 @@ void sampleRed(ScreenshotColorPickerWindow& picker) {
     QImage image(16, 16, QImage::Format_RGBA8888);
     image.fill(Qt::red);
     picker.setCaptureImage(image, image.rect());
-    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 0.0);
+    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), false);
     require(picker.hasCurrentColor(), "picker must sample the capture image");
 }
 
@@ -62,11 +62,11 @@ void cursorPatchSamplingIsReversibleAndDoesNotModifyTheDesktop() {
     const QRect rect(7, 7, 3, 3);
     const auto cleanPointer = clean.constBits();
     picker.setCaptureImage(clean, clean.rect(), patch, rect);
-    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 0.0);
+    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), false);
     require(picker.currentColorText() == QStringLiteral("#0000FF"),
             "shown cursor pixels must be sampled by the magnifier");
     picker.setCaptureImage(clean, clean.rect());
-    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 0.0);
+    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), false);
     require(picker.currentColorText() == QStringLiteral("#FF0000") &&
                 clean.constBits() == cleanPointer && clean.pixelColor(8, 8) == QColor(Qt::red),
             "hiding the cursor must restore clean sampling without detaching the desktop");
@@ -112,7 +112,7 @@ void coordinateModePersistsAndRefreshesWithoutResampling() {
         {
             ScreenshotColorPickerWindow picker;
             sampleRed(picker);
-            picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 0.0, values);
+            picker.updatePicker(QPoint(8, 8), QPointF(8, 8), false, values);
             require(picker.currentPositionText() == (restoredRelative ? relative : global),
                     "picker must restore its coordinate preference after restart");
             require(!settings.setColorPickerCoordinateMode(QStringLiteral("invalid")),
@@ -126,15 +126,15 @@ void coordinateModePersistsAndRefreshesWithoutResampling() {
                 "toggle must immediately change readout and preference without resampling");
             picker.resetForNewCapture();
             sampleRed(picker);
-            picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 0.0, values);
+            picker.updatePicker(QPoint(8, 8), QPointF(8, 8), false, values);
             require(picker.currentPositionText() == (restoredRelative ? global : relative),
                     "new capture must retain coordinate mode");
             auto noSelection = values;
             noSelection.relativePosition.reset();
-            picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 0.0, noSelection);
+            picker.updatePicker(QPoint(8, 8), QPointF(8, 8), false, noSelection);
             require(picker.currentPositionText() == global,
                     "no selection must fall back to global coordinates");
-            picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 0.0, values);
+            picker.updatePicker(QPoint(8, 8), QPointF(8, 8), false, values);
             require(picker.currentPositionText() == (restoredRelative ? global : relative),
                     "selection appearance must restore relative readout without another toggle");
         }
@@ -147,7 +147,7 @@ void coordinateModePersistsAndRefreshesWithoutResampling() {
     applicationStorage.shutdown();
     ScreenshotColorPickerWindow picker;
     sampleRed(picker);
-    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 0.0, values);
+    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), false, values);
     picker.toggleCoordinateMode();
     require(picker.currentPositionText() == relative, "toggle must work without storage");
 }
@@ -272,19 +272,19 @@ void selectionUnitPersistsAndCoordinatesDoNotResample() {
     sampleRed(picker);
     const QString color = picker.currentColorText();
     const ScreenshotCoordinateDisplayValues logical{QPointF(-80.8, 40), Unit::LogicalPixels, false};
-    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 0.0, logical);
+    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), false, logical);
     require(picker.currentPositionText().replace(QLatin1Char('\n'), QLatin1Char(' ')) ==
                     QStringLiteral("X: -81 Y: 40") &&
                 picker.currentColorText() == color,
             "changing units at the same sample must update coordinates without changing the color");
     picker.updatePicker(
-        QPoint(8, 8), QPointF(8, 8), 0.0,
+        QPoint(8, 8), QPointF(8, 8), false,
         ScreenshotCoordinateDisplayValues{QPointF(-101, 50), Unit::PhysicalPixels, false});
     require(picker.currentPositionText().replace(QLatin1Char('\n'), QLatin1Char(' ')) ==
                     QStringLiteral("X: -101 Y: 50") &&
                 picker.currentColorText() == color,
             "physical coordinates must format as integers and preserve the sample");
-    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 1.0, logical);
+    picker.updatePicker(QPoint(8, 8), QPointF(8, 8), true, logical);
     QApplication::processEvents();
     PickerPaintCounter paints;
     picker.installEventFilter(&paints);
@@ -292,7 +292,7 @@ void selectionUnitPersistsAndCoordinatesDoNotResample() {
     wideCoordinates.setStretch(150);
     picker.setFont(wideCoordinates);
     picker.updatePicker(
-        QPoint(8, 8), QPointF(8, 8), 1.0,
+        QPoint(8, 8), QPointF(8, 8), true,
         ScreenshotCoordinateDisplayValues{QPointF(-12345.6, -98765.4), Unit::LogicalPixels, false});
     QApplication::processEvents();
     require(paints.count > 0,
@@ -311,7 +311,7 @@ void selectionUnitPersistsAndCoordinatesDoNotResample() {
     QApplication::processEvents();
     paints.count = 0;
     picker.updatePicker(
-        QPoint(8, 8), QPointF(8, 8), 1.0,
+        QPoint(8, 8), QPointF(8, 8), true,
         ScreenshotCoordinateDisplayValues{QPointF(-12345.8, -98765.1), Unit::LogicalPixels, false});
     QApplication::processEvents();
     require(paints.count == 0 && picker.currentPositionText() == positionText,
@@ -320,7 +320,7 @@ void selectionUnitPersistsAndCoordinatesDoNotResample() {
     picker.resetForNewCapture();
     sampleRed(picker);
     picker.updatePicker(
-        QPoint(8, 8), QPointF(8, 8), 0.0,
+        QPoint(8, 8), QPointF(8, 8), false,
         ScreenshotCoordinateDisplayValues{QPointF(-0.04, 4.666), Unit::LogicalPixels, true});
     require(picker.currentPositionText().replace(QLatin1Char('\n'), QLatin1Char(' ')) ==
                 QStringLiteral("X: 0 Y: 5"),
@@ -348,7 +348,7 @@ void plainHexPreservesSixUppercaseDigits() {
         QImage image(16, 16, QImage::Format_RGBA8888);
         image.fill(colors.at(index));
         picker.setCaptureImage(image, image.rect());
-        picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 0.0);
+        picker.updatePicker(QPoint(8, 8), QPointF(8, 8), false);
         require(picker.currentColorText() == expected.at(index),
                 "plain HEX must preserve leading zeros and uppercase digits without a hash");
     }
@@ -397,7 +397,7 @@ void pickerUsesASeparateClickThroughWindow() {
     image.fill(Qt::blue);
     const QPoint localCursor(100, 100);
     picker.setCaptureImage(image, image.rect());
-    picker.updatePicker(localCursor, localCursor, 1.0);
+    picker.updatePicker(localCursor, localCursor, true);
     QApplication::processEvents();
 
     const QPoint globalCursor = owner.mapToGlobal(localCursor);
@@ -496,17 +496,17 @@ void pickerPreparationPreservesCanvasInputSurfaces() {
             QImage image(owner->size(), QImage::Format_RGBA8888);
             image.fill(Qt::red);
             picker.setCaptureImage(image, image.rect());
-            picker.updatePicker(QPoint(100, 100), QPointF(100, 100), 1.0);
+            picker.updatePicker(QPoint(100, 100), QPointF(100, 100), true);
             QApplication::processEvents();
             require(picker.isVisible() &&
                         picker.windowHandle()->transientParent() == owner->windowHandle(),
                     "the picker must retain its separate visible surface and stacking owner");
             requireNonNativeCanvases();
             requireImmediatePresentation(picker);
-            picker.updatePicker(QPoint(100, 100), QPointF(100, 100), 0.0);
-            require(!picker.isVisible(), "zero opacity must immediately hide the magnifier");
+            picker.updatePicker(QPoint(100, 100), QPointF(100, 100), false);
+            require(!picker.isVisible(), "hiding must immediately remove the magnifier");
             requireImmediatePresentation(picker);
-            picker.updatePicker(QPoint(100, 100), QPointF(100, 100), 1.0);
+            picker.updatePicker(QPoint(100, 100), QPointF(100, 100), true);
             require(picker.isVisible(), "the hidden magnifier must reveal immediately on reuse");
             picker.resetForNewCapture();
             require(!picker.isVisible(), "resetting capture must immediately hide the magnifier");
