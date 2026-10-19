@@ -54,6 +54,8 @@ if(NOT TARGET snow_draw_engine_c)
         STRIP_MSVC_DIRECTIVES
     )
 endif()
+target_include_directories(snow_draw_engine_c INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
 
 add_library(snow_canvas_image STATIC
     src/rendering/snow_canvas_image.cpp

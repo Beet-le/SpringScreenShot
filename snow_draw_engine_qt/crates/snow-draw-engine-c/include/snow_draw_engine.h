@@ -48,6 +48,8 @@ SnowError snow_runtime_serialize_document_session_bytes(SnowRuntime runtime,
 SnowError snow_serialized_bytes_data(SnowSerializedBytes bytes, const uint8_t** out_data,
                                      size_t* out_size);
 void snow_serialized_bytes_destroy(SnowSerializedBytes bytes);
+// Current draw-template schema version; versions 1 through this value are supported.
+uint32_t snow_draw_template_schema_version(void);
 SnowError snow_runtime_serialize_selected_draw_template(SnowRuntime runtime, uint8_t* buffer,
                                                         size_t buffer_capacity, size_t* out_size);
 SnowError snow_runtime_serialize_selected_element_ids(SnowRuntime runtime, uint8_t* buffer,

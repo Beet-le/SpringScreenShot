@@ -74,7 +74,7 @@ pub use api::{
 };
 pub use api::{SHAPE_STYLE_MIXED_BRUSH_MODE, SHAPE_STYLE_PROPERTY_BRUSH_MODE};
 pub use defaults::{EditorStyleDefaults, editor_style_defaults};
-pub use draw_template::DrawTemplate;
+pub use draw_template::{DRAW_TEMPLATE_SCHEMA_VERSION, DrawTemplate};
 pub use session::{
     EditorSession, EditorSessionSnapshot, PersistedEditorSession, validate_editor_style_defaults,
 };

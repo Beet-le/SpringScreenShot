@@ -10812,8 +10812,23 @@ void watermarkTemplateLibraryAndEditorApplySnapshotsDeterministically() {
 void drawTemplateSelectSavesFiltersInsertsAndDeletes() {
     const snow_shot::storage::DrawTemplateSettings settings;
     require(settings.setTemplates({}), "draw-template test must start with an empty library");
-    const QByteArray payload =
-        QByteArrayLiteral(R"({"schemaVersion":1,"selectedIds":[1],"elements":[1]})");
+    SnowCanvasRuntime source;
+    const auto created =
+        QJsonDocument::fromJson(
+            source.applyAnnotationTransaction(QByteArrayLiteral(
+                R"({"version":1,"operations":[{"type":"rectangle","bounds":[0,0,80,50]}]})")))
+            .object()
+            .value(QStringLiteral("created_element_ids"))
+            .toArray();
+    require(created.size() == 1, "create a real annotation for the template dialog");
+    const auto id = created.first().toObject();
+    SnowCanvasRuntimeEditor sourceEditor(source);
+    require(
+        sourceEditor.select(static_cast<quint32>(id.value(QStringLiteral("index")).toInt()),
+                            static_cast<quint32>(id.value(QStringLiteral("generation")).toInt())),
+        "select the annotation for the template dialog");
+    const QByteArray payload = source.serializeSelectedDrawTemplate();
+    require(!payload.isEmpty(), "capture a real engine-generated annotation template");
     ScreenshotToolPalette::Options options;
     options.showSelectTool = true;
     options.showOcrTool = true;
@@ -10827,7 +10842,7 @@ void drawTemplateSelectSavesFiltersInsertsAndDeletes() {
     palette.setDrawTemplateCallbacks(
         [&]() {
             ++snapshots;
-            return payload;
+            return source.serializeSelectedDrawTemplate();
         },
         [&](const QByteArray& value) { inserted.push_back(value); });
     palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
@@ -10910,12 +10925,20 @@ void drawTemplateSelectSavesFiltersInsertsAndDeletes() {
             "Draw Template test should restore English");
     QCoreApplication::processEvents();
     require(snapshots == 0, "Add Template should wait for confirmation to capture the selection");
+    const QPointer<adqt::widgets::AdModal> createdModal(modal);
     modal->acceptButton()->click();
     QCoreApplication::processEvents();
     require(snapshots == 1, "confirming Add Template should capture the selected elements once");
     require(settings.templates() ==
                 QVector<snow_shot::storage::DrawTemplate>{{QStringLiteral("Template 1"), payload}},
             "confirming Add Template should persist the editable element payload");
+    require(createdModal == nullptr || !createdModal->isOpen(),
+            "successfully creating a real template should close the dialog");
+    SnowCanvasRuntime destination;
+    SnowCanvasRuntimeEditor destinationEditor(destination);
+    require(destinationEditor.insertDrawTemplate(settings.templates().first().payload,
+                                                 QPointF(200, 150)),
+            "the template created through the dialog must remain editable and insertable");
 
     palette.setStyleToolbarState(unselected);
     select->showPopup();
@@ -17666,6 +17689,7 @@ void styledDrawTemplatesPersistNormalizeAndRemainInsertable() {
                             QStringLiteral("line")};
     QVector<storage::DrawTemplate> templates;
     QVector<QJsonObject> sourceData;
+    int currentTemplateVersion = 0;
     const auto elementData = [](const QByteArray& payload) {
         const auto elements =
             QJsonDocument::fromJson(payload).object().value(QStringLiteral("elements")).toArray();
@@ -17706,10 +17730,13 @@ void styledDrawTemplatesPersistNormalizeAndRemainInsertable() {
                     static_cast<quint32>(id.value(QStringLiteral("generation")).toInt())),
                 "select the styled template source");
         const QByteArray payload = source.serializeSelectedDrawTemplate();
-        require(
-            QJsonDocument::fromJson(payload).object().value(QStringLiteral("schemaVersion")) ==
-                QJsonValue(6),
-            "storage compatibility coverage should follow the engine's current template version");
+        const int version = QJsonDocument::fromJson(payload)
+                                .object()
+                                .value(QStringLiteral("schemaVersion"))
+                                .toInt();
+        require(version > 0 && (currentTemplateVersion == 0 || version == currentTemplateVersion),
+                "the engine must serialize every template with the same positive schema version");
+        currentTemplateVersion = version;
         const auto data = elementData(payload);
         require(
             data.value(QStringLiteral("stroke_rendering_style")) ==
@@ -17788,7 +17815,7 @@ void styledDrawTemplatesPersistNormalizeAndRemainInsertable() {
         object.insert(QStringLiteral("schemaVersion"), version);
         return QJsonDocument(object).toJson(QJsonDocument::Compact);
     };
-    for (int version = 1; version <= 6; ++version) {
+    for (int version = 1; version <= currentTemplateVersion; ++version) {
         const auto payload = withVersion(version);
         require(
             settings.setTemplates({{QStringLiteral("  Compatible  "), payload}}) &&
@@ -17798,8 +17825,9 @@ void styledDrawTemplatesPersistNormalizeAndRemainInsertable() {
     }
     require(settings.setTemplates(templates),
             "restore actual styled templates before invalid edits");
-    for (const auto& version : {QJsonValue(), QJsonValue(-1), QJsonValue(0), QJsonValue(7),
-                                QJsonValue(1.5), QJsonValue(QStringLiteral("6"))}) {
+    for (const auto& version :
+         {QJsonValue(), QJsonValue(-1), QJsonValue(0), QJsonValue(currentTemplateVersion + 1),
+          QJsonValue(1.5), QJsonValue(QStringLiteral("6"))}) {
         const auto invalid = withVersion(version);
         require(!settings.setTemplates({templates.first(), {QStringLiteral("Invalid"), invalid}}) &&
                     settings.templates() == templates,

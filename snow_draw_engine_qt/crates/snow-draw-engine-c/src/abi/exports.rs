@@ -180,6 +180,12 @@ pub unsafe extern "C" fn snow_serialized_bytes_destroy(bytes: SnowSerializedByte
     });
 }
 
+/// Current draw-template schema version. The engine reads versions 1 through this value.
+#[unsafe(no_mangle)]
+pub extern "C" fn snow_draw_template_schema_version() -> u32 {
+    snow_draw_engine::DRAW_TEMPLATE_SCHEMA_VERSION
+}
+
 /// Serializes the selected editable elements as a versioned draw template.
 /// A null buffer with zero capacity queries the required byte count.
 #[unsafe(no_mangle)]
