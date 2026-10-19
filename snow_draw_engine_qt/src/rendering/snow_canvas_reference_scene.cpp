@@ -4,11 +4,19 @@
 #include "snow_canvas_pen_mask_atlas.h"
 #include "snow_canvas_filter_tile_cache.h"
 
+#include <QtMath>
+
 #include <cmath>
 #include <limits>
 
 SnowCanvasReferenceScene::~SnowCanvasReferenceScene() {
     snow_canvas_filter_tile_cache::invalidateNamespace(this);
+}
+
+std::uint64_t SnowCanvasReferenceScene::viewportId() const {
+    std::uint64_t id = 0;
+    m_viewport.id(&id);
+    return id;
 }
 
 void SnowCanvasReferenceScene::clearRenderState() {
@@ -27,19 +35,18 @@ void SnowCanvasReferenceScene::reset() {
     m_viewport.reset();
     m_displayCache.reset({255, 255, 255, 255});
     m_reference = {};
+    m_pixelSize = {};
 }
 
-bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
-                                      const SnowCanvasFilterRenderReference& reference,
-                                      const snow_canvas_renderer::SceneRenderRequest& request,
-                                      const QTransform& canvasToView) {
+bool SnowCanvasReferenceScene::sync(SnowRuntime runtime,
+                                    const SnowCanvasFilterRenderReference& reference) {
     const QRectF bounds = reference.canvasRect;
     const qreal scale = reference.pixelsPerCanvasUnit;
     const double width = std::ceil(bounds.width() * scale);
     const double height = std::ceil(bounds.height() * scale);
-    if (runtime == nullptr || request.painter == nullptr || !bounds.isValid() ||
-        !std::isfinite(bounds.x()) || !std::isfinite(bounds.y()) || !std::isfinite(scale) ||
-        scale <= 0 || !std::isfinite(width) || !std::isfinite(height) || width < 1 || height < 1 ||
+    if (runtime == nullptr || !bounds.isValid() || !std::isfinite(bounds.x()) ||
+        !std::isfinite(bounds.y()) || !std::isfinite(scale) || scale <= 0 ||
+        !std::isfinite(width) || !std::isfinite(height) || width < 1 || height < 1 ||
         width >= std::numeric_limits<int>::max() || height >= std::numeric_limits<int>::max()) {
         reset();
         return false;
@@ -61,6 +68,7 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
             return false;
         }
         m_reference = reference;
+        m_pixelSize = pixelSize;
     }
     if (!m_displayCache.sync(runtime, m_viewport.get())) {
         return false;
@@ -69,11 +77,62 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
         clearRenderState();
         return false;
     }
+    return true;
+}
+
+QTransform SnowCanvasReferenceScene::sourceTransform() const {
+    const auto scale = m_reference.pixelsPerCanvasUnit;
+    return QTransform(scale, 0, 0, scale, -m_reference.canvasRect.x() * scale,
+                      -m_reference.canvasRect.y() * scale);
+}
+
+QRegion SnowCanvasReferenceScene::mapSourceDamage(const QRegion& damage,
+                                                  const QTransform& canvasToView) const {
+    QRegion result;
+    if (damage.isEmpty())
+        return result;
+    const auto sourceToCanvas = sourceTransform().inverted();
+    const auto affected =
+        snow_canvas_renderer::sceneDamageThroughFilters(m_displayCache.executionPlan(1.0), damage);
+    for (const QRect& rect : affected.intersected(QRect(QPoint(), m_pixelSize))) {
+        // Presentation can sample a neighboring source pixel during linear resampling.
+        result += canvasToView.mapRect(sourceToCanvas.mapRect(QRectF(rect).adjusted(-1, -1, 1, 1)))
+                      .toAlignedRect();
+    }
+    return result;
+}
+
+QRegion SnowCanvasReferenceScene::spotlightDamage(const QTransform& canvasToView) const {
+    return mapSourceDamage(m_displayCache.spotlightDamage(), canvasToView);
+}
+
+QRegion SnowCanvasReferenceScene::backdropDamage(const QRegion& viewDamage,
+                                                 const QTransform& canvasToView) const {
+    QRegion sourceDamage;
+    const auto viewToCanvas = canvasToView.inverted();
+    const auto transform = sourceTransform();
+    for (const QRect& rect : viewDamage)
+        sourceDamage += transform.mapRect(viewToCanvas.mapRect(QRectF(rect))).toAlignedRect();
+    return viewDamage +
+           mapSourceDamage(sourceDamage.intersected(QRect(QPoint(), m_pixelSize)), canvasToView);
+}
+
+bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
+                                      const SnowCanvasFilterRenderReference& reference,
+                                      const snow_canvas_renderer::SceneRenderRequest& request,
+                                      const QTransform& canvasToView) {
+    if (request.painter == nullptr || !sync(runtime, reference))
+        return false;
 
     const auto sceneRevision = m_displayCache.patchCursor().scene_revision;
     const auto backgroundRevision =
         request.backgroundRenderer != nullptr ? request.backgroundRenderer->contentRevision() : 0;
+    auto sourceRequest = request;
+    sourceRequest.spotlightCutouts = m_displayCache.spotlightCutouts();
+    sourceRequest.spotlightCutoutCount = m_displayCache.spotlightCutoutCount();
+    const auto spotlightKey = snow_canvas_renderer::spotlightFingerprint(sourceRequest);
     const bool rebuild = m_image.isNull() || m_sceneRevision != sceneRevision ||
+                         m_spotlightFingerprint != spotlightKey ||
                          m_backgroundRenderer != request.backgroundRenderer ||
                          m_backgroundRevision != backgroundRevision ||
                          m_clearBackgroundEnabled != request.clearBackgroundEnabled ||
@@ -82,7 +141,7 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
     if (rebuild) {
         // Replace the retained surface while immutable stroke masks survive content edits.
         m_image = {};
-        QImage image = snowCanvasAllocateImage(pixelSize, QImage::Format_ARGB32_Premultiplied);
+        QImage image = snowCanvasAllocateImage(m_pixelSize, QImage::Format_ARGB32_Premultiplied);
         if (image.isNull()) {
             return false;
         }
@@ -91,12 +150,9 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
                        : Qt::transparent);
         QPainter painter(&image);
         snow_canvas_renderer::copyPainterFontAndHints(painter, *request.painter);
-        const QTransform sourceTransform(scale, 0, 0, scale, -bounds.x() * scale,
-                                         -bounds.y() * scale);
-        const SnowCanvasRenderContext context{image.rect(), QRegion(image.rect()), sourceTransform,
-                                              1.0};
+        const SnowCanvasRenderContext context{image.rect(), QRegion(image.rect()),
+                                              sourceTransform(), 1.0};
         snow_canvas_filter_render::RenderWorkspace workspace;
-        auto sourceRequest = request;
         sourceRequest.painter = &painter;
         sourceRequest.displayInfo = &m_displayCache.sceneInfo();
         sourceRequest.sceneItems = m_displayCache.sceneItems();
@@ -120,6 +176,7 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
         m_displayCache.clearRenderState();
         m_image = std::move(image);
         m_sceneRevision = sceneRevision;
+        m_spotlightFingerprint = spotlightKey;
         m_backgroundRevision = backgroundRevision;
         m_backgroundRenderer = request.backgroundRenderer;
         m_clearBackgroundEnabled = request.clearBackgroundEnabled;
@@ -127,7 +184,8 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
         m_renderHints = request.painter->renderHints();
     }
 
-    const QRectF rasterBounds(bounds.topLeft(), QSizeF(pixelSize) / scale);
+    const QRectF rasterBounds(m_reference.canvasRect.topLeft(),
+                              QSizeF(m_pixelSize) / m_reference.pixelsPerCanvasUnit);
     const QRectF target = canvasToView.mapRect(rasterBounds);
     QPainter& painter = *request.painter;
     painter.save();
@@ -135,7 +193,7 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
     // Match pinned image sampling: pixel-exact at 1:1, linear at every other scale.
     const QRectF deviceTarget = painter.deviceTransform().mapRect(target);
     const QSize deviceSize(qRound(deviceTarget.width()), qRound(deviceTarget.height()));
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, deviceSize != pixelSize);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, deviceSize != m_pixelSize);
     painter.setCompositionMode(QPainter::CompositionMode_Source);
     if (request.backgroundContext != nullptr) {
         painter.fillRect(
@@ -144,6 +202,18 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
                 ? snow_canvas_renderer::toQColor(m_displayCache.sceneInfo().clear_color)
                 : Qt::transparent);
     }
+    // The reference owns pixels only inside its canvas rectangle. Spotlight also
+    // covers the surrounding viewport; Source presentation replaces the interior
+    // (including transparent pixels) so the backdrop is never composited twice.
+    const QRect coveredInterior(qCeil(target.left()), qCeil(target.top()),
+                                qFloor(target.right()) - qCeil(target.left()),
+                                qFloor(target.bottom()) - qCeil(target.top()));
+    const QRegion outside = request.exposedRegion.subtracted(QRegion(coveredInterior));
+    if (!outside.isEmpty()) {
+        painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        snow_canvas_renderer::renderSpotlightBackdrop(painter, request, outside);
+    }
+    painter.setCompositionMode(QPainter::CompositionMode_Source);
     painter.drawImage(target, m_image);
     painter.restore();
     snow_canvas_renderer::recordReferenceScenePresentation(

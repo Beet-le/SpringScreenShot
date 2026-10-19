@@ -2,6 +2,7 @@
 #include "snow_draw_engine_qt/snow_canvas_overlay_style.h"
 #include "snow_canvas_smart_erase.h"
 #include "snow_canvas_renderer.h"
+#include "snow_canvas_spotlight_renderer.h"
 #include "snow_canvas_background_restore.h"
 
 #include "snow_canvas_display_item.h"
@@ -205,6 +206,14 @@ bool isDashedSelectionFrame(SnowOverlayRectKind kind) {
     return kind == SNOW_OVERLAY_RECT_SELECTION_MULTI_FRAME ||
            kind == SNOW_OVERLAY_RECT_TEXT_ACTUAL_FRAME ||
            kind == SNOW_OVERLAY_RECT_MAGNIFIER_SELECTION_FRAME;
+}
+
+std::uint64_t filterSourceContentKey(const SceneRenderRequest& request) {
+    const auto contentKey =
+        request.filterTileContentKey != 0
+            ? request.filterTileContentKey
+            : filterDependencyFingerprint(request.sceneItems, request.sceneItemCount);
+    return filterTileHashAppend(contentKey, spotlightFingerprint(request));
 }
 
 void applyArrowStrokeStyle(QPen& pen, SnowStrokeStyle style) {
@@ -2429,6 +2438,78 @@ const SceneExecutionPlan& resolveExecutionPlan(const SceneRenderRequest& request
 }
 } // namespace
 
+QRegion sceneDamageThroughFilters(const SceneExecutionPlan& plan, const QRegion& backdropDamage,
+                                  const std::vector<SceneItemDamage>& itemDamage) {
+    QRegion affected = backdropDamage;
+    auto nextItem = itemDamage.begin();
+    for (const auto& pass : plan.passes) {
+        while (nextItem != itemDamage.end() && nextItem->index < pass.start) {
+            affected += nextItem->region;
+            ++nextItem;
+        }
+        const QRegion entering = affected;
+        for (auto index = pass.start; index < pass.end; ++index) {
+            const auto& filter = plan.filter(index);
+            if (!filter.effective)
+                continue;
+            const QRect output =
+                snow_canvas_render_geometry::alignedRectForBounds(filter.logicalBounds);
+            const int radius = filter.logicalSamplingRadius + 1;
+            for (const QRect& rect : entering)
+                affected += rect.adjusted(-radius, -radius, radius, radius).intersected(output);
+        }
+    }
+    for (; nextItem != itemDamage.end(); ++nextItem)
+        affected += nextItem->region;
+    return affected;
+}
+
+void renderSpotlightBackdrop(QPainter& painter, const SceneRenderRequest& request,
+                             const QRegion& exposedRegion) {
+    if (request.spotlightInfo == nullptr)
+        return;
+    const auto& info = *request.displayInfo;
+    const qreal zoom = info.camera_zoom > 0.0 ? info.camera_zoom : 1.0;
+    const QTransform canvasToView(zoom, 0, 0, zoom,
+                                  info.surface_width / 2 - info.camera_center_x * zoom,
+                                  info.surface_height / 2 - info.camera_center_y * zoom);
+    const QRectF area = request.hasSpotlightRenderArea
+                            ? canvasToView.mapRect(request.spotlightRenderArea)
+                            : QRectF(0, 0, info.surface_width, info.surface_height);
+    snow_canvas_spotlight_renderer::render(painter, info, *request.spotlightInfo,
+                                           request.spotlightCutouts, request.spotlightCutoutCount,
+                                           area, exposedRegion);
+}
+
+std::uint64_t spotlightFingerprint(const SceneRenderRequest& request) {
+    if (!request.spotlightInfo ||
+        !snow_canvas_spotlight_renderer::isVisible(*request.spotlightInfo))
+        return 0;
+    const auto& info = *request.spotlightInfo;
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (auto channel : {info.color.r, info.color.g, info.color.b, info.color.a})
+        hash = filterTileHashAppend(hash, channel);
+    hash = filterTileHashDouble(hash, info.opacity);
+    hash = filterTileHashAppend(hash, request.hasSpotlightRenderArea);
+    if (request.hasSpotlightRenderArea) {
+        for (double value :
+             {request.spotlightRenderArea.x(), request.spotlightRenderArea.y(),
+              request.spotlightRenderArea.width(), request.spotlightRenderArea.height()})
+            hash = filterTileHashDouble(hash, value);
+    }
+    hash = filterTileHashAppend(hash, request.spotlightCutoutCount);
+    for (std::uint32_t i = 0; i < request.spotlightCutoutCount; ++i) {
+        const auto& cutout = request.spotlightCutouts[i];
+        hash = filterTileHashAppend(hash, cutout.shape);
+        for (double value :
+             {cutout.center_x, cutout.center_y, cutout.width, cutout.height, cutout.rotation,
+              cutout.corner_radii.top_left, cutout.corner_radii.top_right,
+              cutout.corner_radii.bottom_right, cutout.corner_radii.bottom_left})
+            hash = filterTileHashDouble(hash, value);
+    }
+    return hash;
+}
+
 void copyPainterFontAndHints(QPainter& destination, const QPainter& source) {
     const QPainter::RenderHints hints = source.renderHints();
     destination.setFont(source.font());
@@ -2447,6 +2528,8 @@ void renderSceneItems(const SceneRenderRequest& request) {
     SceneExecutionPlan local;
     SceneRenderRequest prepared = request;
     prepared.executionPlan = &resolveExecutionPlan(request, local, planningNanoseconds);
+    if (prepared.enableFilterTileCache)
+        prepared.filterTileContentKey = filterSourceContentKey(request);
     renderSceneItemsImpl(prepared);
     g_filterDiagnostics.planningNanoseconds += planningNanoseconds;
     g_filterDiagnostics.executionPlanBuildCount +=
@@ -2510,10 +2593,7 @@ void renderSceneItemsTiled(const SceneRenderRequest& request) {
     const int lastTileY =
         std::max(firstTileY, (qCeil((exposedBounds.y() + exposedBounds.height()) * dpr) - 1) /
                                  snow_canvas_filter_tile_cache::kTilePhysicalSize);
-    const std::uint64_t fullFingerprint =
-        request.filterTileContentKey == 0
-            ? filterDependencyFingerprint(request.sceneItems, request.sceneItemCount)
-            : 0;
+    const auto contentKey = filterSourceContentKey(request);
 
     for (int tileY = firstTileY; tileY <= lastTileY; ++tileY) {
         for (int tileX = firstTileX; tileX <= lastTileX; ++tileX) {
@@ -2570,8 +2650,7 @@ void renderSceneItemsTiled(const SceneRenderRequest& request) {
             }
             tiled.enableFilterTileCache = true;
             tiled.filterTileCoordinate = QPoint(tileX, tileY);
-            tiled.filterTileContentKey =
-                request.filterTileContentKey != 0 ? request.filterTileContentKey : fullFingerprint;
+            tiled.filterTileContentKey = contentKey;
             renderSceneItemsImpl(tiled);
             accumulateFilterRenderDiagnostics(aggregateDiagnostics,
                                               filterRenderDiagnosticsForCurrentThread());
@@ -2641,15 +2720,18 @@ void renderSceneItemsImpl(const SceneRenderRequest& request) {
             backgroundRenderer->renderBeforeCanvas(painter, *backgroundContext);
             painter.restore();
         }
+        renderSpotlightBackdrop(painter, request, exposedRegion);
         return;
     }
     for (const QRect& rect : exposedRegion) {
         g_filterDiagnostics.exposedPixelCount +=
             static_cast<std::size_t>(rect.width()) * static_cast<std::size_t>(rect.height());
     }
+    const bool hasSpotlight = request.spotlightInfo != nullptr &&
+                              snow_canvas_spotlight_renderer::isVisible(*request.spotlightInfo);
     const bool hasBackgroundContent =
         (backgroundImage != nullptr && !backgroundImage->isNull()) ||
-        (backgroundRenderer != nullptr && backgroundContext != nullptr);
+        (backgroundRenderer != nullptr && backgroundContext != nullptr) || hasSpotlight;
     const qreal devicePixelRatio =
         painter.device() != nullptr ? qMax<qreal>(1.0, painter.device()->devicePixelRatioF()) : 1.0;
     thread_local snow_canvas_pen_mask::PenMaskAtlas fallbackPenMaskAtlas;
@@ -2833,7 +2915,8 @@ void renderSceneItemsImpl(const SceneRenderRequest& request) {
                 }
             }
             if (!copiedBackgroundRows) {
-                const bool initializedBaseline = !plan.restorationIndices.empty()
+                // Spotlight is part of the entering backdrop, including the clear color.
+                const bool initializedBaseline = !plan.restorationIndices.empty() || hasSpotlight
                                                      ? request.clearBackgroundEnabled
                                                      : request.enableFilterTileCache;
                 scene.fill(initializedBaseline ? toQColor(displayInfo.clear_color)
@@ -2964,6 +3047,8 @@ void renderSceneItemsImpl(const SceneRenderRequest& request) {
                 backgroundRenderer->renderBeforeCanvas(scenePainter, samplingContext);
                 scenePainter.restore();
             }
+            if (!reusedPreLayer)
+                renderSpotlightBackdrop(scenePainter, request, QRegion(surfaceBounds));
             bool renderedContent = reusedPreLayer || hasBackgroundContent;
             std::shared_ptr<const snow_canvas_filter_tile_cache::Entry> pristineEntry;
             const QImage* pristineBackground = nullptr;
@@ -3378,6 +3463,7 @@ void renderSceneItemsImpl(const SceneRenderRequest& request) {
         backgroundRenderer->renderBeforeCanvas(painter, *backgroundContext);
         painter.restore();
     }
+    renderSpotlightBackdrop(painter, request, exposedRegion);
     if (candidateIndices != nullptr) {
         for (std::uint32_t candidate = 0; candidate < candidateCount; ++candidate) {
             const std::uint32_t index = candidateIndices[candidate];

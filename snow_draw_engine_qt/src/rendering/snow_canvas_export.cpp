@@ -8,6 +8,7 @@
 #include "snow_canvas_pen_mask_atlas.h"
 #include "snow_canvas_renderer.h"
 #include "snow_canvas_compositor.h"
+#include "snow_canvas_spotlight_renderer.h"
 #include "snow_canvas_state.h"
 #include "snow_canvas_viewport.h"
 
@@ -122,7 +123,8 @@ bool requiresBackgroundRaster(const SnowCanvasDisplayCache& displayCache) {
 
 bool hasDocumentDrawing(const SnowCanvasDisplayCache& displayCache) {
     const WatermarkDisplayInfo& watermark = displayCache.watermarkInfo();
-    return displayCache.sceneItemCount() != 0 || displayCache.spotlightInfo().active ||
+    return displayCache.sceneItemCount() != 0 ||
+           snow_canvas_spotlight_renderer::isVisible(displayCache.spotlightInfo()) ||
            (watermark.watermark_text_len != 0 && watermark.watermark_color.a != 0 &&
             std::isfinite(watermark.watermark_opacity) && watermark.watermark_opacity > 0.0);
 }
@@ -150,13 +152,9 @@ struct ExportScene {
     }
 };
 
-void renderExportDecorations(QPainter& painter, const ExportScene& scene,
-                             const SnowCanvasDisplayCache& displayCache) {
+void renderExportDecorations(QPainter& painter, const ExportScene& scene) {
     snow_canvas_compositor::Frame decorations;
     decorations.sceneInfo = &scene.sceneInfo;
-    decorations.spotlightInfo = &displayCache.spotlightInfo();
-    decorations.spotlightCutouts = displayCache.spotlightCutouts();
-    decorations.spotlightCutoutCount = displayCache.spotlightCutoutCount();
     decorations.watermarkInfo = &scene.watermarkInfo;
     snow_canvas_compositor::renderDocumentDecorations(
         painter, decorations, snow_canvas_renderer::WatermarkRenderPurpose::ImageExport);
@@ -211,10 +209,13 @@ void renderRuntimeScene(QPainter& painter, const ExportProjection& projection,
     request.backgroundContext = backgroundContext;
     request.smartErase = smartErase;
     request.executionPlan = &preparedScene->executionPlan;
+    request.spotlightInfo = &displayCache.spotlightInfo();
+    request.spotlightCutouts = displayCache.spotlightCutouts();
+    request.spotlightCutoutCount = displayCache.spotlightCutoutCount();
     request.baseImageSources = &baseImageSources;
     snow_canvas_renderer::renderSceneItems(request);
     if (!exposed)
-        renderExportDecorations(painter, *preparedScene, displayCache);
+        renderExportDecorations(painter, *preparedScene);
     painter.restore();
     g_renderDiagnostics.peakScratchPoolBytes =
         std::max(g_renderDiagnostics.peakScratchPoolBytes, workspace.diagnostics().peakPoolBytes);
@@ -500,7 +501,7 @@ QImage renderTilesToImage(SnowRuntime runtime, const QRectF& sourceFrame,
             painter.setClipRect(QRect(tile.destination, tile.sourcePixels.size()));
             painter.translate(tile.destination - tile.sourcePixels.topLeft());
             painter.scale(projection.scaleX(), projection.scaleY());
-            renderExportDecorations(painter, *scene, displayCache);
+            renderExportDecorations(painter, *scene);
             painter.restore();
         }
     }

@@ -18,6 +18,7 @@
 #include "snow_canvas_text_measurement.h"
 #include "snow_canvas_filter_tile_cache.h"
 #include "snow_canvas_smart_erase.h"
+#include "snow_canvas_spotlight_renderer.h"
 #include "snow_canvas_type_conversions.h"
 #include "snow_canvas_widget_display_state.h"
 #include "snow_canvas_widget_input_handler.h"
@@ -386,6 +387,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     void initializeWidget();
     void initializeViewport();
     std::uint64_t runtimeViewportId() const override;
+    bool observesRuntimeViewport(std::uint64_t id) const override;
     void detachRuntimeForReplacement() override;
     void detachRuntime();
     void attachRuntime(SnowRuntime runtime) override;
@@ -499,6 +501,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     QRegion spotlightViewRenderRegion() const;
     bool watermarkEffectivelyVisible() const;
     bool spotlightEffectivelyVisible() const;
+    QRegion spotlightRepaintRegion(const QRegion& damage);
     SnowCanvasCustomRenderer* customRenderer() const;
     void setCustomRenderer(SnowCanvasCustomRenderer* renderer);
     QTransform canvasToViewTransform() const;
@@ -1392,7 +1395,7 @@ bool SnowCanvasWidget::Impl::setCanvasSpotlightConfig(const SnowCanvasSpotlightC
             snow_canvas_types::toEngineSpotlightConfig(config));
     });
     if (applied && !previousPreviewRegion.isEmpty()) {
-        widget.update(previousPreviewRegion);
+        widget.update(spotlightRepaintRegion(previousPreviewRegion));
     }
     return applied;
 }
@@ -1438,7 +1441,7 @@ void SnowCanvasWidget::Impl::applyPendingSpotlightPreview() {
     pendingSpotlightPreview.reset();
     const QRegion changedRegion = previousRegion.united(spotlightViewRenderRegion());
     if (!changedRegion.isEmpty()) {
-        widget.update(changedRegion);
+        widget.update(spotlightRepaintRegion(changedRegion));
     }
     if (!notifyStateChange(&SnowCanvasWidget::spotlightPreviewApplied)) {
         return;
@@ -1783,6 +1786,10 @@ std::uint64_t SnowCanvasWidget::Impl::runtimeViewportId() const {
     return viewportId();
 }
 
+bool SnowCanvasWidget::Impl::observesRuntimeViewport(std::uint64_t id) const {
+    return id == viewportId() || (id != 0 && id == referenceScene.viewportId());
+}
+
 std::uint64_t SnowCanvasWidget::viewportId() const {
     return m_impl->viewportId();
 }
@@ -1850,8 +1857,22 @@ bool SnowCanvasWidget::Impl::spotlightEffectivelyVisible() const {
         spotlightPresentationInfo.color = snow_canvas_types::toEngineColor(spotlightPreview->color);
         spotlightPresentationInfo.opacity = spotlightPreview->opacity;
     }
-    const SpotlightDisplayInfo& info = spotlightPresentationInfo;
-    return info.active && info.color.a != 0 && std::isfinite(info.opacity) && info.opacity > 0.0;
+    return snow_canvas_spotlight_renderer::isVisible(spotlightPresentationInfo);
+}
+
+QRegion SnowCanvasWidget::Impl::spotlightRepaintRegion(const QRegion& damage) {
+    if (damage.isEmpty())
+        return {};
+    const auto& cache = displayState.displayCache();
+    const auto reference = installedCustomRenderer != nullptr
+                               ? installedCustomRenderer->filterRenderReference()
+                               : std::nullopt;
+    const auto affected =
+        reference.has_value() && referenceScene.sync(runtimeBinding.engine(), *reference)
+            ? referenceScene.backdropDamage(damage, ::canvasToViewTransform(cache.sceneInfo()))
+            : snow_canvas_renderer::sceneDamageThroughFilters(
+                  cache.executionPlan(widget.devicePixelRatioF()), damage);
+    return affected.intersected(widget.rect());
 }
 
 void SnowCanvasWidget::Impl::setDecorationRenderAreas(
@@ -1869,6 +1890,7 @@ void SnowCanvasWidget::Impl::setDecorationRenderAreas(
 
     const QRegion previousWatermark = watermarkViewRenderRegion();
     const QRegion previousSpotlight = spotlightViewRenderRegion();
+    const QRectF previousSpotlightArea = spotlightViewRenderArea();
     const bool watermarkWasVisible = watermarkEffectivelyVisible();
     const bool spotlightWasVisible = spotlightEffectivelyVisible();
 
@@ -1883,8 +1905,14 @@ void SnowCanvasWidget::Impl::setDecorationRenderAreas(
     if (watermarkWasVisible || watermarkIsVisible) {
         changed += previousWatermark.united(nextWatermark);
     }
-    if (spotlightWasVisible || spotlightIsVisible) {
-        changed += previousSpotlight.xored(nextSpotlight);
+    if ((spotlightWasVisible || spotlightIsVisible) &&
+        previousSpotlightArea != spotlightViewRenderArea()) {
+        // Keep boundary pixels even for subpixel changes with identical integer bounds.
+        const QRect unchangedInterior = previousSpotlight.boundingRect()
+                                            .intersected(nextSpotlight.boundingRect())
+                                            .adjusted(1, 1, -1, -1);
+        changed += spotlightRepaintRegion(
+            previousSpotlight.united(nextSpotlight).subtracted(QRegion(unchangedInterior)));
     }
     if (!changed.isEmpty()) {
         widget.update(changed);
@@ -1949,9 +1977,7 @@ QRectF SnowCanvasWidget::Impl::spotlightViewRenderArea() const {
 
 QRegion SnowCanvasWidget::Impl::spotlightViewRenderRegion() const {
     const QRectF area = spotlightViewRenderArea();
-    return area.isValid() && !area.isEmpty()
-               ? QRegion(area.toAlignedRect().intersected(widget.rect()))
-               : QRegion();
+    return area.isValid() && !area.isEmpty() ? QRegion(area.toAlignedRect()) : QRegion();
 }
 
 void SnowCanvasWidget::Impl::setSpotlightRenderArea(const QRectF& canvasRect) {
@@ -2362,7 +2388,8 @@ bool SnowCanvasWidget::Impl::resetEditingState(bool restoreSelectTool) {
         }
     }
 
-    const QRegion previewRegion = watermarkViewRenderRegion().united(spotlightViewRenderRegion());
+    const QRegion previewRegion =
+        watermarkViewRenderRegion().united(spotlightRepaintRegion(spotlightViewRenderRegion()));
     pendingWatermarkPreview.reset();
     watermarkPreview.reset();
     watermarkPreviewTimer.stop();
@@ -2717,10 +2744,23 @@ void SnowCanvasWidget::Impl::syncAfterEngineMutation(bool emitSignals) {
                                                     cache.sceneDirtyRectCount(), widget.rect()),
             widget.devicePixelRatioF());
     }
+    QRegion repaint = result.repaintRegion;
+    const auto reference = installedCustomRenderer != nullptr
+                               ? installedCustomRenderer->filterRenderReference()
+                               : std::nullopt;
+    if (reference.has_value() && referenceScene.sync(runtimeBinding.engine(), *reference)) {
+        // The fixed grid may contain changed cutouts culled from the live viewport.
+        repaint += referenceScene.spotlightDamage(::canvasToViewTransform(cache.sceneInfo()))
+                       .intersected(widget.rect());
+    } else if (!cache.spotlightDamage().isEmpty()) {
+        repaint += snow_canvas_renderer::sceneDamageThroughFilters(
+                       cache.executionPlan(widget.devicePixelRatioF()), cache.spotlightDamage())
+                       .intersected(widget.rect());
+    }
     if (result.shouldEmitStateSignals && !publishPendingStateChanges()) {
         return;
     }
-    snow_canvas_widget_repaint::updateCoalesced(widget, result.repaintRegion);
+    snow_canvas_widget_repaint::updateCoalesced(widget, repaint);
     refreshSerialNumberToolbar();
 }
 
@@ -3057,6 +3097,11 @@ bool SnowCanvasWidget::Impl::paint(QPainter& painter, const QRegion& exposedRegi
         if (auto* owner = runtimeBinding.runtimeOwner())
             sceneRequest.smartErase = owner->smartEraseSnapshot();
         sceneRequest.baseImageSources = &baseImageSources;
+        sceneRequest.spotlightInfo = frame.spotlightInfo;
+        sceneRequest.spotlightCutouts = frame.spotlightCutouts;
+        sceneRequest.spotlightCutoutCount = frame.spotlightCutoutCount;
+        sceneRequest.spotlightRenderArea = configuredSpotlightRenderArea.value_or(QRectF());
+        sceneRequest.hasSpotlightRenderArea = configuredSpotlightRenderArea.has_value();
         if (!reference.has_value())
             referenceScene.reset();
         const bool referenceRendered =
@@ -3113,8 +3158,6 @@ snow_canvas_compositor::Frame SnowCanvasWidget::Impl::buildPaintFrame() const {
         spotlightPresentationInfo.opacity = spotlightPreview->opacity;
     }
     frame.spotlightInfo = &spotlightPresentationInfo;
-    frame.spotlightRenderArea = spotlightViewRenderArea();
-    frame.hasSpotlightRenderArea = configuredSpotlightRenderArea.has_value();
     return frame;
 }
 
@@ -4371,7 +4414,7 @@ void SnowCanvasWidget::Impl::updateBaseImageContent(const QRegion& damage) {
         widget.update();
         return;
     }
-    QRegion repaint = damage;
+    std::vector<snow_canvas_renderer::SceneItemDamage> itemDamage;
     const auto& cache = displayState.displayCache();
     const auto& info = cache.sceneInfo();
     const auto projection = snow_canvas_render_geometry::sceneProjection(info);
@@ -4379,8 +4422,6 @@ void SnowCanvasWidget::Impl::updateBaseImageContent(const QRegion& damage) {
         installedCustomRenderer != nullptr ? installedCustomRenderer->baseImageSources()
                                            : QList<SnowCanvasBaseImageSource>{});
     const auto& plan = cache.executionPlan(widget.devicePixelRatioF());
-    int activePass = -1;
-    QRegion entering;
     for (std::uint32_t index = 0; index < cache.sceneItemCount(); ++index) {
         const auto& item = cache.sceneItems()[index];
         if (item.kind == SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER) {
@@ -4389,24 +4430,11 @@ void SnowCanvasWidget::Impl::updateBaseImageContent(const QRegion& damage) {
             if (magnifierSamplesDamage(item, projection, currentFootprints, damage) ||
                 magnifierSamplesDamage(item, projection, paintedBaseImageSamplingFootprints,
                                        damage))
-                repaint += snow_canvas_render_geometry::alignedRectForBounds(item.viewBounds);
-        } else if (item.kind == SNOW_SCENE_DISPLAY_ITEM_FILTER && plan.passForItem[index] >= 0) {
-            const int pass = plan.passForItem[index];
-            if (pass != activePass) {
-                activePass = pass;
-                entering = repaint;
-            }
-            const auto& filter = plan.filter(index);
-            if (!filter.effective)
-                continue;
-            const QRect output =
-                snow_canvas_render_geometry::alignedRectForBounds(filter.logicalBounds);
-            const int radius = filter.logicalSamplingRadius + 1;
-            // Sibling filters share the same entering source. A subsequent source pass
-            // receives their expanded output, closing damage through chained effects.
-            for (const QRect& rect : entering)
-                repaint += rect.adjusted(-radius, -radius, radius, radius).intersected(output);
+                itemDamage.push_back(
+                    {index,
+                     QRegion(snow_canvas_render_geometry::alignedRectForBounds(item.viewBounds))});
         }
     }
+    const auto repaint = snow_canvas_renderer::sceneDamageThroughFilters(plan, damage, itemDamage);
     widget.update(repaint.intersected(widget.rect()));
 }
