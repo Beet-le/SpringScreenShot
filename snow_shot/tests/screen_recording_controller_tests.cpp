@@ -6134,6 +6134,11 @@ int main(int argc, char** argv) {
         require(localized.text.contains(QByteArray("Backspace")) &&
                     localized.text.contains(QByteArray("Num 0")),
                 "key legends must use English names");
+        for (const auto& entry : localized.entries) {
+            require(entry.key_code != 0x5B && entry.key_code != 0x5C &&
+                        (entry.key_code < 0xA0 || entry.key_code > 0xA5),
+                    "physical modifier legends must be resolved from native side and AltGr state");
+        }
         app.removeTranslator(&translator);
         recordingKeyboardFontFollowsApplication();
         effectsPreviewLifecycle();

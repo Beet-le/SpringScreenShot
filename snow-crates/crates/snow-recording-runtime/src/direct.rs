@@ -775,7 +775,7 @@ impl DirectRecordingSession {
                 .clicks
                 .try_send(MouseClickObservation {
                     down: true,
-                    modifiers: [false; 4],
+                    modifiers: [false; 8],
                     at: Instant::now(),
                     x,
                     y,
@@ -4986,7 +4986,7 @@ mod tests {
             sender
                 .send(MouseClickObservation {
                     down: true,
-                    modifiers: [false; 4],
+                    modifiers: [false; 8],
                     at: started_at + Duration::from_millis(index as u64),
                     x: index as i32,
                     y: 0,
@@ -5018,7 +5018,7 @@ mod tests {
             sender
                 .send(MouseClickObservation {
                     down: true,
-                    modifiers: [false; 4],
+                    modifiers: [false; 8],
                     at: start + Duration::from_millis(ms),
                     x: ms as i32,
                     y: 0,
@@ -5161,7 +5161,7 @@ mod tests {
                 .clicks
                 .try_send(MouseClickObservation {
                     down: true,
-                    modifiers: [false; 4],
+                    modifiers: [false; 8],
                     at: Instant::now(),
                     x: 12,
                     y: 34,

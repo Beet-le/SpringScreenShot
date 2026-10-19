@@ -246,8 +246,10 @@ impl Effects {
                                     y: 0,
                                     button,
                                     down,
-                                    modifiers: [18, 19, 17, 20]
-                                        .map(|bit| event.modifiers & (1 << bit) != 0),
+                                    modifiers:
+                                        snow_recording_effects::keyboard_hook::macos_modifier_sides(
+                                            event.modifiers,
+                                        ),
                                 };
                             self.input_effects.queue_key(observation.event(
                                 at_ms,

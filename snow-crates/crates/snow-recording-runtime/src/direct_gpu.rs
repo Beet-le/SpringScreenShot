@@ -2305,7 +2305,7 @@ mod tests {
                                 y: 240,
                                 button,
                                 down,
-                                modifiers: [false; 4],
+                                modifiers: [false; 8],
                             })
                             .map_err(gpu_error)
                     })?;

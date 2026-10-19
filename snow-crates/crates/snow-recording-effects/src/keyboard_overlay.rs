@@ -107,8 +107,8 @@ impl KeyboardModel {
             return;
         }
         let mut modifiers = event.modifiers;
-        modifiers.sort_by_key(|(key, _)| modifier_order(*key));
-        modifiers.dedup_by(|a, b| a.1 == b.1);
+        modifiers.sort_by_key(|(key, _)| (modifier_order(*key), *key));
+        modifiers.dedup_by_key(|(key, _)| *key);
         let extend = self.rows.back().is_some_and(|row| row.released.is_none());
         if !extend {
             if self.rows.len() == MAX_ROWS {
@@ -602,6 +602,63 @@ mod tests {
     }
 
     #[test]
+    fn physical_modifiers_are_not_deduplicated_by_their_labels() {
+        let mut model = KeyboardModel::default();
+        let mut input = event(0, 65, true, &[0xa2, 0xa3]);
+        for (_, label) in &mut input.modifiers {
+            *label = "Ctrl".into();
+        }
+        model.event(input);
+        assert_eq!(
+            model.rows[0]
+                .keys
+                .iter()
+                .map(|key| key.0)
+                .collect::<Vec<_>>(),
+            [0xa2, 0xa3, 65]
+        );
+    }
+
+    #[test]
+    fn mouse_chords_preserve_both_modifier_sides() {
+        use crate::keyboard_hook::MODIFIER_KEYS;
+        use crate::mouse_hook::{MouseClickObservation, ObservedMouseButton};
+        let style = KeyboardOverlayConfig {
+            font: None,
+            keycap_size: 64,
+            background_rgba: [0; 4],
+            text_rgba: [255; 4],
+            border_rgba: [0; 4],
+            labels: Default::default(),
+        };
+        let click = MouseClickObservation {
+            at: std::time::Instant::now(),
+            x: 0,
+            y: 0,
+            button: ObservedMouseButton::Left,
+            down: true,
+            modifiers: [true; 8],
+        };
+        let input = click.event(0, &style, true);
+        assert_eq!(
+            input
+                .modifiers
+                .iter()
+                .map(|(key, _)| *key)
+                .collect::<Vec<_>>(),
+            MODIFIER_KEYS
+        );
+        for pair in input.modifiers.chunks_exact(2) {
+            assert!(pair[0].1.starts_with("Left "));
+            assert!(pair[1].1.starts_with("Right "));
+        }
+        let mut model = KeyboardModel::default();
+        model.event(input);
+        assert_eq!(model.rows[0].keys.len(), 9);
+        assert!(click.event(1, &style, false).modifiers.is_empty());
+    }
+
+    #[test]
     fn mouse_buttons_share_hold_release_and_fade_without_colliding_with_keys() {
         use crate::mouse_hook::{MouseClickObservation, ObservedMouseButton};
         let style = KeyboardOverlayConfig {
@@ -610,7 +667,7 @@ mod tests {
             background_rgba: [0; 4],
             text_rgba: [255; 4],
             border_rgba: [0; 4],
-            labels: [(0x11, "Ctrl".into()), (0x203, "Side four".into())].into(),
+            labels: [(0xa2, "Left Ctrl".into()), (0x203, "Side four".into())].into(),
         };
         for button in [
             ObservedMouseButton::Left,
@@ -626,7 +683,7 @@ mod tests {
                 y: 0,
                 button,
                 down: true,
-                modifiers: [true, false, false, false],
+                modifiers: [true, false, false, false, false, false, false, false],
             };
             let mut default_style = style.clone();
             default_style.labels.clear();
@@ -646,7 +703,7 @@ mod tests {
             assert!(model.rows[0].released.is_none());
             assert_eq!(
                 observation.event(20, &style, true).modifiers,
-                [(0x11, "Ctrl".into())]
+                [(0xa2, "Left Ctrl".into())]
             );
             observation.down = false;
             model.event(observation.event(100, &style, false));
@@ -1161,7 +1218,11 @@ mod tests {
     fn modifier_release_does_not_dismantle_chord_and_sides_release_independently() {
         let mut m = KeyboardModel::default();
         m.event(event(0, 0xa2, true, &[0xa2]));
-        m.event(event(10, 0xa3, true, &[0xa2]));
+        m.event(event(10, 0xa3, true, &[0xa2, 0xa3]));
+        assert_eq!(
+            m.rows[0].keys.iter().map(|key| key.0).collect::<Vec<_>>(),
+            [0xa2, 0xa3]
+        );
         m.event(event(20, 0xa2, false, &[0xa3]));
         assert!(m.rows[0].released.is_none());
         m.event(event(30, 83, true, &[0xa3]));
