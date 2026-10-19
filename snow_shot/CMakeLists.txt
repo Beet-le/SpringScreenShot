@@ -8180,8 +8180,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-screen-recording-controller-tests --webcam-preview-only)
     add_test(NAME snow-shot-recording-webcam-settings-tests
         COMMAND snow-shot-screen-recording-controller-tests --webcam-settings-only)
+    add_test(NAME snow-shot-recording-warning-placement-tests
+        COMMAND snow-shot-screen-recording-controller-tests --warnings-only -platform offscreen)
     set_tests_properties(snow-shot-recording-webcam-preview-tests
-        snow-shot-recording-webcam-settings-tests PROPERTIES
+        snow-shot-recording-webcam-settings-tests snow-shot-recording-warning-placement-tests PROPERTIES
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
         LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60)

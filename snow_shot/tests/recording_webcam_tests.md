@@ -153,16 +153,49 @@ and physical disconnect/reconnect still require a camera-equipped host.
 cargo run -p snow-webcam --example smoke
 ```
 
-The AVFoundation camera module passes ARM64 macOS cross-compilation and Clippy.
-This does not replace a native macOS application build and permission smoke
-test. The full macOS recording runtime could not be cross-checked on this host
-because its native C dependencies require a macOS compiler/SDK. Its cursor-layer
-regression test must run with the native macOS tests. Native macOS and Windows
-ARM64 verification remain required. Test both
+On macOS, the active stream owns the device configuration lock until the native
+session has stopped and its callback queue has drained. This prevents macOS from
+overriding the chosen format during startup or while another app shares the
+camera. Format selection prefers the requested cadence, then the smallest source
+that covers the square crop; undersized sources prefer the largest crop. When an
+exact rate is unavailable, selection uses the nearest supported rate at or below
+the request when possible, and uses the device's exact boundary frame duration
+for fixed rates such as 30000/1001 fps. The shared service still caps admitted fps.
+Native BGRA frames copy directly into packed RGBA without intermediate frame copies.
+
+The macOS compositor retains one immutable sRGB camera image by generation and
+pixel layout. Unchanged output frames reuse that native source; movement changes
+only its placement. New frames, shape/size changes and reappearance replace it.
+Disappearance releases it even when desktop composition is bypassed or the output
+pool is full. Foreground effects and HDR color conversion retain the same order.
+
+Focused native checks run on ARM64 macOS 27.0.1, with repository FFmpeg configured:
+
+```sh
+# From snow-crates; all tests below run without camera hardware.
+cargo test -p snow-macos --lib webcam::
+cargo test -p snow-macos --lib compositor::tests::
+cargo test -p snow-recording-runtime --no-default-features --lib webcam
+cargo test -p snow-recording-runtime --no-default-features --lib camera_and_highlight
+cargo clippy -p snow-macos -p snow-webcam -p snow-recording-runtime --no-default-features --all-targets -- -D warnings
+```
+
+These cover lock lifetime and startup-failure cleanup, native format selection,
+channel order/row orientation, native image reuse/replacement/retirement, padded
+rows, clipped and translucent overlays, HDR agreement, and cursor layering.
+ARM64 Full and Mini Debug app builds, Intel macOS all-target checks for
+`snow-macos`, formatting and Clippy pass. The focused verification passed 26 Rust
+tests, five UI tests and ten bundle-metadata tests. Hardware acceptance still
+requires a camera-equipped host; none was enumerated on this Mac.
+Physical Intel/macOS 15 and Windows ARM64 verification remain required. Test both
 editions' localized camera permission descriptions in a packaged app, then
 preview, record, pause/resume, cancel, and repeatedly close/reopen recording.
 Verify the camera indicator retires, no camera microphone track is created,
 and screen recording continues after denied access or camera removal.
+Use a manifested application for first-time macOS permission testing: the bare
+`cargo run` smoke executable has no camera usage description and deliberately
+does not request access without one. The Full and Mini bundles include that key
+and their localized permission resources.
 
 Native capture follows the platform APIs documented by
 [Microsoft](https://learn.microsoft.com/en-us/windows/win32/medfound/audio-video-capture-in-media-foundation)

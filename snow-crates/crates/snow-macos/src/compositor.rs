@@ -46,6 +46,32 @@ pub struct RgbaOverlay<'a> {
     pub stride: usize,
     pub bytes: &'a [u8],
 }
+
+/// A single camera image. The revision must change whenever its pixels change.
+pub struct RevisionedRgbaOverlay<'a> {
+    pub revision: u64,
+    pub overlay: RgbaOverlay<'a>,
+}
+
+enum Background<'a, 'b> {
+    Transient(&'a [RgbaOverlay<'b>]),
+    Cached(Option<&'a RevisionedRgbaOverlay<'b>>),
+}
+impl Background<'_, '_> {
+    fn overlays(&self) -> &[RgbaOverlay<'_>] {
+        match self {
+            Self::Transient(overlays) => overlays,
+            Self::Cached(Some(overlay)) => std::slice::from_ref(&overlay.overlay),
+            Self::Cached(None) => &[],
+        }
+    }
+}
+
+struct CachedOverlay {
+    key: (u64, u32, u32, usize),
+    image: Retained<CIImage>,
+}
+
 pub struct Compositor {
     context: Retained<CIContext>,
     pool: CFRetained<CVPixelBufferPool>,
@@ -55,7 +81,9 @@ pub struct Compositor {
     format: PixelFormat,
     color: ColorDescription,
     color_space: CFRetained<CGColorSpace>,
+    overlay_color_space: CFRetained<CGColorSpace>,
     overlay_batcher: OverlayBatcher,
+    background_overlay: Option<CachedOverlay>,
 }
 // SAFETY: methods require exclusive access; Core Image contexts and CoreVideo
 // pools support use on worker threads. No main-thread Cocoa objects are held.
@@ -163,6 +191,8 @@ impl Compositor {
             let threshold = CFRetained::retain(NonNull::from(threshold.as_opaque()));
             let color_space = CGColorSpace::with_name(Some(space))
                 .ok_or_else(|| MacError::Unsupported("output color space unavailable".into()))?;
+            let overlay_color_space =
+                CGColorSpace::with_name(Some(kCGColorSpaceSRGB)).ok_or(MacError::Inactive)?;
             Ok(Self {
                 context,
                 pool,
@@ -172,7 +202,9 @@ impl Compositor {
                 format,
                 color,
                 color_space,
+                overlay_color_space,
                 overlay_batcher: OverlayBatcher::default(),
+                background_overlay: None,
             })
         })
     }
@@ -273,7 +305,7 @@ impl Compositor {
     ) -> MacResult<PixelBuffer> {
         self.compose_impl(
             layers,
-            background_overlays,
+            Background::Transient(background_overlays),
             overlays,
             highlight,
             opaque,
@@ -281,16 +313,50 @@ impl Compositor {
         )
     }
 
+    /// Retain only the current immutable camera image. Core Image can reuse its
+    /// source upload while faster desktop/effect frames continue to be composed.
+    /// Passing None releases it; a geometry change also invalidates the cache.
+    pub fn compose_with_cached_background_overlay(
+        &mut self,
+        layers: &[Layer<'_>],
+        background: Option<&RevisionedRgbaOverlay<'_>>,
+        overlays: &[RgbaOverlay<'_>],
+        highlight: &[RgbaOverlay<'_>],
+        opaque: bool,
+    ) -> MacResult<PixelBuffer> {
+        self.compose_impl(
+            layers,
+            Background::Cached(background),
+            overlays,
+            highlight,
+            opaque,
+            true,
+        )
+    }
+
+    /// Also release an invisible camera when callers can bypass composition.
+    pub fn clear_cached_background_overlay(&mut self) {
+        self.background_overlay = None;
+    }
+
     fn compose_impl(
         &mut self,
         layers: &[Layer<'_>],
-        background_overlays: &[RgbaOverlay<'_>],
+        background: Background<'_, '_>,
         overlays: &[RgbaOverlay<'_>],
         highlight: &[RgbaOverlay<'_>],
         opaque: bool,
         batch_overlays: bool,
     ) -> MacResult<PixelBuffer> {
-        for overlay in background_overlays.iter().chain(highlight).chain(overlays) {
+        if !matches!(&background, Background::Cached(Some(_))) {
+            self.clear_cached_background_overlay();
+        }
+        for overlay in background
+            .overlays()
+            .iter()
+            .chain(highlight)
+            .chain(overlays)
+        {
             let needed = overlay.stride.checked_mul(overlay.height as usize);
             if overlay.width == 0
                 || overlay.height == 0
@@ -309,13 +375,14 @@ impl Compositor {
         objc2::rc::autoreleasepool(|_| unsafe {
             let buffer = self.allocate_output()?;
             let bounds = rect(0.0, 0.0, self.size.width as f64, self.size.height as f64);
-            let background = CIColor::colorWithRed_green_blue_alpha(
+            let background_color = CIColor::colorWithRed_green_blue_alpha(
                 0.0,
                 0.0,
                 0.0,
                 if opaque { 1.0 } else { 0.0 },
             );
-            let mut result = CIImage::imageWithColor(&background).imageByCroppingToRect(bounds);
+            let mut result =
+                CIImage::imageWithColor(&background_color).imageByCroppingToRect(bounds);
             for layer in layers {
                 let s = layer.source;
                 let d = layer.destination;
@@ -343,8 +410,38 @@ impl Compositor {
                 );
                 result = transformed.imageByCompositingOverImage(&result);
             }
-            let srgb =
-                CGColorSpace::with_name(Some(kCGColorSpaceSRGB)).ok_or(MacError::Inactive)?;
+            let srgb = &self.overlay_color_space;
+            let background_overlays = match background {
+                Background::Transient(overlays) => overlays,
+                Background::Cached(overlay) => {
+                    if let Some(revisioned) = overlay {
+                        let overlay = &revisioned.overlay;
+                        let key = (
+                            revisioned.revision,
+                            overlay.width,
+                            overlay.height,
+                            overlay.stride,
+                        );
+                        if self
+                            .background_overlay
+                            .as_ref()
+                            .is_none_or(|cached| cached.key != key)
+                        {
+                            self.background_overlay = Some(CachedOverlay {
+                                key,
+                                image: bitmap_image(overlay, srgb),
+                            });
+                        }
+                        let positioned = position_overlay(
+                            &self.background_overlay.as_ref().unwrap().image,
+                            overlay,
+                            self.size,
+                        );
+                        result = positioned.imageByCompositingOverImage(&result);
+                    }
+                    &[]
+                }
+            };
             for (mut group, multiply) in [
                 (background_overlays, false),
                 (highlight, true),
@@ -359,27 +456,8 @@ impl Compositor {
                         count = 1;
                         &group[0]
                     };
-                    let data = objc2_foundation::NSData::with_bytes(overlay.bytes);
-                    let image = CIImage::imageWithBitmapData_bytesPerRow_size_format_colorSpace(
-                        &data,
-                        overlay.stride,
-                        CGSize {
-                            width: f64::from(overlay.width),
-                            height: f64::from(overlay.height),
-                        },
-                        objc2_core_image::kCIFormatRGBA8,
-                        Some(&srgb),
-                    );
-                    let positioned = image.imageByApplyingTransform(CGAffineTransform {
-                        a: 1.0,
-                        b: 0.0,
-                        c: 0.0,
-                        d: 1.0,
-                        tx: f64::from(overlay.x),
-                        ty: f64::from(self.size.height)
-                            - f64::from(overlay.y)
-                            - f64::from(overlay.height),
-                    });
+                    let image = bitmap_image(overlay, srgb);
+                    let positioned = position_overlay(&image, overlay, self.size);
                     result = if multiply {
                         let parameters = objc2_foundation::NSDictionary::from_slices(
                             &[objc2_foundation::ns_string!("inputBackgroundImage")],
@@ -452,6 +530,39 @@ impl Compositor {
                 NonNull::new(buffer).ok_or(MacError::Inactive)?,
             ))
         }
+    }
+}
+
+fn bitmap_image(overlay: &RgbaOverlay<'_>, srgb: &CGColorSpace) -> Retained<CIImage> {
+    let data = objc2_foundation::NSData::with_bytes(overlay.bytes);
+    unsafe {
+        CIImage::imageWithBitmapData_bytesPerRow_size_format_colorSpace(
+            &data,
+            overlay.stride,
+            CGSize {
+                width: f64::from(overlay.width),
+                height: f64::from(overlay.height),
+            },
+            objc2_core_image::kCIFormatRGBA8,
+            Some(srgb),
+        )
+    }
+}
+
+fn position_overlay(
+    image: &CIImage,
+    overlay: &RgbaOverlay<'_>,
+    size: PixelSize,
+) -> Retained<CIImage> {
+    unsafe {
+        image.imageByApplyingTransform(CGAffineTransform {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            tx: f64::from(overlay.x),
+            ty: f64::from(size.height) - f64::from(overlay.y) - f64::from(overlay.height),
+        })
     }
 }
 fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
@@ -551,6 +662,186 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cached_camera_owns_one_immutable_image_and_refreshes_on_revision_geometry_and_reappearance()
+    {
+        let mut compositor =
+            Compositor::new(PixelSize::new(16, 16).unwrap(), PixelFormat::Bgra8, 2).unwrap();
+        let red = [220, 10, 20, 255].repeat(4 * 4);
+        let blue = [10, 20, 220, 255].repeat(4 * 4);
+        let camera = |revision, width, bytes| RevisionedRgbaOverlay {
+            revision,
+            overlay: RgbaOverlay {
+                x: 2,
+                y: 3,
+                width,
+                height: 4,
+                stride: 16,
+                bytes,
+            },
+        };
+        fn render(
+            compositor: &mut Compositor,
+            overlay: Option<&RevisionedRgbaOverlay<'_>>,
+        ) -> snow_media::CpuFrame {
+            compositor
+                .compose_with_cached_background_overlay(&[], overlay, &[], &[], true)
+                .unwrap()
+                .to_cpu_format(PixelFormat::Rgba8)
+                .unwrap()
+        }
+        let first = render(&mut compositor, Some(&camera(1, 4, &red)));
+        let original = compositor
+            .background_overlay
+            .as_ref()
+            .unwrap()
+            .image
+            .clone();
+        // A different borrowed buffer with the same revision must reuse the owned
+        // immutable source, rather than copy/upload it again or borrow its bytes.
+        let repeated = render(&mut compositor, Some(&camera(1, 4, &blue)));
+        assert_eq!(first.bytes, repeated.bytes);
+        assert!(std::ptr::eq(
+            &*original,
+            &*compositor.background_overlay.as_ref().unwrap().image
+        ));
+        let changed = render(&mut compositor, Some(&camera(2, 4, &blue)));
+        assert_ne!(first.bytes, changed.bytes);
+        assert!(!std::ptr::eq(
+            &*original,
+            &*compositor.background_overlay.as_ref().unwrap().image
+        ));
+        let old = compositor
+            .background_overlay
+            .as_ref()
+            .unwrap()
+            .image
+            .clone();
+        render(&mut compositor, Some(&camera(2, 3, &blue)));
+        assert!(!std::ptr::eq(
+            &*old,
+            &*compositor.background_overlay.as_ref().unwrap().image
+        ));
+        let hidden = render(&mut compositor, None);
+        assert!(compositor.background_overlay.is_none());
+        assert!(
+            hidden
+                .bytes
+                .chunks_exact(4)
+                .all(|pixel| pixel == [0, 0, 0, 255])
+        );
+        assert_eq!(
+            render(&mut compositor, Some(&camera(1, 4, &red))).bytes,
+            first.bytes
+        );
+        compositor.clear_cached_background_overlay();
+        assert!(compositor.background_overlay.is_none());
+        // A later input's revision can restart after explicit retirement.
+        assert_eq!(
+            render(&mut compositor, Some(&camera(1, 4, &blue))).bytes,
+            changed.bytes
+        );
+        let overlay = camera(1, 4, &blue);
+        let first_lease = compositor
+            .compose_with_cached_background_overlay(&[], Some(&overlay), &[], &[], true)
+            .unwrap();
+        let second_lease = compositor
+            .compose_with_cached_background_overlay(&[], Some(&overlay), &[], &[], true)
+            .unwrap();
+        assert!(matches!(
+            compositor.compose_with_cached_background_overlay(&[], None, &[], &[], true,),
+            Err(MacError::Timeout)
+        ));
+        assert!(
+            compositor.background_overlay.is_none(),
+            "pool backpressure cannot retain an invisible camera"
+        );
+        drop((first_lease, second_lease));
+    }
+
+    #[test]
+    fn cached_camera_matches_uncached_pixels_with_padding_clipping_alpha_layering_and_hdr() {
+        let size = PixelSize::new(16, 16).unwrap();
+        let pixels = [
+            200, 20, 10, 255, 100, 10, 5, 128, 0, 0, 0, 0, 10, 220, 20, 255, 5, 110, 10, 128, 0, 0,
+            0, 0, 20, 10, 240, 255, 10, 5, 120, 128, 0, 0, 0, 0,
+        ];
+        let foreground = [255; 4 * 4 * 4];
+        for format in [
+            PixelFormat::Bgra8,
+            PixelFormat::Rgba16Float,
+            PixelFormat::P010,
+        ] {
+            let mut cached = Compositor::new(size, format, 2).unwrap();
+            let mut reference = Compositor::new(size, format, 2).unwrap();
+            for (x, y) in [(2, 3), (15, 15), (7, 5)] {
+                let camera = RevisionedRgbaOverlay {
+                    revision: 1,
+                    overlay: RgbaOverlay {
+                        x,
+                        y,
+                        width: 2,
+                        height: 3,
+                        stride: 12,
+                        bytes: &pixels,
+                    },
+                };
+                let overlays = [RgbaOverlay {
+                    x: 3,
+                    y: 4,
+                    width: 4,
+                    height: 4,
+                    stride: 16,
+                    bytes: &foreground,
+                }];
+                for opaque in [false, true] {
+                    let actual = cached
+                        .compose_with_cached_background_overlay(
+                            &[],
+                            Some(&camera),
+                            &overlays,
+                            &overlays,
+                            opaque,
+                        )
+                        .unwrap()
+                        .to_cpu()
+                        .unwrap();
+                    let expected = reference
+                        .compose_with_background_overlays(
+                            &[],
+                            std::slice::from_ref(&camera.overlay),
+                            &overlays,
+                            &overlays,
+                            opaque,
+                        )
+                        .unwrap()
+                        .to_cpu()
+                        .unwrap();
+                    assert_eq!(
+                        actual.bytes, expected.bytes,
+                        "{format:?}, ({x}, {y}), opaque={opaque}"
+                    );
+                }
+            }
+            let invalid = RevisionedRgbaOverlay {
+                revision: 2,
+                overlay: RgbaOverlay {
+                    x: 0,
+                    y: 0,
+                    width: 4,
+                    height: 4,
+                    stride: usize::MAX,
+                    bytes: &pixels,
+                },
+            };
+            assert!(
+                cached
+                    .compose_with_cached_background_overlay(&[], Some(&invalid), &[], &[], true,)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn batched_overlays_match_individual_layers_with_alpha_highlights_hdr_and_clipping() {
         let size = PixelSize::new(256, 192).unwrap();
         let rectangles = [
@@ -605,12 +896,26 @@ mod tests {
                     let background = if mixed_layers { &overlays[..2] } else { &[] };
                     let highlight = if mixed_layers { &overlays[1..4] } else { &[] };
                     let expected = compositor
-                        .compose_impl(&[], background, &overlays, highlight, opaque, false)
+                        .compose_impl(
+                            &[],
+                            Background::Transient(background),
+                            &overlays,
+                            highlight,
+                            opaque,
+                            false,
+                        )
                         .unwrap()
                         .to_cpu()
                         .unwrap();
                     let actual = compositor
-                        .compose_impl(&[], background, &overlays, highlight, opaque, true)
+                        .compose_impl(
+                            &[],
+                            Background::Transient(background),
+                            &overlays,
+                            highlight,
+                            opaque,
+                            true,
+                        )
                         .unwrap()
                         .to_cpu()
                         .unwrap();
@@ -620,12 +925,26 @@ mod tests {
                     );
                     // Reusing the batch for a smaller scene cannot retain earlier pixels.
                     let expected = compositor
-                        .compose_impl(&[], &[], &overlays[..2], &[], opaque, false)
+                        .compose_impl(
+                            &[],
+                            Background::Transient(&[]),
+                            &overlays[..2],
+                            &[],
+                            opaque,
+                            false,
+                        )
                         .unwrap()
                         .to_cpu()
                         .unwrap();
                     let actual = compositor
-                        .compose_impl(&[], &[], &overlays[..2], &[], opaque, true)
+                        .compose_impl(
+                            &[],
+                            Background::Transient(&[]),
+                            &overlays[..2],
+                            &[],
+                            opaque,
+                            true,
+                        )
                         .unwrap()
                         .to_cpu()
                         .unwrap();

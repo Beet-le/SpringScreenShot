@@ -501,19 +501,25 @@ impl NativeRecordingSession {
                 (self.config.output.width, self.config.output.height),
             );
         }
-        let webcam: Vec<_> = self
-            .webcam
-            .image()
-            .into_iter()
-            .map(|image| snow_macos::compositor::RgbaOverlay {
-                x: image.rect.0,
-                y: image.rect.1,
-                width: image.rect.2,
-                height: image.rect.2,
-                stride: image.rect.2 as usize * 4,
-                bytes: image.pixels,
-            })
-            .collect();
+        let webcam =
+            self.webcam
+                .image()
+                .map(|image| snow_macos::compositor::RevisionedRgbaOverlay {
+                    revision: image.generation,
+                    overlay: snow_macos::compositor::RgbaOverlay {
+                        x: image.rect.0,
+                        y: image.rect.1,
+                        width: image.rect.2,
+                        height: image.rect.2,
+                        stride: image.rect.2 as usize * 4,
+                        bytes: image.pixels,
+                    },
+                });
+        if webcam.is_none()
+            && let Some(compositor) = &mut self.compositor
+        {
+            compositor.clear_cached_background_overlay();
+        }
         let overlays: Vec<_> = tiles
             .iter()
             .map(|tile| snow_macos::compositor::RgbaOverlay {
@@ -552,7 +558,7 @@ impl NativeRecordingSession {
             self.config.output,
             output_format,
             destination,
-            overlays.is_empty() && highlight.is_empty() && webcam.is_empty(),
+            overlays.is_empty() && highlight.is_empty() && webcam.is_none(),
         ) {
             frame.image.clone()
         } else {
@@ -636,8 +642,13 @@ impl NativeRecordingSession {
                 .compositor
                 .as_mut()
                 .unwrap()
-                .compose_with_background_overlays(&layers, &webcam, &overlays, &highlight, true)
-            {
+                .compose_with_cached_background_overlay(
+                    &layers,
+                    webcam.as_ref(),
+                    &overlays,
+                    &highlight,
+                    true,
+                ) {
                 Ok(image) => image,
                 Err(MacError::Timeout) => return Ok(NativeRecordingEvent::Idle),
                 Err(error) => return Err(native_error(error)),

@@ -505,13 +505,8 @@ struct ScreenRecordingController::Impl {
             *areaWindow, effectsSourceFactory ? effectsSourceFactory() : nullptr);
         SNOW_SHOT_RECORDING_PERF_MILESTONE("open.preview_created");
         uiSession->preview->reportError = [this](const QString& error) {
-            if (toolbarWindow == nullptr) {
-                return;
-            }
-            adqt::widgets::AdMessage::Request request;
-            request.key = QStringLiteral("screen-recording-preview-error");
-            request.content = tr("Motion preview unavailable: %1").arg(error);
-            adqt::widgets::AdMessageService::warning(std::move(request), toolbarWindow);
+            showRecordingWarning(QStringLiteral("screen-recording-preview-error"),
+                                 tr("Motion preview unavailable: %1").arg(error));
         };
         toolbarWindow = uiSession->toolbar.get();
         // Keep the toolbar above the area even when drawing or resizing activates the area.
@@ -1982,15 +1977,23 @@ struct ScreenRecordingController::Impl {
 #endif
     }
 
+    void showRecordingWarning(const QString& key, const QString& content) {
+        if (!areaWindow)
+            return;
+        adqt::widgets::AdMessage::Request request;
+        request.key = key;
+        request.content = content;
+        adqt::widgets::AdMessageService::warning(std::move(request), areaWindow);
+    }
+
     void reportToolbarExclusionError() {
-        if (toolbarExclusionErrorReported || !toolbarWindow)
+        if (toolbarExclusionErrorReported || !areaWindow)
             return;
         toolbarExclusionErrorReported = true;
-        adqt::widgets::AdMessage::Request request;
-        request.key = QStringLiteral("recording-toolbar-exclusion-error");
-        request.content = QCoreApplication::translate(
-            "ScreenRecordingController", "Unable to exclude toolbar controls from recording");
-        adqt::widgets::AdMessageService::warning(std::move(request), toolbarWindow);
+        showRecordingWarning(
+            QStringLiteral("recording-toolbar-exclusion-error"),
+            QCoreApplication::translate("ScreenRecordingController",
+                                        "Unable to exclude toolbar controls from recording"));
     }
 
     void pollToolbarExclusions() {
@@ -2079,10 +2082,8 @@ struct ScreenRecordingController::Impl {
     }
 
     void notifyWebcamError(const QString& error) {
-        adqt::widgets::AdMessage::Request request;
-        request.key = QStringLiteral("screen-recording-webcam-error");
-        request.content = tr("Webcam unavailable: %1").arg(error);
-        adqt::widgets::AdMessageService::warning(std::move(request), toolbarWindow);
+        showRecordingWarning(QStringLiteral("screen-recording-webcam-error"),
+                             tr("Webcam unavailable: %1").arg(error));
     }
 
     void syncPreview() {

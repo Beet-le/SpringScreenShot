@@ -19,6 +19,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod configuration;
+use configuration::{ConfigurationLock, preference};
+
 struct State {
     frames: Sender<(PixelBuffer, Instant)>,
     closed: AtomicBool,
@@ -90,9 +93,13 @@ pub struct Stream {
     _queue: DispatchRetained<DispatchQueue>,
     state: Arc<State>,
     frames: Receiver<(PixelBuffer, Instant)>,
+    _configuration: ConfigurationLock<Retained<AVCaptureDevice>>,
 }
 impl Stream {
     pub fn open(size: u32, fps: u32) -> Result<Self, String> {
+        if !(50..=500).contains(&size) || !(1..=30).contains(&fps) {
+            return Err("Invalid camera capture size or frame rate.".into());
+        }
         objc2::rc::autoreleasepool(|_| unsafe {
             if authorization() != Some(true) {
                 return Err(
@@ -113,52 +120,48 @@ impl Stream {
             }
             session.addInput(&input);
             session.addOutput(&output);
+            let configuration = ConfigurationLock::new(device)?;
+            let device = &configuration.0;
             let format = device
                 .formats()
                 .iter()
                 .filter_map(|format| {
                     let dimensions =
                         CMVideoFormatDescriptionGetDimensions(&format.formatDescription());
-                    if dimensions.width <= 0
-                        || dimensions.height <= 0
-                        || dimensions.width > 8192
-                        || dimensions.height > 8192
-                    {
-                        return None;
-                    }
-                    let rate = format
+                    let (selected, interval) = format
                         .videoSupportedFrameRateRanges()
                         .iter()
-                        .find(|range| {
-                            range.minFrameRate() <= f64::from(fps)
-                                && range.maxFrameRate() >= f64::from(fps)
-                        })?;
-                    let _ = rate;
-                    let minimum = dimensions.width.min(dimensions.height) as u32;
-                    Some((
-                        (
-                            minimum < size,
-                            u64::from(dimensions.width as u32)
-                                * u64::from(dimensions.height as u32),
-                        ),
-                        format,
-                    ))
+                        .filter_map(|range| {
+                            let selected = preference(
+                                (dimensions.width, dimensions.height),
+                                size,
+                                fps,
+                                (range.minFrameRate(), range.maxFrameRate()),
+                            )?;
+                            // Use the device's exact CMTime at range boundaries (e.g.
+                            // 30000/1001 fps), avoiding rounded, unsupported durations.
+                            let interval = if selected.fps == range.minFrameRate() {
+                                range.maxFrameDuration()
+                            } else if selected.fps == range.maxFrameRate() {
+                                range.minFrameDuration()
+                            } else {
+                                CMTime {
+                                    value: 1,
+                                    timescale: fps as i32,
+                                    flags: CMTimeFlags::Valid,
+                                    epoch: 0,
+                                }
+                            };
+                            Some((selected, interval))
+                        })
+                        .min_by_key(|(selected, _)| selected.score)?;
+                    Some((selected.score, format, interval))
                 })
-                .min_by_key(|(score, _)| *score)
-                .map(|(_, format)| format);
-            if let Some(format) = format {
-                device.lockForConfiguration().map_err(|e| e.to_string())?;
-                device.setActiveFormat(&format);
-                let interval = CMTime {
-                    value: 1,
-                    timescale: fps as i32,
-                    flags: CMTimeFlags::Valid,
-                    epoch: 0,
-                };
-                device.setActiveVideoMinFrameDuration(interval);
-                device.setActiveVideoMaxFrameDuration(interval);
-                device.unlockForConfiguration();
-            }
+                .min_by_key(|(score, _, _)| *score)
+                .ok_or("The camera does not support a usable video format.")?;
+            device.setActiveFormat(&format.1);
+            device.setActiveVideoMinFrameDuration(format.2);
+            device.setActiveVideoMaxFrameDuration(format.2);
             let settings = NSDictionary::from_slices(
                 &[&*NSString::from_str("PixelFormatType")],
                 &[
@@ -193,6 +196,7 @@ impl Stream {
                 _queue: queue,
                 state,
                 frames,
+                _configuration: configuration,
             };
             stream.session.startRunning();
             if !stream.session.isRunning() {
@@ -203,28 +207,29 @@ impl Stream {
     }
     pub fn poll(&self, timeout: Duration) -> Result<Option<Frame>, String> {
         match self.frames.recv_timeout(timeout) {
-            Ok((image, at)) => {
-                let size = image.size();
-                let cpu = image
-                    .to_cpu()
-                    .map_err(|e| e.to_string())?
-                    .into_format(PixelFormat::Rgba8)
-                    .map_err(|e| e.to_string())?;
-                Ok(Some(Frame {
-                    width: size.width,
-                    height: size.height,
-                    rgba: cpu
-                        .plane_bytes(0)
-                        .ok_or("Invalid camera frame layout.")?
-                        .to_vec(),
-                    stride: cpu.planes[0].stride,
-                    at,
-                }))
-            }
+            Ok((image, at)) => rgba_frame(&image, at).map(Some),
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => Ok(None),
             Err(_) => Err("The camera disconnected.".into()),
         }
     }
+}
+
+fn rgba_frame(image: &PixelBuffer, at: Instant) -> Result<Frame, String> {
+    let size = image.size();
+    let stride = size.width as usize * 4;
+    let mut rgba = vec![0; stride * size.height as usize];
+    // Copy and channel-swap directly from CoreVideo while its read lock is held.
+    // Avoid a full BGRA allocation, a conversion allocation and a final clone.
+    image
+        .copy_packed(&mut rgba, image.format() == PixelFormat::Bgra8)
+        .map_err(|error| error.to_string())?;
+    Ok(Frame {
+        width: size.width,
+        height: size.height,
+        stride,
+        rgba,
+        at,
+    })
 }
 impl Drop for Stream {
     fn drop(&mut self) {
@@ -236,5 +241,50 @@ impl Drop for Stream {
         // The capture owner is never the callback queue. Drain already queued callbacks
         // before releasing the delegate; their closed flag prevents any further delivery.
         self._queue.exec_sync(|| {});
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compositor::{Compositor, RgbaOverlay};
+    use snow_media::geometry::PixelSize;
+
+    #[test]
+    fn native_camera_copy_preserves_top_down_unmirrored_rgba_and_timestamp() {
+        let pixels = [
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255, 255, 0, 255, 255, 0,
+            255, 255, 255,
+        ];
+        let mut compositor =
+            Compositor::new(PixelSize::new(2, 3).unwrap(), PixelFormat::Bgra8, 2).unwrap();
+        let native = compositor
+            .compose_with_overlays(
+                &[],
+                &[RgbaOverlay {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 3,
+                    stride: 8,
+                    bytes: &pixels,
+                }],
+                true,
+            )
+            .unwrap();
+        let at = Instant::now();
+        let frame = rgba_frame(&native, at).unwrap();
+        assert_eq!(
+            (frame.width, frame.height, frame.stride, frame.at),
+            (2, 3, 8, at)
+        );
+        assert_eq!(frame.rgba, pixels);
+    }
+
+    #[test]
+    fn invalid_capture_options_are_rejected_before_requesting_hardware() {
+        for (size, fps) in [(49, 30), (501, 30), (150, 0), (150, 31)] {
+            assert!(Stream::open(size, fps).is_err());
+        }
     }
 }

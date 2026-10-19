@@ -47,6 +47,7 @@
 #include "widgets/popover.h"
 #include "widgets/popup_surface_guard.h"
 #include "widgets/dpi_stable_window_controller.h"
+#include "widgets/message.h"
 
 #include <QApplication>
 #include <QAbstractEventDispatcher>
@@ -134,6 +135,8 @@ struct SnowWebcam {
 };
 namespace {
 std::atomic<int> webcamCreates = 0, webcamConfigures = 0, webcamDestroys = 0;
+bool failWebcamCreation = false;
+QByteArray webcamError;
 std::vector<std::weak_ptr<RecordingEffectTestState>> effectSources;
 std::unique_ptr<RecordingEffectsSource> testEffectsSource() {
     auto state = std::make_shared<RecordingEffectTestState>();
@@ -229,6 +232,16 @@ ScreenshotToolPalette* palette() {
         }
     }
     require(false, "recording toolbar must exist");
+    return nullptr;
+}
+
+ScreenRecordingAreaWindow* recordingAreaWindow() {
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        if (auto* area = qobject_cast<ScreenRecordingAreaWindow*>(widget);
+            area && area->isVisible())
+            return area;
+    }
+    require(false, "recording area must exist");
     return nullptr;
 }
 
@@ -2205,6 +2218,19 @@ void recordingCaptureExclusionWiring() {
                     require(drawingPopover->surfaceWidget()->isVisible() == captureToolbar,
                             "unavailable native exclusion keeps drawing popup hidden; capture-on "
                             "shows it");
+                    if (!captureToolbar) {
+                        auto* area = recordingAreaWindow();
+                        auto* messages = area->findChild<adqt::widgets::AdMessage*>();
+                        auto* handle = messages
+                                           ? messages->findChild<adqt::widgets::AdMessageHandle*>()
+                                           : nullptr;
+                        require(messages && messages->count() == 1 && handle &&
+                                    handle->key() ==
+                                        QStringLiteral("recording-toolbar-exclusion-error"),
+                                "capture exclusion warnings must appear in the recording area");
+                        require(toolbar->findChild<adqt::widgets::AdMessage*>() == nullptr,
+                                "capture exclusion warnings must not create toolbar messages");
+                    }
                 }
 #ifdef Q_OS_WIN
                 if (QGuiApplication::platformName() == QStringLiteral("windows")) {
@@ -2824,6 +2850,8 @@ screenshotWindowNamesAtPoint(const QPointF& point, std::span<const std::uintptr_
 extern "C" {
 SnowWebcam* snow_webcam_create(uint32_t size, uint32_t fps) {
     ++webcamCreates;
+    if (failWebcamCreation)
+        return nullptr;
     return new SnowWebcam{size, fps, false};
 }
 uint8_t snow_webcam_configure(const SnowWebcam* source, uint32_t size, uint32_t fps) {
@@ -2844,8 +2872,8 @@ void snow_webcam_destroy(SnowWebcam* source) {
 }
 size_t snow_webcam_error(const SnowWebcam*, char* buffer, size_t capacity) {
     if (buffer && capacity)
-        buffer[0] = '\0';
-    return 0;
+        qstrncpy(buffer, webcamError.constData(), capacity);
+    return static_cast<size_t>(webcamError.size());
 }
 SnowRecordingResult
 snow_recording_session_create_direct(const SnowCaptureDirectRecordingConfig* config,
@@ -3247,6 +3275,71 @@ void recordingWebcamPreviewLifecycle() {
     }
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     require(webcamDestroys == destroyed + 1, "controller teardown releases its camera source");
+}
+
+void recordingWarningsUseAreaWindow() {
+    using namespace adqt::widgets;
+    enum class Failure { Initialization, Recording, Paused, Preview };
+    for (const auto failure :
+         {Failure::Initialization, Failure::Recording, Failure::Paused, Failure::Preview}) {
+        prepareWebcamSettings(failure != Failure::Preview);
+        const snow_shot::storage::RecordingSettings settings;
+        require(settings.setAutoHideToolbar(false), "keep warning fixture controls visible");
+        if (failure == Failure::Preview)
+            require(settings.setShowKeyboard(true), "enable the failing motion preview");
+        failWebcamCreation = failure == Failure::Initialization;
+        const auto resetFailure = qScopeGuard([] {
+            failWebcamCreation = false;
+            webcamError.clear();
+        });
+        ScreenRecordingController controller([failure] {
+            auto source = testEffectsSource();
+            if (failure == Failure::Preview)
+                effectSources.back().lock()->fail = true;
+            return source;
+        });
+        controller.open({80, 80, 320, 240});
+        auto* controls = palette();
+        auto* toolbar = qobject_cast<ScreenRecordingToolbarWindow*>(controls->window());
+        QPointer<ScreenRecordingAreaWindow> area = recordingAreaWindow();
+        require(area && area->isVisible(), "warning fixture has a visible recording area");
+        auto* messages = AdMessageService::instance(area);
+        if (failure == Failure::Recording || failure == Failure::Paused) {
+            controller.startRecording();
+            waitForRecording(controller);
+            if (failure == Failure::Paused)
+                controls->recordingPauseRequested();
+            toolbar->hide();
+            webcamError = "test camera disconnected";
+        }
+        waitForWebcam([&] { return messages->count() == 1; },
+                      "recording warnings must appear in the recording area");
+        QPointer<AdMessageHandle> handle = messages->findChild<AdMessageHandle*>();
+        const bool preview = failure == Failure::Preview;
+        require(handle &&
+                    handle->key() == (preview ? QStringLiteral("screen-recording-preview-error")
+                                              : QStringLiteral("screen-recording-webcam-error")),
+                "the recording area must receive the original warning");
+        QPointer<QWidget> notice = handle->noticeWidget();
+        require(notice && notice->window() == area,
+                "warning notices must belong to the recording area window");
+        waitForWebcam(
+            [&] {
+                return notice && notice->isVisible() &&
+                       area->rect().contains(QRect(notice->mapTo(area, QPoint()), notice->size()));
+            },
+            "warning notices must settle inside the recording area bounds");
+        require(toolbar->findChild<AdMessage*>() == nullptr,
+                "recording warnings must not create a toolbar message host");
+        toolbar->showWithoutActivating();
+        toolbar->hide();
+        require(handle && handle->isOpen() && notice->isVisible(),
+                "hiding recording controls must preserve recording area warnings");
+        controls->recordingCloseRequested();
+        waitForIdle(controller);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        require(!area && !handle, "closing the recording UI must retire its warning notices");
+    }
 }
 
 void recordingWebcamPreferencesPreserveSessionSnapshots() {
@@ -6392,6 +6485,11 @@ int main(int argc, char** argv) {
     }
     if (app.arguments().contains(QStringLiteral("--webcam-preview-only"))) {
         recordingWebcamPreviewLifecycle();
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (app.arguments().contains(QStringLiteral("--warnings-only"))) {
+        recordingWarningsUseAreaWindow();
         ApplicationStorage::instance().shutdown();
         return 0;
     }
