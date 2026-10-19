@@ -220,12 +220,11 @@ class ApplicationController::Impl {
             [](const QString& path) {
                 static_cast<void>(presentation::recording::revealScreenRecordingFile(path));
             });
-        QObject::connect(&systemTray, &presentation::SystemTrayController::exitRequested, &q,
-                         [this]() {
-                             if (storage::ApplicationStorage::instance().directoryChanging())
-                                 return;
-                             QApplication::quit();
-                         });
+        QObject::connect(&systemTray, &presentation::SystemTrayController::exitRequested, &q, []() {
+            if (storage::ApplicationStorage::instance().directoryChanging())
+                return;
+            QApplication::quit();
+        });
         QObject::connect(
             &systemTray, &presentation::SystemTrayController::quickActionRequested, &q,
             [this](presentation::GlobalShortcutAction action) { dispatchQuickAction(action); });
