@@ -133,6 +133,7 @@ struct Options {
     clarity: Clarity,
     backend: CaptureBackendKind,
     prefer_hardware: bool,
+    codec: VideoCodec,
     encode_threads: Option<u8>,
     conversion_threads: u8,
     force_hardware_failure: bool,
@@ -182,7 +183,8 @@ bench-stage-timing,bench-compositor-timing,bench-pipeline-timing \
   --fps <n>                  capture and output frame rate (default: {DEFAULT_FPS})\n\
   --clarity <kind>           output cap: 4k, 2k, 1080p, 720p, 480p, native (default: 1080p)\n\
   --backend <kind>           capture backend: auto, dxgi, wgc, gdi (default: auto)\n\
-  --prefer-hardware          prefer a hardware H.264 encoder\n\
+  --codec <h264|h265>         output video codec (default: h264)\n\
+  --prefer-hardware          prefer hardware for the selected codec\n\
   --scenario <name>          application-default, no-effects, mouse-only, or all-effects\n\
   --workload <name>          continuous, static, or sparse (default: continuous)\n\
   --region-size <WxH>        source region within the leftmost monitor, at least 528x96\n\
@@ -199,6 +201,14 @@ bench-stage-timing,bench-compositor-timing,bench-pipeline-timing \
     );
 }
 
+fn parse_codec(value: &str) -> Result<VideoCodec> {
+    match value {
+        "h264" => Ok(VideoCodec::H264),
+        "h265" => Ok(VideoCodec::H265),
+        _ => bail!("unknown codec '{value}' (expected h264 or h265)"),
+    }
+}
+
 fn parse_args() -> Result<Options> {
     let mut options = Options {
         region_size: None,
@@ -209,6 +219,7 @@ fn parse_args() -> Result<Options> {
         clarity: Clarity::Fixed(1920, 1080),
         backend: CaptureBackendKind::Auto,
         prefer_hardware: false,
+        codec: VideoCodec::H264,
         encode_threads: None,
         conversion_threads: 0,
         force_hardware_failure: false,
@@ -309,6 +320,7 @@ fn parse_args() -> Result<Options> {
             "--backend" => {
                 options.backend = parse_backend(&next_value("--backend", &args, &mut index)?)?;
             }
+            "--codec" => options.codec = parse_codec(&next_value("--codec", &args, &mut index)?)?,
             "--prefer-hardware" => options.prefer_hardware = true,
             "--scenario" => {
                 options.scenario_filter = Some(next_value("--scenario", &args, &mut index)?);
@@ -455,6 +467,7 @@ struct SampleResult {
     published_frames: u64,
     workload_failures: u64,
     requested_hardware: bool,
+    requested_codec: VideoCodec,
     scenario: &'static str,
     sample: usize,
     duration_seconds: u64,
@@ -972,7 +985,7 @@ fn run_sample(
         output_fps: options.fps,
         maximum_width,
         maximum_height,
-        codec: VideoCodec::H264,
+        codec: options.codec,
         preset: VideoEncodingSpeed::VeryFast,
         quality: 80,
         prefer_hardware_encoder: options.prefer_hardware,
@@ -1108,6 +1121,7 @@ fn run_sample(
         published_frames,
         workload_failures,
         requested_hardware: options.prefer_hardware,
+        requested_codec: options.codec,
         scenario: scenario.name,
         sample: sample + 1,
         duration_seconds,
@@ -1308,6 +1322,10 @@ fn write_summary_csv(output_directory: &Path, rows: &[SampleResult]) -> Result<P
             (
                 "workload_failures".into(),
                 row.workload_failures.to_string(),
+            ),
+            (
+                "requested_codec".into(),
+                format!("{:?}", row.requested_codec),
             ),
             (
                 "hardware_requested".into(),
@@ -1942,6 +1960,13 @@ fn send_chord(session: &DirectRecordingSession, vk: u16, outcome: &mut InputOutc
 #[cfg(test)]
 mod synthetic_input_tests {
     use super::*;
+
+    #[test]
+    fn encoder_codec_is_explicit_and_invalid_values_are_rejected() {
+        assert_eq!(parse_codec("h264").unwrap(), VideoCodec::H264);
+        assert_eq!(parse_codec("h265").unwrap(), VideoCodec::H265);
+        assert!(parse_codec("auto").is_err());
+    }
 
     #[test]
     fn composition_trace_preserves_boundaries_before_encoder_admission() {

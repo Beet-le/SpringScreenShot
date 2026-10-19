@@ -936,7 +936,8 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
          {QStringLiteral("mp4"), QStringLiteral("gif"), QStringLiteral("apng"),
           QStringLiteral("webp")}},
         {QStringLiteral("screen_recording/encoder"),
-         {QStringLiteral("h264_hw"), QStringLiteral("h264"), QStringLiteral("h265")}},
+         {QStringLiteral("h264_hw"), QStringLiteral("h265_hw"), QStringLiteral("h264"),
+          QStringLiteral("h265")}},
         {QStringLiteral("screen_recording/encoding_preset"),
          {QStringLiteral("ultrafast"), QStringLiteral("veryfast"), QStringLiteral("medium"),
           QStringLiteral("veryslow"), QStringLiteral("placebo")}},
@@ -2488,6 +2489,8 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
             "recording loop preference must round-trip enabled");
     require(recording.setEncoder(QStringLiteral("h264_hw")) &&
                 recording.encoder() == QStringLiteral("h264_hw") &&
+                recording.setEncoder(QStringLiteral("h265_hw")) &&
+                storage::RecordingSettings().encoder() == QStringLiteral("h265_hw") &&
                 recording.setEncoder(QStringLiteral("h264")) &&
                 recording.encoder() == QStringLiteral("h264"),
             "recording adapters must round-trip every advertised encoder");

@@ -289,6 +289,16 @@ impl DirectRecordingConfig {
         }
     }
 
+    #[cfg(any(windows, test))]
+    fn retry_hardware_with_cpu_input(&self) -> bool {
+        // HEVC may be available through a CPU-input MFT (notably ARM64), or
+        // on a device without compatible native-surface interop. Retain the
+        // validated complete software fallback policy for H.264.
+        self.format == ExportFormat::Mp4
+            && self.codec == VideoCodec::H265
+            && self.prefer_hardware_encoder
+    }
+
     fn software_policy_domain(&self) -> bool {
         let (width, height) = self.output_dimensions();
         self.format == ExportFormat::Mp4
@@ -1002,7 +1012,7 @@ impl DirectRecordingSession {
                         }
                         result => {
                             let reason = result.err().map(|error| error.to_string());
-                            if gpu::eligible(&config) {
+                            if gpu::eligible(&config) && !config.retry_hardware_with_cpu_input() {
                                 streaming_config = streaming_config.software_only();
                             }
                             (
@@ -1018,7 +1028,11 @@ impl DirectRecordingSession {
                     let clock = RecordingClock::new(Instant::now());
                     *control_clock.lock().unwrap_or_else(|e| e.into_inner()) = Some(clock.clone());
                     #[cfg(windows)]
-                    let fallback_config = streaming_config.clone().software_only();
+                    let fallback_config = if config.retry_hardware_with_cpu_input() {
+                        streaming_config.clone().cpu_input()
+                    } else {
+                        streaming_config.clone().software_only()
+                    };
                     #[cfg(windows)]
                     let asynchronous = asynchronous && gpu_compositor.is_none();
                     let created = RecordingEncoder::new(
@@ -3785,6 +3799,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn hevc_native_negotiation_keeps_cpu_input_hardware_candidates() {
+        let mut settings = config();
+        settings.prefer_hardware_encoder = true;
+        assert!(!settings.retry_hardware_with_cpu_input());
+        settings.codec = VideoCodec::H265;
+        assert!(settings.retry_hardware_with_cpu_input());
+        settings.prefer_hardware_encoder = false;
+        assert!(!settings.retry_hardware_with_cpu_input());
+        settings.prefer_hardware_encoder = true;
+        settings.format = ExportFormat::Gif;
+        assert!(!settings.retry_hardware_with_cpu_input());
     }
 
     #[test]

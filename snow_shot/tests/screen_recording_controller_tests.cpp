@@ -3144,7 +3144,11 @@ void recordingSettingsDialog() {
                 form->findChild<AdSelect*>(QStringLiteral("screen-recording.encoder"))
                         ->options()
                         .first()
-                        .label == QStringLiteral("Translated: H.264 (Hardware)"),
+                        .label == QStringLiteral("Translated: H.264 (Hardware)") &&
+                form->findChild<AdSelect*>(QStringLiteral("screen-recording.encoder"))
+                        ->options()
+                        .at(1)
+                        .label == QStringLiteral("Translated: H.265 / HEVC (Hardware)"),
             "open recording preferences must retranslate their title, labels and options");
     QCoreApplication::removeTranslator(&translator);
     QCoreApplication::processEvents();
@@ -3205,7 +3209,7 @@ void recordingSettingsDialog() {
     select("screen-recording.frame-rate", 60);
     select("screen-recording.animated-image-clarity", QStringLiteral("1080p"));
     select("screen-recording.animated-image-frame-rate", 15);
-    select("screen-recording.encoder", QStringLiteral("h265"));
+    select("screen-recording.encoder", QStringLiteral("h265_hw"));
     select("screen-recording.encoding-preset", QStringLiteral("medium"));
     auto* quality = form->findChild<AdSlider*>(QStringLiteral("screen-recording.video-quality"));
     require(quality != nullptr && quality->minimum() == 0 && quality->maximum() == 100,
@@ -3228,7 +3232,8 @@ void recordingSettingsDialog() {
     const snow_shot::storage::RecordingSettings saved;
     require(saved.screenRecordingClarity() == QStringLiteral("4k") && saved.frameRate() == 60 &&
                 saved.animatedImageClarity() == QStringLiteral("1080p") &&
-                saved.animatedImageFrameRate() == 15 && saved.encoder() == QStringLiteral("h265") &&
+                saved.animatedImageFrameRate() == 15 &&
+                saved.encoder() == QStringLiteral("h265_hw") &&
                 saved.encodingPreset() == QStringLiteral("medium") && saved.videoQuality() == 65 &&
                 !saved.loopAnimatedImages() && saved.separateAudioTracks() &&
                 !saved.captureToolbarInRecording() && saved.autoHideToolbar(),
@@ -3302,6 +3307,7 @@ void recordingSettingsDialog() {
     require(lastDirectConfig.capture_fps == 30 && lastDirectConfig.maximum_width == 3840 &&
                 lastDirectConfig.maximum_height == 2160 &&
                 lastDirectConfig.codec == SNOW_CAPTURE_VIDEO_CODEC_H265 &&
+                lastDirectConfig.encoder_preference == SNOW_CAPTURE_ENCODER_PREFERENCE_HARDWARE &&
                 lastDirectConfig.preset == SNOW_CAPTURE_VIDEO_ENCODING_PRESET_MEDIUM &&
                 lastDirectConfig.quality == 65 && lastDirectConfig.loop_animated_images == 0 &&
                 lastDirectConfig.audio_mode == SNOW_CAPTURE_RECORDING_AUDIO_SEPARATE &&
@@ -6072,12 +6078,16 @@ int main(int argc, char** argv) {
                                             {QStringLiteral("start_delay_seconds"), 0},
                                             {QStringLiteral("frame_rate"), 24},
                                             {QStringLiteral("quality"), 63},
+                                            {QStringLiteral("encoder"), QStringLiteral("h265_hw")},
                                             {QStringLiteral("separate_audio_tracks"), true}},
                                            &error),
                 "automation start must succeed");
         waitForRecording(controller);
         require(!QFileInfo::exists(outputPath),
                 "the controller must leave output publication to the recording exporter");
+        require(lastDirectConfig.codec == SNOW_CAPTURE_VIDEO_CODEC_H265 &&
+                    lastDirectConfig.encoder_preference == SNOW_CAPTURE_ENCODER_PREFERENCE_HARDWARE,
+                "automation HEVC hardware preference must reach capture without changing settings");
         require(lastDirectConfig.capture_fps == 24,
                 "automation frame rate must reach the native capture configuration");
         require(lastDirectConfig.audio_mode == SNOW_CAPTURE_RECORDING_AUDIO_SEPARATE &&

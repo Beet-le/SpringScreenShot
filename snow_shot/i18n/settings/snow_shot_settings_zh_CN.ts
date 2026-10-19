@@ -1589,6 +1589,10 @@
             <translation>选择更新的下载和安装方式</translation>
         </message>
         <message>
+            <source>Choose the MP4 video encoder. Hardware encoding falls back to software with the same codec if unavailable. H.265 (HEVC) can produce smaller files but requires a compatible player.</source>
+            <translation>选择 MP4 视频编码器。硬件编码不可用时，将回退到相同编码格式的软件编码。H.265（HEVC）可生成更小的文件，但需要兼容的播放器。</translation>
+        </message>
+        <message>
             <source>Choose the OCR model version and size to balance recognition speed and accuracy</source>
             <translation>选择 OCR 模型版本和大小，以平衡识别速度和准确率</translation>
         </message>
@@ -1699,10 +1703,6 @@
         <message>
             <source>Choose the translation service or AI model</source>
             <translation>选择翻译服务或 AI 模型</translation>
-        </message>
-        <message>
-            <source>Choose the video encoder</source>
-            <translation>选择视频编码器</translation>
         </message>
         <message>
             <source>Choose what happens automatically when text recognition completes</source>
@@ -2503,6 +2503,10 @@
         <message>
             <source>H.265</source>
             <translation>H.265</translation>
+        </message>
+        <message>
+            <source>H.265 / HEVC (Hardware)</source>
+            <translation>H.265 / HEVC（硬件）</translation>
         </message>
         <message>
             <source>Hidden tools</source>

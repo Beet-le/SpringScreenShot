@@ -9744,6 +9744,21 @@ if(SNOW_SHOT_ENABLE_MCP)
     )
 endif()
 
+# The same fixed-frame encoder experiment validates VideoToolbox on macOS.
+if(APPLE AND SNOW_SHOT_BUILD_BENCHMARKS)
+    add_custom_target(snow-shot-recording-encoder-performance-benchmark
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "CARGO_TARGET_DIR=${SNOW_RUST_CARGO_TARGET_DIR}"
+            "FFMPEG_DIR=${SNOW_FFMPEG_ROOT}"
+            "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+            "CARGO_PROFILE_RELEASE_DEBUG=2"
+            "${CARGO_EXECUTABLE}" build --locked --release
+            --target ${SNOW_SHOT_RUST_TARGET}
+            --package snow-recording-export --example recording_encoder_benchmark
+        WORKING_DIRECTORY "${SNOW_SHOT_CAPTURE_CRATES_DIR}"
+        USES_TERMINAL VERBATIM)
+endif()
+
 if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
     snow_windows_rust_environment(_snow_shot_benchmark_environment "${SNOW_SHOT_RUST_TARGET}")
     list(APPEND _snow_shot_benchmark_environment "LIBCLANG_PATH=${SNOW_SHOT_LIBCLANG_DIR}")

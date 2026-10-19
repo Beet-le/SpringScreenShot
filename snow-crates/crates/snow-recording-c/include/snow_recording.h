@@ -121,7 +121,10 @@ typedef enum SnowCaptureVideoEncodingPreset {
 
 typedef enum SnowCaptureEncoderPreference {
     SNOW_CAPTURE_ENCODER_PREFERENCE_SOFTWARE = 0,
-    SNOW_CAPTURE_ENCODER_PREFERENCE_H264_HARDWARE = 1,
+    /* Applies to the selected video codec (H.264 or H.265). */
+    SNOW_CAPTURE_ENCODER_PREFERENCE_HARDWARE = 1,
+    /* Source/ABI compatibility with existing clients. */
+    SNOW_CAPTURE_ENCODER_PREFERENCE_H264_HARDWARE = SNOW_CAPTURE_ENCODER_PREFERENCE_HARDWARE,
 } SnowCaptureEncoderPreference;
 
 #define SNOW_RECORDING_EXPORT_CONFIG_VERSION 1u

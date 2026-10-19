@@ -1589,6 +1589,10 @@
             <translation>Choose how updates are downloaded and installed</translation>
         </message>
         <message>
+            <source>Choose the MP4 video encoder. Hardware encoding falls back to software with the same codec if unavailable. H.265 (HEVC) can produce smaller files but requires a compatible player.</source>
+            <translation>Choose the MP4 video encoder. Hardware encoding falls back to software with the same codec if unavailable. H.265 (HEVC) can produce smaller files but requires a compatible player.</translation>
+        </message>
+        <message>
             <source>Choose the OCR model version and size to balance recognition speed and accuracy</source>
             <translation>Choose the OCR model version and size to balance recognition speed and accuracy</translation>
         </message>
@@ -1699,10 +1703,6 @@
         <message>
             <source>Choose the translation service or AI model</source>
             <translation>Choose the translation service or AI model</translation>
-        </message>
-        <message>
-            <source>Choose the video encoder</source>
-            <translation>Choose the video encoder</translation>
         </message>
         <message>
             <source>Choose what happens automatically when text recognition completes</source>
@@ -2503,6 +2503,10 @@
         <message>
             <source>H.265</source>
             <translation>H.265</translation>
+        </message>
+        <message>
+            <source>H.265 / HEVC (Hardware)</source>
+            <translation>H.265 / HEVC (Hardware)</translation>
         </message>
         <message>
             <source>Hidden tools</source>

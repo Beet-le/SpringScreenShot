@@ -1,4 +1,4 @@
-//! Independent codec instances share an active timeline, never H.264 parameters.
+//! Independent codec instances share an active timeline, never codec parameters.
 use super::*;
 use ffmpeg::Rescale;
 use std::collections::BTreeMap;
@@ -40,8 +40,8 @@ pub(super) fn create(builder: StreamingEncoderBuilder) -> Result<StreamingEncode
         .config
         .validate()
         .map_err(RecordingExportError::InvalidConfig)?;
-    if builder.config.format != ExportFormat::Mp4 || builder.config.codec != VideoCodec::H264 {
-        return Err(error("segmented recovery requires H.264 MP4"));
+    if builder.config.format != ExportFormat::Mp4 {
+        return Err(error("segmented recovery requires MP4"));
     }
     let parent = builder
         .config
@@ -346,7 +346,8 @@ impl StreamingEncoder {
                 endpoint,
                 self.final_duration_us.map(|us| us / 1000),
             )?;
-            self.report.video_encoder = "libx264".into();
+            self.report.video_encoder =
+                crate::codec::exact_mp4_encoder(state.config.codec).0.into();
             self.report.used_hardware_video_encoder = false;
             self.report.hardware_fallback = true;
             &normalized
@@ -485,7 +486,11 @@ fn remux(
             target.set_time_base(source.time_base());
             target.set_metadata(source.metadata().to_owned());
             unsafe {
-                (*target.parameters().as_mut_ptr()).codec_tag = 0;
+                // These segments were encoded with a global HEVC header. Keep
+                // their hvc1 sample entry through recovery and ordinary remux.
+                if source.parameters().id() != ffmpeg::codec::Id::HEVC {
+                    (*target.parameters().as_mut_ptr()).codec_tag = 0;
+                }
                 (*target.as_mut_ptr()).disposition = source.disposition().bits();
             }
             mapping.insert(source.index(), (source.time_base(), target.index()));
@@ -721,6 +726,18 @@ mod tests {
     #[cfg(windows)]
     #[ignore = "requires offscreen VideoProcessor and a native H.264 encoder"]
     fn hardware_static_image_survives_failure_without_a_successor() -> anyhow::Result<()> {
+        hardware_static_image_recovery(VideoCodec::H264)
+    }
+
+    #[test]
+    #[cfg(windows)]
+    #[ignore = "requires offscreen D3D11 video processing and a native HEVC encoder"]
+    fn hevc_hardware_static_image_survives_failure_without_a_successor() -> anyhow::Result<()> {
+        hardware_static_image_recovery(VideoCodec::H265)
+    }
+
+    #[cfg(windows)]
+    fn hardware_static_image_recovery(codec: VideoCodec) -> anyhow::Result<()> {
         use snow_d3d11::{Rect, SharedDevice, VideoLayer, VideoProcessor};
         use windows::Win32::Graphics::Direct3D11::*;
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -730,7 +747,8 @@ mod tests {
         let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }?;
         let adapter = unsafe { factory.EnumAdapters1(0) }?.cast()?;
         let device = SharedDevice::create(&adapter)?;
-        let size = (640, 480);
+        // 360 rows exercises HEVC QSV's 32-row surface alignment and crop.
+        let size = (640, 360);
         let processor = VideoProcessor::new(device.clone(), size, size, 30)?;
         let texture = device.texture(
             size.0,
@@ -760,6 +778,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("static.mp4");
         let mut settings = config(path.clone());
+        settings.codec = codec;
         settings.width = size.0;
         settings.height = size.1;
         settings.fps = 30;
@@ -809,7 +828,10 @@ mod tests {
             "closing a failed hardware encoder must release its surface references"
         );
         assert_eq!(report.recovery_count, 1);
-        assert_eq!(report.video_encoder, "libx264");
+        assert_eq!(
+            report.video_encoder,
+            crate::codec::exact_mp4_encoder(codec).0
+        );
         let mut media = ffmpeg::format::input(&path)?;
         let stream = media.streams().best(ffmpeg::media::Type::Video).unwrap();
         let base = stream.time_base();
@@ -1036,6 +1058,90 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn hevc_recovery_preserves_codec_audio_duration_and_sample_entry() {
+        use ffmpeg::Rescale;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hevc-recovery.mp4");
+        let mut settings = config(path.clone());
+        settings.codec = VideoCodec::H265;
+        settings.width = 64;
+        settings.height = 64;
+        settings.video.speed = snow_recording_model::VideoEncodingSpeed::UltraFast;
+        let mut encoder = StreamingEncoder::builder(settings)
+            .recoverable()
+            .create()
+            .unwrap();
+        for pts in 0..48 {
+            encoder
+                .push_rgba_frame_at_pts(pts, &vec![40 + pts as u8; 64 * 64 * 4])
+                .unwrap();
+        }
+        assert!(encoder.report.video_packets > 0);
+        encoder
+            .push_audio_pcm_i16(0, &vec![300; 48_000 * 2 * 5])
+            .unwrap();
+        encoder
+            .recover_to_software("injected HEVC device loss")
+            .unwrap();
+        assert_eq!(encoder.opened_video_encoder(), ("libx265", false));
+        for pts in [50, 52, 54] {
+            encoder
+                .push_rgba_frame_at_pts(pts, &vec![160; 64 * 64 * 4])
+                .unwrap();
+        }
+        encoder
+            .push_audio_pcm_i16(5000, &vec![300; 48_000 * 2])
+            .unwrap();
+        let report = encoder.finish_at_pts(60).unwrap();
+        assert_eq!(report.recovery_count, 1);
+        assert_eq!(report.video_encoder, "libx265");
+        assert!(report.hardware_fallback && !report.used_hardware_video_encoder);
+        let mut media = ffmpeg::format::input(&path).unwrap();
+        assert_eq!(media.nb_streams(), 2);
+        let stream = media.streams().best(ffmpeg::media::Type::Video).unwrap();
+        assert_eq!(stream.parameters().id(), ffmpeg::codec::Id::HEVC);
+        assert_eq!(
+            unsafe { (*stream.parameters().as_ptr()).codec_tag },
+            u32::from_le_bytes(*b"hvc1")
+        );
+        assert_eq!(stream.duration().rescale(stream.time_base(), (1, 10)), 60);
+        let index = stream.index();
+        let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut decoded = 0;
+        let mut audio_pts = Vec::new();
+        for (stream, packet) in media.packets() {
+            if stream.index() == index {
+                decoder.send_packet(&packet).unwrap();
+                while decoder
+                    .receive_frame(&mut ffmpeg::frame::Video::empty())
+                    .is_ok()
+                {
+                    decoded += 1;
+                }
+            } else {
+                audio_pts.push(packet.pts().unwrap());
+            }
+        }
+        decoder.send_eof().unwrap();
+        while decoder
+            .receive_frame(&mut ffmpeg::frame::Video::empty())
+            .is_ok()
+        {
+            decoded += 1;
+        }
+        assert_eq!(decoded, report.encoded_frames);
+        assert!(decoded > 3);
+        assert!(audio_pts.len() > 200);
+        assert!(audio_pts.windows(2).all(|pair| pair[1] - pair[0] == 1024));
+        drop(media);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
     #[test]

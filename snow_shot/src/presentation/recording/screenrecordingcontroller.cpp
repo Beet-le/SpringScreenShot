@@ -118,8 +118,9 @@ int validAnimatedImageFrameRate(int frameRate) {
 }
 
 SnowCaptureVideoCodec videoCodec(const QString& encoder) {
-    return encoder == QStringLiteral("h265") ? SNOW_CAPTURE_VIDEO_CODEC_H265
-                                             : SNOW_CAPTURE_VIDEO_CODEC_H264;
+    return encoder == QStringLiteral("h265") || encoder == QStringLiteral("h265_hw")
+               ? SNOW_CAPTURE_VIDEO_CODEC_H265
+               : SNOW_CAPTURE_VIDEO_CODEC_H264;
 }
 
 SnowCaptureVideoEncodingPreset videoEncodingPreset(const QString& preset) {
@@ -149,7 +150,8 @@ DirectRecordingSettings directRecordingSettings(const QString& outputFormat,
         overrides.value(QStringLiteral("encoding_preset")).toString(settings.encodingPreset()));
     result.quality = static_cast<uint32_t>(
         qBound(0, overrides.value(QStringLiteral("quality")).toInt(settings.videoQuality()), 100));
-    result.useHardwareEncoder = encoder == QStringLiteral("h264_hw");
+    result.useHardwareEncoder =
+        encoder == QStringLiteral("h264_hw") || encoder == QStringLiteral("h265_hw");
 
     if (outputFormat == QStringLiteral("mp4")) {
         result
@@ -1094,7 +1096,7 @@ struct ScreenRecordingController::Impl {
                 static_cast<uint32_t>(sessionOutputSettings.codec),
                 static_cast<uint32_t>(sessionOutputSettings.preset),
                 static_cast<uint32_t>(sessionOutputSettings.useHardwareEncoder
-                                          ? SNOW_CAPTURE_ENCODER_PREFERENCE_H264_HARDWARE
+                                          ? SNOW_CAPTURE_ENCODER_PREFERENCE_HARDWARE
                                           : SNOW_CAPTURE_ENCODER_PREFERENCE_SOFTWARE),
                 static_cast<uint8_t>(audioSupported && microphoneEnabled),
                 static_cast<uint8_t>(audioSupported && systemAudioEnabled),
@@ -2358,7 +2360,8 @@ bool ScreenRecordingController::startAutomation(const QRect& region, const QJson
         {QStringLiteral("animated_clarity"),
          {QStringLiteral("1080p"), QStringLiteral("720p"), QStringLiteral("480p")}},
         {QStringLiteral("encoder"),
-         {QStringLiteral("h264"), QStringLiteral("h265"), QStringLiteral("h264_hw")}},
+         {QStringLiteral("h264"), QStringLiteral("h265"), QStringLiteral("h264_hw"),
+          QStringLiteral("h265_hw")}},
         {QStringLiteral("encoding_preset"),
          {QStringLiteral("ultrafast"), QStringLiteral("veryfast"), QStringLiteral("medium"),
           QStringLiteral("veryslow"), QStringLiteral("placebo")}}};

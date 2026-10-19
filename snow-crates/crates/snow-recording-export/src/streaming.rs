@@ -14,7 +14,7 @@ use crate::codec::{
     choose_audio_sample_format, choose_audio_sample_rate, choose_video_pixel_format,
     configure_codec_threads, drain_audio_packets_with_callback, effective_audio_bitrate_kbps,
     effective_video_config, ensure_video_frame_writable, hardware_codec_candidates,
-    is_hardware_h264_encoder, open_audio_encoder, open_video_encoder,
+    is_hardware_video_encoder, open_audio_encoder, open_video_encoder,
     opened_video_encoder_uses_hardware, select_video_codec,
 };
 use crate::config::{ExportExecutionMode, ExportFormat, SoftwareH264Priority};
@@ -103,6 +103,8 @@ pub struct StreamingEncoderConfig {
     pub height: u32,
     pub fps: u32,
     pub codec: VideoCodec,
+    /// Prefer hardware for the selected codec, including H.265. The historical
+    /// field name is retained for Rust and serialized configuration compatibility.
     pub prefer_hardware_h264: bool,
     pub execution_mode: ExportExecutionMode,
     pub software_h264_priority: SoftwareH264Priority,
@@ -203,6 +205,11 @@ impl StreamingEncoderBuilder {
         if let Some(threads) = self.software_fallback_threads {
             self.config.encode_threads = threads;
         }
+        self.cpu_input()
+    }
+    /// Release native surface configuration while retaining the codec and
+    /// hardware preference. CPU-input hardware encoders can still be tried.
+    pub fn cpu_input(mut self) -> Self {
         #[cfg(windows)]
         {
             self.gpu_input = None;
@@ -212,6 +219,9 @@ impl StreamingEncoderBuilder {
             self.cpu_hdr_input |= self.native_input == Some(snow_media::PixelFormat::P010);
             self.native_input = None;
         }
+        // Keep this mutable on platforms with native surfaces only.
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let _ = &mut self;
         self
     }
     #[cfg(windows)]
@@ -599,6 +609,7 @@ impl StreamingEncoder {
             .map(|input| {
                 crate::gpu::HardwareFrames::new(
                     input,
+                    config.codec,
                     (config.width, config.height),
                     crate::gpu::HardwareFrames::LIVE_CAPACITY,
                 )
@@ -622,11 +633,10 @@ impl StreamingEncoder {
         #[cfg(windows)]
         if let Some(frames) = &hardware_frames {
             if config.format != ExportFormat::Mp4
-                || config.codec != VideoCodec::H264
                 || config.execution_mode == ExportExecutionMode::SoftwareOnly
             {
                 return Err(RecordingExportError::InvalidConfig(
-                    "GPU input requires hardware-preferred H.264 MP4".into(),
+                    "GPU input requires hardware H.264 or H.265 MP4".into(),
                 ));
             }
             video_codec = ffmpeg::encoder::find_by_name(frames.codec_name()).ok_or_else(|| {
@@ -675,13 +685,21 @@ impl StreamingEncoder {
             cpu_input_format_hint,
             config.execution_mode,
         );
-        if cpu_hdr_input {
-            pixel_format = crate::hdr::pixel_format(
+        let hdr_pixel_error = if cpu_hdr_input {
+            match crate::hdr::pixel_format(
                 video_codec
                     .video()
                     .map_err(|e| RecordingExportError::Encode(e.to_string()))?,
-            )?;
-        }
+            ) {
+                Ok(pixel) => {
+                    pixel_format = pixel;
+                    None
+                }
+                Err(error) => Some(error),
+            }
+        } else {
+            None
+        };
         #[cfg(windows)]
         if let Some(frames) = &hardware_frames {
             pixel_format = frames.pixel_format();
@@ -691,8 +709,9 @@ impl StreamingEncoder {
             pixel_format = ffmpeg::format::Pixel::VIDEOTOOLBOX;
         }
         let effective_video = effective_video_config(&config.video);
-        let make_encoder = |codec: ffmpeg::Codec,
-                            pixel: ffmpeg::format::Pixel|
+        let open_encoder = |codec: ffmpeg::Codec,
+                            pixel: ffmpeg::format::Pixel,
+                            purpose: VideoEncoderPurpose|
          -> Result<ffmpeg::encoder::video::Encoder> {
             let mut encoder = ffmpeg::codec::context::Context::new_with_codec(codec)
                 .encoder()
@@ -702,6 +721,13 @@ impl StreamingEncoder {
                         "failed to create streaming video encoder: {error}"
                     ))
                 })?;
+            // hvc1 keeps HEVC MP4 playable in Apple players as well as FFmpeg.
+            // GLOBAL_HEADER below stores parameter sets in the sample entry.
+            if config.format == ExportFormat::Mp4 && config.codec == VideoCodec::H265 {
+                unsafe {
+                    (*encoder.as_mut_ptr()).codec_tag = u32::from_le_bytes(*b"hvc1");
+                }
+            }
             encoder.set_width(config.width);
             encoder.set_height(config.height);
             encoder.set_format(pixel);
@@ -745,12 +771,12 @@ impl StreamingEncoder {
             // Resolve against the codec being opened, never an already-opened
             // hardware context's effective thread count. The fallback may also
             // have been selected during codec discovery, before an open fails.
-            let encode_threads = if config.prefer_hardware_h264 && !is_hardware_h264_encoder(&codec)
-            {
-                software_fallback_threads.unwrap_or(config.encode_threads)
-            } else {
-                config.encode_threads
-            };
+            let encode_threads =
+                if config.prefer_hardware_h264 && !is_hardware_video_encoder(&codec) {
+                    software_fallback_threads.unwrap_or(config.encode_threads)
+                } else {
+                    config.encode_threads
+                };
             configure_codec_threads(
                 &mut encoder,
                 encode_threads,
@@ -793,7 +819,17 @@ impl StreamingEncoder {
             )
         };
 
-        let primary = if force_hardware_failure && is_hardware_h264_encoder(&video_codec) {
+        let make_encoder = |codec: ffmpeg::Codec, pixel| {
+            crate::codec::open_with_hardware_compatibility(
+                purpose,
+                is_hardware_video_encoder(&codec),
+                |profile| open_encoder(codec, pixel, profile),
+            )
+        };
+
+        let primary = if let Some(error) = hdr_pixel_error {
+            Err(error)
+        } else if force_hardware_failure && is_hardware_video_encoder(&video_codec) {
             Err(RecordingExportError::Encode(
                 "benchmark forced hardware initialization failure".into(),
             ))
@@ -805,7 +841,7 @@ impl StreamingEncoder {
             Err(primary_error)
                 if !gpu_enabled
                     && config.prefer_hardware_h264
-                    && is_hardware_h264_encoder(&video_codec) =>
+                    && is_hardware_video_encoder(&video_codec) =>
             {
                 let mut opened_hardware = None;
                 if !force_hardware_failure {
@@ -822,9 +858,16 @@ impl StreamingEncoder {
                             config.execution_mode,
                         );
                         let pixel = if cpu_hdr_input {
-                            crate::hdr::pixel_format(candidate.video().map_err(|error| {
-                                RecordingExportError::Encode(error.to_string())
-                            })?)?
+                            // An 8-bit-only MFT must not prevent the remaining
+                            // candidates or libx265 from preserving HDR10.
+                            let Ok(pixel) =
+                                crate::hdr::pixel_format(candidate.video().map_err(|error| {
+                                    RecordingExportError::Encode(error.to_string())
+                                })?)
+                            else {
+                                continue;
+                            };
+                            pixel
                         } else {
                             pixel
                         };
@@ -3782,6 +3825,7 @@ mod tests {
             (VideoCodec::H264, false, false),
             (VideoCodec::H264, true, false),
             (VideoCodec::H265, false, false),
+            (VideoCodec::H265, true, false),
             (VideoCodec::H264, false, true),
             (VideoCodec::H265, false, true),
         ]
@@ -4300,6 +4344,145 @@ mod tests {
             assert!(StreamingEncoder::create(config).is_err());
             assert!(!path.exists());
             assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn hevc_hardware_failure_preserves_codec_quality_audio_and_cleanup() {
+        for offline in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("hevc-fallback.mp4");
+            let mut config = encoder_config(path.clone(), ExportFormat::Mp4);
+            config.codec = VideoCodec::H265;
+            config.width = 64;
+            config.height = 64;
+            config.video.quality = 65;
+            config.prefer_hardware_h264 = true;
+            config.execution_mode = ExportExecutionMode::HardwarePreferred;
+            config.audio = vec![StreamingAudioConfig::default()];
+            let mut builder = StreamingEncoder::builder(config).software_fallback_threads(2);
+            if offline {
+                builder = builder.offline_output();
+            }
+            builder.force_hardware_failure = true;
+            let mut encoder = builder.create().unwrap();
+            assert_eq!(encoder.opened_video_encoder(), ("libx265", false));
+            assert_eq!(encoder.report.effective_encode_threads, 2);
+            let mut crf = 0.0;
+            assert!(
+                unsafe {
+                    ffmpeg::ffi::av_opt_get_double(
+                        (*encoder.encoder.as_ptr()).priv_data,
+                        c"crf".as_ptr(),
+                        0,
+                        &mut crf,
+                    )
+                } >= 0
+            );
+            assert_eq!(
+                crf,
+                f64::from(crate::video_quality::quality_to_h264_crf(65))
+            );
+            for (pts, value) in [(0, 40), (3, 90), (6, 150)] {
+                encoder
+                    .push_rgba_frame_at_pts(pts, &vec![value; 64 * 64 * 4])
+                    .unwrap();
+            }
+            encoder
+                .push_audio_pcm_i16(0, &vec![300; 48_000 * 2])
+                .unwrap();
+            let report = encoder.finish_at_duration_ms(1000).unwrap();
+            assert!(report.hardware_fallback);
+            assert_eq!(report.video_encoder, "libx265");
+            let input = ffmpeg::format::input(&path).unwrap();
+            assert_eq!(input.nb_streams(), 2);
+            let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+            assert_eq!(stream.parameters().id(), ffmpeg::codec::Id::HEVC);
+            assert_eq!(
+                unsafe { (*stream.parameters().as_ptr()).codec_tag },
+                u32::from_le_bytes(*b"hvc1")
+            );
+            assert_eq!(input.duration(), 1_000_000);
+            assert_eq!(decoded_video_frame_count(&path), (3, 64, 64));
+            drop(input);
+            assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn hevc_hardware_only_failure_never_falls_back_or_publishes() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = encoder_config(directory.path().join("hevc.mp4"), ExportFormat::Mp4);
+        config.codec = VideoCodec::H265;
+        config.prefer_hardware_h264 = true;
+        config.execution_mode = ExportExecutionMode::HardwareOnly;
+        let mut builder = StreamingEncoder::builder(config);
+        builder.force_hardware_failure = true;
+        assert!(builder.create().is_err());
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires a native HEVC hardware encoder; no screen capture or desktop required"]
+    fn hevc_hardware_live_and_offline_sparse_round_trip() {
+        use ffmpeg::Rescale;
+        for offline in [false, true] {
+            for frames in [1, 5] {
+                let directory = tempfile::tempdir().unwrap();
+                let path = directory.path().join("hevc-hardware.mp4");
+                let mut config = encoder_config(path.clone(), ExportFormat::Mp4);
+                config.codec = VideoCodec::H265;
+                config.width = 640;
+                config.height = 360;
+                config.fps = 30;
+                config.prefer_hardware_h264 = true;
+                config.execution_mode = ExportExecutionMode::HardwareOnly;
+                let builder = StreamingEncoder::builder(config);
+                #[cfg(target_os = "macos")]
+                let builder = builder
+                    .native_input(snow_media::PixelFormat::Bgra8)
+                    .cpu_input();
+                let mut encoder = if offline {
+                    builder.offline_output()
+                } else {
+                    builder
+                }
+                .create()
+                .unwrap();
+                assert!(encoder.opened_video_encoder().1);
+                for index in 0..frames {
+                    encoder
+                        .push_rgba_frame_at_pts(
+                            index * 7,
+                            &[40 + index as u8 * 30, 80, 120, 255].repeat(640 * 360),
+                        )
+                        .unwrap();
+                }
+                let report = encoder.finish_at_pts(60).unwrap();
+                assert!(report.used_hardware_video_encoder && !report.hardware_fallback);
+                assert_eq!(
+                    decoded_video_frame_count(&path),
+                    (frames as usize, 640, 360)
+                );
+                let mut media = ffmpeg::format::input(&path).unwrap();
+                let stream = media.streams().best(ffmpeg::media::Type::Video).unwrap();
+                assert_eq!(stream.parameters().id(), ffmpeg::codec::Id::HEVC);
+                assert_eq!(
+                    unsafe { (*stream.parameters().as_ptr()).codec_tag },
+                    u32::from_le_bytes(*b"hvc1")
+                );
+                let base = stream.time_base();
+                assert_eq!(stream.duration().rescale(base, (1, 30)), 60);
+                let mut timestamps: Vec<_> = media
+                    .packets()
+                    .map(|(_, packet)| packet.pts().unwrap().rescale(base, (1, 30)))
+                    .collect();
+                timestamps.sort_unstable();
+                assert_eq!(
+                    timestamps,
+                    (0..frames).map(|i| (i * 7) as i64).collect::<Vec<_>>()
+                );
+            }
         }
     }
 

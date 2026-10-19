@@ -1379,15 +1379,11 @@ pub unsafe extern "C" fn snow_recording_gpu_probe(
     let config = match unsafe { read_direct_recording_config(config) }
         .and_then(|config| parse_direct_recording_config(&config))
     {
-        Ok(config)
-            if config.prefer_hardware_encoder
-                && config.format == ExportFormat::Mp4
-                && config.codec == VideoCodec::H264 =>
-        {
+        Ok(config) if config.prefer_hardware_encoder && config.format == ExportFormat::Mp4 => {
             config
         }
         Ok(_) => {
-            set_last_error("GPU probe requires hardware H.264 MP4");
+            set_last_error("GPU probe requires hardware H.264 or H.265 MP4");
             return SnowRecordingResult::InvalidArgument;
         }
         Err(error) => {
@@ -2400,6 +2396,21 @@ mod tests {
         assert_eq!(parsed.mouse_trail_rgba, [0x11, 0x22, 0x33, 0x44]);
         assert_eq!(parsed.mouse_click_rgba, [0xAA, 0xBB, 0xCC, 0x80]);
     }
+    #[test]
+    fn direct_hevc_hardware_config_preserves_codec_and_preference() {
+        let output = CString::new("hevc.mp4").unwrap();
+        let mut config = direct_config(&output);
+        config.codec = 1;
+        config.encoder_preference = 1;
+        let parsed = parse_direct_recording_config(&config).unwrap();
+        assert_eq!(parsed.codec, VideoCodec::H265);
+        assert!(parsed.prefer_hardware_encoder);
+        config.encoder_preference = 0;
+        let parsed = parse_direct_recording_config(&config).unwrap();
+        assert_eq!(parsed.codec, VideoCodec::H265);
+        assert!(!parsed.prefer_hardware_encoder);
+    }
+
     #[test]
     fn animated_direct_configs_omit_audio() {
         let output = CString::new("recording.webp").unwrap();

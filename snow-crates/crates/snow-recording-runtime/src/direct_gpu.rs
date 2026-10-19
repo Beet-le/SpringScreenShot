@@ -17,7 +17,6 @@ use resize::{AreaScaler, CropCopy};
 
 pub(super) fn eligible(config: &DirectRecordingConfig) -> bool {
     config.format == ExportFormat::Mp4
-        && config.codec == VideoCodec::H264
         && config.prefer_hardware_encoder
         && !crate::capture_policy::recording_gpu_backends(config.capture_backend).is_empty()
 }
@@ -68,7 +67,9 @@ pub(super) fn prepare(
     settings.output_path = path.0.clone();
     settings.audio.clear();
     diagnostics.stage = Some("encoder_startup".into());
-    if let Some(name) = snow_d3d11::h264_encoder(device.identity().vendor) {
+    if let Some(name) =
+        snow_recording_export::gpu::encoder_name(device.identity().vendor, config.codec)
+    {
         diagnostics.encoder_attempts.push(name.into());
     }
     let mut encoder = StreamingEncoder::builder(settings)
@@ -1154,8 +1155,10 @@ mod tests {
     }
 
     #[test]
-    fn only_hardware_h264_direct_mp4_uses_native_surfaces() {
+    fn only_hardware_video_direct_mp4_uses_native_surfaces() {
         let mut config = config(PathBuf::from("test.mp4"), CaptureBackendKind::Auto);
+        assert!(eligible(&config));
+        config.codec = VideoCodec::H265;
         assert!(eligible(&config));
         config.prefer_hardware_encoder = false;
         assert!(!eligible(&config));
