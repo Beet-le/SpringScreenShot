@@ -113,8 +113,8 @@ class InterfaceSettings final {
     bool setThemePrimaryColor(const QColor& color) const;
     [[nodiscard]] QString appFontFamily() const;
     bool setAppFontFamily(const QString& family) const;
-    [[nodiscard]] int appFontSizePercentage() const;
-    bool setAppFontSizePercentage(int percentage) const;
+    [[nodiscard]] int appFontSize() const;
+    bool setAppFontSize(int pixelSize) const;
     [[nodiscard]] QString themeMode() const;
     bool setThemeMode(const QString& mode) const;
     [[nodiscard]] QString language() const;

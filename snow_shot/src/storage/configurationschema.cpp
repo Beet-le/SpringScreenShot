@@ -258,8 +258,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("interface/theme_primary_color"), QStringLiteral("#1677FFFF"),
      ConfigurationValueKind::String},
     {QStringLiteral("interface/app_font"), QStringLiteral(""), ConfigurationValueKind::String},
-    {QStringLiteral("interface/app_font_size_percentage"), 100, ConfigurationValueKind::Integer,
-     ConfigurationIntegerRange{100, 200, 1}},
+    {QStringLiteral("interface/app_font_size"), 14, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{12, 32, 1}},
     {QStringLiteral("interface/language"), QStringLiteral("system"),
      ConfigurationValueKind::String},
     {QStringLiteral("interface/skin_path"), QString(), ConfigurationValueKind::String},
@@ -2916,6 +2916,17 @@ bool ConfigurationSchema::parseIntegerVersion(const QJsonValue& value, int* vers
 
 QMap<QString, QJsonValue>
 ConfigurationSchema::migrateLegacyValues(QMap<QString, QJsonValue> values) {
+    const QJsonValue fontPercentage =
+        values.take(QStringLiteral("interface/app_font_size_percentage"));
+    const QString fontSizeKey = QStringLiteral("interface/app_font_size");
+    if (!values.contains(fontSizeKey) && fontPercentage.isDouble()) {
+        const double percentage = fontPercentage.toDouble();
+        if (std::isfinite(percentage) && std::floor(percentage) == percentage &&
+            percentage >= 100 && percentage <= 200) {
+            // The percentage setting scaled a 14 px base font size.
+            values.insert(fontSizeKey, qRound(14 * percentage / 100.0));
+        }
+    }
     const QJsonValue legacy = values.take(QStringLiteral("screenshot/auto_save_after_copy"));
     const QString actionsKey = QStringLiteral("screenshot/auto_save_after_execution_actions");
     if (!values.contains(actionsKey) && legacy.isBool()) {

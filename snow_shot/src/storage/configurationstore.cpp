@@ -85,12 +85,13 @@ QMap<QString, QJsonValue> overlayFromDocument(const QJsonObject& document) {
             overlay.insert(entry.key, raw);
         }
     }
-    const QString legacyAutoSaveKey = QStringLiteral("screenshot/auto_save_after_copy");
-    bool legacyAutoSavePresent = false;
-    const QJsonValue legacyAutoSave =
-        valueAtPath(document, legacyAutoSaveKey, &legacyAutoSavePresent);
-    if (legacyAutoSavePresent) {
-        overlay.insert(legacyAutoSaveKey, legacyAutoSave);
+    for (const QString& legacyKey : {QStringLiteral("screenshot/auto_save_after_copy"),
+                                     QStringLiteral("interface/app_font_size_percentage")}) {
+        bool present = false;
+        const QJsonValue raw = valueAtPath(document, legacyKey, &present);
+        if (present) {
+            overlay.insert(legacyKey, raw);
+        }
     }
     return overlay;
 }
@@ -160,6 +161,12 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
     const QMap<QString, QJsonValue> currentOverlay =
         mutateDocument ? ConfigurationSchema::migrateLegacyValues(overlay) : overlay;
     if (mutateDocument) {
+        QJsonObject interfaceValues = result.document.value(QStringLiteral("interface")).toObject();
+        if (interfaceValues.contains(QStringLiteral("app_font_size_percentage"))) {
+            interfaceValues.remove(QStringLiteral("app_font_size_percentage"));
+            result.document.insert(QStringLiteral("interface"), interfaceValues);
+            result.dirty = !replaceAll;
+        }
         QJsonObject screenshot = result.document.value(QStringLiteral("screenshot")).toObject();
         if (screenshot.contains(QStringLiteral("auto_save_after_copy"))) {
             screenshot.remove(QStringLiteral("auto_save_after_copy"));

@@ -484,12 +484,12 @@ bool InterfaceSettings::setAppFontFamily(const QString& family) const {
     return cache().setValue(QStringLiteral("interface/app_font"), family.trimmed());
 }
 
-int InterfaceSettings::appFontSizePercentage() const {
-    return cache().value(QStringLiteral("interface/app_font_size_percentage")).toInt(100);
+int InterfaceSettings::appFontSize() const {
+    return cache().value(QStringLiteral("interface/app_font_size")).toInt(14);
 }
 
-bool InterfaceSettings::setAppFontSizePercentage(int percentage) const {
-    return cache().setValue(QStringLiteral("interface/app_font_size_percentage"), percentage);
+bool InterfaceSettings::setAppFontSize(int pixelSize) const {
+    return cache().setValue(QStringLiteral("interface/app_font_size"), pixelSize);
 }
 
 QString InterfaceSettings::themeMode() const {
