@@ -237,7 +237,8 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
     painter.restore();
     std::size_t updatedPixels = 0;
     for (const auto& rect : damage)
-        updatedPixels += static_cast<std::size_t>(rect.width()) * rect.height();
+        updatedPixels +=
+            static_cast<std::size_t>(rect.width()) * static_cast<std::size_t>(rect.height());
     snow_canvas_renderer::recordReferenceScenePresentation(
         rebuild, static_cast<std::size_t>(m_image.sizeInBytes()), updatedPixels);
     if (request.diagnostics != nullptr) {
