@@ -1608,8 +1608,8 @@
             <translation>选择更新的下载和安装方式</translation>
         </message>
         <message>
-            <source>Choose the MP4 video encoder. Hardware encoding falls back to software with the same codec if unavailable. H.265 (HEVC) can produce smaller files but requires a compatible player.</source>
-            <translation>选择 MP4 视频编码器。硬件编码不可用时，将回退到相同编码格式的软件编码。H.265（HEVC）可生成更小的文件，但需要兼容的播放器。</translation>
+            <source>Choose the MP4 video encoder. Hardware encoding falls back to software with the same codec if unavailable. H.265 can produce smaller files but requires a compatible player.</source>
+            <translation>选择 MP4 视频编码器。硬件编码不可用时，将回退到相同编码格式的软件编码。H.265 可生成更小的文件，但需要兼容的播放器。</translation>
         </message>
         <message>
             <source>Choose the OCR model version and size to balance recognition speed and accuracy</source>
@@ -1840,12 +1840,12 @@
             <translation>压缩级别</translation>
         </message>
         <message>
-            <source>Configuration exported to the clipboard.</source>
-            <translation>配置已导出到剪贴板。</translation>
+            <source>Configuration exported to the clipboard</source>
+            <translation>配置已导出到剪贴板</translation>
         </message>
         <message>
-            <source>Configuration imported.</source>
-            <translation>配置已导入。</translation>
+            <source>Configuration imported</source>
+            <translation>配置已导入</translation>
         </message>
         <message>
             <source>Configure S3-compatible upload destinations</source>
@@ -2524,8 +2524,8 @@
             <translation>H.265</translation>
         </message>
         <message>
-            <source>H.265 / HEVC (Hardware)</source>
-            <translation>H.265 / HEVC（硬件）</translation>
+            <source>H.265 (Hardware)</source>
+            <translation>H.265（硬件）</translation>
         </message>
         <message>
             <source>Hidden tools</source>
@@ -5030,8 +5030,8 @@ Unavailable: %2</source>
             <translation>最近的存储错误</translation>
         </message>
         <message>
-            <source>Log file copied.</source>
-            <translation>日志文件已复制。</translation>
+            <source>Log file copied</source>
+            <translation>日志文件已复制</translation>
         </message>
         <message>
             <source>Log location</source>
@@ -5162,8 +5162,8 @@ Unavailable: %2</source>
             <translation>存储位置</translation>
         </message>
         <message>
-            <source>Storage migration complete.</source>
-            <translation>存储迁移完成。</translation>
+            <source>Storage migration complete</source>
+            <translation>存储迁移完成</translation>
         </message>
         <message>
             <source>Storage mode</source>

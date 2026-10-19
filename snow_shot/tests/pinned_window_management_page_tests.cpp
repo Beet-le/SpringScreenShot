@@ -125,6 +125,72 @@ class StyleChangeRecorder final : public QObject {
     }
 };
 
+void pinnedDescriptionsUseSmallThemeText(const QVector<storage::PinnedWindowSummary>& records) {
+    Fixture fixture;
+    fixture.items = records;
+    QWidget host;
+    QFont inheritedFont = host.font();
+    inheritedFont.setPixelSize(14);
+    inheritedFont.setHintingPreference(QFont::PreferNoHinting);
+    host.setFont(inheritedFont);
+    PinnedWindowManagementPageWidget page(&fixture, &host);
+    host.resize(980, 640);
+    page.resize(host.size());
+    host.show();
+    page.show();
+    QCoreApplication::processEvents();
+
+    const QStringList descriptionNames{QStringLiteral("pinnedManagementSourceBadge"),
+                                       QStringLiteral("pinnedManagementGroup"),
+                                       QStringLiteral("pinnedManagementStatus")};
+    QHash<QString, QFont::HintingPreference> originalHinting;
+    for (const auto& name : descriptionNames) {
+        const auto* label = page.findChild<QLabel*>(name);
+        require(label != nullptr, "pinned description labels exist before changing their theme");
+        originalHinting.insert(name, label->font().hintingPreference());
+    }
+
+    for (const int fontSize : {14, 20, 14}) {
+        presentation::styles::ThemeStyleConfig config;
+        config.fontSize = fontSize;
+        const auto scheme = presentation::styles::generateThemeColorScheme(config);
+        page.applyTheme(scheme);
+        const auto requireDescriptionFonts = [&] {
+            for (const auto& name : descriptionNames) {
+                const auto labels = page.findChildren<QLabel*>(name);
+                require(labels.size() == fixture.items.size(),
+                        "every pinned entry exposes all three description labels");
+                for (const auto* label : labels) {
+                    require(label->font().pixelSize() == scheme.metricAlias.fontSizeSM &&
+                                label->font().weight() == QFont::Normal &&
+                                label->font().hintingPreference() == originalHinting.value(name),
+                            "pinned descriptions use small theme text and preserve their hinting");
+                }
+            }
+            const auto timestamps = page.findChildren<adqt::widgets::AdCheckbox*>(
+                QStringLiteral("pinnedManagementEntrySelection"));
+            for (const auto* timestamp : timestamps) {
+                require(timestamp->font().pixelSize() == scheme.metricAlias.fontSizeLG &&
+                            timestamp->font().weight() == QFont::DemiBold,
+                        "pinned timestamps retain their heading text style");
+            }
+        };
+        QCoreApplication::processEvents();
+        requireDescriptionFonts();
+        inheritedFont.setPointSizeF(24);
+        inheritedFont.setWeight(QFont::Bold);
+        host.setFont(inheritedFont);
+        QCoreApplication::processEvents();
+        requireDescriptionFonts();
+        auto record = records.first();
+        record.id = QStringLiteral("added-%1").arg(fixture.items.size());
+        fixture.items.push_back(record);
+        page.refresh();
+        QCoreApplication::processEvents();
+        requireDescriptionFonts();
+    }
+}
+
 void pinnedThemeChangesDoNotRestyleTwice(const QVector<storage::PinnedWindowSummary>& records) {
     auto& themeManager = presentation::styles::ThemeManager::instance();
     themeManager.setThemeAppearance(presentation::styles::ThemeAppearance::Light);
@@ -581,6 +647,9 @@ void pinnedEntryMoreActionsUseOnlyTheirRecord() {
                      });
     const QPoint previousCursor = QCursor::pos();
     const auto restoreCursor = qScopeGuard([previousCursor] { QCursor::setPos(previousCursor); });
+    QString editorId;
+    QObject::connect(&page, &PinnedWindowManagementPageWidget::imageEditingRequested, &page,
+                     [&](const QString& id) { editorId = id; });
     const auto rows = page.findChildren<QFrame*>(QStringLiteral("pinnedManagementRecord"));
     require(rows.size() == 3, "stitching fixtures include closed and open pins");
     auto* selection = rows.back()->findChild<adqt::widgets::AdCheckbox*>();
@@ -619,16 +688,23 @@ void pinnedEntryMoreActionsUseOnlyTheirRecord() {
         QPointer<adqt::widgets::AdContextMenu> menu = row->findChild<adqt::widgets::AdContextMenu*>(
             QStringLiteral("pinnedManagementEntryMoreMenu"));
         require(menu && menu->isPopupVisible() && !menu->nativeMenuEnabled() &&
-                    menu->actions().size() == 3,
+                    menu->actions().size() == 4,
                 "hovering More opens the shared widget menu");
         auto* stitch = menu->actions().at(0);
         auto* split = menu->actions().at(1);
-        auto* reveal = menu->actions().at(2);
+        auto* reveal = menu->actions().at(3);
+        auto* imageEditing =
+            menu->findChild<QAction*>(QStringLiteral("pinnedManagementEntryImageEditing"));
+        require(imageEditing && menu->actions().at(2) == imageEditing &&
+                    imageEditing->isEnabled() &&
+                    imageEditing->text() == QStringLiteral("Image Editing") &&
+                    !imageEditing->icon().isNull(),
+                "independent editor follows Image Splitting for open and closed pins");
         require(reveal->objectName() == QStringLiteral("pinnedManagementEntryReveal") &&
                     reveal->text() == presentation::components::history_page::revealActionText() &&
                     reveal->toolTip() == reveal->text() && reveal->isEnabled() &&
                     !reveal->icon().isNull(),
-                "More offers a themed, platform-specific reveal action after splitting");
+                "More offers a themed, platform-specific reveal action after image editing");
         require(stitch->text() == QStringLiteral("Stitch Image") && stitch->isEnabled() &&
                     !stitch->icon().isNull() &&
                     split->text() == QStringLiteral("Image Splitting") && split->isEnabled() &&
@@ -651,9 +727,18 @@ void pinnedEntryMoreActionsUseOnlyTheirRecord() {
         menu = row->findChild<adqt::widgets::AdContextMenu*>(
             QStringLiteral("pinnedManagementEntryMoreMenu"));
         require(menu, "reopen More for reveal");
-        activatePinnedMenuAction(menu, menu->actions().at(2));
+        activatePinnedMenuAction(menu, menu->actions().at(3));
         require(!menu && fixture.revealed.last() == row->property("recordId").toString(),
                 "reveal dispatches only its row and retires the menu");
+        more->click();
+        QCoreApplication::processEvents();
+        menu = row->findChild<adqt::widgets::AdContextMenu*>(
+            QStringLiteral("pinnedManagementEntryMoreMenu"));
+        require(menu, "reopen More for independent editing");
+        activatePinnedMenuAction(
+            menu, menu->findChild<QAction*>(QStringLiteral("pinnedManagementEntryImageEditing")));
+        require(editorId == row->property("recordId").toString() && !menu,
+                "Image Editing dispatches exactly its pin and retires the menu");
     }
     require(requests == 3 && splitRequests == 3 && fixture.revealed.size() == 3 &&
                 selection->isChecked() && fixture.fullImageRequests == 0 &&
@@ -693,8 +778,8 @@ void pinnedEntryMoreActionsUseOnlyTheirRecord() {
                 menu->actions().at(1)->toolTip() == menu->actions().at(1)->text(),
             "language changes retranslate both actions in the open menu");
         const QString revealLabel = presentation::components::history_page::revealActionText();
-        require(menu->actions().at(2)->text() == revealLabel &&
-                    menu->actions().at(2)->toolTip() == revealLabel &&
+        require(menu->actions().at(3)->text() == revealLabel &&
+                    menu->actions().at(3)->toolTip() == revealLabel &&
                     !translator.translate("HistoryFileLocation", "Open in Explorer").isEmpty() &&
                     !translator.translate("HistoryFileLocation", "Reveal in Finder").isEmpty(),
                 "language changes retranslate the platform reveal action in the open menu");
@@ -716,7 +801,7 @@ void pinnedEntryMoreActionsUseOnlyTheirRecord() {
     menu = rows.front()->findChild<adqt::widgets::AdContextMenu*>(
         QStringLiteral("pinnedManagementEntryMoreMenu"));
     require(menu, "reopen More for failure fixture");
-    activatePinnedMenuAction(menu, menu->actions().at(2));
+    activatePinnedMenuAction(menu, menu->actions().at(3));
     require(!menu &&
                 failureMessage == QStringLiteral("Unable to open this entry's file location.") &&
                 QApplication::activeModalWidget() == nullptr && fixture.removed.isEmpty() &&
@@ -732,7 +817,7 @@ void pinnedEntryMoreActionsUseOnlyTheirRecord() {
             item.pending = true;
     }
     page.refresh();
-    require(menu && !menu->actions().at(2)->isEnabled(),
+    require(menu && !menu->actions().at(3)->isEnabled(),
             "pending pins retain a visible disabled reveal action");
     fixture.items.clear();
     page.refresh();
@@ -767,6 +852,7 @@ int main(int argc, char** argv) {
     second.ignored = true;
     second.creationSource = storage::PinnedWindowCreationSource::Screenshot;
     fixture.items = {first, second};
+    pinnedDescriptionsUseSmallThemeText(fixture.items);
     pinnedThemeChangesDoNotRestyleTwice(fixture.items);
     pinnedRowsRespectSkinMask(fixture.items);
     pinnedChangesRefreshOnlyVisiblePages(fixture.items);

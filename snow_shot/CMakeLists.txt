@@ -1825,7 +1825,19 @@ else()
     endif()
 endif()
 
+set(SNOW_SHOT_IMAGE_EDITING_SOURCES
+    include/snow_shot/presentation/imageeditingdocument.h
+    include/snow_shot/presentation/imageeditingcanvas.h
+    include/snow_shot/presentation/imageeditingwindow.h
+    src/presentation/imageediting/imageeditingdocument.cpp
+    src/presentation/imageediting/imageeditingexportcontroller.cpp
+    src/presentation/imageediting/imageeditingexportcontroller.h
+    src/presentation/imageediting/imageeditingsource.cpp
+    src/presentation/imageediting/imageeditingcanvas.cpp
+    src/presentation/imageediting/imageeditingwindow.cpp)
+
 set(PROJECT_CXX_SOURCES
+    ${SNOW_SHOT_IMAGE_EDITING_SOURCES}
     ${SNOW_SELECTED_FILES_SOURCES}
     src/presentation/services/screenshotfilepinbatch.cpp
     src/presentation/capture/directcapturecontroller.cpp
@@ -4905,6 +4917,20 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
 
     add_executable(snow-shot-pinned-window-tests
+        ${SNOW_SHOT_IMAGE_EDITING_SOURCES}
+        tests/imageediting_tests.cpp
+        tests/imageediting_canvas_tests.cpp
+        tests/imageediting_document_tests.cpp
+        tests/imageediting_translation_tests.cpp
+        tests/imageediting_branch_tests.cpp
+        tests/imageediting_lifetime_tests.cpp
+        tests/imageediting_close_tests.cpp
+        tests/imageediting_source_tests.cpp
+        tests/imageediting_smart_erase_tests.cpp
+        tests/imageediting_save_tests.cpp
+        src/presentation/capture/screenshotscrollingpipeline.cpp
+        src/presentation/services/screenshotexportscrollingsource.cpp
+        src/presentation/services/screenshotmanualsave.cpp
         src/presentation/services/pinnedtextstylecapture.cpp
         src/app/mcp/mcppinnedstate.cpp
         tests/screenshot_pinned_hide_to_top_tests.cpp
@@ -5009,6 +5035,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     snow_shot_link_macos_window_platform(snow-shot-pinned-window-tests)
     target_include_directories(snow-shot-pinned-window-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-stitch-images-c/include"
     )
     target_compile_definitions(snow-shot-pinned-window-tests PRIVATE
         SNOW_SHOT_TEST_HOOKS=1
@@ -5018,6 +5045,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_compile_options(snow-shot-pinned-window-tests PRIVATE /bigobj)
     endif()
     target_link_libraries(snow-shot-pinned-window-tests PRIVATE
+        snow_stitch_images_c
+        snow_shot_diagnostics
         MINIZIP::minizip-ng
         snow_shot_animation_playback
         snow_shot_translation
@@ -5048,6 +5077,56 @@ if(SNOW_SHOT_BUILD_TESTS)
         LABELS "interactive;e2e;windows" RUN_SERIAL TRUE TIMEOUT 180
         ENVIRONMENT "QT_QPA_PLATFORM=windows")
     snow_shot_import_offscreen_platform(snow-shot-pinned-window-tests)
+    add_test(NAME snow-shot-image-editing-tests
+        COMMAND snow-shot-pinned-window-tests --image-editing-only -platform offscreen)
+    foreach(_snow_editor_regression IN ITEMS
+        close source smart-erase save canvas document translation branch conversion-availability)
+        set(_snow_editor_regression_test
+            "snow-shot-image-editing-${_snow_editor_regression}-tests")
+        add_test(NAME ${_snow_editor_regression_test}
+            COMMAND snow-shot-pinned-window-tests --image-editing-only
+                "--image-editing-${_snow_editor_regression}-only" -platform offscreen)
+        set_tests_properties(${_snow_editor_regression_test} PROPERTIES
+            LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    endforeach()
+    add_test(NAME snow-shot-image-editing-lifetime-tests
+        COMMAND snow-shot-pinned-window-tests --image-editing-only
+            --image-editing-lifetime-only -platform offscreen)
+    set_tests_properties(snow-shot-image-editing-lifetime-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    add_test(NAME snow-shot-image-editing-recognition-feedback-tests
+        COMMAND snow-shot-pinned-window-tests --image-editing-only
+            --image-editing-recognition-feedback-only -platform offscreen)
+    set_tests_properties(snow-shot-image-editing-recognition-feedback-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    add_test(NAME snow-shot-image-editing-entry-points-tests
+        COMMAND snow-shot-pinned-window-tests --image-editing-entry-points-only -platform offscreen)
+    set_tests_properties(snow-shot-image-editing-entry-points-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    set_tests_properties(snow-shot-image-editing-tests PROPERTIES LABELS "unit" RUN_SERIAL TRUE TIMEOUT 120
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    foreach(_snow_editor_toolbar_dpr IN ITEMS 1 1.25 2)
+        set(_snow_editor_toolbar_test
+            "snow-shot-image-editing-toolbar-placement-${_snow_editor_toolbar_dpr}-tests")
+        add_test(NAME ${_snow_editor_toolbar_test}
+            COMMAND snow-shot-pinned-window-tests --image-editing-only --image-editing-toolbar-only
+                -platform offscreen)
+        set_tests_properties(${_snow_editor_toolbar_test} PROPERTIES
+            LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
+            ENVIRONMENT "QT_SCALE_FACTOR=${_snow_editor_toolbar_dpr};${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    endforeach()
+    if(WIN32)
+        add_test(NAME snow-shot-image-editing-toolbar-native-tests
+            COMMAND snow-shot-pinned-window-tests --image-editing-only
+                --image-editing-toolbar-native-only -platform windows)
+        set_tests_properties(snow-shot-image-editing-toolbar-native-tests PROPERTIES
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 60
+            ENVIRONMENT "QT_QPA_PLATFORM=windows")
+    endif()
     add_test(NAME snow-shot-pinned-wheel-step-tests
         COMMAND snow-shot-pinned-window-tests --wheel-step-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-wheel-step-tests PROPERTIES
@@ -12516,4 +12595,25 @@ if(TARGET snow-shot-pinned-window-tests)
     set_tests_properties(snow-shot-pinned-color-window-tests snow-shot-pinned-color-repository-tests
         PROPERTIES LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 90
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+if(SNOW_APPS_BUILD_BENCHMARKS AND TARGET snow-shot-pinned-window-tests)
+    get_target_property(_image_editing_benchmark_sources snow-shot-pinned-window-tests SOURCES)
+    list(FILTER _image_editing_benchmark_sources EXCLUDE REGEX "(^|[/\\])tests[/\\]")
+    list(REMOVE_DUPLICATES _image_editing_benchmark_sources)
+    add_executable(snow-shot-image-editing-benchmark tests/imageediting_performance_benchmark.cpp
+        ${_image_editing_benchmark_sources})
+    foreach(_property IN ITEMS INCLUDE_DIRECTORIES LINK_LIBRARIES COMPILE_DEFINITIONS COMPILE_OPTIONS)
+        get_target_property(_values snow-shot-pinned-window-tests ${_property})
+        if(_values)
+            set_property(TARGET snow-shot-image-editing-benchmark PROPERTY ${_property} "${_values}")
+        endif()
+    endforeach()
+    snow_shot_import_offscreen_platform(snow-shot-image-editing-benchmark)
+    snow_shot_offscreen_qpa_environment(_image_editing_environment)
+    add_test(NAME snow-shot-image-editing-benchmark
+        COMMAND snow-shot-image-editing-benchmark -platform offscreen)
+    set_tests_properties(snow-shot-image-editing-benchmark PROPERTIES LABELS "benchmark"
+        TIMEOUT 240 ENVIRONMENT "${_image_editing_environment}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()

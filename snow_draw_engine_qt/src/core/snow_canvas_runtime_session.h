@@ -28,6 +28,8 @@ class RuntimeSession final {
     bool reset();
     bool cloneDocumentSessionFrom(const RuntimeSession& source);
     QByteArray serializeDocumentSession() const;
+    QByteArray serializeDocumentSnapshot() const;
+    QByteArray documentCheckpoint() const;
     QByteArray serializeSelectedDrawTemplate() const;
     bool restoreDocumentSession(const QByteArray& payload);
     QByteArray serializeDocumentHistory() const;

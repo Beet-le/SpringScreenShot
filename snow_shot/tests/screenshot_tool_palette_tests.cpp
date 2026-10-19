@@ -3274,9 +3274,15 @@ void groupedDrawingOptionsShowShortcutTooltips() {
         distanceShortcut.isEmpty()
             ? QStringLiteral("Distance annotation")
             : QStringLiteral("Distance annotation (%1)").arg(distanceShortcut);
+    const QString angleShortcut = snow_shot::shortcuts::formatShortcutListDisplayText(
+        settings.shortcuts(QStringLiteral("angle")));
+    const QString angleTooltip = angleShortcut.isEmpty()
+                                     ? QStringLiteral("Angle annotation")
+                                     : QStringLiteral("Angle annotation (%1)").arg(angleShortcut);
     const QMap<QString, QString> expectedTooltips{
         {QStringLiteral("arrow"), QStringLiteral("Arrow (2)")},
         {QStringLiteral("distance"), distanceTooltip},
+        {QStringLiteral("angle"), angleTooltip},
         {QStringLiteral("line"), QStringLiteral("Line (%1)")
                                      .arg(snow_shot::shortcuts::formatShortcutListDisplayText(
                                          settings.shortcuts(QStringLiteral("line"))))},
@@ -3298,7 +3304,7 @@ void groupedDrawingOptionsShowShortcutTooltips() {
 
         const auto buttons = popover->contentWidget()->findChildren<adqt::widgets::AdButton*>();
         const qsizetype expectedCount =
-            QString::fromLatin1(triggerName) == QStringLiteral("screenshotArrowLineButton") ? 3 : 2;
+            QString::fromLatin1(triggerName) == QStringLiteral("screenshotArrowLineButton") ? 4 : 2;
         require(buttons.size() == expectedCount,
                 "default drawing group should expose all configured tools");
         for (auto* button : buttons) {
@@ -3536,6 +3542,7 @@ void moveToolPresentationUsesTheOwningShortcutScope() {
     screenshotOptions.showMoveTool = true;
     screenshotOptions.showSelectTool = true;
     screenshotOptions.showShapeTool = false;
+    screenshotOptions.showSpeechBubbleTool = false;
     screenshotOptions.showArrowTool = false;
     screenshotOptions.showDistanceTool = false;
     screenshotOptions.showAngleTool = false;
@@ -3556,6 +3563,7 @@ void moveToolPresentationUsesTheOwningShortcutScope() {
     pinnedOptions.moveToolPresentation = ScreenshotToolPalette::MoveToolPresentation::ResizeWindow;
     pinnedOptions.showSelectTool = true;
     pinnedOptions.showShapeTool = false;
+    pinnedOptions.showSpeechBubbleTool = false;
     pinnedOptions.showArrowTool = false;
     pinnedOptions.showDistanceTool = false;
     pinnedOptions.showAngleTool = false;
@@ -6602,13 +6610,17 @@ void scrollingSettingsUseCenteredFormAndPersistOnAccept() {
         palette.findChild<AdButton*>(QStringLiteral("screenshotScrollingMoveVerticalButton"));
     auto* splitButton =
         palette.findChild<AdButton*>(QStringLiteral("screenshotScrollingImageSplittingButton"));
-    require(button && separator && movement && splitButton && button->text().isEmpty() &&
+    auto* editingButton =
+        palette.findChild<AdButton*>(QStringLiteral("screenshotScrollingImageEditingButton"));
+    require(button && separator && movement && splitButton && editingButton &&
+                button->text().isEmpty() &&
                 button->accessibleName() == QStringLiteral("Settings") &&
                 controls->layout()->itemAt(controls->layout()->count() - 1)->widget() == button &&
                 separator->x() - (movement->x() + movement->width()) == 16 &&
                 splitButton->x() - (separator->x() + separator->width()) == 16 &&
-                button->x() - (splitButton->x() + splitButton->width()) == 4,
-            "scrolling settings must follow Image Splitting at the far right");
+                editingButton->x() - (splitButton->x() + splitButton->width()) == 4 &&
+                button->x() - (editingButton->x() + editingButton->width()) == 4,
+            "scrolling settings must follow Image Splitting and Image Editing at the far right");
     const auto findModal = [&] {
         return palette.findChild<AdModal*>(QStringLiteral("screenshotScrollingSettingsModal"));
     };
@@ -6790,16 +6802,27 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
                                  : nullptr;
     require(controls != nullptr &&
                 controls->findChild<adqt::widgets::AdRadioButtonGroup*>() == nullptr &&
-                modeButtons.size() == 8 && verticalButton != nullptr && horizontalButton != nullptr,
+                modeButtons.size() == 9 && verticalButton != nullptr && horizontalButton != nullptr,
             "scrolling screenshot should expose two independent mode buttons");
     auto* splitButton = controls->findChild<adqt::widgets::AdButton*>(
         QStringLiteral("screenshotScrollingImageSplittingButton"));
     auto* settingsButton = controls->findChild<adqt::widgets::AdButton*>(
         QStringLiteral("screenshotScrollingSettingsButton"));
-    require(splitButton && settingsButton && splitButton->isVisible() &&
+    auto* editingButton = controls->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotScrollingImageEditingButton"));
+    require(splitButton && editingButton && settingsButton && splitButton->isVisible() &&
+                editingButton->isVisible() && !editingButton->icon().isNull() &&
+                editingButton->text().isEmpty() &&
+                editingButton->toolTip() == QStringLiteral("Image Editing") &&
                 splitButton->toolTip() == QStringLiteral("Image Splitting") &&
-                settingsButton->x() - (splitButton->x() + splitButton->width()) == 4,
-            "Image Splitting must appear immediately to the left of Settings");
+                editingButton->x() - (splitButton->x() + splitButton->width()) == 4 &&
+                settingsButton->x() - (editingButton->x() + editingButton->width()) == 4,
+            "Image Editing must appear between Image Splitting and Settings");
+    int editingRequests = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::scrollingImageEditingRequested,
+                     [&] { ++editingRequests; });
+    editingButton->click();
+    require(editingRequests == 1, "Image Editing must emit one request per click");
     int splitRequests = 0;
     QObject::connect(&palette, &ScreenshotToolPalette::scrollingImageSplittingRequested,
                      [&] { ++splitRequests; });
@@ -6937,8 +6960,9 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
     require(palette.setPhysicalScale(1.5),
             "scrolling screenshot toolbar should accept a physical scale change");
     requireSeparatorSpacing(24, 6);
-    require(settingsButton->x() - (splitButton->x() + splitButton->width()) == 6,
-            "Image Splitting spacing must scale with the scrolling toolbar");
+    require(editingButton->x() - (splitButton->x() + splitButton->width()) == 6 &&
+                settingsButton->x() - (editingButton->x() + editingButton->width()) == 6,
+            "Image Editing spacing must scale with the scrolling toolbar");
     for (adqt::widgets::AdButton* button : modeButtons) {
         require(button->size() == QSize(button == interval ? 144 : 48, 48) &&
                     button->iconSize() == QSize(36, 36),
@@ -6996,6 +7020,11 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
     splitButton = palette.findChild<adqt::widgets::AdButton*>(
         QStringLiteral("screenshotScrollingImageSplittingButton"));
     require(splitButton != nullptr, "Image Splitting must survive toolbar recreation");
+    editingButton = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotScrollingImageEditingButton"));
+    require(editingButton != nullptr, "Image Editing must survive toolbar recreation");
+    editingButton->click();
+    require(editingRequests == 2, "recreated Image Editing dispatches exactly once");
     const QString englishTooltip = interval->toolTip();
     for (const auto& locale : {QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
         require(languages.setLanguage(locale), "load interval translations");
@@ -7005,6 +7034,11 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
         require(splitButton->toolTip() == splitLabel &&
                     splitButton->accessibleName() == splitButton->toolTip(),
                 "Image Splitting must retranslate its tooltip and accessible name");
+        const QString editingLabel =
+            QString::fromUtf8(locale == QStringLiteral("zh_CN") ? "图片编辑" : "圖片編輯");
+        require(editingButton->toolTip() == editingLabel &&
+                    editingButton->accessibleName() == editingLabel,
+                "Image Editing must retranslate its tooltip and accessible name");
         require(interval->toolTip() != englishTooltip &&
                     interval->accessibleName() == interval->toolTip() &&
                     interval->valueText() == QStringLiteral("350ms"),
@@ -7021,6 +7055,8 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
             "scaling a translated interval editor must preserve its translation source");
     require(splitButton->toolTip() == QStringLiteral("Image Splitting"),
             "Image Splitting must restore its English caption after language changes");
+    require(editingButton->toolTip() == QStringLiteral("Image Editing"),
+            "Image Editing must restore its English caption after language changes");
 }
 
 void originalImageToggleLeadsRecognitionActions() {
@@ -18940,15 +18976,20 @@ void moveToolExposesCaptureCursorAndRecaptureOptions() {
                 subtractRegion != nullptr && regionSeparator != nullptr && layout != nullptr &&
                 palette.actionToolbarVisible() && !palette.styleToolbarVisible(),
             "Move must materialize and display its dedicated options row");
+    auto* backgroundOpacity = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotSelectionBackgroundOpacityEditor"));
     require(
-        layout->indexOf(addRegion) == 0 && layout->indexOf(subtractRegion) == 2 &&
-            layout->indexOf(regionSeparator) == 9 && layout->indexOf(cursor) == 11 &&
-            layout->indexOf(recapture) == 13 &&
+        backgroundOpacity && layout->indexOf(addRegion) == 0 &&
+            layout->indexOf(subtractRegion) == 2 &&
+            layout->indexOf(backgroundOpacity) > layout->indexOf(subtractRegion) &&
+            layout->indexOf(regionSeparator) == layout->indexOf(backgroundOpacity) + 2 &&
+            layout->indexOf(cursor) == layout->indexOf(regionSeparator) + 2 &&
+            layout->indexOf(recapture) == layout->indexOf(cursor) + 2 &&
             layout->indexOf(hideSelectionToolbar) == layout->count() - 1 &&
             layout->itemAt(layout->indexOf(hideSelectionToolbar) - 4) != nullptr &&
             qobject_cast<QFrame*>(
                 layout->itemAt(layout->indexOf(hideSelectionToolbar) - 4)->widget()) != nullptr,
-        "Move options must group region actions at the far left, before capture actions and hide");
+        "Move options must group region and background actions before capture actions and hide");
     auto* qr =
         palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotShowQrCodeButton"));
     require(qr && layout->indexOf(qr) == layout->indexOf(recapture) + 2 && !qr->isEnabled(),

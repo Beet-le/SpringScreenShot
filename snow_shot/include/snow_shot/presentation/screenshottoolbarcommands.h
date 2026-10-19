@@ -110,6 +110,7 @@ class ScreenshotToolbarCommandSink {
     virtual void startScrollingScreenshot() = 0;
     virtual void restartScrollingScreenshot() {}
     virtual void splitScrollingScreenshot() {}
+    virtual void editScrollingScreenshot() {}
     virtual void setScrollingScreenshotRecognitionMode(ScreenshotScrollingRecognitionMode) {}
     virtual void setScrollingScreenshotAutoScroll(bool) {}
     virtual void setScrollingScreenshotAutoScrollIntervalMs(int) {}

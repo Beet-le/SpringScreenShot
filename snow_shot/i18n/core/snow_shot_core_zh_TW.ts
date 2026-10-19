@@ -258,8 +258,8 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>查看原始碼，一起改進</translation>
         </message>
         <message>
-            <source>You are up to date.</source>
-            <translation>目前已是最新版本。</translation>
+            <source>You are up to date</source>
+            <translation>目前已是最新版本</translation>
         </message>
     </context>
     <context>

@@ -108,6 +108,7 @@ class ScreenshotToolPalette final : public QWidget,
     enum class MoveToolPresentation {
         EditSelection,
         ResizeWindow,
+        Pan,
     };
 
     enum class RecordingState {
@@ -227,12 +228,15 @@ class ScreenshotToolPalette final : public QWidget,
     Q_DECLARE_FLAGS(Actions, Action)
 
     struct Options {
+        // Keep the parent surface behind the margins when embedded in an opaque window.
+        bool preserveParentBackground = false;
         bool showDragHandle = false;
         bool showHistoryActions = false;
         bool showMoveTool = false;
         bool enableMoveOptionsToolbar = false;
         MoveToolPresentation moveToolPresentation = MoveToolPresentation::EditSelection;
         bool showSelectTool = true;
+        bool showCropTools = false;
         bool showShapeTool = true;
         bool showSpeechBubbleTool = true;
         bool showArrowTool = true;
@@ -363,6 +367,7 @@ class ScreenshotToolPalette final : public QWidget,
     void clearActiveTool();
     [[nodiscard]] std::optional<Tool> activeTool() const;
     void setHistoryState(const SnowCanvasHistoryState& state);
+    void setCropToolsState(bool rowsActive, bool columnsActive);
     void setScrollingScreenshotMode(bool enabled);
     [[nodiscard]] bool scrollingScreenshotMode() const;
     void setScrollingRecognitionMode(ScreenshotScrollingRecognitionMode mode);
@@ -450,6 +455,7 @@ class ScreenshotToolPalette final : public QWidget,
     void setTableEditingState(bool available, bool canUndo, bool canRedo, bool canMerge,
                               bool canSplit, bool canReset);
     void setShowOriginalImage(bool show);
+    void setOriginalImageToggleEnabled(bool enabled);
     void setTextEditingState(bool available, bool editing, bool canUndo = false,
                              bool canRedo = false);
     void setTextTranslationState(bool available, bool translating, bool streaming,
@@ -488,6 +494,8 @@ class ScreenshotToolPalette final : public QWidget,
     void undoRequested();
     void redoRequested();
     void moveRequested();
+    void cropRowsRequested();
+    void cropColumnsRequested();
     void cursorVisibilityToggled(bool enabled);
     void recaptureRequested();
     void qrCodeVisibilityRequested(bool visible);
@@ -549,6 +557,7 @@ class ScreenshotToolPalette final : public QWidget,
     void textTargetLanguageRequested(const QString& language);
     void scrollingScreenshotRequested();
     void scrollingImageSplittingRequested();
+    void scrollingImageEditingRequested();
     void printRequested();
     void saveRequested();
     void cloudUploadRequested();
@@ -916,6 +925,8 @@ class ScreenshotToolPalette final : public QWidget,
     QSpacerItem* m_shapeStyleGroupSeparatorLeadingSpacing = nullptr;
     QSpacerItem* m_shapeStyleGroupSeparatorTrailingSpacing = nullptr;
     adqt::widgets::AdButton* m_moveButton = nullptr;
+    adqt::widgets::AdButton* m_cropRowsButton = nullptr;
+    adqt::widgets::AdButton* m_cropColumnsButton = nullptr;
     adqt::widgets::AdButton* m_cursorButton = nullptr;
     adqt::widgets::AdButton* m_hideSelectionToolbarButton = nullptr;
     adqt::widgets::AdButton* m_recaptureButton = nullptr;
@@ -956,6 +967,7 @@ class ScreenshotToolPalette final : public QWidget,
     QVector<int> m_tableQrOptionValues;
     Tool m_tableQrEntryTool = Tool::Table;
     bool m_showOriginalImage = false;
+    bool m_originalImageToggleEnabled = true;
     adqt::widgets::AdButton* m_showOriginalImageButton = nullptr;
     QSpacerItem* m_showOriginalImageSpacing = nullptr;
     adqt::widgets::AdButton* m_textEditButton = nullptr;

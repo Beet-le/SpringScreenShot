@@ -748,13 +748,16 @@ class HistoryEntryWidget final : public QFrame {
                        std::function<void(bool)> selectionChanged,
                        std::function<void()> editRequested, std::function<void()> copyRequested,
                        std::function<void()> pinRequested, std::function<void()> stitchRequested,
-                       std::function<void()> splitRequested, std::function<void()> revealRequested,
-                       std::function<void()> deleteRequested, QWidget* parent = nullptr)
+                       std::function<void()> splitRequested,
+                       std::function<void()> imageEditingRequested,
+                       std::function<void()> revealRequested, std::function<void()> deleteRequested,
+                       QWidget* parent = nullptr)
         : QFrame(parent), m_record(record), m_assets(assets),
           m_selectionChanged(std::move(selectionChanged)),
           m_editRequested(std::move(editRequested)), m_copyRequested(std::move(copyRequested)),
           m_pinRequested(std::move(pinRequested)), m_stitchRequested(std::move(stitchRequested)),
           m_splitRequested(std::move(splitRequested)),
+          m_imageEditingRequested(std::move(imageEditingRequested)),
           m_revealRequested(std::move(revealRequested)),
           m_deleteRequested(std::move(deleteRequested)) {
         setObjectName(QStringLiteral("screenshotHistoryEntry-%1").arg(record.id));
@@ -972,6 +975,9 @@ class HistoryEntryWidget final : public QFrame {
         dateFont.setWeight(QFont::DemiBold);
         m_selectionCheckbox->setFont(dateFont);
 
+        for (QLabel* label : {m_sourceLabel, m_summaryLabel, m_metaLabel}) {
+            history_page::applyEntryDescriptionFont(label, scheme);
+        }
         QPalette secondary = m_summaryLabel->palette();
         secondary.setColor(QPalette::WindowText, scheme.map.colorTextSecondary);
         m_summaryLabel->setPalette(secondary);
@@ -1113,6 +1119,10 @@ class HistoryEntryWidget final : public QFrame {
             m_stitchAction->setText(HistoryEntryWidget::tr("Stitch Image"));
             m_stitchAction->setToolTip(HistoryEntryWidget::tr("Stitch Image"));
         }
+        if (m_imageEditingAction != nullptr) {
+            m_imageEditingAction->setText(HistoryEntryWidget::tr("Image Editing"));
+            m_imageEditingAction->setToolTip(m_imageEditingAction->text());
+        }
         if (m_splitAction != nullptr) {
             const QString label = QCoreApplication::translate(
                 "ImageSplitWindow", QT_TRANSLATE_NOOP("ImageSplitWindow", "Image Splitting"));
@@ -1141,6 +1151,13 @@ class HistoryEntryWidget final : public QFrame {
         split->setObjectName(QStringLiteral("screenshotHistoryEntrySplit"));
         split->setEnabled(m_record.result.has_value());
         m_splitAction = split;
+        m_imageEditingAction = menu->addItem(HistoryEntryWidget::tr("Image Editing"),
+                                             custom_outlined_icons::ImageEditing());
+        m_imageEditingAction->setObjectName(QStringLiteral("screenshotHistoryEntryImageEditing"));
+        connect(m_imageEditingAction, &QAction::triggered, this, [this] {
+            if (m_imageEditingRequested)
+                m_imageEditingRequested();
+        });
         auto* reveal = menu->addItem(QString(), custom_outlined_icons::RevealInFolder());
         reveal->setObjectName(QStringLiteral("screenshotHistoryEntryReveal"));
         m_revealAction = reveal;
@@ -1194,6 +1211,8 @@ class HistoryEntryWidget final : public QFrame {
     std::function<void()> m_pinRequested;
     std::function<void()> m_stitchRequested;
     std::function<void()> m_splitRequested;
+    std::function<void()> m_imageEditingRequested;
+    QPointer<QAction> m_imageEditingAction;
     std::function<void()> m_revealRequested;
     std::function<void()> m_deleteRequested;
     QBoxLayout* m_layout = nullptr;
@@ -1715,6 +1734,7 @@ void ScreenshotHistoryPageWidget::rebuildEntries() {
                 [this, id = record.id]() { emit pinRequested(id); },
                 [this, record]() { emit collageRequested({record}); },
                 [this, record]() { emit splitRequested(record); },
+                [this, record]() { emit imageEditingRequested(record); },
                 [this, id = record.id]() {
                     if (!m_dataSource || !m_dataSource->revealRecord(id))
                         history_page::showRevealFailure(this);

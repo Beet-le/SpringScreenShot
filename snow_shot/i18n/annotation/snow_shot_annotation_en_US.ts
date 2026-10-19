@@ -656,6 +656,10 @@
             <translation>Highlight stroke width %1px</translation>
         </message>
         <message>
+            <source>Horizontal Crop</source>
+            <translation>Horizontal Crop</translation>
+        </message>
+        <message>
             <source>Horizontal scrolling</source>
             <translation>Horizontal scrolling</translation>
         </message>
@@ -666,6 +670,10 @@
         <message>
             <source>Image</source>
             <translation>Image</translation>
+        </message>
+        <message>
+            <source>Image Editing</source>
+            <translation>Image Editing</translation>
         </message>
         <message>
             <source>Image Splitting</source>
@@ -878,6 +886,10 @@
         <message>
             <source>Outlined square</source>
             <translation>Outlined square</translation>
+        </message>
+        <message>
+            <source>Pan</source>
+            <translation>Pan</translation>
         </message>
         <message>
             <source>Pause recording</source>
@@ -1458,6 +1470,10 @@
         <message>
             <source>Uppercase letters</source>
             <translation>Uppercase letters</translation>
+        </message>
+        <message>
+            <source>Vertical Crop</source>
+            <translation>Vertical Crop</translation>
         </message>
         <message>
             <source>Vertical scrolling</source>

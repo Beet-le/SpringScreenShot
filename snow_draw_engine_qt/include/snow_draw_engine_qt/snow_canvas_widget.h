@@ -182,6 +182,10 @@ class SnowCanvasWidget : public QWidget {
     std::uint64_t viewportId() const;
 
     bool setViewportCamera(double centerX, double centerY, double zoom);
+    // Clips document pixels and limits new pointer gestures to the host image bounds.
+    // Existing selection controls and inline editing remain usable outside the image.
+    // Does not change document geometry, history, or runtime exports.
+    void setContentClip(std::optional<QRectF> canvasRect);
     // Limits the viewport-anchored watermark to a canvas-space area. An empty
     // area renders no watermark; clearWatermarkRenderArea() restores the full
     // viewport behavior.

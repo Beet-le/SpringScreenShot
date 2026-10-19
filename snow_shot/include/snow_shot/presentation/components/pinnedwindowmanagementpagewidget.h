@@ -69,6 +69,7 @@ class PinnedWindowManagementPageWidget final : public QWidget {
   signals:
     void collageRequested(const QStringList& recordIds);
     void splitRequested(const QString& recordId);
+    void imageEditingRequested(const QString& recordId);
 
   protected:
     void changeEvent(QEvent* event) override;

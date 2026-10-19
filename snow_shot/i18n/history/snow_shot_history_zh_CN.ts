@@ -758,6 +758,10 @@ Files:
             <translation>焦点窗口</translation>
         </message>
         <message>
+            <source>Image Editing</source>
+            <translation>图片编辑</translation>
+        </message>
+        <message>
             <source>Loading preview…</source>
             <translation>正在加载预览…</translation>
         </message>
@@ -827,6 +831,29 @@ Files:
         <message>
             <source>Unable to open this entry's file location.</source>
             <translation>无法打开此条目的文件位置。</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageEditingWindow</name>
+        <message>
+            <source>%1 px</source>
+            <translation>%1 像素</translation>
+        </message>
+        <message>
+            <source>No available output filename was found.</source>
+            <translation>未找到可用的输出文件名。</translation>
+        </message>
+        <message>
+            <source>The editing content could not be prepared for export.</source>
+            <translation>无法准备要导出的编辑内容。</translation>
+        </message>
+        <message>
+            <source>The image could not be loaded.</source>
+            <translation>无法加载图像。</translation>
+        </message>
+        <message>
+            <source>The save directory is not available.</source>
+            <translation>保存目录不可用。</translation>
         </message>
     </context>
     <context>
@@ -1282,6 +1309,10 @@ Files:
             <translation>已隐藏</translation>
         </message>
         <message>
+            <source>Image Editing</source>
+            <translation>图片编辑</translation>
+        </message>
+        <message>
             <source>Image Splitting</source>
             <translation>图片分割</translation>
         </message>
@@ -1672,6 +1703,10 @@ Files:
             <translation>顶部隐藏</translation>
         </message>
         <message>
+            <source>Image Editing</source>
+            <translation>图片编辑</translation>
+        </message>
+        <message>
             <source>Image file</source>
             <translation>图像文件</translation>
         </message>
@@ -1853,6 +1888,81 @@ Files:
         <message>
             <source>Windows · not closed / total</source>
             <translation>窗口 · 未关闭 / 总数</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::ImageEditingWindow</name>
+        <message>
+            <source>Configure cloud upload before uploading an image.</source>
+            <translation>上传图像前请先配置云上传。</translation>
+        </message>
+        <message>
+            <source>Continue Editing</source>
+            <translation>继续编辑</translation>
+        </message>
+        <message>
+            <source>Discard Changes</source>
+            <translation>放弃更改</translation>
+        </message>
+        <message>
+            <source>Discard Changes?</source>
+            <translation>放弃更改？</translation>
+        </message>
+        <message>
+            <source>Editable annotations could not be restored. The composited image was opened instead.</source>
+            <translation>无法恢复可编辑标注，已打开合成后的图像。</translation>
+        </message>
+        <message>
+            <source>Export completed</source>
+            <translation>导出完成</translation>
+        </message>
+        <message>
+            <source>Export could not be started.</source>
+            <translation>无法开始导出。</translation>
+        </message>
+        <message>
+            <source>Exporting…</source>
+            <translation>正在导出…</translation>
+        </message>
+        <message>
+            <source>Fit image to window</source>
+            <translation>适应窗口</translation>
+        </message>
+        <message>
+            <source>Image Editing</source>
+            <translation>图片编辑</translation>
+        </message>
+        <message>
+            <source>Loading image…</source>
+            <translation>正在加载图像…</translation>
+        </message>
+        <message>
+            <source>No recognition result is available to export.</source>
+            <translation>没有可导出的识别结果。</translation>
+        </message>
+        <message>
+            <source>Printing is unavailable.</source>
+            <translation>打印功能不可用。</translation>
+        </message>
+        <message>
+            <source>Save as file</source>
+            <translation>另存为文件</translation>
+        </message>
+        <message>
+            <source>Text files (*.txt)</source>
+            <translation>文本文件 (*.txt)</translation>
+        </message>
+        <message>
+            <source>The image could not be loaded.</source>
+            <translation>无法加载图像。</translation>
+        </message>
+        <message>
+            <source>This editing window has unsaved changes.</source>
+            <translation>此编辑窗口有未保存的更改。</translation>
+        </message>
+        <message>
+            <source>View at actual size (100%)</source>
+            <translation>以实际大小查看（100%）</translation>
         </message>
     </context>
     <context>

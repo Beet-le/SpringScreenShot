@@ -1,6 +1,6 @@
 # HEVC recording
 
-Choose **H.265 / HEVC (Hardware)** in Recording settings to record MP4 with a
+Choose **H.265 (Hardware)** in Recording settings to record MP4 with a
 hardware HEVC encoder. The existing **H.265** option continues to use libx265;
 existing preferences and the default H.264 hardware selection are unchanged.
 GIF, APNG and WebP retain their own encoders.

@@ -43,6 +43,16 @@ SnowError snow_runtime_serialize_document_session(SnowRuntime runtime, uint8_t* 
 // Release it with snow_serialized_bytes_destroy after copying/consuming its data.
 SnowError snow_runtime_serialize_document_session_bytes(SnowRuntime runtime,
                                                         SnowSerializedBytes* out_bytes);
+// A restorable session of committed document/configuration without undo/redo or input drafts.
+// Snapshot serialization depends only on current content, never on accumulated history.
+// Retains the persisted-session limit of 16 MiB for current content.
+SnowError snow_runtime_serialize_document_snapshot_bytes(SnowRuntime runtime,
+                                                         SnowSerializedBytes* out_bytes);
+// Canonical current-document JSON bytes, not a hash or a restorable session.
+// Excludes history, editor defaults, revisions and unused trailing element slots.
+// Both functions return owned handles released with snow_serialized_bytes_destroy.
+SnowError snow_runtime_document_checkpoint_bytes(SnowRuntime runtime,
+                                                 SnowSerializedBytes* out_bytes);
 // The read-only data remains valid until the handle is destroyed, even if the
 // originating runtime changes or is destroyed.
 SnowError snow_serialized_bytes_data(SnowSerializedBytes bytes, const uint8_t** out_data,
@@ -1559,6 +1569,11 @@ SnowError snow_viewport_fill_auto_filter_category(SnowRuntime runtime, SnowViewp
                                                   SnowChangedViewportList* changed);
 
 SnowError snow_runtime_get_history_state(SnowRuntime runtime, SnowHistoryState* out_state);
+/* Runtime-only host edits share annotation undo ordering, but are not serialized. */
+SnowError snow_runtime_host_history_state(SnowRuntime runtime, int32_t direction,
+                                          uint64_t* out_state);
+SnowError snow_runtime_commit_host_history_state(SnowRuntime runtime, uint64_t state,
+                                                 SnowChangedViewportList* out_changed_viewports);
 /* Reports current capture ownership after input, cancellation, and document mutations. */
 SnowError snow_runtime_has_pointer_capture(SnowRuntime runtime, uint8_t* out_active);
 

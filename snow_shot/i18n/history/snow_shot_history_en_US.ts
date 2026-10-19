@@ -758,6 +758,10 @@ Files:
             <translation>Focused window</translation>
         </message>
         <message>
+            <source>Image Editing</source>
+            <translation>Image Editing</translation>
+        </message>
+        <message>
             <source>Loading preview…</source>
             <translation>Loading preview…</translation>
         </message>
@@ -827,6 +831,29 @@ Files:
         <message>
             <source>Unable to open this entry's file location.</source>
             <translation>Unable to open this entry's file location.</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageEditingWindow</name>
+        <message>
+            <source>%1 px</source>
+            <translation>%1 px</translation>
+        </message>
+        <message>
+            <source>No available output filename was found.</source>
+            <translation>No available output filename was found.</translation>
+        </message>
+        <message>
+            <source>The editing content could not be prepared for export.</source>
+            <translation>The editing content could not be prepared for export.</translation>
+        </message>
+        <message>
+            <source>The image could not be loaded.</source>
+            <translation>The image could not be loaded.</translation>
+        </message>
+        <message>
+            <source>The save directory is not available.</source>
+            <translation>The save directory is not available.</translation>
         </message>
     </context>
     <context>
@@ -1284,6 +1311,10 @@ Files:
             <translation>Hidden</translation>
         </message>
         <message>
+            <source>Image Editing</source>
+            <translation>Image Editing</translation>
+        </message>
+        <message>
             <source>Image Splitting</source>
             <translation>Image Splitting</translation>
         </message>
@@ -1678,6 +1709,10 @@ Files:
             <translation>Hide to Top</translation>
         </message>
         <message>
+            <source>Image Editing</source>
+            <translation>Image Editing</translation>
+        </message>
+        <message>
             <source>Image file</source>
             <translation>Image file</translation>
         </message>
@@ -1859,6 +1894,81 @@ Files:
         <message>
             <source>Windows · not closed / total</source>
             <translation>Windows · not closed / total</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::ImageEditingWindow</name>
+        <message>
+            <source>Configure cloud upload before uploading an image.</source>
+            <translation>Configure cloud upload before uploading an image.</translation>
+        </message>
+        <message>
+            <source>Continue Editing</source>
+            <translation>Continue Editing</translation>
+        </message>
+        <message>
+            <source>Discard Changes</source>
+            <translation>Discard Changes</translation>
+        </message>
+        <message>
+            <source>Discard Changes?</source>
+            <translation>Discard Changes?</translation>
+        </message>
+        <message>
+            <source>Editable annotations could not be restored. The composited image was opened instead.</source>
+            <translation>Editable annotations could not be restored. The composited image was opened instead.</translation>
+        </message>
+        <message>
+            <source>Export completed</source>
+            <translation>Export completed</translation>
+        </message>
+        <message>
+            <source>Export could not be started.</source>
+            <translation>Export could not be started.</translation>
+        </message>
+        <message>
+            <source>Exporting…</source>
+            <translation>Exporting…</translation>
+        </message>
+        <message>
+            <source>Fit image to window</source>
+            <translation>Fit image to window</translation>
+        </message>
+        <message>
+            <source>Image Editing</source>
+            <translation>Image Editing</translation>
+        </message>
+        <message>
+            <source>Loading image…</source>
+            <translation>Loading image…</translation>
+        </message>
+        <message>
+            <source>No recognition result is available to export.</source>
+            <translation>No recognition result is available to export.</translation>
+        </message>
+        <message>
+            <source>Printing is unavailable.</source>
+            <translation>Printing is unavailable.</translation>
+        </message>
+        <message>
+            <source>Save as file</source>
+            <translation>Save as file</translation>
+        </message>
+        <message>
+            <source>Text files (*.txt)</source>
+            <translation>Text files (*.txt)</translation>
+        </message>
+        <message>
+            <source>The image could not be loaded.</source>
+            <translation>The image could not be loaded.</translation>
+        </message>
+        <message>
+            <source>This editing window has unsaved changes.</source>
+            <translation>This editing window has unsaved changes.</translation>
+        </message>
+        <message>
+            <source>View at actual size (100%)</source>
+            <translation>View at actual size (100%)</translation>
         </message>
     </context>
     <context>

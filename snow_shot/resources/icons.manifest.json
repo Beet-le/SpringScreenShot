@@ -47,6 +47,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ActualSize",
+      "name": "actual-size",
+      "source": "../src/presentation/components/icons/resources/actual-size.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "AlignBottom",
       "name": "align-bottom",
       "source": "../src/presentation/components/icons/resources/align-bottom.svg",
@@ -463,6 +471,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "CropHorizontal",
+      "name": "crop-horizontal",
+      "source": "../src/presentation/components/icons/resources/crop-horizontal.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "CropVertical",
+      "name": "crop-vertical",
+      "source": "../src/presentation/components/icons/resources/crop-vertical.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "Delete",
       "name": "delete",
       "source": "../src/presentation/components/icons/resources/delete.svg",
@@ -682,6 +706,14 @@
       "symbol": "Html",
       "name": "html",
       "source": "../src/presentation/components/icons/resources/html.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ImageEditing",
+      "name": "image-editing",
+      "source": "../src/presentation/components/icons/resources/image-editing.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

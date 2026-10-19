@@ -1,3 +1,4 @@
+#include "snow_shot/presentation/imageeditingdocument.h"
 #include "snow_shot/presentation/screenshotmanualsave.h"
 #include "snow_shot/presentation/crosshaircursor.h"
 #include "snow_shot/presentation/collagedocument.h"
@@ -3603,6 +3604,7 @@ void ScreenshotPinnedWindow::executeAnimationCommand(const QString& id) {
 }
 
 void ScreenshotPinnedWindow::createContextMenu() {
+    m_imageEditingAction = nullptr;
     m_ocrAction = nullptr;
     m_drawingAction = nullptr;
     m_animationToggleAction = nullptr;
@@ -3838,6 +3840,17 @@ void ScreenshotPinnedWindow::createContextMenu() {
                     return;
                 emit splitRequested(splittingSnapshot());
             });
+            m_imageEditingAction =
+                processMenu->addItem(tr("Image Editing"), custom_outlined_icons::ImageEditing());
+            setActionTranslationSource(m_imageEditingAction, "Image Editing");
+            m_imageEditingAction->setObjectName(
+                QStringLiteral("screenshotPinnedImageEditingAction"));
+            connect(m_imageEditingAction, &QAction::triggered, this, [this] {
+                if (m_closing || !m_firstContentFramePublished ||
+                    (m_transformedImage.isNull() && !m_imageSource.isValid()))
+                    return;
+                emit imageEditingRequested(m_persistenceId);
+            });
             refreshContextMenu();
             refreshMenuShortcutDisplays();
         },
@@ -4060,6 +4073,13 @@ void ScreenshotPinnedWindow::refreshContextMenu() {
     if (m_loadContentAction != nullptr) {
         m_loadContentAction->setEnabled(m_firstContentFramePublished && !m_originalImage.isNull() &&
                                         !m_closing);
+    }
+    if (m_imageEditingAction != nullptr) {
+        const QString label = tr("Image Editing");
+        m_imageEditingAction->setText(label);
+        m_imageEditingAction->setToolTip(label);
+        m_imageEditingAction->setEnabled(m_firstContentFramePublished && !m_closing &&
+                                         (!m_transformedImage.isNull() || m_imageSource.isValid()));
     }
     if (m_groupMenu && m_groupMenu->isPopupVisible() && !m_groupMenu->isRetiring())
         rebuildGroupMenu();
@@ -10018,4 +10038,34 @@ bool ScreenshotPinnedWindow::automationWorkflowBusy() const {
              m_recognitionSession->workflowState().value(QStringLiteral("busy")).toBool())) ||
            (m_editController &&
             m_editController->automationAutoFilterState().value(QStringLiteral("busy")).toBool());
+}
+
+snow_shot::presentation::ImageEditingSource ScreenshotPinnedWindow::imageEditingSnapshot() const {
+    snow_shot::presentation::ImageEditingSource source;
+    if (m_closing || !m_firstContentFramePublished)
+        return source;
+    source.image = m_transformedImage;
+    source.layeredImage = m_imageSource;
+    source.pixelSize =
+        m_transformedImage.isNull() ? m_originalPixelSize : m_transformedImage.size();
+    source.canvasRect = m_animationTransformSnapshot ? m_animationTransformSnapshot->backgroundRect
+                                                     : m_backgroundCanvasRect;
+    if (m_resultStyle.region || m_resultStyle.cornerRadius != 0 || m_resultStyle.shadowWidth != 0)
+        source.resultStyle = m_resultStyle;
+    if (source.image.isNull() && source.layeredImage.isLayered()) {
+        qreal scale = 1;
+        for (const auto& layer : source.layeredImage.layers)
+            if (layer.imageCanvasRect.intersects(source.canvasRect))
+                scale = std::max(scale, layer.image.width() / layer.imageCanvasRect.width());
+        source.pixelSize = QSize(qRound(source.canvasRect.width() * scale),
+                                 qRound(source.canvasRect.height() * scale));
+    }
+    source.canvasSession = m_runtime.serializeDocumentSnapshot();
+    if (source.canvasSession.isEmpty())
+        source.error = QCoreApplication::translate(
+            "ImageEditingWindow", "The editing content could not be prepared for export.");
+    source.smartErase = m_runtime.smartEraseSnapshot();
+    source.recognition = recognitionSnapshot();
+    source.originalFileName = QFileInfo(m_originalClipboardContent.localFilePath).fileName();
+    return source;
 }

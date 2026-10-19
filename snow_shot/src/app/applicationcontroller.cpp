@@ -28,6 +28,7 @@
 #include "snow_shot/presentation/screenshotexportcoordinator.h"
 #include "snow_shot/presentation/collagewindowcoordinator.h"
 #include "snow_shot/presentation/imagesplitwindow.h"
+#include "snow_shot/presentation/imageeditingwindow.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
 
 #include "snow_shot/presentation/globalshortcutmanager.h"
@@ -223,7 +224,6 @@ class ApplicationController::Impl {
                          [this]() {
                              if (storage::ApplicationStorage::instance().directoryChanging())
                                  return;
-                             systemTray.hide();
                              QApplication::quit();
                          });
         QObject::connect(
@@ -481,7 +481,15 @@ class ApplicationController::Impl {
                     "Your settings could not be saved. Please retry before updating."));
                 return;
             }
-            updates->beginApply();
+            if (imageEditingWindowCoordinator) {
+                imageEditingWindowCoordinator->confirmShutdown([this](bool accepted) {
+                    if (!accepted)
+                        return;
+                    imageEditingWindowCoordinator->shutdown();
+                    updates->beginApply();
+                });
+            } else
+                updates->beginApply();
         });
         handoffInput = new ApplicationInputGuard(&q);
         app.installEventFilter(handoffInput);
@@ -665,7 +673,9 @@ class ApplicationController::Impl {
                !storage::ApplicationStorage::instance().directoryChanging() && updates != nullptr &&
                updates->status().state != update::UpdateState::Applying &&
                !(screenshotController && screenshotController->blocksApplicationUpdate()) &&
-               !(directCaptureController && directCaptureController->blocksApplicationUpdate());
+               !(directCaptureController && directCaptureController->blocksApplicationUpdate()) &&
+               !(imageEditingWindowCoordinator &&
+                 imageEditingWindowCoordinator->hasUnsavedChanges());
     }
 
     [[nodiscard]] bool memoryTrimmingIsSafe() const {
@@ -1553,6 +1563,16 @@ class ApplicationController::Impl {
                                      {snapshot.source, snapshot.originalFileName,
                                       snapshot.createdUtc, snapshot.error, snapshot.outputSize});
                              });
+            QObject::connect(screenshotController.get(),
+                             &ScreenshotController::scrollingImageEditingRequested, &q,
+                             [this](const ScreenshotExportSource& source) {
+                                 ensureImageEditingWindowCoordinator().presentSource(source);
+                             });
+            QObject::connect(screenshotController.get(),
+                             &ScreenshotController::pinnedImageEditingRequested, &q,
+                             [this](const QString& id) {
+                                 ensureImageEditingWindowCoordinator().presentPinnedRecord(id);
+                             });
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
             QObject::connect(screenshotController.get(),
                              &ScreenshotController::translationPageRequested, &q,
@@ -1705,6 +1725,10 @@ class ApplicationController::Impl {
                              [this](const storage::CaptureHistoryRecord& record) {
                                  ensureImageSplitWindowCoordinator().presentHistory(record);
                              });
+            QObject::connect(mainWindow, &MainWindow::screenshotHistoryImageEditingRequested, &q,
+                             [this](const storage::CaptureHistoryRecord& record) {
+                                 ensureImageEditingWindowCoordinator().presentHistory(record);
+                             });
             QObject::connect(mainWindow, &MainWindow::pinnedWindowCollageRequested, &q,
                              [this](const QStringList& recordIds) {
                                  ensureCollageWindowCoordinator().presentPinnedRecords(recordIds);
@@ -1712,6 +1736,11 @@ class ApplicationController::Impl {
             QObject::connect(mainWindow, &MainWindow::pinnedWindowSplitRequested, &q,
                              [this](const QString& recordId) {
                                  ensureImageSplitWindowCoordinator().presentPinnedRecord(recordId);
+                             });
+            QObject::connect(mainWindow, &MainWindow::pinnedWindowImageEditingRequested, &q,
+                             [this](const QString& recordId) {
+                                 ensureImageEditingWindowCoordinator().presentPinnedRecord(
+                                     recordId);
                              });
         }
         return *mainWindow;
@@ -1969,6 +1998,25 @@ class ApplicationController::Impl {
         }
     }
 
+    presentation::ImageEditingWindowCoordinator& ensureImageEditingWindowCoordinator() {
+        if (!imageEditingWindowCoordinator) {
+            presentation::ImageEditingServices services;
+            services.pins = &groupManager;
+            services.providers = [this] {
+                return ScreenshotPinnedRecognitionProviders{
+                    ocrRecognition.get(), ensureScreenshotController()->mcpQrRecognition(),
+                    apiClient()};
+            };
+            imageEditingWindowCoordinator =
+                std::make_unique<presentation::ImageEditingWindowCoordinator>(std::move(services),
+                                                                              &q);
+            QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                             imageEditingWindowCoordinator.get(),
+                             &presentation::ImageEditingWindowCoordinator::shutdown);
+        }
+        return *imageEditingWindowCoordinator;
+    }
+
     presentation::ImageSplitWindowCoordinator& ensureImageSplitWindowCoordinator() {
         if (!imageSplitWindowCoordinator) {
             imageSplitWindowCoordinator =
@@ -2154,6 +2202,7 @@ class ApplicationController::Impl {
     std::unique_ptr<presentation::DirectCaptureController> directCaptureController;
     std::unique_ptr<presentation::CollageWindowCoordinator> collageWindowCoordinator;
     std::unique_ptr<presentation::ImageSplitWindowCoordinator> imageSplitWindowCoordinator;
+    std::unique_ptr<presentation::ImageEditingWindowCoordinator> imageEditingWindowCoordinator;
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     std::unique_ptr<presentation::SelectedTextTranslationCoordinator>
         selectedTextTranslationCoordinator;

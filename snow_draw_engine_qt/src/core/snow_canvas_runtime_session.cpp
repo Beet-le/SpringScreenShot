@@ -28,6 +28,26 @@ void clearDrawingCachesForCurrentThread() {
     snow_canvas_pressure_mask::clearCacheForCurrentThread();
 }
 
+QByteArray serializedRuntimeBytes(SnowRuntime runtime,
+                                  SnowError (*serialize)(SnowRuntime, SnowSerializedBytes*)) {
+    if (runtime == nullptr) {
+        return {};
+    }
+    SnowSerializedBytes bytes = nullptr;
+    if (serialize(runtime, &bytes) != SNOW_OK) {
+        return {};
+    }
+    const std::unique_ptr<SnowSerializedBytesImpl, decltype(&snow_serialized_bytes_destroy)>
+        snapshot(bytes, &snow_serialized_bytes_destroy);
+    const std::uint8_t* data = nullptr;
+    std::size_t size = 0;
+    if (snow_serialized_bytes_data(snapshot.get(), &data, &size) != SNOW_OK || size == 0 ||
+        size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return {};
+    }
+    return QByteArray(reinterpret_cast<const char*>(data), static_cast<int>(size));
+}
+
 bool toEngineRuntimeConfig(const SnowCanvasRuntimeConfig& config, SnowStyleDefaults& styleDefaults,
                            SnowRuntimeConfig& engineConfig) {
     engineConfig = SnowRuntimeConfig{};
@@ -263,22 +283,15 @@ bool RuntimeSession::cloneDocumentSessionFrom(const RuntimeSession& source) {
 }
 
 QByteArray RuntimeSession::serializeDocumentSession() const {
-    if (m_runtime.get() == nullptr) {
-        return {};
-    }
-    SnowSerializedBytes bytes = nullptr;
-    if (snow_runtime_serialize_document_session_bytes(m_runtime.get(), &bytes) != SNOW_OK) {
-        return {};
-    }
-    const std::unique_ptr<SnowSerializedBytesImpl, decltype(&snow_serialized_bytes_destroy)>
-        snapshot(bytes, &snow_serialized_bytes_destroy);
-    const std::uint8_t* data = nullptr;
-    std::size_t size = 0;
-    if (snow_serialized_bytes_data(snapshot.get(), &data, &size) != SNOW_OK || size == 0 ||
-        size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        return {};
-    }
-    return QByteArray(reinterpret_cast<const char*>(data), static_cast<int>(size));
+    return serializedRuntimeBytes(m_runtime.get(), &snow_runtime_serialize_document_session_bytes);
+}
+
+QByteArray RuntimeSession::serializeDocumentSnapshot() const {
+    return serializedRuntimeBytes(m_runtime.get(), &snow_runtime_serialize_document_snapshot_bytes);
+}
+
+QByteArray RuntimeSession::documentCheckpoint() const {
+    return serializedRuntimeBytes(m_runtime.get(), &snow_runtime_document_checkpoint_bytes);
 }
 
 QByteArray RuntimeSession::serializeSelectedDrawTemplate() const {

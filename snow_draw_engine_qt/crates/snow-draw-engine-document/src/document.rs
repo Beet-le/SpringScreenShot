@@ -1195,6 +1195,31 @@ impl ElementData {
 }
 
 impl Document {
+    /// Canonical committed content for dirty checks, independent of history and allocation state.
+    /// Deleted trailing slots and the revision/next-index counters do not affect document content.
+    pub fn content_checkpoint(&self) -> impl Serialize + '_ {
+        #[derive(Serialize)]
+        struct Content<'a> {
+            slots: &'a [Option<ElementRecord>],
+            paint_order: &'a [ElementId],
+            watermark: &'a WatermarkConfig,
+            spotlight: &'a SpotlightConfig,
+            auto_filter_regions: &'a Option<crate::AutoFilterRegionRecord>,
+        }
+        let slot_count = self
+            .slots
+            .iter()
+            .rposition(Option::is_some)
+            .map_or(0, |index| index + 1);
+        Content {
+            slots: &self.slots[..slot_count],
+            paint_order: &self.paint_order,
+            watermark: &self.watermark,
+            spotlight: &self.spotlight,
+            auto_filter_regions: &self.auto_filter_regions,
+        }
+    }
+
     pub fn normalize_angle_invariants(&mut self) -> Result<(), ErrorCode> {
         for element in self.slots.iter_mut().flatten() {
             element.data.normalize_angle_invariant()?;

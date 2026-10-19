@@ -3678,7 +3678,7 @@ void recordingSettingsDialog() {
                 form->findChild<AdSelect*>(QStringLiteral("screen-recording.encoder"))
                         ->options()
                         .at(1)
-                        .label == QStringLiteral("Translated: H.265 / HEVC (Hardware)"),
+                        .label == QStringLiteral("Translated: H.265 (Hardware)"),
             "open recording preferences must retranslate their title, labels and options");
     QCoreApplication::removeTranslator(&translator);
     QCoreApplication::processEvents();

@@ -1,6 +1,24 @@
 use super::*;
 
 impl Engine {
+    pub fn host_history_state(&self, direction: i32) -> u64 {
+        match direction {
+            -1 => self.history.next_host_state(false),
+            1 => self.history.next_host_state(true),
+            _ => self.history.host_state(),
+        }
+    }
+
+    pub fn commit_host_history_state(&mut self, state: u64) -> Result<MutationResult, ErrorCode> {
+        if state == self.history.host_state() {
+            return Err(ErrorCode::InvalidArgument);
+        }
+        let snapshot = self.capture_session_snapshot();
+        self.history.push_host_state(state, snapshot);
+        self.speech_bubble_layout_origin = None;
+        self.refresh_all_viewports()
+    }
+
     pub fn history_state(&self) -> HistoryState {
         HistoryState {
             can_undo: self.history.can_undo(),

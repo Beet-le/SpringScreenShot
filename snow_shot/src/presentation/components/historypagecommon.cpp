@@ -94,6 +94,14 @@ void applyTextTheme(const TextControls& controls, const styles::ThemeColorScheme
     setColor(controls.emptyDescription, scheme.map.colorTextSecondary);
 }
 
+void applyEntryDescriptionFont(QLabel* label, const styles::ThemeColorScheme& scheme) {
+    // Keep entry descriptions compact instead of inheriting the application body font.
+    QFont font = label->font();
+    font.setPixelSize(scheme.metricAlias.fontSizeSM);
+    font.setWeight(QFont::Normal);
+    label->setFont(font);
+}
+
 bool RecordFilter::matches(const QVariant& source, const QDateTime& timestamp) const {
     if (!sources.isEmpty() && !sources.contains(source)) {
         return false;

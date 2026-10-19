@@ -88,7 +88,9 @@ struct ScreenshotRecognitionSessionActions {
     std::function<void(std::shared_ptr<ScreenshotOcrPresentation>, QImage, QRectF)>
         applyOcrBackgroundImage;
     std::function<void(int, const QString&)> updateOcrText;
-    std::function<void(bool, bool, SnowShotImageConversionFormat)> setConversionState;
+    // Workflow activity is independent of the host's provider/tool availability.
+    std::function<void(bool active, bool busy, SnowShotImageConversionFormat format)>
+        setConversionState;
     std::function<void(bool)> setShowOriginalImage;
     std::function<void(const QString&)> setTextTargetLanguage;
     std::function<void(bool, bool, bool)> setLatexEditingState;
@@ -109,6 +111,10 @@ class ScreenshotRecognitionSessionController final : public QObject {
     ~ScreenshotRecognitionSessionController() override;
 
     void setTarget(ScreenshotRecognitionTarget target);
+    // Independent image editors show results directly, without image overlays or companion windows.
+    void setIndependentEditing(bool enabled);
+    [[nodiscard]] QHash<QString, QByteArray> contentCheckpoints() const;
+    [[nodiscard]] QString activeContentKey() const;
     // Updates an existing formatted target's appearance without resetting session state.
     void refreshFormattedTarget(QImage image, std::shared_ptr<QTextDocument> document);
     void setProviders(ScreenshotOcrRecognitionPort* recognition,
@@ -245,6 +251,15 @@ class ScreenshotRecognitionSessionController final : public QObject {
 #endif
     };
 
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    struct TableCacheEntry {
+        std::shared_ptr<ScreenshotTableEditingSession> session;
+        // The parsed source or imported draft, before any editor mutations. Keeping this with
+        // its session lets a lazy parse retain the source checkpoint without parsing at import.
+        QByteArray initialDocumentCheckpoint;
+    };
+#endif
+
     [[nodiscard]] std::shared_ptr<ScreenshotOcrTextEditingSession>
     currentEditingSession(const TextCacheEntry& entry) const {
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
@@ -288,6 +303,7 @@ class ScreenshotRecognitionSessionController final : public QObject {
     void applyQrContents(const QStringList& contents);
     void handleTextDocumentChanged(const QString& key);
     void handleTranslationDocumentChanged(const QString& key);
+    void prepareIndependentTranslation(TextCacheEntry& entry, const QString& key);
     void startTranslation();
     void prepareOverlayTranslation(TextCacheEntry& entry);
     void reportOverlayTranslationFailure();
@@ -339,7 +355,7 @@ class ScreenshotRecognitionSessionController final : public QObject {
     QPointer<ScreenshotRecognitionWindow> m_content;
     QHash<QString, TextCacheEntry> m_textCache;
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
-    QHash<QString, std::shared_ptr<ScreenshotTableEditingSession>> m_tableCache;
+    QHash<QString, TableCacheEntry> m_tableCache;
     QHash<QString, ScreenshotTableRecognitionEntry> m_tableEntries;
     QHash<QString, QString> m_tableEntryTargets;
     QString m_tableModelSelection;
@@ -413,6 +429,7 @@ class ScreenshotRecognitionSessionController final : public QObject {
     Mode m_mode = Mode::Text;
     bool m_active = false;
     bool m_showOriginalImage = false;
+    bool m_independentEditing = false;
     // "Shown" tracks the visible download prompt; "in progress" tracks that
     // asset acquisition is still pending for the in-flight text request, even
     // while only cache verification or helper start-up is running.

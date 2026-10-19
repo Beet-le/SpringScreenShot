@@ -941,6 +941,13 @@ void PinnedWindowManagementPageWidget::rebuildEntries() {
                         splitLabel, presentation::icons::custom::outlined::ImageSplitting());
                     split->setObjectName(QStringLiteral("pinnedManagementEntrySplit"));
                     split->setToolTip(splitLabel);
+                    auto* imageEditing = menu->addItem(
+                        tr("Image Editing"), presentation::icons::custom::outlined::ImageEditing());
+                    imageEditing->setObjectName(
+                        QStringLiteral("pinnedManagementEntryImageEditing"));
+                    imageEditing->setToolTip(imageEditing->text());
+                    connect(imageEditing, &QAction::triggered, row,
+                            [this, id] { emit imageEditingRequested(id); });
                     const QString revealLabel = history_page::revealActionText();
                     auto* reveal = menu->addItem(
                         revealLabel, presentation::icons::custom::outlined::RevealInFolder());
@@ -1038,6 +1045,11 @@ void PinnedWindowManagementPageWidget::rebuildEntries() {
              row->findChildren<QAction*>(QStringLiteral("pinnedManagementEntryStitch"))) {
             stitch->setText(tr("Stitch Image"));
             stitch->setToolTip(tr("Stitch Image"));
+        }
+        for (auto* action :
+             row->findChildren<QAction*>(QStringLiteral("pinnedManagementEntryImageEditing"))) {
+            action->setText(tr("Image Editing"));
+            action->setToolTip(action->text());
         }
         for (auto* split :
              row->findChildren<QAction*>(QStringLiteral("pinnedManagementEntrySplit"))) {
@@ -1225,8 +1237,14 @@ void PinnedWindowManagementPageWidget::applyTheme(const styles::ThemeColorScheme
         dateFont.setWeight(QFont::DemiBold);
         checkbox->setFont(dateFont);
         checkbox->setPalette(titlePalette);
-        row->findChild<QLabel*>(QStringLiteral("pinnedManagementGroup"))->setPalette(muted);
-        row->findChild<QLabel*>(QStringLiteral("pinnedManagementStatus"))->setPalette(muted);
+        auto* source = row->findChild<QLabel*>(QStringLiteral("pinnedManagementSourceBadge"));
+        auto* group = row->findChild<QLabel*>(QStringLiteral("pinnedManagementGroup"));
+        auto* status = row->findChild<QLabel*>(QStringLiteral("pinnedManagementStatus"));
+        for (QLabel* label : {source, group, status}) {
+            history_page::applyEntryDescriptionFont(label, scheme);
+        }
+        group->setPalette(muted);
+        status->setPalette(muted);
     }
     updateSelectionBar();
 }

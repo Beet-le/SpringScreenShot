@@ -445,6 +445,13 @@ void ScreenshotRecognitionSessionController::setProviders(
 #endif
 }
 
+void ScreenshotRecognitionSessionController::setIndependentEditing(bool enabled) {
+    m_independentEditing = enabled;
+    if (enabled)
+        setShowOriginalImage(false);
+    updateOriginalImagePreview();
+}
+
 void ScreenshotRecognitionSessionController::setTarget(ScreenshotRecognitionTarget target) {
     if (target.key == m_target.key && target.canvasRect == m_target.canvasRect &&
         target.formattedTextDocument == m_target.formattedTextDocument &&
@@ -557,6 +564,7 @@ void ScreenshotRecognitionSessionController::seedRecognitionResults(
             entry.hasTranslationConfiguration = true;
         }
 #endif
+        prepareIndependentTranslation(entry, m_target.key);
         m_textCache.insert(m_target.key, std::move(entry));
         textInserted = true;
     }
@@ -619,7 +627,7 @@ void ScreenshotRecognitionSessionController::seedRecognitionResults(
         const auto table = m_tableCache.constFind(recognitionCacheKey(Mode::Table));
         if (table != m_tableCache.cend()) {
             m_tableCacheKey = recognitionCacheKey(Mode::Table);
-            if (!notify(&ScreenshotRecognitionSessionController::applyTableSession, table.value()))
+            if (!notify(&ScreenshotRecognitionSessionController::applyTableSession, table->session))
                 return;
         } else if (m_tableEntries.contains(recognitionCacheKey(Mode::Table))) {
             cancelModelRecognition(Mode::Table);
@@ -691,7 +699,7 @@ ScreenshotRecognitionSessionController::cachedRecognitionResults() const {
             !recognitionEntryValid(it->model, it->modelFingerprint))
             continue;
         auto entry = it.value();
-        if (const auto session = m_tableCache.value(it.key())) {
+        if (const auto session = m_tableCache.value(it.key()).session) {
             const QString draft = session->document.toHtml();
             if (draft != session->baseline.toHtml())
                 entry.draftHtml = draft;
@@ -734,6 +742,73 @@ ScreenshotRecognitionSessionController::recognitionResultsSnapshot() const {
     }
 #endif
     return results;
+}
+
+QHash<QString, QByteArray> ScreenshotRecognitionSessionController::contentCheckpoints() const {
+    QHash<QString, QByteArray> result;
+    const auto add = [&result](const QString& key, const QString& text) {
+        result.insert(key, QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha256));
+    };
+    if (const auto entry = m_textCache.constFind(m_target.key); entry != m_textCache.cend()) {
+        if (entry->editingSession)
+            add(QStringLiteral("text"), entry->editingSession->text());
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+        if (entry->translationSession)
+            add(QStringLiteral("translation"), entry->translationSession->text());
+#endif
+    }
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    for (auto it = m_tableEntries.cbegin(); it != m_tableEntries.cend(); ++it) {
+        if (m_tableEntryTargets.value(it.key()) != m_target.key)
+            continue;
+        const QString key = QStringLiteral("table:") + it.key();
+        const auto cached = m_tableCache.constFind(it.key());
+        if (cached != m_tableCache.cend() && cached->session) {
+            const auto current = QCryptographicHash::hash(
+                cached->session->document.toHtml().toUtf8(), QCryptographicHash::Sha256);
+            if (current != cached->initialDocumentCheckpoint) {
+                result.insert(key, current);
+                continue;
+            }
+        }
+        // Parsing can normalize HTML, but viewing the original source/draft is not an edit.
+        add(key, it->draftHtml.value_or(it->result.html));
+    }
+#endif
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    for (auto it = m_latexCache.cbegin(); it != m_latexCache.cend(); ++it)
+        if (m_latexEntryTargets.value(it.key()) == m_target.key && it.value())
+            add(QStringLiteral("latex:") + it.key(), it.value()->text());
+#endif
+#if SNOW_SHOT_ENABLE_QR_RECOGNITION
+    if (m_qrResults.contains(m_target.key))
+        add(QStringLiteral("qr"), m_qrCache.value(m_target.key).join(u'\n'));
+#endif
+#if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
+    for (const auto& entry : m_conversion->entries(m_target.key))
+        add(QStringLiteral("conversion:%1:%2").arg(int(entry.format)).arg(entry.model),
+            entry.source);
+#endif
+    return result;
+}
+
+QString ScreenshotRecognitionSessionController::activeContentKey() const {
+    if (m_mode == Mode::Text)
+        return translating() ? QStringLiteral("translation") : QStringLiteral("text");
+    if (m_mode == Mode::Table)
+        return QStringLiteral("table:") + recognitionCacheKey(Mode::Table);
+    if (m_mode == Mode::Latex)
+        return QStringLiteral("latex:") + recognitionCacheKey(Mode::Latex);
+    if (m_mode == Mode::Qr)
+        return QStringLiteral("qr");
+#if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
+    if (m_conversion->state() == ScreenshotImageConversionController::State::Completed &&
+        !m_conversion->activeModel().isEmpty())
+        return QStringLiteral("conversion:%1:%2")
+            .arg(int(m_conversion->format()))
+            .arg(m_conversion->activeModel());
+#endif
+    return {};
 }
 
 bool ScreenshotRecognitionSessionController::hasTarget() const {
@@ -1047,7 +1122,7 @@ void ScreenshotRecognitionSessionController::activateModelResult() {
         m_recognitionAwaitingModel = false;
         m_tableCacheKey = key;
         if (!notify(&ScreenshotRecognitionSessionController::applyTableSession,
-                    m_tableCache.value(key)))
+                    m_tableCache.value(key).session))
             return;
         if (!hideRecognitionMessage())
             return;
@@ -1218,9 +1293,15 @@ void ScreenshotRecognitionSessionController::activate(Mode mode) {
                 if (!notify(&ScreenshotRecognitionSessionController::startTextRender))
                     return;
             }
+            // Independent hosts may start translation from the ready notification.
+            // Establish text editing first, as the fresh-result path does, so restoring
+            // OCR cannot subsequently replace the translation editor or restart its request.
+            if (m_independentEditing &&
+                !notify(&ScreenshotRecognitionSessionController::beginTextEditing))
+                return;
             if (!notify(&ScreenshotRecognitionSessionController::textResultChanged, true))
                 return;
-            if (cached->editing) {
+            if (!m_independentEditing && cached->editing) {
                 m_editing = true;
                 m_editingKey = m_target.key;
                 if (!notify(&ScreenshotRecognitionSessionController::beginTextEditing))
@@ -1747,8 +1828,9 @@ void ScreenshotRecognitionSessionController::beginTextTranslation() {
     }
     it->editing = false;
     const snow_shot::storage::ScreenshotTranslationSettings settings;
-    const bool originalImage =
-        settings.originalImageTranslationEnabled() && !it->formatted && it->presentation != nullptr;
+    const bool originalImage = !m_independentEditing &&
+                               settings.originalImageTranslationEnabled() && !it->formatted &&
+                               it->presentation != nullptr;
     if (originalImage != m_translationInImage) {
         cancelTranslationRequests();
     }
@@ -1759,6 +1841,7 @@ void ScreenshotRecognitionSessionController::beginTextTranslation() {
         if (!notify(&ScreenshotRecognitionSessionController::invalidateCurrentTranslation, false))
             return;
     }
+    prepareIndependentTranslation(*it, m_editingKey);
     if (originalImage) {
         prepareOverlayTranslation(*it);
         m_textDocument = nullptr;
@@ -1812,7 +1895,7 @@ void ScreenshotRecognitionSessionController::beginTextTranslation() {
 
 bool ScreenshotRecognitionSessionController::activateCachedTextTranslation() {
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
-    if (!m_active || m_mode != Mode::Text) {
+    if (!m_active || m_mode != Mode::Text || m_independentEditing) {
         return false;
     }
     auto entry = m_textCache.find(m_target.key);
@@ -1994,6 +2077,32 @@ void ScreenshotRecognitionSessionController::openTranslationSettings() {
         });
     connect(m_translationSettingsModal, &adqt::widgets::AdModal::finished, this,
             [this] { m_translationSettingsModal = nullptr; });
+#endif
+}
+
+void ScreenshotRecognitionSessionController::prepareIndependentTranslation(TextCacheEntry& entry,
+                                                                           const QString& key) {
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+    const auto& overlay = entry.overlayTranslation;
+    if (!m_independentEditing || entry.translationSession || !overlay.captured ||
+        !overlay.presentation || overlay.status != TextCacheEntry::TranslationStatus::Completed ||
+        (entry.hasTranslationConfiguration &&
+         entry.translationConfiguration !=
+             snow_shot::storage::ScreenshotTranslationSettings().configuration()))
+        return;
+    // Captured translations belong to the source content, while their display mode belongs to
+    // the host. Seed a text baseline before the independent host records its clean checkpoint.
+    const QString text = snow_shot::presentation::originalOcrText(*overlay.presentation);
+    entry.translationSession = std::make_shared<ScreenshotOcrTextEditingSession>(text);
+    connect(entry.translationSession->document(), &QTextDocument::contentsChanged, this,
+            [this, key] { handleTranslationDocumentChanged(key); });
+    entry.translationText = text;
+    entry.successfulTranslation = text;
+    entry.hasSuccessfulTranslation = true;
+    entry.translationStatus = TextCacheEntry::TranslationStatus::Completed;
+#else
+    Q_UNUSED(entry)
+    Q_UNUSED(key)
 #endif
 }
 
@@ -2344,6 +2453,8 @@ bool ScreenshotRecognitionSessionController::originalImageTranslationActive() co
 }
 
 void ScreenshotRecognitionSessionController::setShowOriginalImage(bool show) {
+    if (m_independentEditing)
+        show = false;
     show = show && m_active;
     if (m_showOriginalImage == show) {
         return;
@@ -2635,6 +2746,8 @@ void ScreenshotRecognitionSessionController::renderTextBackground() {
 }
 
 void ScreenshotRecognitionSessionController::startTextRender() {
+    if (m_independentEditing)
+        return;
     const QPointer<ScreenshotRecognitionSessionController> lifetime(this);
     if (!m_active || m_mode != Mode::Text || !hasTarget() || m_recognition == nullptr ||
         m_presentation == nullptr || !m_actions.applyOcrBackgroundImage) {
@@ -2888,6 +3001,9 @@ void ScreenshotRecognitionSessionController::handleTextOutput(
             if (!notify(&ScreenshotRecognitionSessionController::startTextRender))
                 return;
         }
+        if (m_independentEditing &&
+            !notify(&ScreenshotRecognitionSessionController::beginTextEditing))
+            return;
         if (!notify(&ScreenshotRecognitionSessionController::textResultChanged, true))
             return;
     }
@@ -2985,7 +3101,9 @@ void ScreenshotRecognitionSessionController::materializeTableEntry(
         guard->m_tableResults.insert(key, entry.result);
         guard->m_tableEntries.insert(key, std::move(entry));
         guard->m_tableEntryTargets.insert(key, target);
-        guard->m_tableCache.insert(key, session);
+        guard->m_tableCache.insert(
+            key, {session, QCryptographicHash::hash(session->document.toHtml().toUtf8(),
+                                                    QCryptographicHash::Sha256)});
         if (guard->m_active && guard->m_mode == Mode::Table) {
             guard->m_tableCacheKey = key;
             if (!guard->notify(&ScreenshotRecognitionSessionController::applyTableSession, session))
@@ -3480,7 +3598,7 @@ void ScreenshotRecognitionSessionController::updateOriginalImagePreview() const 
         return;
     }
 #if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
-    m_content->setLatexPreviewEnabled(m_active && m_mode == Mode::Latex &&
+    m_content->setLatexPreviewEnabled(!m_independentEditing && m_active && m_mode == Mode::Latex &&
                                       m_latexCache.contains(recognitionCacheKey(Mode::Latex)));
 #endif
     const bool textActive = m_active && m_mode == Mode::Text;
@@ -3493,6 +3611,7 @@ void ScreenshotRecognitionSessionController::updateOriginalImagePreview() const 
     // provide their displayed image and viewport mapping without replacing it.
     m_content->setOriginalImagePreviewSource(m_target.image, m_target.canvasRect);
     m_content->setOriginalImagePreviewEnabled(
+        !m_independentEditing &&
         snow_shot::storage::TextRecognitionSettings().showOriginalImagePreview());
 }
 
@@ -3978,6 +4097,9 @@ void ScreenshotRecognitionSessionController::cancelWorkflow() {
     if (!lifetime)
         return;
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
-    m_conversion->invalidate();
+    if (m_independentEditing)
+        m_conversion->deactivate();
+    else
+        m_conversion->invalidate();
 #endif
 }

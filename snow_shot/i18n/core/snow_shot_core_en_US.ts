@@ -258,8 +258,8 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>View the source and improve it together</translation>
         </message>
         <message>
-            <source>You are up to date.</source>
-            <translation>You are up to date.</translation>
+            <source>You are up to date</source>
+            <translation>You are up to date</translation>
         </message>
     </context>
     <context>

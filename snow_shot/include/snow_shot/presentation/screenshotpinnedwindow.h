@@ -47,6 +47,7 @@ class AdModal;
 class AdSlider;
 } // namespace adqt::widgets
 namespace snow_shot::presentation {
+struct ImageEditingSource;
 class WindowShortcutManager;
 class PinnedWindowGroupManager;
 class PinnedWindowSelectionController;
@@ -223,6 +224,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     bool prewarm(QScreen* screen = nullptr);
     QRect currentNativeGeometry() const;
     [[nodiscard]] snow_shot::storage::PinnedWindowRecord persistenceSnapshot() const;
+    [[nodiscard]] snow_shot::presentation::ImageEditingSource imageEditingSnapshot() const;
     void checkpointStorage();
     [[nodiscard]] ScreenshotPinnedImageSnapshot stitchingSnapshot();
     [[nodiscard]] ScreenshotPinnedImageSnapshot splittingSnapshot();
@@ -277,6 +279,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     void automationWorkflowStateChanged() const;
     void showMainWindowRequested();
     void splitRequested(const ScreenshotPinnedImageSnapshot& snapshot);
+    void imageEditingRequested(const QString& recordId);
     void closingForPersistence(const snow_shot::storage::PinnedWindowRecord& snapshot,
                                snow_shot::storage::PinnedWindowCloseIntent intent);
 
@@ -636,6 +639,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     QPointer<QAction> m_closeAction;
     QPointer<QAction> m_loadContentAction;
     QPointer<QAction> m_splitImageAction;
+    QPointer<QAction> m_imageEditingAction;
     QPointer<QActionGroup> m_opacityActions;
     QPointer<QActionGroup> m_scaleActions;
     QPointer<QAction> m_scaleMenuAction;

@@ -2183,14 +2183,14 @@ QVector<SettingsItemDefinition> screenRecordingEncodingItems() {
             QT_TRANSLATE_NOOP("SettingsCatalog", "Encoder"),
             QT_TRANSLATE_NOOP("SettingsCatalog",
                               "Choose the MP4 video encoder. Hardware encoding falls back to "
-                              "software with the same codec if unavailable. H.265 (HEVC) can "
+                              "software with the same codec if unavailable. H.265 can "
                               "produce smaller files but requires a compatible player."),
             QStringLiteral("screen_recording/encoder"),
             SettingsSelectBinding::ScreenRecordingEncoder,
             {{QStringLiteral("h264_hw"),
               settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "H.264 (Hardware)"))},
              {QStringLiteral("h265_hw"),
-              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "H.265 / HEVC (Hardware)"))},
+              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "H.265 (Hardware)"))},
              {QStringLiteral("h264"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "H.264"))},
              {QStringLiteral("h265"),
               settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "H.265"))}}),
@@ -2988,7 +2988,7 @@ SettingsItemDefinition exportConfigurationItem() {
     payload.buttonText = settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Export"));
     payload.iconFactory = []() { return custom_outlined_icons::ExportConfiguration(); };
     payload.successMessage = settingsText(
-        QT_TRANSLATE_NOOP("SettingsCatalog", "Configuration exported to the clipboard."));
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Configuration exported to the clipboard"));
     payload.exportOptions = {
         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Canvas Style Configuration")),
         settingsText(QT_TRANSLATE_NOOP(
@@ -3026,7 +3026,7 @@ SettingsItemDefinition importConfigurationItem() {
         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Zip archives (*.zip);;All files (*.*)")),
     };
     payload.successMessage =
-        settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Configuration imported."));
+        settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Configuration imported"));
     return {
         QStringLiteral("configuration.import"),
         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Import configuration")),

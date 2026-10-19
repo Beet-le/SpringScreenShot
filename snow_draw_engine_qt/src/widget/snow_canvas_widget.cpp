@@ -478,6 +478,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool handleContextMenu(QContextMenuEvent* event);
     bool wheelZoomEnabled() const;
     void setWheelZoomEnabled(bool enabled);
+    std::optional<QRectF> contentClip;
     bool canvasContentVisible() const;
     void setCanvasContentVisible(bool visible);
     bool clearBackgroundEnabled() const;
@@ -542,6 +543,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     SnowCanvasRenderContext renderContext(QPainter& painter, const QRegion& exposedRegion) const;
     void renderBeforeCanvas(QPainter& painter, const SnowCanvasRenderContext& context) const;
     void renderAfterCanvas(QPainter& painter, const SnowCanvasRenderContext& context) const;
+    bool canBeginPointerInteraction(const QMouseEvent& event) const;
     bool handleMousePress(QMouseEvent* event, const SnowInputEvent* pointerInput = nullptr);
     bool handleMouseDoubleClick(QMouseEvent* event);
     bool handleMouseMove(QMouseEvent* event, const SnowInputEvent* pointerInput = nullptr);
@@ -3062,6 +3064,10 @@ bool SnowCanvasWidget::Impl::paint(QPainter& painter, const QRegion& exposedRegi
 
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setClipRegion(exposedRegion);
+    painter.save();
+    if (contentClip)
+        painter.setClipRect(::canvasToViewTransform(cache.sceneInfo()).mapRect(*contentClip),
+                            Qt::IntersectClip);
     snow_canvas_compositor::Frame frame = buildPaintFrame();
     if (canvasContentIsVisible) {
         const SnowCanvasRenderContext tileContext = renderContext(painter, exposedRegion);
@@ -3122,13 +3128,20 @@ bool SnowCanvasWidget::Impl::paint(QPainter& painter, const QRegion& exposedRegi
         }
         painter.save();
         snow_canvas_compositor::renderDocumentDecorations(painter, frame);
-        snow_canvas_compositor::renderEditorOverlays(painter, frame);
-        textInteraction.renderEditorOverlay(painter, widget.font(), cache);
         painter.restore();
     } else {
         const SnowCanvasRenderContext context = renderContext(painter, exposedRegion);
         snow_canvas_compositor::clearSurface(painter, frame);
         renderBeforeCanvas(painter, context);
+    }
+    painter.restore();
+    // The image bounds constrain document pixels, while selection controls and
+    // inline editing affordances must remain visible beyond those bounds.
+    if (canvasContentIsVisible) {
+        painter.save();
+        snow_canvas_compositor::renderEditorOverlays(painter, frame);
+        textInteraction.renderEditorOverlay(painter, widget.font(), cache);
+        painter.restore();
     }
     const SnowCanvasRenderContext context = renderContext(painter, exposedRegion);
     renderAfterCanvas(painter, context);
@@ -3238,13 +3251,35 @@ bool SnowCanvasWidget::eventFilter(QObject* watched, QEvent* event) {
     return QWidget::eventFilter(watched, event);
 }
 
+bool SnowCanvasWidget::Impl::canBeginPointerInteraction(const QMouseEvent& event) const {
+    if (!contentClip ||
+        contentClip->contains(canvasToViewTransform().inverted().map(event.position()))) {
+        return true;
+    }
+    // Only existing editor affordances can own a press beyond the image.
+    return event.button() == Qt::LeftButton &&
+           (textInteraction.editorContains(displayState.displayCache(), event.position()) ||
+            ((!textInteraction.isActive() || textInteraction.hasSelectionInteraction()) &&
+             snow_canvas_widget_selection_hit_testing::pointerHitsSelectionInteraction(
+                 displayState.displayCache(), event.position())));
+}
+
 bool SnowCanvasWidget::Impl::handleMousePress(QMouseEvent* event,
                                               const SnowInputEvent* pointerInput) {
     const QPointer<SnowCanvasWidget> lifetime(&widget);
     if (event == nullptr || !interactionEnabled()) {
         return false;
     }
-
+    if (!canBeginPointerInteraction(*event)) {
+        event->accept();
+        return true;
+    }
+    if (canvasTool() == SnowCanvasTool::AutoFilter && event->button() == Qt::LeftButton) {
+        emit widget.autoFilterInteractionStarting();
+        if (!lifetime) {
+            return true;
+        }
+    }
     clearTextStylePopupInteraction();
     const bool rightQuickSelectionEligible =
         event->button() == Qt::RightButton &&
@@ -3377,12 +3412,6 @@ void SnowCanvasWidget::mousePressEvent(QMouseEvent* event) {
     if (m_impl->suppressTabletMouseEvent(event)) {
         return;
     }
-    if (canvasTool() == SnowCanvasTool::AutoFilter && event->button() == Qt::LeftButton) {
-        emit autoFilterInteractionStarting();
-        if (!lifetime) {
-            return;
-        }
-    }
     if (event != nullptr && event->button() == Qt::MiddleButton) {
         m_impl->beginMiddleClickTracking(event->position());
     }
@@ -3463,6 +3492,12 @@ bool SnowCanvasWidget::Impl::handleMouseDoubleClick(QMouseEvent* event) {
     const QPointer<SnowCanvasWidget> lifetime(&widget);
     if (event == nullptr || !interactionEnabled()) {
         return false;
+    }
+    if (contentClip &&
+        !contentClip->contains(canvasToViewTransform().inverted().map(event->position()))) {
+        // Outside the document, a double click may operate existing controls,
+        // but must never enter the engine's blank-area creation path.
+        return handleMousePress(event);
     }
     if (event->button() == Qt::RightButton &&
         hasQuickSelectionTargetAt(event->position(), Qt::RightButton)) {
@@ -4437,4 +4472,12 @@ void SnowCanvasWidget::Impl::updateBaseImageContent(const QRegion& damage) {
     }
     const auto repaint = snow_canvas_renderer::sceneDamageThroughFilters(plan, damage, itemDamage);
     widget.update(repaint.intersected(widget.rect()));
+}
+
+void SnowCanvasWidget::setContentClip(std::optional<QRectF> canvasRect) {
+    if (m_impl->contentClip == canvasRect)
+        return;
+    m_impl->contentClip = canvasRect;
+    setTextEditingBounds(canvasRect);
+    update();
 }

@@ -27,6 +27,7 @@ SelectionShadowCursor(const adqt::icons::IconColors& colors = {});
 } // namespace cursor
 
 namespace outlined {
+[[nodiscard]] adqt::icons::IconRef ActualSize(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef AlignBottom(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef
 AlignCenterHorizontal(const adqt::icons::IconColors& colors = {});
@@ -97,6 +98,8 @@ ArrowheadTriangleStart(const adqt::icons::IconColors& colors = {});
 BrushPressureSensitive(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef BrushRegular(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ColorPicker(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef CropHorizontal(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef CropVertical(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Delete(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef DestroyPinnedWindow(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Disabled(const adqt::icons::IconColors& colors = {});
@@ -125,6 +128,7 @@ BrushPressureSensitive(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef FullScreenCanvas(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Group(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Html(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef ImageEditing(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ImageSplitting(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ImageStitching(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ImportConfiguration(const adqt::icons::IconColors& colors = {});

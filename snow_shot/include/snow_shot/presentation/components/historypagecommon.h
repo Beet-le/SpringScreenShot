@@ -58,6 +58,7 @@ void configurePagination(adqt::widgets::AdPagination* pagination);
 void configureSelectionAction(adqt::widgets::AdButton* button, bool destructive);
 void configureDeleteConfirmation(adqt::widgets::AdPopconfirm* confirmation);
 void applyTextTheme(const TextControls& controls, const styles::ThemeColorScheme& scheme);
+void applyEntryDescriptionFont(QLabel* label, const styles::ThemeColorScheme& scheme);
 
 struct RecordFilter {
     QVariantList sources;

@@ -124,6 +124,7 @@
     "CollageWindow",
     "HistoryEntryWidget",
     "HistoryFileLocation",
+    "ImageEditingWindow",
     "ImageSplitDocument",
     "ImageSplitEditorWidget",
     "ImageSplitExport",
@@ -134,6 +135,7 @@
     "ScreenshotHistoryPageWidget",
     "ScreenshotPinnedWindow",
     "WindowGroupSwitcher",
+    "snow_shot::presentation::ImageEditingWindow",
     "snow_shot::presentation::PinnedWindowGroupManager",
     "snow_shot::presentation::PinnedWindowSelectionController",
     "snow_shot::presentation::WindowGroupSwitcherController"

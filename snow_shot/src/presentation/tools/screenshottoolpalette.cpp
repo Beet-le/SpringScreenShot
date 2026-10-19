@@ -139,6 +139,7 @@ namespace toolbar_layout = snow_shot::presentation::toolbar_layout;
 constexpr int TOOLBAR_ITEM_SPACING = 8;
 [[maybe_unused]] constexpr const char* TOOLTIP_TRANSLATIONS[] = {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Edit selection"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pan"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Resize window"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Select elements"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Shape"),
@@ -995,8 +996,8 @@ ScreenshotToolPalette::ScreenshotToolPalette(const Options& options, QWidget* pa
     m_lastHighlightTool = highlightToolFromSetting(settings.lastHighlightTool());
     m_lastEraserTool = eraserToolFromSetting(settings.lastEraserTool());
 
-    setAttribute(Qt::WA_TranslucentBackground, true);
-    setAttribute(Qt::WA_NoSystemBackground, true);
+    setAttribute(Qt::WA_TranslucentBackground, !options.preserveParentBackground);
+    setAttribute(Qt::WA_NoSystemBackground, !options.preserveParentBackground);
     setAutoFillBackground(false);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
@@ -4668,6 +4669,8 @@ void ScreenshotToolPalette::refreshConfirmShortcutHint() {
 
 void ScreenshotToolPalette::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event);
+    if (m_options.preserveParentBackground)
+        return;
 
     QPainter painter(this);
     painter.setCompositionMode(QPainter::CompositionMode_Source);
@@ -5995,6 +5998,12 @@ void ScreenshotToolPalette::applyMainToolbarLayout(bool notify) {
         }
     }
 
+    bool cropToolsAdded = false;
+    const auto addCropTools = [&] {
+        addFixedWidget(m_cropRowsButton);
+        addFixedWidget(m_cropColumnsButton);
+        cropToolsAdded = true;
+    };
     bool hasActionPositions = false;
     bool actionSeparatorPending = false;
     for (const QStringList& position : std::as_const(m_actionToolsLayout.positions)) {
@@ -6021,6 +6030,9 @@ void ScreenshotToolPalette::applyMainToolbarLayout(bool notify) {
         if (!hasActionPositions && hasContent) {
             addSeparator();
         }
+        if (!cropToolsAdded && availableItemIds.contains(QStringLiteral("table-recognition"))) {
+            addCropTools();
+        }
         if (hasContent && !separated) {
             addMainToolbarSpacing(TOOLBAR_ITEM_SPACING);
         }
@@ -6032,6 +6044,11 @@ void ScreenshotToolPalette::applyMainToolbarLayout(bool notify) {
         hasContent = true;
         separated = false;
         hasActionPositions = true;
+    }
+
+    // Keep editor crop tools available even when recognition is hidden or unavailable.
+    if (!cropToolsAdded) {
+        addCropTools();
     }
 
     QVector<QWidget*> resultActions{
@@ -6107,6 +6124,8 @@ bool ScreenshotToolPalette::addMainToolButtons(const Options& options, QBoxLayou
             m_moveButton = addToolButton("Resize window", custom_outlined_icons::ToolMove());
             applyPinToScreenShortcutTooltip(m_moveButton, QStringLiteral("Resize window"),
                                             QStringLiteral("resize_window"));
+        } else if (options.moveToolPresentation == MoveToolPresentation::Pan) {
+            m_moveButton = addToolButton("Pan", custom_outlined_icons::ToolMove());
         } else {
             m_moveButton = addToolButton("Edit selection", custom_outlined_icons::ToolMove());
             applyScreenshotShortcutTooltip(m_moveButton, QStringLiteral("Edit selection"),
@@ -6255,6 +6274,17 @@ void ScreenshotToolPalette::setHistoryState(const SnowCanvasHistoryState& state)
     updateHistoryActionAvailability();
 }
 
+void ScreenshotToolPalette::setCropToolsState(bool rowsActive, bool columnsActive) {
+    if (m_cropRowsButton != nullptr) {
+        m_cropRowsButton->setChecked(rowsActive);
+        setScreenshotToolPaletteButtonActive(m_cropRowsButton, rowsActive);
+    }
+    if (m_cropColumnsButton != nullptr) {
+        m_cropColumnsButton->setChecked(columnsActive);
+        setScreenshotToolPaletteButtonActive(m_cropColumnsButton, columnsActive);
+    }
+}
+
 void ScreenshotToolPalette::updateHistoryActionAvailability() {
     if (m_undoButton != nullptr) {
         m_undoButton->setEnabled(historyActionEnabled(QStringLiteral("undo")));
@@ -6321,6 +6351,27 @@ bool ScreenshotToolPalette::addMainSecondaryButtons(const Options& options, QBox
         layout->addWidget(button);
         hasButton = true;
     };
+
+    if (options.showCropTools) {
+        m_cropRowsButton =
+            addToolButton(QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Vertical Crop"),
+                          custom_outlined_icons::CropVertical());
+        m_cropColumnsButton =
+            addToolButton(QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Horizontal Crop"),
+                          custom_outlined_icons::CropHorizontal());
+        m_cropRowsButton->setObjectName(QStringLiteral("imageEditingCropRows"));
+        m_cropColumnsButton->setObjectName(QStringLiteral("imageEditingCropColumns"));
+        for (auto* button : {m_cropRowsButton, m_cropColumnsButton}) {
+            button->setCheckable(true);
+            button->setCheckedUsesActiveStyle(false);
+        }
+        addButton(m_cropRowsButton);
+        addButton(m_cropColumnsButton);
+        connect(m_cropRowsButton, &adqt::widgets::AdButton::clicked, this,
+                &ScreenshotToolPalette::cropRowsRequested);
+        connect(m_cropColumnsButton, &adqt::widgets::AdButton::clicked, this,
+                &ScreenshotToolPalette::cropColumnsRequested);
+    }
 
     if ((options.showTableTool && snow_shot::app::edition::tableRecognition) &&
         (options.showQrTool && snow_shot::app::edition::qrRecognition)) {
@@ -8705,6 +8756,7 @@ void ScreenshotToolPalette::createShowOriginalImageButton() {
     m_showOriginalImageButton = createScreenshotToolPaletteStyleActionButton(
         m_selectActionPanel, QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Show original image"),
         adqt::icons::antd::outlined::Eye(), actionButtonMetrics(m_physicalScale));
+    m_showOriginalImageButton->setEnabled(m_originalImageToggleEnabled);
     m_showOriginalImageButton->setObjectName(QStringLiteral("screenshotShowOriginalImageButton"));
     m_showOriginalImageSpacing = addStyleToolbarSpacing(m_selectActionLayout, STYLE_ITEM_SPACING);
     m_selectActionLayout->removeItem(m_showOriginalImageSpacing);
@@ -9351,6 +9403,14 @@ void ScreenshotToolPalette::createScrollingRecognitionActionFamily() {
     addStyleToolbarSpacing(layout, STYLE_ITEM_SPACING);
     connect(splitButton, &adqt::widgets::AdButton::clicked, this,
             &ScreenshotToolPalette::scrollingImageSplittingRequested);
+    auto* editingButton = createScreenshotToolPaletteStyleActionButton(
+        m_scrollingRecognitionControls, QT_TR_NOOP("Image Editing"),
+        custom_outlined_icons::ImageEditing(), actionButtonMetrics(m_physicalScale));
+    editingButton->setObjectName(QStringLiteral("screenshotScrollingImageEditingButton"));
+    layout->addWidget(editingButton);
+    addStyleToolbarSpacing(layout, STYLE_ITEM_SPACING);
+    connect(editingButton, &adqt::widgets::AdButton::clicked, this,
+            &ScreenshotToolPalette::scrollingImageEditingRequested);
     auto* settingsButton = createScreenshotToolPaletteStyleActionButton(
         m_scrollingRecognitionControls, QT_TR_NOOP("Settings"), outlined_icons::Setting(),
         actionButtonMetrics(m_physicalScale));
@@ -9361,9 +9421,9 @@ void ScreenshotToolPalette::createScrollingRecognitionActionFamily() {
     m_selectActionLayout->addWidget(m_scrollingRecognitionControls);
     stampScreenshotToolbarReferenceWidth(
         m_scrollingRecognitionControls,
-        actionButtonMetrics(1.0).buttonSize * 7 +
+        actionButtonMetrics(1.0).buttonSize * 8 +
             screenshotToolbarReferenceWidth(m_scrollingAutoScrollIntervalEditor) +
-            STYLE_GROUP_SPACING * 12 + STYLE_ITEM_SPACING * 4 + TOOLBAR_SEPARATOR_WIDTH * 3);
+            STYLE_GROUP_SPACING * 12 + STYLE_ITEM_SPACING * 5 + TOOLBAR_SEPARATOR_WIDTH * 3);
     connect(m_scrollingAutoScrollButton, &adqt::widgets::AdButton::clicked, this, [this]() {
         m_scrollingAutoScroll = !m_scrollingAutoScroll;
         updateScrollingRecognitionButtons();
@@ -10748,4 +10808,10 @@ void ScreenshotToolPalette::setCloudUploadBusy(bool busy) {
     for (int i = 0; i < m_actionToolGroups.size(); ++i)
         if (m_actionToolGroups[i].itemIds.contains(QStringLiteral("upload-to-cloud")))
             refreshActionToolGroup(i);
+}
+
+void ScreenshotToolPalette::setOriginalImageToggleEnabled(bool enabled) {
+    m_originalImageToggleEnabled = enabled;
+    if (m_showOriginalImageButton)
+        m_showOriginalImageButton->setEnabled(enabled);
 }

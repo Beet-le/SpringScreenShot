@@ -15,6 +15,7 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QColorSpace>
 #include <QFontDatabase>
 #include <QImage>
 #include <QPainter>
@@ -26,6 +27,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <iostream>
+#include <future>
 #include <limits>
 #include <random>
 #include <utility>
@@ -2019,6 +2021,46 @@ void exportWithoutRuntimeStillRendersSources() {
             "export sources must remain visible when no runtime scene is available");
 }
 
+void sourceOnlyExportMatchesDocumentSamplingOnWorkers() {
+    QImage source(QSize(9, 7), QImage::Format_ARGB32_Premultiplied);
+    source.setColorSpace(QColorSpace::SRgb);
+    for (int y = 0; y < source.height(); ++y)
+        for (int x = 0; x < source.width(); ++x)
+            source.setPixelColor(x, y, (x + y) % 2 == 0 ? Qt::white : Qt::black);
+    QImage overlay(QSize(3, 4), QImage::Format_ARGB32_Premultiplied);
+    overlay.fill(QColor(240, 60, 30, 128));
+    overlay.setPixelColor(1, 2, QColor(20, 160, 240, 192));
+    const QList<CanvasExportSource> sources{
+        {source, QRectF(-3.25, 2.5, 9, 7), QRectF(-2.25, 3.25, 6.5, 5)},
+        {overlay, QRectF(3.125, 4.75, 1.5, 2), QRectF(3.375, 5, 1, 1.25)}};
+    const QRectF frame(-1.75, 3.5, 7.25, 4.25);
+    SnowCanvasRuntime runtime;
+    for (const QSize size : {QSize(9, 6), QSize(29, 17), QSize(5, 3)}) {
+        const auto expected = runtime.renderToImage(frame, size, sources);
+        snow_canvas_export::resetDiagnosticsForCurrentThread();
+        const auto actual = SnowCanvasRuntime::renderImageSourcesToImage(frame, size, sources);
+        const auto diagnostics = snow_canvas_export::diagnosticsForCurrentThread();
+        require(!actual.isNull() && actual == expected,
+                "source-only export must retain document export sampling at fractional scales");
+        require(actual.devicePixelRatio() == 1 && !actual.colorSpace().isValid(),
+                "source-only exports must leave source color metadata to their caller");
+        require(actual.pixelColor(size.width() - 1, size.height() / 2).alpha() == 0,
+                "source coverage must clip projected pixels outside the retained layer");
+        require(diagnostics.directSourceFastPathCount == 0 &&
+                    diagnostics.fullCompositorPathCount == 0 &&
+                    diagnostics.unsynchronizedFallbackCount == 0,
+                "stateless source rendering must not count as a runtime export or fallback");
+        auto worker = std::async(std::launch::async, [&] {
+            return SnowCanvasRuntime::renderImageSourcesToImage(frame, size, sources);
+        });
+        require(worker.get() == expected,
+                "source-only export must produce the same pixels without a worker runtime");
+    }
+    require(SnowCanvasRuntime::renderImageSourcesToImage({}, QSize(9, 6), sources).isNull() &&
+                SnowCanvasRuntime::renderImageSourcesToImage(frame, {}, sources).isNull(),
+            "source-only export must reject an empty projection");
+}
+
 void plainExportUsesDirectSourceFastPath() {
     SnowCanvasRuntime runtime;
     SnowCanvasWidget canvas(runtime);
@@ -2724,6 +2766,51 @@ void runtimeExportUsesExactFractionalProjection() {
             "fractional export must preserve the source pixel before the filter edge");
     require(exported.pixelColor(130, 128) == QColor(135, 225, 245),
             "fractional export must place the filter edge using the exact export projection");
+
+    for (int y = 0; y < base.height(); ++y)
+        for (int x = 0; x < base.width(); ++x)
+            base.setPixelColor(x, y,
+                               QColor((x * 17 + y * 11) % 256, (x * 31 + y * 7) % 256,
+                                      (x * 3 + y * 23) % 256, 48 + (x * 13 + y * 19) % 208));
+    QImage overlay(7, 9, QImage::Format_ARGB32_Premultiplied);
+    for (int y = 0; y < overlay.height(); ++y)
+        for (int x = 0; x < overlay.width(); ++x)
+            overlay.setPixelColor(
+                x, y, QColor((x * 37) % 256, (y * 29) % 256, 190, 32 + (x * 23 + y * 17) % 224));
+    const QList<CanvasExportSource> translucentSources{
+        {base, QRectF(-0.75, -0.5, 100.25, 64.75), QRectF(1.125, 1.75, 90.5, 60.25)},
+        {overlay, QRectF(29.25, 8.125, 10.25, 14.5), QRectF(30.375, 9.25, 7.75, 11.5)}};
+    const QRectF frame(0.25, 0, 64.5, 64);
+    for (const QSize size : {QSize(83, 81), QSize(129, 127), QSize(257, 253)}) {
+        QImage background(size, QImage::Format_ARGB32_Premultiplied);
+        background.fill(Qt::transparent);
+        {
+            // The pre-refactor compositor backdrop contract paints at DPR 1 with
+            // independently projected pixel rectangles, before filtering occurs.
+            QPainter painter(&background);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            const auto project = [&](const QRectF& rect) {
+                const qreal sx = size.width() / frame.width();
+                const qreal sy = size.height() / frame.height();
+                return QRectF((rect.x() - frame.x()) * sx, (rect.y() - frame.y()) * sy,
+                              rect.width() * sx, rect.height() * sy);
+            };
+            for (const auto& source : translucentSources) {
+                painter.save();
+                painter.setClipRect(project(source.coverage), Qt::IntersectClip);
+                painter.drawImage(project(source.canvasRect), source.image);
+                painter.restore();
+            }
+        }
+        const auto expected = runtime.renderToImage(frame, size, translucentSources, background);
+        const auto actual = runtime.renderToImage(frame, size, translucentSources);
+        require(
+            !actual.isNull() && actual == expected,
+            "automatic fractional backdrops must preserve DPR-1 source sampling before filters");
+        require(expected != background,
+                "fractional translucent backdrop comparison must exercise the partial filter");
+    }
 }
 
 void explicitRenderPlanValidatesBoundariesAndCrops() {
@@ -3889,6 +3976,7 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--export-only"))) {
         exportWithoutRuntimeStillRendersSources();
+        sourceOnlyExportMatchesDocumentSamplingOnWorkers();
         plainExportUsesDirectSourceFastPath();
         annotatedExportUsesDirectSourceFastPath();
         runtimeExportPreservesOffscreenSourceBoundaries();
@@ -3962,6 +4050,7 @@ int main(int argc, char** argv) {
     sparseAndForcedDensePenFiltersMatch();
     customBackdropIsRenderedOnceBelowFilters();
     exportWithoutRuntimeStillRendersSources();
+    sourceOnlyExportMatchesDocumentSamplingOnWorkers();
     plainExportUsesDirectSourceFastPath();
     annotatedExportUsesDirectSourceFastPath();
     scalarAvx2AndThreadingProduceIdenticalPixels();

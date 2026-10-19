@@ -9,4 +9,6 @@ struct SnowCanvasBaseImageSource {
     QImage image;
     QRectF canvasRect;
     QRectF coverage;
+    // Visual overlays remain available to magnifiers without becoming reconstruction donors.
+    bool smartEraseSource = true;
 };

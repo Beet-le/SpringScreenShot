@@ -1608,8 +1608,8 @@
             <translation>Choose how updates are downloaded and installed</translation>
         </message>
         <message>
-            <source>Choose the MP4 video encoder. Hardware encoding falls back to software with the same codec if unavailable. H.265 (HEVC) can produce smaller files but requires a compatible player.</source>
-            <translation>Choose the MP4 video encoder. Hardware encoding falls back to software with the same codec if unavailable. H.265 (HEVC) can produce smaller files but requires a compatible player.</translation>
+            <source>Choose the MP4 video encoder. Hardware encoding falls back to software with the same codec if unavailable. H.265 can produce smaller files but requires a compatible player.</source>
+            <translation>Choose the MP4 video encoder. Hardware encoding falls back to software with the same codec if unavailable. H.265 can produce smaller files but requires a compatible player.</translation>
         </message>
         <message>
             <source>Choose the OCR model version and size to balance recognition speed and accuracy</source>
@@ -1840,12 +1840,12 @@
             <translation>Compression level</translation>
         </message>
         <message>
-            <source>Configuration exported to the clipboard.</source>
-            <translation>Configuration exported to the clipboard.</translation>
+            <source>Configuration exported to the clipboard</source>
+            <translation>Configuration exported to the clipboard</translation>
         </message>
         <message>
-            <source>Configuration imported.</source>
-            <translation>Configuration imported.</translation>
+            <source>Configuration imported</source>
+            <translation>Configuration imported</translation>
         </message>
         <message>
             <source>Configure S3-compatible upload destinations</source>
@@ -2524,8 +2524,8 @@
             <translation>H.265</translation>
         </message>
         <message>
-            <source>H.265 / HEVC (Hardware)</source>
-            <translation>H.265 / HEVC (Hardware)</translation>
+            <source>H.265 (Hardware)</source>
+            <translation>H.265 (Hardware)</translation>
         </message>
         <message>
             <source>Hidden tools</source>
@@ -5030,8 +5030,8 @@ Unavailable: %2</translation>
             <translation>Latest storage error</translation>
         </message>
         <message>
-            <source>Log file copied.</source>
-            <translation>Log file copied.</translation>
+            <source>Log file copied</source>
+            <translation>Log file copied</translation>
         </message>
         <message>
             <source>Log location</source>
@@ -5162,8 +5162,8 @@ Unavailable: %2</translation>
             <translation>Storage location</translation>
         </message>
         <message>
-            <source>Storage migration complete.</source>
-            <translation>Storage migration complete.</translation>
+            <source>Storage migration complete</source>
+            <translation>Storage migration complete</translation>
         </message>
         <message>
             <source>Storage mode</source>

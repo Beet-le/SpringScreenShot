@@ -128,15 +128,49 @@ pub unsafe extern "C" fn snow_runtime_serialize_document_session_bytes(
     runtime: SnowRuntime,
     out_bytes: *mut SnowSerializedBytes,
 ) -> SnowError {
+    serialize_runtime_bytes(runtime, out_bytes, Runtime::serialize_document_session)
+}
+
+/// Serializes committed document/configuration without undo/redo or input drafts.
+/// The result is accepted by `snow_runtime_create_from_document_session_with_config`.
+///
+/// # Safety
+/// `runtime` must be live and `out_bytes` writable. Destroy the returned handle
+/// with `snow_serialized_bytes_destroy`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_runtime_serialize_document_snapshot_bytes(
+    runtime: SnowRuntime,
+    out_bytes: *mut SnowSerializedBytes,
+) -> SnowError {
+    serialize_runtime_bytes(runtime, out_bytes, Runtime::serialize_document_snapshot)
+}
+
+/// Canonical current-document JSON bytes for comparison, not a hash or a session.
+/// Excludes history, editor defaults, revisions and unused trailing element slots.
+///
+/// # Safety
+/// `runtime` must be live and `out_bytes` writable. Destroy the returned handle
+/// with `snow_serialized_bytes_destroy`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_runtime_document_checkpoint_bytes(
+    runtime: SnowRuntime,
+    out_bytes: *mut SnowSerializedBytes,
+) -> SnowError {
+    serialize_runtime_bytes(runtime, out_bytes, Runtime::document_checkpoint)
+}
+
+fn serialize_runtime_bytes(
+    runtime: SnowRuntime,
+    out_bytes: *mut SnowSerializedBytes,
+    serialize: fn(&Runtime) -> Result<Vec<u8>, snow_draw_engine::ErrorCode>,
+) -> SnowError {
     ffi_error(|| {
         if out_bytes.is_null() {
             return SnowError::InvalidArgument;
         }
         write_out(out_bytes, std::ptr::null_mut());
         let bytes = match with_runtime_ref(runtime, |runtime| {
-            runtime
-                .serialize_document_session()
-                .map_err(SnowError::from)
+            serialize(runtime).map_err(SnowError::from)
         }) {
             Ok(bytes) => bytes,
             Err(error) => return error,
@@ -825,6 +859,51 @@ pub unsafe extern "C" fn snow_changed_viewports_get(
 #[cfg(test)]
 mod session_tests {
     use super::*;
+
+    #[test]
+    fn current_content_bytes_are_owned_and_reject_bad_input() {
+        type Serialize = unsafe extern "C" fn(SnowRuntime, *mut SnowSerializedBytes) -> SnowError;
+        unsafe {
+            for (serialize, current_bytes) in [
+                (
+                    snow_runtime_serialize_document_snapshot_bytes as Serialize,
+                    Runtime::serialize_document_snapshot
+                        as fn(&Runtime) -> Result<Vec<u8>, snow_draw_engine::ErrorCode>,
+                ),
+                (
+                    snow_runtime_document_checkpoint_bytes as Serialize,
+                    Runtime::document_checkpoint,
+                ),
+            ] {
+                let mut runtime = std::ptr::null_mut();
+                assert_eq!(snow_runtime_create(&mut runtime), SnowError::Ok);
+                (*runtime).runtime.commit_host_history_state(1).unwrap();
+                let expected = current_bytes(&(*runtime).runtime).unwrap();
+                let mut bytes = std::ptr::null_mut();
+                assert_eq!(serialize(runtime, &mut bytes), SnowError::Ok);
+                assert!(!bytes.is_null());
+                assert_eq!(
+                    serialize(runtime, std::ptr::null_mut()),
+                    SnowError::InvalidArgument
+                );
+                (*runtime).runtime.commit_host_history_state(2).unwrap();
+                snow_runtime_destroy(runtime);
+                let mut data = std::ptr::null();
+                let mut size = 0;
+                assert_eq!(
+                    snow_serialized_bytes_data(bytes, &mut data, &mut size),
+                    SnowError::Ok
+                );
+                assert_eq!(std::slice::from_raw_parts(data, size), expected);
+                snow_serialized_bytes_destroy(bytes);
+                assert_eq!(
+                    serialize(std::ptr::null_mut(), &mut bytes),
+                    SnowError::InvalidArgument
+                );
+                assert!(bytes.is_null());
+            }
+        }
+    }
 
     #[test]
     fn session_bytes_snapshot_outlives_runtime_and_rejects_bad_input() {

@@ -1,3 +1,5 @@
+#include "snow_shot/presentation/imageeditingdocument.h"
+#include "snow_shot/presentation/imageeditingwindow.h"
 #include "snow_shot/app/supportedpinfiles.h"
 #include "angle_wheel_host_test_support.h"
 #include "../src/app/mcp/mcppinnedstate_p.h"
@@ -186,6 +188,8 @@
 
 void runPinnedOriginalImageTranslationTests();
 void runPinnedHideToTopControllerTests();
+void runImageEditingTests();
+void runImageEditingEntryPointTests();
 
 class ScreenshotOriginalImagePreviewWindowTestAccess {
   public:
@@ -21848,6 +21852,123 @@ QImage pinnedStitchingPixels(const ScreenshotPinnedImageSnapshot& snapshot, QObj
     return image;
 }
 
+void pinnedImageEditingServiceRequests() {
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "pinned editing requires a screen");
+    int requests = 0;
+    QString requestedId;
+    ScreenshotSelectionExportUiServices services(nullptr, nullptr, nullptr, {}, {}, nullptr, {}, {},
+                                                 [&](const QString& id) {
+                                                     ++requests;
+                                                     requestedId = id;
+                                                 });
+    services.prewarmPinnedWindow(screen);
+    for (int index = 0; index < 2; ++index) {
+        QPointer<ScreenshotPinnedWindow> prepared(hiddenPinnedWindowExcept({}));
+        require(prepared != nullptr, "editing consumes a prepared shell");
+        QImage image(120, 80, QImage::Format_ARGB32_Premultiplied);
+        image.fill(index == 0 ? Qt::red : Qt::green);
+        bool completed = false;
+        require(services.presentPinnedImage(
+                    image, screen, physicalPinGeometry(*screen, QPoint(60, 60), image.size()),
+                    image.size(), {}, {}, 1.0, {}, {},
+                    [&](bool success, QImage result) {
+                        require(success && !result.isNull(), "pinned editing publishes content");
+                        completed = true;
+                    }),
+                "present the prepared editing pin");
+        QElapsedTimer loading;
+        loading.start();
+        while ((!completed || hiddenPinnedWindowExcept({prepared}) == nullptr) &&
+               loading.elapsed() < 10000)
+            waitForUi(1);
+        require(completed && prepared->isVisible(), "prepared editing pin becomes ready");
+        materializePinnedMenuTree(*prepared);
+        auto* editing =
+            prepared->findChild<QAction*>(QStringLiteral("screenshotPinnedImageEditingAction"));
+        require(editing && editing->isEnabled(), "prepared pin exposes Image Editing");
+        editing->trigger();
+        require(requests == index + 1 && requestedId == prepared->persistenceId(),
+                "each prepared shell forwards exactly one request for its current record");
+        prepared->close();
+        require(processUntilDeleted(prepared, 2000), "close the editing source pin");
+    }
+}
+
+void pinnedImageEditingPreservesAppearance() {
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen, "styled pin editing needs a screen");
+    QImage image(80, 60, QImage::Format_ARGB32_Premultiplied);
+    image.fill(QColor(42, 84, 126));
+    SnowCanvasRuntime runtime;
+    require(
+        !runtime
+             .applyAnnotationTransaction(
+                 R"({"version":1,"operations":[{"type":"rectangle","bounds":[8,9,8,6],"style":{"fill":[255,0,0,255],"stroke":[0,0,0,0]}}]})")
+             .isEmpty(),
+        "live styled pin fixture has an annotation");
+    auto config = clickThroughTestConfig(*screen);
+    config.canvasSourceRect = QRectF(0, 0, 80, 60);
+    config.contentCanvasRect = config.canvasSourceRect;
+    config.resultStyle.cornerRadius = 5;
+    config.resultStyle.shadowWidth = 3;
+    config.resultStyle.shadowColor = QColor(0, 0, 0, 180);
+    config.resultStyle.region = QRegion(0, 0, 80, 60).subtracted(QRect(28, 20, 18, 16));
+    config.surfaceCanvasRect = config.canvasSourceRect.adjusted(-3, -3, 3, 3);
+    config.initialWindowSize = QSize(86, 66);
+    config.nativeGeometry =
+        physicalPinGeometry(*screen, QPoint(100, 120), config.initialWindowSize);
+    config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+    config.initialCanvasSession = runtime.serializeDocumentSnapshot();
+    ScreenshotPinnedWindow pin;
+    pin.setAttribute(Qt::WA_DeleteOnClose, false);
+    bool published = false;
+    require(pin.present(config, [&](bool success, QImage) { published = success; }),
+            "live styled pin presents");
+    QElapsedTimer deadline;
+    deadline.start();
+    while (!published && deadline.elapsed() < 10000)
+        waitForUi(1);
+    require(published, "live styled pin publishes its source content");
+    const auto before = pin.persistenceSnapshot();
+    const QImage expected = pinnedStitchingPixels(pin.splittingSnapshot(), pin);
+    const auto preparation = captureScreenshotPinnedTextPreparation();
+    for (const bool live : {true, false}) {
+        const auto source =
+            live ? pin.imageEditingSnapshot()
+                 : snow_shot::presentation::readImageEditingPinned(before, preparation);
+        require(source.resultStyle.has_value(), "pin editing retains its pending result style");
+        snow_shot::presentation::ImageEditingWindow editor;
+        bool completed = false, succeeded = false;
+        QObject::connect(&editor, &snow_shot::presentation::ImageEditingWindow::loaded, &editor,
+                         [&](bool success) {
+                             completed = true;
+                             succeeded = success;
+                         });
+        editor.present(source);
+        deadline.restart();
+        while (!completed && deadline.elapsed() < 10000)
+            waitForUi(1);
+        require(completed && succeeded && editor.document()->image().size() == expected.size() &&
+                    !editor.document()->runtime().hasDocumentContent(),
+                "live and closed styled pins import their complete composite without annotations");
+        const auto actual =
+            editor.document()->image().convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        const auto expectedPixels = expected.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        for (int y = 0; y < actual.height(); ++y)
+            for (int x = 0; x < actual.width(); ++x)
+                require(actual.pixel(x, y) == expectedPixels.pixel(x, y),
+                        "pin editing preserves exactly the pin's mask, rounding, shadow and "
+                        "annotations");
+        require(actual.pixelColor(40, 30).alpha() == 0,
+                "the pin's excluded pixels stay transparent in independent editing");
+        editor.shutdown();
+    }
+    require(pin.persistenceSnapshot().canvasSession == before.canvasSession && pin.isVisible(),
+            "compositing an independent source does not change the live pin");
+    pin.hide();
+}
+
 void pinnedImageSplittingSnapshots() {
     using Access = ScreenshotPinnedWindowTestAccess;
     PinnedSelectionFixture fixture;
@@ -21880,18 +22001,33 @@ void pinnedImageSplittingSnapshots() {
     auto* menu = window.findChild<adqt::widgets::AdContextMenu*>(
         QStringLiteral("screenshotPinnedProcessImageMenu"));
     auto* split = window.findChild<QAction*>(QStringLiteral("screenshotPinnedSplitImageAction"));
+    auto* editing =
+        window.findChild<QAction*>(QStringLiteral("screenshotPinnedImageEditingAction"));
     auto* reset =
         window.findChild<QAction*>(QStringLiteral("screenshotPinnedResetTransformAction"));
-    require(menu && split && reset && menu->actions().last() == split &&
-                menu->actions().at(menu->actions().size() - 2)->isSeparator() &&
-                menu->actions().indexOf(reset) == menu->actions().size() - 3 &&
-                split->isEnabled() && split->text() == QStringLiteral("Image Splitting") &&
-                !split->icon().isNull(),
-            "Process image ends with a separator and the themed Image Splitting entry");
+    require(menu && split && editing && reset && menu->actions().last() == editing &&
+                menu->actions().at(menu->actions().size() - 3)->isSeparator() &&
+                menu->actions().indexOf(reset) == menu->actions().size() - 4 &&
+                menu->actions().indexOf(editing) == menu->actions().indexOf(split) + 1 &&
+                editing->isEnabled() && editing->text() == QStringLiteral("Image Editing") &&
+                !editing->icon().isNull() && split->isEnabled() &&
+                split->text() == QStringLiteral("Image Splitting") && !split->icon().isNull(),
+            "Process image ends with Image Splitting followed by Image Editing");
+    int editingRequests = 0;
+    snow_shot::presentation::ImageEditingWindowCoordinator editors({{}, &fixture.groups, nullptr});
+    QObject::connect(&window, &ScreenshotPinnedWindow::imageEditingRequested, &window,
+                     [&](const QString& id) {
+                         require(id == window.persistenceId(), "editing identifies the live pin");
+                         ++editingRequests;
+                         editors.presentPinnedRecord(id);
+                     });
     class SplitTranslator final : public QTranslator {
       public:
         QString translate(const char* context, const char* source, const char*,
                           int) const override {
+            if (QByteArray(context) == "ScreenshotPinnedWindow" &&
+                QByteArray(source) == "Image Editing")
+                return QStringLiteral("Translated Image Editing");
             return QByteArray(context) == "ImageSplitWindow" &&
                            QByteArray(source) == "Image Splitting"
                        ? QStringLiteral("Translated Image Splitting")
@@ -21906,6 +22042,34 @@ void pinnedImageSplittingSnapshots() {
     require(split->text() == QStringLiteral("Translated Image Splitting") &&
                 split->toolTip() == split->text(),
             "pinned Image Splitting action uses the shared translation context at runtime");
+    require(editing->text() == QStringLiteral("Translated Image Editing") &&
+                editing->toolTip() == editing->text(),
+            "pinned Image Editing retranslates its label and tooltip at runtime");
+    editing->trigger();
+    require(editingRequests == 1, "Image Editing dispatches exactly one live pin request");
+    require(editors.windows().size() == 1, "pinned editing opens one editor");
+    auto* editor = editors.windows().first().data();
+    const auto source = window.imageEditingSnapshot();
+    QElapsedTimer loading;
+    loading.start();
+    while (editor->document()->image().isNull() && loading.elapsed() < 10000)
+        waitForUi(1);
+    auto expectedDocument = QJsonDocument::fromJson(source.canvasSession)
+                                .object()
+                                .value(QStringLiteral("document"))
+                                .toObject();
+    auto importedDocument =
+        QJsonDocument::fromJson(editor->document()->runtime().serializeDocumentSession())
+            .object()
+            .value(QStringLiteral("document"))
+            .toObject();
+    expectedDocument.remove(QStringLiteral("revision"));
+    importedDocument.remove(QStringLiteral("revision"));
+    require(editor->document()->image() == source.image &&
+                editor->document()->bounds() == source.canvasRect &&
+                importedDocument == expectedDocument && window.isVisible(),
+            "pinned editor imports live transformed pixels and editable annotations independently");
+    editors.shutdown();
     split->trigger();
     require(requests == 1 && snapshot.source.isValid() && snapshot.outputSize == QSize(80, 120) &&
                 snapshot.originalFileName == QStringLiteral("section.reference.png") &&
@@ -21932,6 +22096,10 @@ void pinnedImageSplittingSnapshots() {
     materializePinnedMenuTree(unavailable);
     auto* unavailableSplit =
         unavailable.findChild<QAction*>(QStringLiteral("screenshotPinnedSplitImageAction"));
+    auto* unavailableEditing =
+        unavailable.findChild<QAction*>(QStringLiteral("screenshotPinnedImageEditingAction"));
+    require(unavailableEditing && !unavailableEditing->isEnabled(),
+            "a pin without loaded content cannot open Image Editing");
     require(unavailableSplit && !unavailableSplit->isEnabled() &&
                 !unavailable.splittingSnapshot().source.isValid(),
             "a pin without loaded content cannot split placeholder pixels");
@@ -24394,6 +24562,19 @@ void pinnedAnimationTransformRollback() {
                 "the rollback fixture must change physical geometry");
         const QRect adoptedGeometry = Access::authority(window);
         const auto adoptedRaster = Access::originalPreviewSource(window).materializedImage;
+        const auto historyBeforeSnapshot = Access::drawingHistory(window);
+        const auto tokenBeforeSnapshot = Access::pendingAnimationToken(window);
+        const auto frozen = window.imageEditingSnapshot();
+        require(frozen.image == ScreenshotResultCompositor::normalizeImage(paintedImage) &&
+                    frozen.canvasRect.size() == QSizeF(animation->canvasSize),
+                "independent editing freezes the published animation frame with its matching "
+                "orientation");
+        require(Access::drawingHistory(window) == historyBeforeSnapshot &&
+                    Access::pendingAnimationToken(window) == tokenBeforeSnapshot &&
+                    Access::authority(window) == adoptedGeometry,
+                "independent snapshot does not commit gestures, publish pending frames, or change "
+                "the pin");
+
         Access::setLock(window, true);
         if (!rejectRollback)
             wait([&] { return persisted.quarterTurns == 1; },
@@ -25340,6 +25521,19 @@ int main(int argc, char* argv[]) {
         }
         if (app.arguments().contains(QStringLiteral("--passive-publication-only"))) {
             pinnedPassiveCorrectionPreservesPublishedPixels();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--image-editing-entry-points-only"))) {
+            runImageEditingEntryPointTests();
+            pinnedImageEditingServiceRequests();
+            pinnedImageEditingPreservesAppearance();
+            ScreenshotExportCoordinator::shared().shutdown();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--image-editing-only"))) {
+            runImageEditingTests();
+            pinnedAnimationTransformRollback();
+            ScreenshotExportCoordinator::shared().shutdown();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--window-confirmation-only"))) {

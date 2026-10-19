@@ -1023,7 +1023,7 @@ void AboutPageWidget::refreshUpdateStatus() {
                                                ? tr("Check for a newer version of %1.")
                                                      .arg(snow_shot::app::edition::productName())
                                                : tr("Check for a newer version of Snow Shot."))
-                                        : tr("You are up to date.");
+                                        : tr("You are up to date");
         if (!status.version.isEmpty()) {
             statusIcon = outlined::CheckCircle();
             statusColor = colors.colorSuccessText;

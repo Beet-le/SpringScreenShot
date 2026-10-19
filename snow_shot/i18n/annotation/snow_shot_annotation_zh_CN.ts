@@ -656,6 +656,10 @@
             <translation>高亮描边宽度 %1 像素</translation>
         </message>
         <message>
+            <source>Horizontal Crop</source>
+            <translation>水平裁剪</translation>
+        </message>
+        <message>
             <source>Horizontal scrolling</source>
             <translation>水平滚动</translation>
         </message>
@@ -666,6 +670,10 @@
         <message>
             <source>Image</source>
             <translation>图像</translation>
+        </message>
+        <message>
+            <source>Image Editing</source>
+            <translation>图片编辑</translation>
         </message>
         <message>
             <source>Image Splitting</source>
@@ -878,6 +886,10 @@
         <message>
             <source>Outlined square</source>
             <translation>轮廓方形</translation>
+        </message>
+        <message>
+            <source>Pan</source>
+            <translation>平移</translation>
         </message>
         <message>
             <source>Pause recording</source>
@@ -1458,6 +1470,10 @@
         <message>
             <source>Uppercase letters</source>
             <translation>大写字母</translation>
+        </message>
+        <message>
+            <source>Vertical Crop</source>
+            <translation>垂直裁剪</translation>
         </message>
         <message>
             <source>Vertical scrolling</source>
