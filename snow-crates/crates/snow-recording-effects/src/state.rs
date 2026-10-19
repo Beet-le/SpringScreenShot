@@ -235,6 +235,7 @@ mod tests {
                 let mut effects = InputEffectsState::new(lifetime);
                 let mut preview = EffectsPreview::new(
                     PreviewConfig {
+                        webcam: None,
                         region: (0, 0, SIZE.0, SIZE.1),
                         canvas: SIZE,
                         output: SIZE,

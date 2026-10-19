@@ -524,6 +524,9 @@ pub struct SnowCaptureDirectRecordingConfig {
     system_audio_gain_db: i32,
     microphone_gain_db: i32,
     mouse_highlight_radius: u32,
+    webcam_source: *const snow_webcam::Source,
+    webcam_size: u32,
+    webcam_shape: u32,
 }
 
 #[repr(C)]
@@ -533,7 +536,7 @@ struct SnowCaptureDirectRecordingConfigHeader {
     struct_size: u32,
 }
 
-pub const DIRECT_RECORDING_CONFIG_VERSION: u32 = 12;
+pub const DIRECT_RECORDING_CONFIG_VERSION: u32 = 13;
 // Version 8 ended with four padding bytes now occupied by quality.
 const DIRECT_RECORDING_CONFIG_V8_SIZE: u32 = 256;
 const DIRECT_RECORDING_CONFIG_V4_FIELDS_SIZE: usize =
@@ -569,7 +572,7 @@ fn direct_config_size(version: u32) -> Result<u32, String> {
         8 | 9 => Ok(DIRECT_RECORDING_CONFIG_V8_SIZE),
         10 => Ok(std::mem::offset_of!(SnowCaptureDirectRecordingConfig, microphone_gain_db) as u32),
         // Version 12 uses the four tail-padding bytes of the version-11 structure.
-        11 => Ok(272),
+        11 | 12 => Ok(272),
         DIRECT_RECORDING_CONFIG_VERSION => Ok(DIRECT_RECORDING_CONFIG_SIZE),
         _ => Err(format!(
             "unsupported direct recording config version: {version}"
@@ -1064,6 +1067,17 @@ fn parse_direct_recording_config(
         }
     };
     let direct = DirectRecordingConfig {
+        webcam: if config.version >= 13 {
+            unsafe {
+                snow_webcam::config_from_raw(
+                    config.webcam_source,
+                    config.webcam_size,
+                    config.webcam_shape,
+                )?
+            }
+        } else {
+            None
+        },
         audio_mode,
         system_audio_gain_db: if config.version >= 11 {
             config.system_audio_gain_db
@@ -1891,12 +1905,14 @@ mod tests {
 
     #[test]
     fn direct_recording_exclusion_abi_layout() {
-        assert_eq!(DIRECT_RECORDING_CONFIG_VERSION, 12);
+        assert_eq!(DIRECT_RECORDING_CONFIG_VERSION, 13);
         assert_eq!(
             std::mem::offset_of!(SnowCaptureDirectRecordingConfig, exclusions),
             192
         );
-        assert_eq!(DIRECT_RECORDING_CONFIG_SIZE, 272);
+        assert_eq!(DIRECT_RECORDING_CONFIG_SIZE, 288);
+        assert_eq!(direct_config_size(12).unwrap(), 272);
+        assert_eq!(direct_config_size(11).unwrap(), 272);
         assert_eq!(direct_config_size(10).unwrap(), 264);
         assert_eq!(direct_config_size(9).unwrap(), 256);
         assert_eq!(
@@ -1906,7 +1922,7 @@ mod tests {
         assert_eq!(direct_config_size(7).unwrap(), 232);
         assert_eq!(direct_config_size(6).unwrap(), 224);
         assert_eq!(DIRECT_RECORDING_CONFIG_V5_SIZE, 192);
-        for version in [5, 6, 7, 8, 9, 10] {
+        for version in [5, 6, 7, 8, 9, 10, 11, 12, 13] {
             let header = SnowCaptureDirectRecordingConfigHeader {
                 version,
                 struct_size: 8,
@@ -2278,6 +2294,9 @@ mod tests {
 
     pub(super) fn direct_config(output: &CStr) -> SnowCaptureDirectRecordingConfig {
         SnowCaptureDirectRecordingConfig {
+            webcam_source: std::ptr::null(),
+            webcam_size: 150,
+            webcam_shape: 0,
             exclusions: Default::default(),
             audio_mode: 0,
             system_audio_gain_db: 0,
@@ -2323,6 +2342,34 @@ mod tests {
             keyboard_size: 64,
             loop_animated_images: 1,
         }
+    }
+    #[test]
+    fn webcam_direct_v13_retains_source_and_v12_defaults_disabled() {
+        let output = CString::new("webcam-abi.mp4").unwrap();
+        let source = snow_webcam::Source::with_backend(
+            snow_webcam::CaptureOptions { size: 150, fps: 30 },
+            |_| Err("unused".into()),
+        )
+        .unwrap();
+        let mut raw = direct_config(&output);
+        raw.webcam_source = &source;
+        raw.webcam_size = 500;
+        raw.webcam_shape = 1;
+        let parsed =
+            parse_direct_recording_config(&unsafe { read_direct_recording_config(&raw) }.unwrap())
+                .unwrap();
+        assert_eq!(parsed.webcam.as_ref().unwrap().style.size, 500);
+        assert_eq!(parsed.webcam.as_ref().unwrap().source, source);
+        raw.webcam_shape = 2;
+        assert!(parse_direct_recording_config(&raw).is_err());
+        raw.version = 12;
+        raw.struct_size = direct_config_size(12).unwrap();
+        assert!(
+            parse_direct_recording_config(&unsafe { read_direct_recording_config(&raw) }.unwrap())
+                .unwrap()
+                .webcam
+                .is_none()
+        );
     }
     #[test]
     fn gpu_probe_rejects_invalid_and_software_configs_before_capture() {

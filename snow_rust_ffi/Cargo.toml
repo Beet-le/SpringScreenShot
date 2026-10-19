@@ -8,6 +8,7 @@ license = "GPL-3.0-or-later"
 crate-type = ["staticlib"]
 
 [dependencies]
+snow-webcam = { path = "../snow-crates/crates/snow-webcam" }
 snow-core = { path = "../snow-crates/crates/snow-core" }
 snow-visual-region-detector-c = { path = "../snow-crates/crates/snow-visual-region-detector-c" }
 snow-recording-effects-c = { path = "../snow-crates/crates/snow-recording-effects-c" }

@@ -927,6 +927,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "RecordingCamera",
+      "name": "recording-camera",
+      "source": "../src/presentation/components/icons/resources/recording-camera.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "RecordingClick",
       "name": "recording-click",
       "source": "../src/presentation/components/icons/resources/recording-click.svg",

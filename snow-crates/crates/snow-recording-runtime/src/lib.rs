@@ -13,6 +13,7 @@ pub(crate) mod keyboard_overlay;
 pub(crate) mod keyboard_rasterizer;
 pub(crate) mod mouse_hook;
 mod output_schedule;
+mod webcam;
 mod worker_startup;
 pub use keyboard_overlay::{KeyboardOverlayConfig, KeyboardOverlayFont};
 #[cfg(feature = "legacy-capture")]

@@ -42,6 +42,7 @@ pub(crate) fn run_capture(
     native.execution = ExportExecutionMode::HardwarePreferred;
     native.video.quality = config.quality.max(95);
     native.video.speed = snow_recording_model::VideoEncodingSpeed::VeryFast;
+    native.webcam = None;
     native.codec = if native.capture.dynamic_range == DynamicRange::Hdr {
         VideoCodec::H265
     } else {
@@ -66,6 +67,7 @@ pub(crate) fn run_capture(
     let origin = Instant::now();
     clock.controller().mark_resume(origin);
     input.reset(&clock, origin)?;
+    let webcam = crate::webcam::DeferredWebcam::start(config, path, clock.clone());
     let mut paused = false;
     let mut since = origin;
     let mut stop = None;
@@ -232,6 +234,9 @@ pub(crate) fn run_capture(
         .div_ceil(1_000_000)
         .max(1) as u64;
     recording.freeze_source(stop);
+    if let Some(webcam) = webcam {
+        webcam.finish(duration_ms);
+    }
     input.drain(&clock, true, since, Some(stop))?;
     if !admitted {
         return Err(ScreenRecorderError::Encode(

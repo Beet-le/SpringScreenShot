@@ -33,6 +33,7 @@ pub struct RecordedEffects {
     last_frame: Option<u64>,
     playback: PlaybackRenderer,
     tiles: TileSurface,
+    webcam: crate::webcam::WebcamOverlay,
 }
 
 impl RecordedEffects {
@@ -116,12 +117,25 @@ impl RecordedEffects {
             last_frame: None,
             playback,
             tiles: TileSurface::new(output),
+            webcam: crate::webcam::WebcamOverlay::default(),
         })
     }
 
     pub fn with_timeline(mut self, timeline: FinalizedTimeline) -> Self {
         self.timeline = Some(timeline);
         self
+    }
+
+    pub fn set_webcam_frame(
+        &mut self,
+        frame: Option<&snow_webcam::Frame>,
+        style: snow_recording_model::WebcamStyle,
+    ) {
+        self.webcam.prepare(
+            frame,
+            style,
+            (self.config.output_width, self.config.output_height),
+        );
     }
 
     /// Input observations stay on the source clock; the playback badge uses clip time.
@@ -262,6 +276,7 @@ impl RecordedEffects {
             return Err("effect rendering cannot move backwards on the timeline".into());
         }
         self.last_frame = Some(frame.timestamp_ms);
+        self.webcam.draw_to(surface);
         let now = frame.timestamp_ms;
         if self.config.effects.mouse_trail_rgba[3] != 0 {
             self.pointer.advance(
@@ -511,6 +526,7 @@ mod tests {
         };
         let mut live = EffectsPreview::new(
             PreviewConfig {
+                webcam: None,
                 region: (0, 0, size.0, size.1),
                 canvas: size,
                 output: size,

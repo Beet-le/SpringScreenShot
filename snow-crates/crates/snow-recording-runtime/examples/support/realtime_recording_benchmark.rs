@@ -125,6 +125,8 @@ impl Clarity {
 }
 
 struct Options {
+    webcam_size: Option<u32>,
+    webcam_shape: snow_webcam::WebcamShape,
     region_size: Option<(u32, u32)>,
     duration_seconds: u64,
     warmup_seconds: u64,
@@ -188,6 +190,8 @@ bench-stage-timing,bench-compositor-timing,bench-pipeline-timing \
   --scenario <name>          application-default, no-effects, mouse-only, or all-effects\n\
   --workload <name>          continuous, static, or sparse (default: continuous)\n\
   --region-size <WxH>        source region within the leftmost monitor, at least 528x96\n\
+  --webcam-size <px>         add a synthetic moving camera, 50..500 pixels\n\
+  --webcam-shape <shape>     square or circle (default: square)\n\
   --audio                    include system audio in the recording\n\
   --move-interval-ms <n>     simulated mouse move interval (default: {DEFAULT_MOVE_INTERVAL_MS})\n\
   --click-interval-ms <n>    simulated left click interval (default: {DEFAULT_CLICK_INTERVAL_MS})\n\
@@ -211,6 +215,8 @@ fn parse_codec(value: &str) -> Result<VideoCodec> {
 
 fn parse_args() -> Result<Options> {
     let mut options = Options {
+        webcam_size: None,
+        webcam_shape: snow_webcam::WebcamShape::Square,
         region_size: None,
         duration_seconds: DEFAULT_DURATION_SECONDS,
         warmup_seconds: DEFAULT_WARMUP_SECONDS,
@@ -257,6 +263,21 @@ fn parse_args() -> Result<Options> {
             "--help" | "-h" => {
                 print_usage();
                 std::process::exit(0);
+            }
+            "--webcam-size" => {
+                let size: u32 = next_value("--webcam-size", &args, &mut index)?.parse()?;
+                if !(50..=500).contains(&size) {
+                    bail!("webcam size must be 50..500");
+                }
+                options.webcam_size = Some(size);
+            }
+            "--webcam-shape" => {
+                options.webcam_shape =
+                    match next_value("--webcam-shape", &args, &mut index)?.as_str() {
+                        "square" => snow_webcam::WebcamShape::Square,
+                        "circle" => snow_webcam::WebcamShape::Circle,
+                        _ => bail!("webcam shape must be square or circle"),
+                    };
             }
             "--duration-seconds" => {
                 options.duration_seconds = next_value("--duration-seconds", &args, &mut index)?
@@ -602,6 +623,13 @@ pub(crate) fn run() -> Result<()> {
             options.encode_threads,
             options.align_capture,
             options.resize_threads
+        ),
+    )?;
+    fs::write(
+        options.output_directory.join("webcam-metadata.txt"),
+        format!(
+            "size={:?}\nshape={:?}\n",
+            options.webcam_size, options.webcam_shape
         ),
     )?;
     let mut rows = Vec::new();
@@ -967,6 +995,32 @@ fn run_sample(
         options.duration_seconds
     };
     let config = DirectRecordingConfig {
+        webcam: options
+            .webcam_size
+            .map(|size| {
+                let source = snow_webcam::Source::with_backend(
+                    snow_webcam::CaptureOptions {
+                        size,
+                        fps: options.fps.min(30),
+                    },
+                    |options| {
+                        Ok(Box::new(BenchmarkCamera {
+                            next: Instant::now(),
+                            fps: options.fps,
+                            sequence: 0,
+                        }))
+                    },
+                )
+                .map_err(anyhow::Error::msg)?;
+                Ok::<_, anyhow::Error>(snow_webcam::Config {
+                    source,
+                    style: snow_webcam::WebcamStyle {
+                        size,
+                        shape: options.webcam_shape,
+                    },
+                })
+            })
+            .transpose()?,
         audio_mode: Default::default(),
         system_audio_gain_db: 0,
         microphone_gain_db: 0,
@@ -2736,4 +2790,42 @@ fn decode_frame_ids(path: &Path, source_width: u32, source_height: u32) -> Resul
     receive(&mut decoder)?;
     fs::write(path.with_extension("identifiers.csv"), identifiers)?;
     Ok((count, fresh, unreadable))
+}
+
+struct BenchmarkCamera {
+    next: Instant,
+    fps: u32,
+    sequence: u32,
+}
+impl snow_webcam::CameraBackend for BenchmarkCamera {
+    fn poll(
+        &mut self,
+        timeout: Duration,
+    ) -> std::result::Result<Option<snow_webcam::RawFrame>, String> {
+        let remaining = self.next.saturating_duration_since(Instant::now());
+        if remaining > timeout {
+            std::thread::sleep(timeout);
+            return Ok(None);
+        }
+        std::thread::sleep(remaining);
+        let at = Instant::now();
+        self.next += Duration::from_secs_f64(1.0 / f64::from(self.fps));
+        self.sequence += 1;
+        let mut rgba = vec![255; 640 * 480 * 4];
+        for y in 0..480 {
+            for x in 0..640 {
+                let i = (y * 640 + x) * 4;
+                rgba[i] = ((x as u32 + self.sequence * 4) % 256) as u8;
+                rgba[i + 1] = ((y as u32 + self.sequence * 3) % 256) as u8;
+                rgba[i + 2] = 120;
+            }
+        }
+        Ok(Some(snow_webcam::RawFrame {
+            width: 640,
+            height: 480,
+            stride: 640 * 4,
+            rgba,
+            at,
+        }))
+    }
 }

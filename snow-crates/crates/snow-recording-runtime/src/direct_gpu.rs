@@ -201,6 +201,14 @@ struct OverlayTexture {
     upload: Vec<u8>,
 }
 
+/// Camera uploads are bounded by the overlay size, independent of desktop resolution.
+/// Keep them separate from effects so an unchanged camera image is never uploaded twice.
+struct WebcamTexture {
+    texture: Texture,
+    generation: u64,
+    upload: Vec<u8>,
+}
+
 impl OverlayTexture {
     fn new(device: &SharedDevice, size: (u32, u32)) -> Result<Self> {
         let texture = device
@@ -305,6 +313,7 @@ pub(super) struct GpuVisualCompositor {
     scratch: [Texture; 2],
     cursor_output: Texture,
     overlay: OverlayTexture,
+    webcam: Option<WebcamTexture>,
     tiles: TileSurface,
     cursor_shader: ID3D11ComputeShader,
     cursor_constants: ID3D11Buffer,
@@ -412,6 +421,7 @@ impl GpuVisualCompositor {
             scratch,
             cursor_output,
             overlay,
+            webcam: None,
             tiles: TileSurface::new(size),
             cursor_shader: cursor_shader.ok_or_else(|| gpu_error("missing cursor shader"))?,
             cursor_constants: cursor_constants
@@ -445,6 +455,76 @@ impl GpuVisualCompositor {
         }
         let source_size = frame.dimensions();
         let mut index = self.desktop(&frame.layers, source_size)?;
+        if let Some(image) = state.webcam.image() {
+            let (x, y, side) = image.rect;
+            let (pixels, generation) = (image.pixels, image.generation);
+            if self
+                .webcam
+                .as_ref()
+                .is_none_or(|v| v.texture.dimensions() != (side, side))
+            {
+                self.webcam = Some(WebcamTexture {
+                    texture: device
+                        .texture(
+                            side,
+                            side,
+                            DXGI_FORMAT_B8G8R8A8_UNORM,
+                            (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
+                        )
+                        .map_err(gpu_error)?,
+                    generation: generation.wrapping_sub(1),
+                    upload: vec![0; pixels.len()],
+                });
+            }
+            let webcam = self.webcam.as_mut().unwrap();
+            if webcam.generation != generation {
+                for (from, to) in pixels
+                    .chunks_exact(4)
+                    .zip(webcam.upload.chunks_exact_mut(4))
+                {
+                    let alpha = u32::from(from[3]);
+                    for (out, input) in [2, 1, 0].into_iter().enumerate() {
+                        to[out] = ((u32::from(from[input]) * 255 + alpha / 2)
+                            .checked_div(alpha)
+                            .unwrap_or(0)
+                            .min(255)) as u8;
+                    }
+                    to[3] = from[3];
+                }
+                unsafe {
+                    device.context().UpdateSubresource(
+                        webcam.texture.raw(),
+                        0,
+                        None,
+                        webcam.upload.as_ptr().cast(),
+                        side * 4,
+                        0,
+                    );
+                }
+                self.overlay_upload_bytes += pixels.len() as u64;
+                webcam.generation = generation;
+            }
+            let layer = VideoLayer {
+                source: Rect::full((side, side)),
+                destination: Rect {
+                    x: x as i32,
+                    y: y as i32,
+                    width: side,
+                    height: side,
+                },
+                texture: webcam.texture.clone(),
+                rotation: 0,
+                alpha: true,
+            };
+            self.processor
+                .blit(
+                    &[self.layer(self.scratch[index].clone(), false), layer],
+                    self.scratch[1 - index].raw(),
+                    0,
+                )
+                .map_err(gpu_error)?;
+            index = 1 - index;
+        }
         if config.show_cursor
             && config.mouse_highlight_rgba[3] != 0
             && let Some(sample) = cursor.filter(|c| {
@@ -939,6 +1019,7 @@ mod tests {
 
     fn config(path: PathBuf, backend: CaptureBackendKind) -> DirectRecordingConfig {
         DirectRecordingConfig {
+            webcam: None,
             audio_mode: Default::default(),
             system_audio_gain_db: 0,
             microphone_gain_db: 0,
@@ -978,7 +1059,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires offscreen D3D11 VideoProcessor and a native H.264 encoder"]
-    fn hardware_sparse_effects_match_cpu_draw_order_and_expiration() -> Result<()> {
+    fn hardware_sparse_effects_and_webcam_match_cpu_draw_order_and_expiration() -> Result<()> {
         use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
         use windows::core::Interface;
         struct Rasterizer;
@@ -1095,6 +1176,26 @@ mod tests {
             .into_iter()
             .enumerate()
         {
+            let webcam = snow_webcam::Frame {
+                revision: index as u64 + 1,
+                at: Instant::now(),
+                size: 100,
+                rgba: Arc::new([220, 30, index as u8 * 20, 255].repeat(100 * 100)),
+            };
+            for state in [&mut cpu_state, &mut gpu_state] {
+                state.webcam.prepare(
+                    (timestamp < 1800).then_some(&webcam),
+                    snow_webcam::WebcamStyle {
+                        size: 150,
+                        shape: if index < 4 {
+                            snow_webcam::WebcamShape::Square
+                        } else {
+                            snow_webcam::WebcamShape::Circle
+                        },
+                    },
+                    size,
+                );
+            }
             let cursor = AttachedCursorSample {
                 x: 145 + index as i32 * 2,
                 y: 150,

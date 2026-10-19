@@ -457,6 +457,7 @@ pub fn render_bundle_range_with_speed(
         cancellation,
     )?;
     video.seek_to(first, cancellation)?;
+    let mut webcam = crate::webcam::WebcamReplay::open(path, cancellation)?;
     let mut audio = ExportAudioReplay::open(path, &footer, &config, range, speed)?;
     let mut rgba = RasterBuffer::zeroed(config.width as usize * config.height as usize * 4);
     let mut hdr_conversion = if output_hdr {
@@ -540,6 +541,10 @@ pub fn render_bundle_range_with_speed(
         #[cfg(feature = "bench-timing")]
         let stage_started = Instant::now();
         video.advance(source_index, cancellation)?;
+        if let Some(webcam) = &mut webcam {
+            let image = webcam.frame_at(frame.timestamp_ms, cancellation)?;
+            effects.set_webcam_frame(image.as_deref(), webcam.style());
+        }
         #[cfg(feature = "bench-timing")]
         {
             stage_times[1] += stage_started.elapsed();
@@ -796,7 +801,7 @@ fn blend_hdr_tiles(
     }
 }
 
-struct SequentialVideoSource {
+pub(crate) struct SequentialVideoSource {
     input: ffmpeg::format::context::Input,
     decoder: ffmpeg::decoder::Video,
     stream_index: usize,
@@ -815,8 +820,26 @@ struct SequentialVideoSource {
     decoder_name: String,
 }
 impl SequentialVideoSource {
+    pub(crate) fn recorded_sdr_colors(&mut self) -> Result<()> {
+        // StreamingEncoder stores SDR sources as full-range BT.709. Camera replay
+        // must not let libswscale infer a different matrix from its small dimensions.
+        crate::hdr::scaler_colors(&mut self.conversion, false, true)
+    }
     fn open(
         path: &Path,
+        timeline: FinalizedTimeline,
+        hdr: bool,
+        coded: (u32, u32),
+        output: (u32, u32),
+        cancellation: &CancellationToken,
+    ) -> Result<Self> {
+        let index = VideoIndexReader::from_bundle(path)?
+            .ok_or_else(|| decode("clean source video index is missing"))?;
+        Self::open_indexed(path, index, timeline, hdr, coded, output, cancellation)
+    }
+    pub(crate) fn open_indexed(
+        path: &Path,
+        mut index: VideoIndexReader,
         timeline: FinalizedTimeline,
         hdr: bool,
         coded: (u32, u32),
@@ -831,8 +854,6 @@ impl SequentialVideoSource {
             .best(ffmpeg::media::Type::Video)
             .ok_or_else(|| decode("source video stream missing"))?;
         let stream_index = stream.index();
-        let mut index = VideoIndexReader::from_bundle(path)?
-            .ok_or_else(|| decode("clean source video index is missing"))?;
         if index.remaining() > timeline.frame_count() {
             return Err(decode(
                 "clean source index has more images than output slots",
@@ -974,7 +995,7 @@ impl SequentialVideoSource {
             }
         }
     }
-    fn seek_to(&mut self, pts: u64, cancellation: &CancellationToken) -> Result<()> {
+    pub(crate) fn seek_to(&mut self, pts: u64, cancellation: &CancellationToken) -> Result<()> {
         if pts < u64::from(self.timeline.fps()) {
             return Ok(());
         }
@@ -991,7 +1012,7 @@ impl SequentialVideoSource {
         self.next = self.decode_next(cancellation)?;
         Ok(())
     }
-    fn advance(&mut self, pts: u64, cancellation: &CancellationToken) -> Result<()> {
+    pub(crate) fn advance(&mut self, pts: u64, cancellation: &CancellationToken) -> Result<bool> {
         let mut changed = false;
         while self
             .next
@@ -1014,9 +1035,9 @@ impl SequentialVideoSource {
         if self.current.is_none() {
             return Err(decode("clean source contains no video frames"));
         }
-        Ok(())
+        Ok(changed)
     }
-    fn copy_rgba(&self, output: &mut [u8]) -> Result<()> {
+    pub(crate) fn copy_rgba(&self, output: &mut [u8]) -> Result<()> {
         let stride = self.converted.stride(0);
         for y in 0..self.output.1 as usize {
             let row = &self.converted.data(0)

@@ -198,6 +198,7 @@ constexpr int TOOLBAR_ITEM_SPACING = 8;
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Mouse click color transparent"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Show cursor in recording"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Show keystrokes in recording"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Record webcam"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Delay recording (scroll to adjust)"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Copy recording"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Trim Video"),
@@ -2394,6 +2395,34 @@ void ScreenshotToolPalette::setRecordingSettingsOwnerWindow(QWidget* owner) {
     m_recordSettingsOwnerWindow = owner;
 }
 
+void ScreenshotToolPalette::setRecordingWebcamEnabled(bool enabled) {
+    m_recordingWebcamEnabled = enabled;
+    updateRecordingExportSettingsControls();
+}
+bool ScreenshotToolPalette::recordingWebcamEnabled() const {
+    return m_recordingWebcamEnabled;
+}
+void ScreenshotToolPalette::setRecordingWebcamSize(int size) {
+    m_recordingWebcamSize = std::clamp(size, 50, 500);
+    if (m_recordWebcamSizeInput) {
+        const QSignalBlocker blocker(m_recordWebcamSizeInput);
+        m_recordWebcamSizeInput->setValue(m_recordingWebcamSize);
+    }
+}
+int ScreenshotToolPalette::recordingWebcamSize() const {
+    return m_recordingWebcamSize;
+}
+void ScreenshotToolPalette::setRecordingWebcamShape(const QString& shape) {
+    m_recordingWebcamShape = shape == QStringLiteral("circle") ? shape : QStringLiteral("square");
+    if (m_recordWebcamShapeSelect) {
+        const QSignalBlocker blocker(m_recordWebcamShapeSelect);
+        m_recordWebcamShapeSelect->setCurrentValue(m_recordingWebcamShape);
+    }
+}
+QString ScreenshotToolPalette::recordingWebcamShape() const {
+    return m_recordingWebcamShape;
+}
+
 void ScreenshotToolPalette::setRecordingKeyboardSize(int value) {
     m_recordingKeyboardSize = std::clamp(value, 32, 128);
     if (m_recordKeyboardSizeInput != nullptr) {
@@ -3816,6 +3845,10 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
     if (m_recordPostProcessingButton != nullptr) {
         configureScreenshotToolPaletteStyleButton(m_recordPostProcessingButton,
                                                   "Post-processing effects",
+                                                  styleButtonMetrics(m_physicalScale));
+    }
+    if (m_recordWebcamButton) {
+        configureScreenshotToolPaletteStyleButton(m_recordWebcamButton, "Record webcam",
                                                   styleButtonMetrics(m_physicalScale));
     }
     refreshRecordingPostProcessingOptions();
@@ -7116,6 +7149,15 @@ void ScreenshotToolPalette::createRecordingExportSettingsToolbar() {
         custom_outlined_icons::RecordingKeyboard(), styleButtonMetrics(m_physicalScale));
     m_recordKeyboardButton->setObjectName(QStringLiteral("screenRecordingShowKeyboard"));
     layout->addWidget(m_recordKeyboardButton);
+    m_recordWebcamButton = createScreenshotToolPaletteStyleActionButton(
+        m_recordExportSettingsPanel, "Record webcam", custom_outlined_icons::RecordingCamera(),
+        styleButtonMetrics(m_physicalScale));
+    m_recordWebcamButton->setObjectName(QStringLiteral("screenRecordingWebcam"));
+    layout->addWidget(m_recordWebcamButton);
+    connect(m_recordWebcamButton, &adqt::widgets::AdButton::clicked, this, [this]() {
+        setRecordingWebcamEnabled(!m_recordingWebcamEnabled);
+        emit recordingWebcamEnabledChanged(m_recordingWebcamEnabled);
+    });
     m_recordPostProcessingButton = createScreenshotToolPaletteStyleActionButton(
         m_recordExportSettingsPanel, "Post-processing effects",
         custom_outlined_icons::RecordingPostProcessing(), styleButtonMetrics(m_physicalScale));
@@ -7305,6 +7347,8 @@ bool ScreenshotToolPalette::ensureRecordingEffectSettingsModal() {
                 m_recordSettingsForm = nullptr;
                 m_recordTrailDurationInput = nullptr;
                 m_recordKeyboardSizeInput = nullptr;
+                m_recordWebcamSizeInput = nullptr;
+                m_recordWebcamShapeSelect = nullptr;
                 m_recordKeyboardBackgroundPicker = nullptr;
                 m_recordKeyboardForegroundPicker = nullptr;
                 // finalizeClose() still inspects the modal after emitting finished,
@@ -7367,6 +7411,43 @@ bool ScreenshotToolPalette::ensureRecordingEffectSettingsModal() {
                 if (previous != m_recordingKeyboardSize) {
                     emit recordingKeyboardSizeChanged(m_recordingKeyboardSize);
                 }
+            });
+    m_recordWebcamSizeInput = new adqt::widgets::AdInputNumber;
+    m_recordWebcamSizeInput->setObjectName(QStringLiteral("screenRecordingWebcamSize"));
+    m_recordWebcamSizeInput->setMinimum(50);
+    m_recordWebcamSizeInput->setMaximum(500);
+    m_recordWebcamSizeInput->setSingleStep(1);
+    m_recordWebcamSizeInput->setDecimals(0);
+    m_recordWebcamSizeInput->setFixedWidth(kRecordingSettingsColumnWidth);
+    m_recordWebcamSizeInput->setValue(m_recordingWebcamSize);
+    m_recordWebcamSizeInput->setStepButtonLayout(
+        adqt::widgets::AdInputNumber::StepButtonLayout::Compact);
+    form->addField(tr("Webcam Size"), m_recordWebcamSizeInput, QStringLiteral("webcamSize"));
+    connect(m_recordWebcamSizeInput, &adqt::widgets::AdInputNumber::valueChanged, this,
+            [this](double value) {
+                const int previous = m_recordingWebcamSize;
+                setRecordingWebcamSize(qRound(value));
+                if (previous != m_recordingWebcamSize)
+                    emit recordingWebcamSizeChanged(m_recordingWebcamSize);
+            });
+    auto* webcamSpacer = new QWidget(form);
+    webcamSpacer->setFixedSize(kRecordingSettingsColumnGap, 1);
+    auto* webcamSpacerItem = form->addField(QString(), webcamSpacer);
+    webcamSpacerItem->setNoStyle(true);
+    webcamSpacerItem->setFixedWidth(kRecordingSettingsColumnGap);
+    m_recordWebcamShapeSelect = new adqt::widgets::AdSelect;
+    m_recordWebcamShapeSelect->setObjectName(QStringLiteral("screenRecordingWebcamShape"));
+    m_recordWebcamShapeSelect->setFixedWidth(kRecordingSettingsColumnWidth);
+    m_recordWebcamShapeSelect->setOptions(
+        {{QStringLiteral("square"), tr("Square")}, {QStringLiteral("circle"), tr("Circle")}});
+    m_recordWebcamShapeSelect->setCurrentValue(m_recordingWebcamShape);
+    form->addField(tr("Webcam Shape"), m_recordWebcamShapeSelect, QStringLiteral("webcamShape"));
+    connect(m_recordWebcamShapeSelect, &adqt::widgets::AdSelect::currentValueChanged, this,
+            [this](const QVariant& value) {
+                const QString previous = m_recordingWebcamShape;
+                setRecordingWebcamShape(value.toString());
+                if (previous != m_recordingWebcamShape)
+                    emit recordingWebcamShapeChanged(m_recordingWebcamShape);
             });
     const auto addKeyboardPicker = [form](const QString& name, const QString& label,
                                           const QString& key, const QColor& color) {
@@ -7522,6 +7603,17 @@ void ScreenshotToolPalette::refreshRecordingEffectSettingsModalText() {
     m_recordSettingsForm->field(QStringLiteral("highlightPreview"))
         ->setLabel(tr("Mouse highlight preview"));
     m_recordSettingsModal->setWindowTitle(tr("Effect Settings"));
+    m_recordWebcamSizeInput->setAccessibleName(tr("Webcam Size"));
+    m_recordWebcamSizeInput->setSuffixText(tr("px"));
+    m_recordWebcamShapeSelect->setAccessibleName(tr("Webcam Shape"));
+    {
+        const QSignalBlocker blocker(m_recordWebcamShapeSelect);
+        m_recordWebcamShapeSelect->setOptions(
+            {{QStringLiteral("square"), tr("Square")}, {QStringLiteral("circle"), tr("Circle")}});
+        m_recordWebcamShapeSelect->setCurrentValue(m_recordingWebcamShape);
+    }
+    m_recordSettingsForm->field(QStringLiteral("webcamSize"))->setLabel(tr("Webcam Size"));
+    m_recordSettingsForm->field(QStringLiteral("webcamShape"))->setLabel(tr("Webcam Shape"));
     m_recordKeyboardSizeInput->setAccessibleName(tr("Keyboard Size"));
     m_recordKeyboardSizeInput->setSuffixText(tr("px"));
     m_recordTrailDurationInput->setSuffixText(tr("ms"));
@@ -7540,6 +7632,8 @@ void ScreenshotToolPalette::refreshRecordingEffectSettingsModalText() {
 }
 
 void ScreenshotToolPalette::refreshRecordingExportSettingsText() {
+    if (m_recordWebcamButton)
+        configureScreenshotToolPaletteTooltip(m_recordWebcamButton, "Record webcam");
     if (m_recordPreferencesButton != nullptr) {
         configureScreenshotToolPaletteTooltip(m_recordPreferencesButton, "Recording settings");
         m_recordPreferencesButton->setAccessibleName(tr("Recording settings"));
@@ -7621,6 +7715,10 @@ void ScreenshotToolPalette::setRecordingExportSettingsVisible(bool visible) {
 
 void ScreenshotToolPalette::updateRecordingExportSettingsControls() {
     const bool editable = m_recordingSession.state() == RecordingState::Idle && !recordingBusy();
+    if (m_recordWebcamButton) {
+        m_recordWebcamButton->setEnabled(editable);
+        setScreenshotToolPaletteButtonActive(m_recordWebcamButton, m_recordingWebcamEnabled);
+    }
     if (m_recordPostProcessingPopover) {
         m_recordPostProcessingPopover->setEnabled(editable);
         if (!editable) {

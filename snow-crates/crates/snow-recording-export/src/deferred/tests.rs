@@ -14,6 +14,220 @@ struct Fixture {
     metadata: RenderMetadata,
 }
 
+fn add_webcam(fixture: &Fixture, shape: snow_recording_model::WebcamShape) {
+    let root = fixture._directory.path();
+    let mut config = fixture.config.clone();
+    config.output_path = root.join("camera.mp4");
+    config.format = crate::ExportFormat::Mp4;
+    config.width = 50;
+    config.height = 50;
+    config.fps = 30;
+    config.audio.clear();
+    let mut encoder = StreamingEncoder::builder(config.clone())
+        .recording_source()
+        .create()
+        .unwrap();
+    for (pts, color) in [
+        (6, [240, 10, 10, 255]),
+        (15, [10, 240, 10, 255]),
+        (27, [10, 10, 240, 255]),
+    ] {
+        encoder
+            .push_rgba_frame_at_pts(pts, &color.repeat(50 * 50))
+            .unwrap();
+    }
+    encoder.finish_at_duration_ms(1001).unwrap();
+    let camera_index = root.join("camera.index");
+    let mut bytes = b"SVIDX\0\0".to_vec();
+    for (index, at, duration) in [(0u64, 200u64, 300u32), (1, 500, 400), (2, 900, 101)] {
+        bytes.extend(index.to_le_bytes());
+        bytes.extend(at.to_le_bytes());
+        bytes.extend(duration.to_le_bytes());
+    }
+    std::fs::write(&camera_index, bytes).unwrap();
+    let metadata = root.join("camera.bin");
+    snow_recording_model::webcam::write_metadata(
+        &metadata,
+        &snow_recording_model::webcam::WebcamMetadata {
+            style: snow_recording_model::WebcamStyle { size: 50, shape },
+            fps: 30,
+            duration_ms: 1001,
+            visibility: vec![(200, true), (700, false), (900, true)],
+        },
+    )
+    .unwrap();
+    let footer = read_recording_bundle_footer(&fixture.bundle).unwrap();
+    let mut bundle = File::open(&fixture.bundle).unwrap();
+    let paths: Vec<_> = footer
+        .assets
+        .iter()
+        .enumerate()
+        .map(|(i, asset)| {
+            let path = root.join(format!("saved-{i}.bin"));
+            bundle.seek(SeekFrom::Start(asset.offset)).unwrap();
+            std::io::copy(
+                &mut (&mut bundle).take(asset.len),
+                &mut File::create(&path).unwrap(),
+            )
+            .unwrap();
+            path
+        })
+        .collect();
+    drop(bundle);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&fixture.bundle)
+        .unwrap()
+        .set_len(footer.video_payload_len)
+        .unwrap();
+    let mut assets: Vec<_> = footer
+        .assets
+        .iter()
+        .zip(&paths)
+        .map(|(asset, path)| RecordingBundleAsset {
+            kind: asset.kind,
+            asset_id: asset.asset_id.as_deref(),
+            path,
+        })
+        .collect();
+    assets.extend([
+        RecordingBundleAsset {
+            kind: BundleAssetKind::WebcamVideo,
+            asset_id: None,
+            path: &config.output_path,
+        },
+        RecordingBundleAsset {
+            kind: BundleAssetKind::WebcamIndex,
+            asset_id: None,
+            path: &camera_index,
+        },
+        RecordingBundleAsset {
+            kind: BundleAssetKind::WebcamMetadata,
+            asset_id: None,
+            path: &metadata,
+        },
+    ]);
+    snow_recording_model::write_recording_bundle(&fixture.bundle, &footer.manifest, &assets)
+        .unwrap();
+}
+
+#[test]
+fn webcam_deferred_formats_replay_gaps_rewinds_and_retries_on_source_time() {
+    for format in [
+        crate::ExportFormat::Mp4,
+        crate::ExportFormat::Gif,
+        crate::ExportFormat::Apng,
+        crate::ExportFormat::Webp,
+    ] {
+        for shape in [
+            snow_recording_model::WebcamShape::Square,
+            snow_recording_model::WebcamShape::Circle,
+        ] {
+            let fixture = fixture_with_source(
+                format,
+                crate::VideoCodec::H264,
+                (240, 180),
+                false,
+                false,
+                (0, 15),
+                false,
+            );
+            add_webcam(&fixture, shape);
+            let cancel = CancellationToken::default();
+            let mut replay = crate::webcam::WebcamReplay::open(&fixture.bundle, &cancel)
+                .unwrap()
+                .unwrap();
+            let held = replay.frame_at(200, &cancel).unwrap().unwrap();
+            assert!(
+                Arc::ptr_eq(&held, &replay.frame_at(499, &cancel).unwrap().unwrap()),
+                "held camera samples reuse conversion and overlay caches"
+            );
+            for (at, channel) in [
+                (0, None),
+                (200, Some(0)),
+                (499, Some(0)),
+                (500, Some(1)),
+                (700, None),
+                (900, Some(2)),
+                (200, Some(0)),
+            ] {
+                let image = replay.frame_at(at, &cancel).unwrap();
+                assert_eq!(image.is_some(), channel.is_some());
+                if let (Some(image), Some(channel)) = (image, channel) {
+                    assert!(image.rgba[channel] > 200, "camera at {at} has wrong color");
+                }
+            }
+            let mut metadata = fixture.metadata.clone();
+            metadata.render.playback_overlay = PlaybackOverlay::None;
+            let source = crate::clip::ClipSource::open(&fixture.bundle, None).unwrap();
+            let mut reader = crate::clip::VideoReader::open(source, false).unwrap();
+            let mut preview = Vec::new();
+            for (at, channel) in [(200_000, 0), (500_000, 1), (900_000, 2), (200_000, 0)] {
+                reader.read(at, &cancel).unwrap();
+                reader.copy_rgba(&mut preview).unwrap();
+                assert!(
+                    preview[((107 * 240 + 73) * 4) + channel] > 200,
+                    "trim preview camera at {at}"
+                );
+            }
+            render_bundle(
+                &fixture.bundle,
+                fixture.config.clone(),
+                metadata.clone(),
+                &cancel,
+                |_, _, _, _| {},
+            )
+            .unwrap();
+            let (frames, width, _, _) = decode_frames(&fixture.config.output_path);
+            let center = ((107 * width + 73) * 4) as usize;
+            assert!(
+                frames
+                    .iter()
+                    .any(|frame| frame[center] > 200 && frame[center + 1] < 60),
+                "{format:?}: red camera frame missing {:?}",
+                frames
+                    .iter()
+                    .map(|frame| &frame[center..center + 4])
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                frames
+                    .iter()
+                    .any(|frame| frame[center + 1] > 200 && frame[center] < 60),
+                "{format:?}: green camera frame missing"
+            );
+            assert!(
+                frames.last().unwrap()[center + 2] > 200,
+                "{format:?}: final camera frame missing"
+            );
+            assert!(
+                fixture.bundle.exists(),
+                "rendering must preserve source for retry"
+            );
+            let mut retry = fixture.config.clone();
+            retry.output_path = fixture
+                ._directory
+                .path()
+                .join(format!("retry.{}", format.file_extension()));
+            let result = render_bundle_range_with_speed(
+                &fixture.bundle,
+                retry,
+                metadata,
+                snow_recording_model::TrimRange::new(200_000, 700_000, 1_001_000).unwrap(),
+                snow_recording_model::PlaybackSpeed::from_percent(200).unwrap(),
+                &cancel,
+                |_, _, _, _| {},
+            )
+            .unwrap();
+            assert_eq!(result.duration_ms, 250);
+            let (retimed, width, _, _) = decode_frames(&result.output_path);
+            let center = ((107 * width + 73) * 4) as usize;
+            assert!(retimed.first().unwrap()[center] > 200);
+            assert!(retimed.last().unwrap()[center + 1] > 200);
+        }
+    }
+}
+
 #[test]
 fn deferred_static_output_holds_composed_images_without_losing_audio_or_endpoint() {
     let fixture = fixture(
@@ -1247,9 +1461,33 @@ fn decode_frames(path: &Path) -> (Vec<Vec<u8>>, u32, u32, f64) {
         let (width, height) = (u32::from(reader.width()), u32::from(reader.height()));
         let mut frames = Vec::new();
         let mut duration = 0.0;
+        let mut canvas = vec![0; (width * height * 4) as usize];
         while let Some(frame) = reader.read_next_frame().unwrap() {
             duration += f64::from(frame.delay) / 100.0;
-            frames.push(frame.buffer.to_vec());
+            let previous = (frame.dispose == gif::DisposalMethod::Previous).then(|| canvas.clone());
+            for y in 0..usize::from(frame.height) {
+                for x in 0..usize::from(frame.width) {
+                    let from = (y * usize::from(frame.width) + x) * 4;
+                    let to = ((usize::from(frame.top) + y) * width as usize
+                        + usize::from(frame.left)
+                        + x)
+                        * 4;
+                    if frame.buffer[from + 3] != 0 {
+                        canvas[to..to + 4].copy_from_slice(&frame.buffer[from..from + 4]);
+                    }
+                }
+            }
+            frames.push(canvas.clone());
+            if let Some(previous) = previous {
+                canvas = previous;
+            } else if frame.dispose == gif::DisposalMethod::Background {
+                for y in 0..usize::from(frame.height) {
+                    let begin = ((usize::from(frame.top) + y) * width as usize
+                        + usize::from(frame.left))
+                        * 4;
+                    canvas[begin..begin + usize::from(frame.width) * 4].fill(0);
+                }
+            }
         }
         return (frames, width, height, duration);
     }

@@ -127,7 +127,13 @@ struct SnowRecordingAudioMonitorImpl {
 };
 struct SnowRecordingSourceImpl {};
 struct SnowRecordingRenderTaskImpl {};
+struct SnowWebcam {
+    uint32_t size = 150;
+    uint32_t fps = 30;
+    bool active = false;
+};
 namespace {
+std::atomic<int> webcamCreates = 0, webcamConfigures = 0, webcamDestroys = 0;
 std::vector<std::weak_ptr<RecordingEffectTestState>> effectSources;
 std::unique_ptr<RecordingEffectsSource> testEffectsSource() {
     auto state = std::make_shared<RecordingEffectTestState>();
@@ -1430,6 +1436,124 @@ void effectsPreviewPhysicalPixels() {
 }
 #endif
 
+void playbackPreviewAtZero() {
+#ifdef Q_OS_WIN
+    // The offscreen QPA does not initialize OLE like Qt's Windows GUI thread does.
+    require(SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)),
+            "playback preview regression must run in the GUI thread's STA apartment");
+    const auto apartment = qScopeGuard([] { CoUninitialize(); });
+#endif
+    auto state = std::make_shared<RecordingEffectTestState>();
+    ScreenRecordingAreaWindow area;
+    area.setRecordingRegion(QRect(40, 40, 640, 480));
+    area.setInputMode(ScreenRecordingAreaWindow::InputMode::PassThrough);
+    RecordingEffectPreview preview(area, std::make_unique<RecordingEffectTestSource>(state));
+    QString previewError;
+    preview.reportError = [&](const QString& error) { previewError = error; };
+    area.show();
+    pumpPreview();
+    const auto configure = [&](uint32_t overlay, const QSize& output) {
+        preview.configure(area.recordingRegion(), output, Qt::transparent, Qt::transparent, false,
+                          500, QColor(0, 0, 0, 204), Qt::white, 64, Qt::transparent, false, 41,
+                          overlay);
+        preview.setEligible(true);
+        pumpPreview();
+        require(previewError.isEmpty(),
+                "zero-second playback preview must initialize without errors");
+    };
+    const auto render = [&] {
+        const qreal dpr = area.devicePixelRatioF();
+        QImage image(
+            QSize(qRound(area.canvas()->width() * dpr), qRound(area.canvas()->height() * dpr)),
+            QImage::Format_RGBA8888_Premultiplied);
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        preview.renderAfterCanvas(painter, {});
+        return image;
+    };
+    const auto visibleBounds = [](const QImage& image) {
+        QRect bounds;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                if (image.pixelColor(x, y).alpha() != 0)
+                    bounds |= QRect(x, y, 1, 1);
+        return bounds;
+    };
+    QImage referenceProgress;
+    QImage referenceTime;
+    for (const QSize output :
+         {QSize(640, 480), QSize(320, 240), QSize(1920, 1080), QSize(3840, 2160)}) {
+        configure(SNOW_RECORDING_PLAYBACK_OVERLAY_PROGRESS_BAR, output);
+        const QImage progress = render();
+        const QRect track = visibleBounds(progress);
+        // Fractional DPI rounds the child canvas outward beyond the exact selection.
+        const QRectF selection = area.selectionRect().translated(-area.canvasGeometry().topLeft());
+        const int selectionBottom = qRound(selection.bottom() * area.devicePixelRatioF()) - 1;
+        const QString trackDescription =
+            QStringLiteral("zero-second progress track: DPR=%1, bounds=%2,%3 %4x%5, canvas=%6x%7, "
+                           "center alpha=%8")
+                .arg(area.devicePixelRatioF())
+                .arg(track.x())
+                .arg(track.y())
+                .arg(track.width())
+                .arg(track.height())
+                .arg(progress.width())
+                .arg(progress.height())
+                .arg(progress.pixelColor(track.center()).alpha());
+        require(!track.isEmpty() && qAbs(track.height() - 12) <= 1 &&
+                    qAbs(track.bottom() - selectionBottom) <= 1 &&
+                    progress.pixelColor(track.center()) == QColor(0, 0, 0, 64),
+                qPrintable(trackDescription));
+        if (referenceProgress.isNull())
+            referenceProgress = progress;
+        require(progress == referenceProgress,
+                "progress preview pixels must not depend on export resolution");
+        configure(SNOW_RECORDING_PLAYBACK_OVERLAY_PLAYBACK_TIME, output);
+        const QImage timer = render();
+        const QRect time = visibleBounds(timer);
+        require(!time.isEmpty() && time.bottom() < track.top(),
+                "switching to zero-second play time must replace the track with a timer badge");
+        if (referenceTime.isNull())
+            referenceTime = timer;
+        require(timer == referenceTime,
+                "playback time preview pixels must not depend on export resolution");
+        require(state->starts == 0 && !state->active,
+                "static playback preview must not start native input observers");
+        preview.setEligible(false);
+        require(visibleBounds(render()).isEmpty(),
+                "starting recording must clear the playback preview");
+        preview.setEligible(true);
+        pumpPreview();
+        require(visibleBounds(render()) == time, "returning to idle must restore zero time");
+        area.hide();
+        require(visibleBounds(render()).isEmpty(), "hiding the area must clear the overlay");
+        area.show();
+        pumpPreview();
+        require(visibleBounds(render()) == time, "showing the area must restore zero time");
+        QDialog modal(&area);
+        modal.setModal(true);
+        modal.show();
+        pumpPreview();
+        require(visibleBounds(render()).isEmpty(), "a modal must suspend the playback preview");
+        modal.close();
+        pumpPreview();
+        require(visibleBounds(render()) == time, "closing a modal must restore zero time");
+        configure(SNOW_RECORDING_PLAYBACK_OVERLAY_NONE, output);
+        require(visibleBounds(render()).isEmpty(), "disabling playback preview must erase it");
+    }
+    preview.configure(area.recordingRegion(), QSize(320, 240), Qt::red, Qt::transparent, false, 500,
+                      QColor(0, 0, 0, 204), Qt::white, 64, Qt::transparent, false, 41,
+                      SNOW_RECORDING_PLAYBACK_OVERLAY_PROGRESS_BAR);
+    pumpPreview();
+    require(state->active && render() != referenceProgress,
+            "mouse effects and playback must share the preview canvas");
+    state->publish(false);
+    pumpPreview();
+    require(render() == referenceProgress,
+            "expiring mouse effects must retain the same fixed-pixel progress track");
+}
+
 void effectsPreviewLifecycle() {
     for (const qreal dpr : {1.0, 1.25, 1.5, 1.75, 2.0}) {
         const QRect selected(-2001, -1103, 641, 479);
@@ -2698,6 +2822,31 @@ screenshotWindowNamesAtPoint(const QPointF& point, std::span<const std::uintptr_
 } // namespace snow_shot::platform
 
 extern "C" {
+SnowWebcam* snow_webcam_create(uint32_t size, uint32_t fps) {
+    ++webcamCreates;
+    return new SnowWebcam{size, fps, false};
+}
+uint8_t snow_webcam_configure(const SnowWebcam* source, uint32_t size, uint32_t fps) {
+    auto* camera = const_cast<SnowWebcam*>(source);
+    camera->size = size;
+    camera->fps = fps;
+    ++webcamConfigures;
+    return 1;
+}
+void snow_webcam_set_active(const SnowWebcam* source, uint8_t active) {
+    if (source)
+        const_cast<SnowWebcam*>(source)->active = active != 0;
+}
+void snow_webcam_retry(const SnowWebcam*) {}
+void snow_webcam_destroy(SnowWebcam* source) {
+    delete source;
+    ++webcamDestroys;
+}
+size_t snow_webcam_error(const SnowWebcam*, char* buffer, size_t capacity) {
+    if (buffer && capacity)
+        buffer[0] = '\0';
+    return 0;
+}
 SnowRecordingResult
 snow_recording_session_create_direct(const SnowCaptureDirectRecordingConfig* config,
                                      SnowRecordingSession** result) {
@@ -3026,6 +3175,276 @@ const char* snow_recording_last_error_message() {
     }
     return "test backend";
 }
+}
+
+void waitForWebcam(const std::function<bool()>& condition, const char* message) {
+    QElapsedTimer deadline;
+    deadline.start();
+    while (!condition() && deadline.elapsed() < 3000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents, 50);
+    require(condition(), message);
+}
+
+void prepareWebcamSettings(bool enabled) {
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    require(
+        configuration.setValues(
+            {{QStringLiteral("screen_recording/enable_webcam"), enabled},
+             {QStringLiteral("screen_recording/webcam_size"), 150},
+             {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("square")},
+             {QStringLiteral("screen_recording/show_cursor"), false},
+             {QStringLiteral("screen_recording/show_keyboard"), false},
+             {QStringLiteral("screen_recording/record_mouse_clicks"), false},
+             {QStringLiteral("screen_recording/mouse_highlight_enabled"), false},
+             {QStringLiteral("screen_recording/mouse_trail_color"), QStringLiteral("#00000000")},
+             {QStringLiteral("screen_recording/mouse_click_color"), QStringLiteral("#00000000")},
+             {QStringLiteral("screen_recording/enable_microphone"), false},
+             {QStringLiteral("screen_recording/enable_system_audio"), false},
+             {QStringLiteral("screen_recording/post_processing_enabled"), false},
+             {QStringLiteral("screen_recording/start_delay_seconds"), 0},
+             {QStringLiteral("screen_recording/auto_exit_after_recording_ends"), false}}),
+        "prepare an isolated webcam-only recording");
+}
+
+void recordingWebcamPreviewLifecycle() {
+    prepareWebcamSettings(true);
+    const snow_shot::storage::RecordingSettings settings;
+    const int created = webcamCreates;
+    const int destroyed = webcamDestroys;
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open({80, 80, 320, 240});
+        const auto preview = effectSources.back().lock();
+        waitForWebcam([&] { return preview && preview->active && preview->webcam; },
+                      "saved webcam enablement must start preview without a later UI edit");
+        const auto* camera = preview->webcam;
+        waitForWebcam([&] { return camera->active; }, "showing the selection activates the camera");
+        require(webcamCreates == created + 1 && preview->webcamSize == 150 &&
+                    preview->webcamShape == 0,
+                "preview must share one camera with the saved style");
+        require(settings.setWebcamSize(300) && settings.setWebcamShape(QStringLiteral("circle")),
+                "change idle webcam style");
+        waitForWebcam([&] { return preview->webcamSize == 300 && preview->webcamShape == 1; },
+                      "idle saved styles must update the existing preview");
+        require(preview->webcam == camera && camera->size == 300 && webcamCreates == created + 1,
+                "style changes reuse the shared camera source");
+        require(settings.setWebcamEnabled(false), "disable idle webcam");
+        require(!preview->active && !camera->active,
+                "disabling webcam retires preview and capture");
+        require(settings.setWebcamEnabled(true), "re-enable idle webcam");
+        waitForWebcam(
+            [&] { return preview->active && preview->webcam == camera && camera->active; },
+            "re-enabling webcam restores preview on the same source");
+        palette()->recordingCloseRequested();
+        require(!controller.isOpen() && !camera->active, "closing the selection stops capture");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        controller.open({80, 80, 320, 240});
+        const auto reopened = effectSources.back().lock();
+        waitForWebcam([&] { return reopened && reopened->active && reopened->webcam == camera; },
+                      "reopening configures the replacement preview with the retained source");
+        require(webcamCreates == created + 1, "reopening must not create competing camera sources");
+        palette()->recordingCloseRequested();
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(webcamDestroys == destroyed + 1, "controller teardown releases its camera source");
+}
+
+void recordingWebcamPreferencesPreserveSessionSnapshots() {
+    enum class Phase { Scheduled, Countdown, Starting, Recording, Paused, Finalizing };
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    for (const bool initiallyEnabled : {false, true}) {
+        for (const auto phase : {Phase::Scheduled, Phase::Countdown, Phase::Starting,
+                                 Phase::Recording, Phase::Paused, Phase::Finalizing}) {
+            prepareWebcamSettings(initiallyEnabled);
+            const snow_shot::storage::RecordingSettings settings;
+            if (phase == Phase::Countdown)
+                require(settings.setStartDelaySeconds(1), "prepare a controlled countdown");
+            ScreenRecordingController controller(testEffectsSource);
+            controller.open({80, 80, 320, 240});
+            std::promise<void> releaseStart;
+            if (phase == Phase::Starting) {
+                sessionCreateEntered = false;
+                sessionCreateGate = releaseStart.get_future().share();
+            }
+            controller.startRecording();
+            const auto recording = [&] {
+                return controller.automationState().value(QStringLiteral("state")) ==
+                       QStringLiteral("recording");
+            };
+            if (phase == Phase::Starting)
+                waitForWebcam([] { return sessionCreateEntered.load(); }, "hold native startup");
+            else if (phase != Phase::Scheduled && phase != Phase::Countdown)
+                waitForWebcam(recording, "start the webcam snapshot fixture");
+            if (phase == Phase::Paused)
+                palette()->recordingPauseRequested();
+            std::promise<void> releaseExport;
+            std::promise<void> enteredExport;
+            auto exportReady = enteredExport.get_future();
+            if (phase == Phase::Finalizing) {
+                exportGate = releaseExport.get_future().share();
+                exportEntered = &enteredExport;
+                palette()->recordingStopRequested();
+                waitForWebcam(
+                    [&] {
+                        return exportReady.wait_for(std::chrono::seconds(0)) ==
+                               std::future_status::ready;
+                    },
+                    "hold recording finalization");
+            }
+            const int configured = webcamConfigures;
+            require(
+                configuration.setValues(
+                    {{QStringLiteral("screen_recording/enable_webcam"), !initiallyEnabled},
+                     {QStringLiteral("screen_recording/webcam_size"), 300},
+                     {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("circle")}}),
+                "save the next recording's webcam preferences during an active session");
+            const auto options =
+                controller.automationState().value(QStringLiteral("options")).toObject();
+            require(options.value(QStringLiteral("webcam")) == initiallyEnabled &&
+                        options.value(QStringLiteral("webcam_size")) == 150 &&
+                        options.value(QStringLiteral("webcam_shape")) == QStringLiteral("square") &&
+                        webcamConfigures == configured,
+                    "saving preferences must preserve the accepted session's webcam snapshot");
+            if (phase == Phase::Starting) {
+                releaseStart.set_value();
+                sessionCreateGate = {};
+            }
+            if (phase == Phase::Scheduled || phase == Phase::Countdown || phase == Phase::Starting)
+                waitForWebcam(recording, "accepted startup retains its original webcam options");
+            require((lastDirectConfig.webcam_source != nullptr) == initiallyEnabled &&
+                        lastDirectConfig.webcam_size == 150 && lastDirectConfig.webcam_shape == 0,
+                    "native recording receives the accepted webcam snapshot");
+            if (phase == Phase::Paused)
+                palette()->recordingResumeRequested();
+            if (phase == Phase::Finalizing) {
+                releaseExport.set_value();
+                exportGate = {};
+                exportEntered = nullptr;
+            } else {
+                palette()->recordingStopRequested();
+            }
+            waitForWebcam(
+                [&] {
+                    return !controller.isRecording() &&
+                           !controller.automationState().value(QStringLiteral("busy")).toBool();
+                },
+                "finalization returns to editable settings");
+            require(palette()->recordingWebcamEnabled() == !initiallyEnabled &&
+                        palette()->recordingWebcamSize() == 300 &&
+                        palette()->recordingWebcamShape() == QStringLiteral("circle"),
+                    "returning to idle applies saved webcam preferences to the toolbar");
+            if (!initiallyEnabled) {
+                const auto preview = effectSources.back().lock();
+                waitForWebcam(
+                    [&] {
+                        return preview && preview->active && preview->webcam &&
+                               preview->webcamSize == 300 && preview->webcamShape == 1;
+                    },
+                    "deferred enablement configures preview before the next recording");
+            }
+            palette()->recordingStartDelaySecondsChanged(0);
+            controller.open({80, 80, 320, 240});
+            controller.startRecording();
+            waitForWebcam(recording, "start the next manual recording");
+            require(
+                (lastDirectConfig.webcam_source != nullptr) == !initiallyEnabled &&
+                    lastDirectConfig.webcam_size == 300 && lastDirectConfig.webcam_shape == 1,
+                "the next manual recording receives all preferences saved during its predecessor");
+            palette()->recordingCloseRequested();
+            waitForIdle(controller);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+    }
+}
+
+void recordingWebcamAutomationOptionsStayIsolated() {
+    prepareWebcamSettings(false);
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    ScreenRecordingController controller(testEffectsSource);
+    QString error;
+    require(controller.startAutomation({80, 80, 320, 240},
+                                       {{QStringLiteral("webcam"), true},
+                                        {QStringLiteral("webcam_size"), 220},
+                                        {QStringLiteral("webcam_shape"), QStringLiteral("circle")}},
+                                       &error),
+            "start with isolated automation webcam options");
+    waitForWebcam([&] { return controller.isRecording(); }, "start automated webcam fixture");
+    require(configuration.setValues(
+                {{QStringLiteral("screen_recording/enable_webcam"), true},
+                 {QStringLiteral("screen_recording/webcam_size"), 300},
+                 {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("square")}}),
+            "save manual preferences while automation owns recording");
+    const auto saved = configuration.snapshot();
+    require(controller.controlAutomation(QStringLiteral("stop"), {}, &error),
+            "stop the automated recording");
+    waitForIdle(controller);
+    require(palette()->recordingWebcamSize() == 220 &&
+                palette()->recordingWebcamShape() == QStringLiteral("circle"),
+            "automation retains its isolated webcam options through finalization");
+    controller.startRecording();
+    waitForWebcam([&] { return controller.isRecording(); },
+                  "start a manual session after automation");
+    require(lastDirectConfig.webcam_source && lastDirectConfig.webcam_size == 300 &&
+                lastDirectConfig.webcam_shape == 0 && configuration.snapshot() == saved,
+            "manual startup restores current saved options without overwriting preferences");
+    palette()->recordingCloseRequested();
+    waitForIdle(controller);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+void recordingWebcamSettingsSurviveInterruptedStartup() {
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    for (const bool cancelCountdown : {true, false}) {
+        prepareWebcamSettings(true);
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open({80, 80, 320, 240});
+        std::promise<void> release;
+        if (cancelCountdown) {
+            palette()->recordingStartDelaySecondsChanged(10);
+        } else {
+            sessionCreateEntered = false;
+            sessionCreateGate = release.get_future().share();
+        }
+        controller.startRecording();
+        if (!cancelCountdown)
+            waitForWebcam([] { return sessionCreateEntered.load(); }, "hold the failing startup");
+        require(configuration.setValues(
+                    {{QStringLiteral("screen_recording/enable_webcam"), false},
+                     {QStringLiteral("screen_recording/webcam_size"), 280},
+                     {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("circle")}}),
+                "save webcam preferences before interrupted startup retires");
+        ErrorObserver errors;
+        if (cancelCountdown) {
+            palette()->recordingCloseRequested();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            controller.open({80, 80, 320, 240});
+        } else {
+            qApp->installEventFilter(&errors);
+            failStart = true;
+            release.set_value();
+            sessionCreateGate = {};
+            waitForWebcam(
+                [&] {
+                    return !controller.automationState().value(QStringLiteral("busy")).toBool();
+                },
+                "failed startup returns to editable webcam settings");
+            qApp->removeEventFilter(&errors);
+            failStart = false;
+            require(errors.shown == 1, "the controlled startup failure is reported once");
+        }
+        require(!palette()->recordingWebcamEnabled() && palette()->recordingWebcamSize() == 280 &&
+                    palette()->recordingWebcamShape() == QStringLiteral("circle"),
+                "reopening and startup failure restore all deferred webcam preferences");
+        palette()->recordingStartDelaySecondsChanged(0);
+        controller.startRecording();
+        waitForWebcam([&] { return controller.isRecording(); }, "retry the interrupted recording");
+        require(!lastDirectConfig.webcam_source && lastDirectConfig.webcam_size == 280 &&
+                    lastDirectConfig.webcam_shape == 1,
+                "retry uses preferences saved during the interrupted startup");
+        palette()->recordingCloseRequested();
+        waitForIdle(controller);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
 }
 
 void recordingSettingsDialog() {
@@ -3611,8 +4030,20 @@ void recordingPostProcessingLifecycle() {
         WindowInputBlockObserver toolbarInput;
         area->installEventFilter(&areaInput);
         toolbar->installEventFilter(&toolbarInput);
+        pumpPreview();
+        const QImage withoutPlayback = previewImage(*area->canvas());
+        const QPoint trackPoint(withoutPlayback.width() / 2, withoutPlayback.height() - 2);
         controls->recordingPostProcessingEnabledChanged(true);
+        pumpPreview();
+        require(previewImage(*area->canvas()).pixelColor(trackPoint) !=
+                    withoutPlayback.pixelColor(trackPoint),
+                "enabling progress bar must immediately display its zero-second track");
         controls->recordingPostProcessingEffectChanged(QStringLiteral("playback_time"));
+        pumpPreview();
+        const QImage withTime = previewImage(*area->canvas());
+        require(withTime != withoutPlayback &&
+                    withTime.pixelColor(trackPoint) == withoutPlayback.pixelColor(trackPoint),
+                "selecting play time must immediately replace the track with the zero timer");
         controls->recordingProgressBarColorChanged(QColor(20, 100, 200, 128));
         require(settings.postProcessingEnabled() &&
                     settings.postProcessingEffect() == QStringLiteral("playback_time") &&
@@ -3625,6 +4056,9 @@ void recordingPostProcessingLifecycle() {
                     controls->recordingPostProcessingEffect() == QStringLiteral("progress_bar") &&
                     controls->recordingProgressBarColor() == QColor(22, 119, 255),
                 "an open toolbar follows externally reset post-processing preferences");
+        pumpPreview();
+        require(previewImage(*area->canvas()) == withoutPlayback,
+                "disabling post processing through settings must clear the preview overlay");
         controls->recordingPostProcessingEnabledChanged(true);
         controls->recordingPostProcessingEffectChanged(QStringLiteral("playback_time"));
         controls->recordingProgressBarColorChanged(QColor(20, 100, 200, 128));
@@ -5956,6 +6390,18 @@ int main(int argc, char** argv) {
         ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (app.arguments().contains(QStringLiteral("--webcam-preview-only"))) {
+        recordingWebcamPreviewLifecycle();
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (app.arguments().contains(QStringLiteral("--webcam-settings-only"))) {
+        recordingWebcamPreferencesPreserveSessionSnapshots();
+        recordingWebcamAutomationOptionsStayIsolated();
+        recordingWebcamSettingsSurviveInterruptedStartup();
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--automation-only"))) {
         {
             ScreenRecordingController manual(testEffectsSource);
@@ -6040,6 +6486,21 @@ int main(int argc, char** argv) {
                                             {{QStringLiteral("quality"), 101}}, &error) &&
                     error == QStringLiteral("invalid_parameters") && !controller.isOpen(),
                 "out-of-range video quality must reject before opening recording UI");
+        for (const auto value : {49.0, 501.0, 150.5}) {
+            require(!controller.startAutomation(QRect(10, 10, 320, 240),
+                                                {{QStringLiteral("webcam_size"), value}}, &error) &&
+                        !controller.isOpen(),
+                    "automation rejects invalid webcam sizes before opening recording UI");
+        }
+        require(!controller.startAutomation(
+                    QRect(10, 10, 320, 240),
+                    {{QStringLiteral("webcam_shape"), QStringLiteral("oval")}}, &error) &&
+                    !controller.isOpen(),
+                "automation rejects unsupported webcam shapes");
+        require(!controller.startAutomation(QRect(10, 10, 320, 240),
+                                            {{QStringLiteral("webcam"), 1}}, &error) &&
+                    !controller.isOpen(),
+                "automation webcam toggle must be boolean");
         for (const auto radius : {7.0, 129.0, 41.5}) {
             require(!controller.startAutomation(
                         QRect(10, 10, 320, 240),
@@ -6125,6 +6586,11 @@ int main(int argc, char** argv) {
         return 0;
     }
 #endif
+    if (app.arguments().contains(QStringLiteral("--playback-preview-only"))) {
+        playbackPreviewAtZero();
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--effects-preview-only"))) {
         class KeyTranslator : public QTranslator {
           public:
@@ -6151,6 +6617,7 @@ int main(int argc, char** argv) {
         }
         app.removeTranslator(&translator);
         recordingKeyboardFontFollowsApplication();
+        playbackPreviewAtZero();
         effectsPreviewLifecycle();
         areaWindowPaintsInputSurfaceOnlyWhenItIsVisible();
         previewIgnoresEventsOtherThanDialogVisibility();

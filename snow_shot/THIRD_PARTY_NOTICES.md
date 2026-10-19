@@ -41,6 +41,11 @@ Recording GIF exports use the Rust `gif` and `weezl` crates (MIT OR Apache-2.0)
 for palette-indexed frame encoding and LZW compression. Their license texts are
 included in the generated Rust dependency notice bundle.
 
+Webcam capture uses the operating system's Media Foundation and AVFoundation
+frameworks through the existing windows-rs and objc2 bindings (MIT OR Apache-2.0
+OR Zlib). Camera-track storage uses the existing FFmpeg libraries. Their resolved
+licenses are included in the generated dependency notice bundle.
+
 Parallel screenshot stitching uses Rayon (Apache-2.0 OR MIT). Its license
 texts and resolved dependencies are included in the generated Rust dependency
 notice bundle.

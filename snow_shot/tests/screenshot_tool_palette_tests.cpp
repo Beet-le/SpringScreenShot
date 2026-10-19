@@ -728,6 +728,26 @@ void recordingEffectSettingsModal() {
         palette.findChild<QFrame*>(QStringLiteral("screenRecordingExportSettingsSeparator"));
     require(button && keyboard && separator,
             "recording settings must expose a button and separator");
+    auto* webcam =
+        palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenRecordingWebcam"));
+    require(webcam && !palette.recordingWebcamEnabled() && palette.recordingWebcamSize() == 150 &&
+                palette.recordingWebcamShape() == QStringLiteral("square"),
+            "webcam controls default off at 150 px square");
+    require(webcam->parentWidget() == keyboard->parentWidget() &&
+                webcam->parentWidget()->layout()->indexOf(webcam) ==
+                    keyboard->parentWidget()->layout()->indexOf(keyboard) + 1,
+            "webcam toggle must be immediately after keystrokes");
+    int webcamChanges = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::recordingWebcamEnabledChanged, &palette,
+                     [&](bool enabled) {
+                         require(enabled, "webcam toggle enables capture");
+                         ++webcamChanges;
+                     });
+    QMetaObject::invokeMethod(webcam, "clicked", Qt::DirectConnection);
+    require(webcamChanges == 1 && palette.recordingWebcamEnabled(),
+            "webcam activation emits exactly once");
+    palette.setRecordingWebcamEnabled(false);
+    require(webcamChanges == 1, "restoring webcam state must not emit edits");
     require(button->text().isEmpty() && button->accessibleName() == QStringLiteral("Settings") &&
                 separator->x() > keyboard->x() && button->x() > separator->x(),
             "settings must follow the keyboard toggle at the right edge");
@@ -805,6 +825,15 @@ void recordingEffectSettingsModal() {
             QStringLiteral("screenRecordingMouseHighlightRadius"));
         require(radius && radius->value() == palette.recordingMouseHighlightRadius(),
                 "reopening effect settings restores the cached highlight radius");
+        auto* webcamSize =
+            settings.modal->contentWidget()->findChild<adqt::widgets::AdInputNumber*>(
+                QStringLiteral("screenRecordingWebcamSize"));
+        auto* webcamShape = settings.modal->contentWidget()->findChild<adqt::widgets::AdSelect*>(
+            QStringLiteral("screenRecordingWebcamShape"));
+        require(webcamSize && webcamSize->minimum() == 50 && webcamSize->maximum() == 500 &&
+                    webcamSize->value() == palette.recordingWebcamSize() && webcamShape &&
+                    webcamShape->currentValue().toString() == palette.recordingWebcamShape(),
+                "dialog recreation restores webcam size and shape");
         require(settings.modal != nullptr && settings.modal->isOpen(),
                 "clicking Settings must build and open the modal");
         auto* surface = settings.modal->contentWidget()->window();
@@ -872,6 +901,19 @@ void recordingEffectSettingsModal() {
     require(keyboardSize && keyboardSize->value() == 64 && keyboardSize->minimum() == 32 &&
                 keyboardSize->maximum() == 128,
             "keyboard size must expose pixel bounds and default");
+    auto* webcamSize =
+        form->findChild<adqt::widgets::AdInputNumber*>(QStringLiteral("screenRecordingWebcamSize"));
+    auto* webcamShape =
+        form->findChild<adqt::widgets::AdSelect*>(QStringLiteral("screenRecordingWebcamShape"));
+    webcamSize->setValue(500);
+    webcamShape->setCurrentValue(QStringLiteral("circle"));
+    require(palette.recordingWebcamSize() == 500 &&
+                palette.recordingWebcamShape() == QStringLiteral("circle"),
+            "webcam size and shape apply immediately");
+    palette.setRecordingWebcamSize(49);
+    require(webcamSize->value() == 50, "webcam size clamps to 50");
+    palette.setRecordingWebcamSize(501);
+    require(webcamSize->value() == 500, "webcam size clamps to 500");
     int sizeChanges = 0;
     int lastSize = 0;
     QObject::connect(&palette, &ScreenshotToolPalette::recordingKeyboardSizeChanged, &palette,
@@ -937,7 +979,22 @@ void recordingEffectSettingsModal() {
                             QStringLiteral("screenRecordingMouseHighlightRadius"))
                             ->accessibleName() == radiusLabel,
                 "highlight radius label and accessible name retranslate in place");
+        const auto webcamSizeLabel =
+            QCoreApplication::translate("ScreenshotToolPalette", "Webcam Size");
+        const auto webcamShapeLabel =
+            QCoreApplication::translate("ScreenshotToolPalette", "Webcam Shape");
+        require(form->field(QStringLiteral("webcamSize"))->label() == webcamSizeLabel &&
+                    webcamSize->accessibleName() == webcamSizeLabel &&
+                    form->field(QStringLiteral("webcamShape"))->label() == webcamShapeLabel &&
+                    webcamShape->accessibleName() == webcamShapeLabel &&
+                    webcamShape->currentValue().toString() == QStringLiteral("circle"),
+                "webcam controls retranslate in place without changing the selected shape");
     }
+    const QRect webcamLeft = form->field(QStringLiteral("webcamSize"))->geometry();
+    const QRect webcamRight = form->field(QStringLiteral("webcamShape"))->geometry();
+    require(webcamLeft.top() == webcamRight.top() &&
+                webcamRight.left() - webcamLeft.right() - 1 == 16,
+            "webcam controls retain the standard 16px column gutter");
     require(first.width() == form->width() && left.top() > first.top() &&
                 left.top() == right.top() && left.width() == right.width() &&
                 right.left() - left.right() - 1 == 16 && left.width() == 218 &&
@@ -1063,9 +1120,15 @@ void recordingEffectSettingsModal() {
     palette.setRecordingState(ScreenshotToolPalette::RecordingState::Recording);
     requireSettingsAbsent("recording must close and destroy settings");
     require(!button->isEnabled(), "recording must lock the settings button");
+    require(!palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenRecordingWebcam"))
+                 ->isEnabled(),
+            "recording must lock the webcam toggle");
     click(button);
     requireSettingsAbsent("a disabled settings button must not build the dialog");
     palette.setRecordingState(ScreenshotToolPalette::RecordingState::Idle);
+    require(palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenRecordingWebcam"))
+                ->isEnabled(),
+            "returning to idle unlocks the webcam toggle");
 
     static_cast<void>(openSettings());
     require(palette.activateDrawingShortcut(QStringLiteral("shape")),

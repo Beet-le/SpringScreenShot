@@ -992,6 +992,10 @@
             <translation>Record speakers</translation>
         </message>
         <message>
+            <source>Record webcam</source>
+            <translation>Record webcam</translation>
+        </message>
+        <message>
             <source>Recording duration</source>
             <translation>Recording duration</translation>
         </message>
@@ -1222,6 +1226,10 @@
         <message>
             <source>Spotlight</source>
             <translation>Spotlight</translation>
+        </message>
+        <message>
+            <source>Square</source>
+            <translation>Square</translation>
         </message>
         <message>
             <source>Start arrowhead</source>
@@ -1490,6 +1498,14 @@
         <message>
             <source>Watermark text</source>
             <translation>Watermark text</translation>
+        </message>
+        <message>
+            <source>Webcam Shape</source>
+            <translation>Webcam Shape</translation>
+        </message>
+        <message>
+            <source>Webcam Size</source>
+            <translation>Webcam Size</translation>
         </message>
         <message>
             <source>Yellow</source>

@@ -10,6 +10,7 @@ pub mod export;
 pub mod gpu;
 pub mod resize;
 pub mod streaming;
+mod webcam;
 
 #[cfg(feature = "bench-timing")]
 pub mod bench_timing;

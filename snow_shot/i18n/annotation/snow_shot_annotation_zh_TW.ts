@@ -992,6 +992,10 @@
             <translation>錄製系統音效</translation>
         </message>
         <message>
+            <source>Record webcam</source>
+            <translation>錄製攝影機</translation>
+        </message>
+        <message>
             <source>Recording duration</source>
             <translation>錄製時間</translation>
         </message>
@@ -1222,6 +1226,10 @@
         <message>
             <source>Spotlight</source>
             <translation>聚光燈</translation>
+        </message>
+        <message>
+            <source>Square</source>
+            <translation>方形</translation>
         </message>
         <message>
             <source>Start arrowhead</source>
@@ -1490,6 +1498,14 @@
         <message>
             <source>Watermark text</source>
             <translation>浮水印文字</translation>
+        </message>
+        <message>
+            <source>Webcam Shape</source>
+            <translation>攝影機形狀</translation>
+        </message>
+        <message>
+            <source>Webcam Size</source>
+            <translation>攝影機大小</translation>
         </message>
         <message>
             <source>Yellow</source>

@@ -2,6 +2,7 @@
 #define SNOW_RECORDING_EFFECTS_H
 #include <stddef.h>
 #include <stdint.h>
+#include "snow_webcam.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -14,7 +15,7 @@ typedef struct SnowRecordingEffectsKeyLabel {
     const char* label_utf8;
 } SnowRecordingEffectsKeyLabel;
 
-#define SNOW_RECORDING_EFFECTS_CONFIG_VERSION 7u
+#define SNOW_RECORDING_EFFECTS_CONFIG_VERSION 8u
 typedef struct SnowRecordingEffectsConfig {
     uint32_t version;
     uint32_t struct_size;
@@ -46,6 +47,10 @@ typedef struct SnowRecordingEffectsConfig {
     double canvas_scale;
     /* Version 7: highlight radius in physical display pixels (8..128); older callers use 41. */
     uint32_t highlight_radius;
+    /* v8: retained camera source; null disables webcam. Shape: 0 square, 1 circle. */
+    const SnowWebcam* webcam_source;
+    uint32_t webcam_size;
+    uint32_t webcam_shape;
 } SnowRecordingEffectsConfig;
 
 typedef struct SnowRecordingEffectsTile {
@@ -77,6 +82,14 @@ void snow_recording_effects_destroy(SnowRecordingEffects* effects);
 // A complete immutable snapshot. All tile pointers remain valid until release, including after
 // stop.
 SnowRecordingEffectsFrame* snow_recording_effects_acquire_frame(SnowRecordingEffects* effects);
+// Static zero-second playback overlay on the same physical display canvas as mouse effects.
+// Width/height use native desktop units; canvas_scale matches SnowRecordingEffectsConfig.
+// No observers are started.
+// overlay: 1 = progress bar, 2 = playback time. Release with release_frame.
+// Null font family selects the system UI font.
+SnowRecordingEffectsFrame* snow_recording_effects_playback_preview(
+    uint32_t width, uint32_t height, double canvas_scale, uint32_t overlay, uint32_t progress_rgba,
+    const char* font_family_utf8, const char* cjk_font_family_utf8, uint32_t font_weight);
 int32_t snow_recording_effects_frame_info(const SnowRecordingEffectsFrame* frame,
                                           SnowRecordingEffectsFrameInfo* info);
 // Both layers use physical display pixels and fixed pixel styles. FrameInfo width/height

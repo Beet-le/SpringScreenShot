@@ -256,7 +256,17 @@ impl Compositor {
         highlight: &[RgbaOverlay<'_>],
         opaque: bool,
     ) -> MacResult<PixelBuffer> {
-        for overlay in highlight.iter().chain(overlays) {
+        self.compose_with_background_overlays(layers, &[], overlays, highlight, opaque)
+    }
+    pub fn compose_with_background_overlays(
+        &mut self,
+        layers: &[Layer<'_>],
+        background_overlays: &[RgbaOverlay<'_>],
+        overlays: &[RgbaOverlay<'_>],
+        highlight: &[RgbaOverlay<'_>],
+        opaque: bool,
+    ) -> MacResult<PixelBuffer> {
+        for overlay in background_overlays.iter().chain(highlight).chain(overlays) {
             let needed = overlay.stride.checked_mul(overlay.height as usize);
             if overlay.width == 0
                 || overlay.height == 0
@@ -311,9 +321,10 @@ impl Compositor {
             }
             let srgb =
                 CGColorSpace::with_name(Some(kCGColorSpaceSRGB)).ok_or(MacError::Inactive)?;
-            for (overlay, multiply) in highlight
+            for (overlay, multiply) in background_overlays
                 .iter()
-                .map(|tile| (tile, true))
+                .map(|tile| (tile, false))
+                .chain(highlight.iter().map(|tile| (tile, true)))
                 .chain(overlays.iter().map(|tile| (tile, false)))
             {
                 let data = objc2_foundation::NSData::with_bytes(overlay.bytes);

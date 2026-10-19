@@ -134,6 +134,7 @@ impl RecordingAudioMode {
 
 #[derive(Clone, Debug)]
 pub struct DirectRecordingConfig {
+    pub webcam: Option<snow_webcam::Config>,
     /// Whether animated image outputs repeat indefinitely.
     pub loop_animated_images: bool,
     pub region: RecordingRegion,
@@ -197,6 +198,9 @@ impl DirectRecordingConfig {
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if let Some(webcam) = &self.webcam {
+            webcam.style.validate()?;
+        }
         if !snow_recording_model::render::MOUSE_HIGHLIGHT_RADIUS_RANGE
             .contains(&self.mouse_highlight_radius)
         {
@@ -1284,6 +1288,11 @@ impl DirectRecordingSession {
         runtime.control_tx.try_send(command).map_err(|_| {
             ScreenRecorderError::Encode("direct recording worker stopped".to_string())
         })?;
+        if let Some(webcam) = &self.config.webcam {
+            webcam
+                .source
+                .set_recording_active(next == RecordingState::Running);
+        }
         self.state.store(state_to_u8(next), Ordering::Release);
         Ok(())
     }
@@ -1460,6 +1469,7 @@ struct DirectWorkerInputs {
 }
 
 fn run_direct_worker(inputs: DirectWorkerInputs) -> Result<DirectRecordingReport> {
+    let mut webcam_capture = crate::webcam::CaptureLease::new(&inputs.config);
     let DirectWorkerInputs {
         stop_boundary,
         cancel_requested,
@@ -1844,6 +1854,14 @@ fn run_direct_worker(inputs: DirectWorkerInputs) -> Result<DirectRecordingReport
             });
             latest_frame = Some(frame);
         }
+        if let Some(webcam) = &config.webcam {
+            let snapshot = webcam.source.recording_snapshot(&clock, slot.at);
+            changed |= compositor.webcam.prepare(
+                snapshot.frame.as_deref(),
+                webcam.style,
+                compositor.output_size,
+            );
+        }
         let timestamp_ms = slot.at.as_millis() as u64;
         let active = compositor.has_active_animation(&config, timestamp_ms);
         #[cfg(windows)]
@@ -1968,6 +1986,7 @@ fn run_direct_worker(inputs: DirectWorkerInputs) -> Result<DirectRecordingReport
     }
 
     // Stop observation before potentially expensive encoder draining/finalization.
+    webcam_capture.stop();
     drop(keyboard_input.take());
     if canceled {
         capture_stream.stop();
@@ -2639,6 +2658,7 @@ impl ResizeFrameDomain {
 }
 
 struct VisualCompositor {
+    webcam: snow_recording_effects::webcam::WebcamOverlay,
     output_size: (u32, u32),
     background: RasterBuffer,
     rgba: RasterBuffer,
@@ -2670,6 +2690,7 @@ struct VisualCompositor {
 impl VisualCompositor {
     fn new(output_size: (u32, u32)) -> Self {
         Self {
+            webcam: Default::default(),
             output_size,
             background: RasterBuffer::new(),
             rgba: RasterBuffer::new(),
@@ -2765,6 +2786,7 @@ impl VisualCompositor {
         let bytes = self.output_size.0 as usize * self.output_size.1 as usize * 4;
         #[cfg(any(test, feature = "bench-synthetic-input"))]
         if self.direct_output
+            && !self.webcam.visible()
             && !effects.show_cursor
             && effects.mouse_trail_rgba[3] == 0
             && effects.mouse_click_rgba[3] == 0
@@ -2883,6 +2905,18 @@ impl VisualCompositor {
             .record("compose.restore", restore_started.elapsed());
         #[cfg(feature = "bench-compositor-timing")]
         self.timings.record("compose.resize", stage.elapsed());
+        if let Some(rows) = touched.as_mut() {
+            self.webcam.draw_to(&mut TrackedSurface {
+                pixels: &mut rgba,
+                rows,
+            });
+        } else {
+            self.webcam
+                .draw_to(&mut snow_recording_effects::surface::RgbaSurface {
+                    pixels: &mut rgba,
+                    dimensions: self.output_size,
+                });
+        }
         let cursor = cursor.cloned();
         if effects.show_cursor
             && effects.mouse_highlight_rgba[3] != 0
@@ -3523,6 +3557,7 @@ mod tests {
 
     fn config() -> DirectRecordingConfig {
         DirectRecordingConfig {
+            webcam: None,
             audio_mode: Default::default(),
             system_audio_gain_db: 0,
             microphone_gain_db: 0,
@@ -3678,6 +3713,119 @@ mod tests {
     }
 
     #[test]
+    fn webcam_disconnect_keeps_clean_screen_exporting_in_every_direct_format() {
+        struct Camera(
+            crossbeam_channel::Receiver<std::result::Result<snow_webcam::RawFrame, String>>,
+        );
+        impl snow_webcam::CameraBackend for Camera {
+            fn poll(
+                &mut self,
+                timeout: Duration,
+            ) -> std::result::Result<Option<snow_webcam::RawFrame>, String> {
+                match self.0.recv_timeout(timeout) {
+                    Ok(frame) => frame.map(Some),
+                    Err(_) => Ok(None),
+                }
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        for format in [
+            ExportFormat::Mp4,
+            ExportFormat::Gif,
+            ExportFormat::Apng,
+            ExportFormat::Webp,
+        ] {
+            let (sender, receiver) = crossbeam_channel::bounded(1);
+            let source = snow_webcam::Source::with_backend(
+                snow_webcam::CaptureOptions { size: 50, fps: 10 },
+                move |_| Ok(Box::new(Camera(receiver.clone()))),
+            )
+            .unwrap();
+            let mut settings = config();
+            settings.region.width = 240;
+            settings.region.height = 180;
+            settings.maximum_width = None;
+            settings.maximum_height = None;
+            settings.output_fps = 10;
+            settings.capture_fps = 10;
+            settings.format = format;
+            settings.output_path = directory
+                .path()
+                .join(format!("camera.{}", format.file_extension()));
+            settings.prefer_hardware_encoder = false;
+            settings.enable_microphone = false;
+            settings.enable_system_audio = false;
+            settings.show_cursor = false;
+            settings.keyboard = None;
+            settings.mouse_click_rgba = [0; 4];
+            settings.mouse_trail_rgba = [0; 4];
+            let style = snow_webcam::WebcamStyle {
+                size: 50,
+                shape: snow_webcam::WebcamShape::Circle,
+            };
+            settings.webcam = Some(snow_webcam::Config {
+                source: source.clone(),
+                style,
+            });
+            let _capture = crate::webcam::CaptureLease::new(&settings);
+            sender
+                .send(Ok(snow_webcam::RawFrame {
+                    width: 50,
+                    height: 50,
+                    stride: 200,
+                    rgba: [240, 10, 10, 255].repeat(50 * 50),
+                    at: Instant::now(),
+                }))
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while source.snapshot(Instant::now()).frame.is_none() {
+                assert!(Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            let original = [20, 40, 60, 255].repeat(240 * 180);
+            let frame: CapturedFrame =
+                snow_capture::frame::Frame::from_rgba8(240, 180, original.clone())
+                    .unwrap()
+                    .into();
+            let mut compositor = VisualCompositor::new((240, 180));
+            compositor.webcam.prepare(
+                source.snapshot(Instant::now()).frame.as_deref(),
+                style,
+                (240, 180),
+            );
+            let first = compositor
+                .compose_with_cursor(&settings, &frame, 0, None)
+                .unwrap();
+            assert_eq!(&first[(107 * 240 + 73) * 4..][..4], &[240, 10, 10, 255]);
+            let mut encoder = StreamingEncoder::builder(settings.streaming_config())
+                .create()
+                .unwrap();
+            encoder.push_rgba_frame_at_pts(0, &first).unwrap();
+            compositor.rgba = first;
+            sender.send(Err("device disconnected".into())).unwrap();
+            while source.snapshot(Instant::now()).error.is_none() {
+                assert!(Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            assert!(compositor.webcam.prepare(
+                source.snapshot(Instant::now()).frame.as_deref(),
+                style,
+                (240, 180)
+            ));
+            let clean = compositor
+                .compose_with_cursor(&settings, &frame, 100, None)
+                .unwrap();
+            assert_eq!(
+                clean, original,
+                "{format:?}: camera failure must restore the screen"
+            );
+            encoder.push_rgba_frame_at_pts(1, &clean).unwrap();
+            encoder.finish_at_duration_ms(200).unwrap();
+            assert!(std::fs::metadata(&settings.output_path).unwrap().len() > 50);
+        }
+    }
+
+    #[test]
     fn restoration_only_matches_full_pixels_and_skips_history_on_changed_backgrounds() {
         check_recycled_overlay_restoration(true);
     }
@@ -3753,6 +3901,22 @@ mod tests {
                 partial.background_sequence = None;
             }
             let cursor = (index < 7).then_some(&cursor);
+            let webcam = snow_webcam::Frame {
+                revision: index as u64 + 1,
+                at: Instant::now(),
+                size: 50,
+                rgba: Arc::new([25, 180, index as u8 * 20, 255].repeat(50 * 50)),
+            };
+            for compositor in [&mut full, &mut partial] {
+                compositor.webcam.prepare(
+                    (index < 7).then_some(&webcam),
+                    snow_webcam::WebcamStyle {
+                        size: 50,
+                        shape: snow_webcam::WebcamShape::Circle,
+                    },
+                    output,
+                );
+            }
             let expected = full
                 .compose_with_cursor(&config, &frame, timestamp, cursor)
                 .unwrap();

@@ -8010,6 +8010,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_compile_definitions(snow-shot-screen-recording-controller-tests PRIVATE
             "snow_recording_audio_monitor_${_operation}=test_recording_audio_monitor_${_operation}")
     endforeach()
+    foreach(_operation create configure set_active retry destroy error)
+        target_compile_definitions(snow-shot-screen-recording-controller-tests PRIVATE
+            "snow_webcam_${_operation}=test_recording_webcam_${_operation}")
+    endforeach()
     foreach(_operation open destroy info boundary seek set_speed acquire frame_destroy error export_start export_start_with_speed export_poll export_error export_cancel export_destroy)
         target_compile_definitions(snow-shot-screen-recording-controller-tests PRIVATE
             "snow_recording_clip_${_operation}=test_recording_clip_${_operation}")
@@ -8149,6 +8153,24 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-recording-effects-preview-tests
         COMMAND snow-shot-screen-recording-controller-tests --effects-preview-only)
     set_tests_properties(snow-shot-recording-effects-preview-tests PROPERTIES
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60)
+    foreach(_preview_scale IN ITEMS 1 1.25 1.5 1.75 2)
+        add_test(NAME snow-shot-recording-playback-preview-dpi-${_preview_scale}-tests
+            COMMAND snow-shot-screen-recording-controller-tests --playback-preview-only)
+        set_tests_properties(snow-shot-recording-playback-preview-dpi-${_preview_scale}-tests
+            PROPERTIES
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT};QT_SCALE_FACTOR=${_preview_scale}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+            LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60)
+    endforeach()
+    add_test(NAME snow-shot-recording-webcam-preview-tests
+        COMMAND snow-shot-screen-recording-controller-tests --webcam-preview-only)
+    add_test(NAME snow-shot-recording-webcam-settings-tests
+        COMMAND snow-shot-screen-recording-controller-tests --webcam-settings-only)
+    set_tests_properties(snow-shot-recording-webcam-preview-tests
+        snow-shot-recording-webcam-settings-tests PROPERTIES
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
         LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60)
@@ -9974,7 +9996,7 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
             "${CARGO_EXECUTABLE}" build --locked --release
             --target ${SNOW_SHOT_RUST_TARGET}
             --package snow-recording-runtime
-            --features bench-stage-timing,bench-compositor-timing,bench-pipeline-timing
+            --features bench-synthetic-input,bench-stage-timing,bench-compositor-timing,bench-pipeline-timing
             --example realtime_recording_benchmark
         WORKING_DIRECTORY "${SNOW_SHOT_CAPTURE_CRATES_DIR}"
         USES_TERMINAL

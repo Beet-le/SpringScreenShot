@@ -327,7 +327,11 @@ impl DeferredRecordingSession {
                 _ => {}
             }
         }
-        self.send(command)
+        self.send(command)?;
+        if let Some(webcam) = &self.config.webcam {
+            webcam.source.set_recording_active(to == 1);
+        }
+        Ok(())
     }
     fn send(&self, command: Command) -> Result<()> {
         self.commands
@@ -406,6 +410,7 @@ fn run_recording(
     control_clock: Arc<Mutex<Option<RecordingClock>>>,
     capture_controls: DeferredCaptureControls,
 ) -> Result<DeferredRecordingSource> {
+    let mut webcam_capture = crate::webcam::CaptureLease::new(&config);
     let parent = options.working_directory.unwrap_or_else(|| {
         config
             .output_path
@@ -440,6 +445,7 @@ fn run_recording(
         control_clock,
         capture_controls,
     )?;
+    webcam_capture.stop();
     finalize_source(directory, product, config, parent, options.playback_overlay)
 }
 
@@ -517,6 +523,28 @@ fn pack_source(
             path: &output_path,
         },
     ];
+    let webcam_video = directory.join("webcam.mp4");
+    let webcam_index = directory.join("webcam.index");
+    let webcam_metadata = directory.join("webcam.bin");
+    if webcam_metadata.is_file() {
+        assets.extend([
+            RecordingBundleAsset {
+                kind: BundleAssetKind::WebcamVideo,
+                asset_id: None,
+                path: &webcam_video,
+            },
+            RecordingBundleAsset {
+                kind: BundleAssetKind::WebcamIndex,
+                asset_id: None,
+                path: &webcam_index,
+            },
+            RecordingBundleAsset {
+                kind: BundleAssetKind::WebcamMetadata,
+                asset_id: None,
+                path: &webcam_metadata,
+            },
+        ]);
+    }
     for track in &product.tracks {
         assets.push(RecordingBundleAsset {
             kind: BundleAssetKind::AudioTrack,
@@ -642,6 +670,7 @@ fn run_capture(
     let origin = Instant::now();
     clock.controller().mark_resume(origin);
     input.reset(&clock, origin)?;
+    let webcam = crate::webcam::DeferredWebcam::start(config, path, clock.clone());
     let mut paused = false;
     let mut fresh_since = origin;
     let mut stop = None;
@@ -872,6 +901,9 @@ fn run_capture(
         .min(u128::from(u64::MAX)) as u64;
     let timeline = FinalizedTimeline::new(duration_ms, config.output_fps).map_err(invalid)?;
     clock.controller().mark_pause(stop);
+    if let Some(webcam) = webcam {
+        webcam.finish(duration_ms);
+    }
     capture.stop();
     input.drain(&clock, true, fresh_since, Some(stop))?;
     if !admitted {
@@ -1582,6 +1614,7 @@ mod tests {
     }
     fn test_config(output_path: PathBuf) -> DirectRecordingConfig {
         DirectRecordingConfig {
+            webcam: None,
             loop_animated_images: false,
             region: crate::RecordingRegion::new(0, 0, 16, 16),
             capture_backend: crate::CaptureBackendKind::Auto,

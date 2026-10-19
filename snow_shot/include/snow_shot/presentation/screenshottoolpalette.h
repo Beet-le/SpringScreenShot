@@ -410,6 +410,12 @@ class ScreenshotToolPalette final : public QWidget,
     void setRecordingSettingsOwnerWindow(QWidget* owner);
     void setRecordingKeyboardSize(int value);
     [[nodiscard]] int recordingKeyboardSize() const;
+    void setRecordingWebcamEnabled(bool enabled);
+    [[nodiscard]] bool recordingWebcamEnabled() const;
+    void setRecordingWebcamSize(int size);
+    [[nodiscard]] int recordingWebcamSize() const;
+    void setRecordingWebcamShape(const QString& shape);
+    [[nodiscard]] QString recordingWebcamShape() const;
     void setRecordingKeyboardBackgroundColor(const QColor& value);
     [[nodiscard]] QColor recordingKeyboardBackgroundColor() const;
     void setRecordingKeyboardForegroundColor(const QColor& value);
@@ -606,6 +612,9 @@ class ScreenshotToolPalette final : public QWidget,
     void recordingStartDelaySecondsChanged(int seconds);
     void recordingMouseTrailDurationMsChanged(int value);
     void recordingKeyboardSizeChanged(int value);
+    void recordingWebcamEnabledChanged(bool enabled);
+    void recordingWebcamSizeChanged(int size);
+    void recordingWebcamShapeChanged(const QString& shape);
     void recordingKeyboardBackgroundColorChanged(const QColor& value);
     void recordingKeyboardForegroundColorChanged(const QColor& value);
     void recordingMouseTrailColorChanged(const QColor& color);
@@ -1006,6 +1015,12 @@ class ScreenshotToolPalette final : public QWidget,
     std::unique_ptr<snow_shot::presentation::ScreenshotToolPaletteColorPresets>
         m_recordMouseClickColorPresets;
     adqt::widgets::AdButton* m_recordKeyboardButton = nullptr;
+    adqt::widgets::AdButton* m_recordWebcamButton = nullptr;
+    adqt::widgets::AdInputNumber* m_recordWebcamSizeInput = nullptr;
+    adqt::widgets::AdSelect* m_recordWebcamShapeSelect = nullptr;
+    bool m_recordingWebcamEnabled = false;
+    int m_recordingWebcamSize = 150;
+    QString m_recordingWebcamShape = QStringLiteral("square");
     adqt::widgets::AdButton* m_recordPostProcessingButton = nullptr;
     adqt::widgets::AdPopover* m_recordPostProcessingPopover = nullptr;
     QPointer<adqt::widgets::AdRadio> m_recordProgressBarRadio;

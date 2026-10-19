@@ -31,6 +31,16 @@ int main(int argc, char** argv) {
                              temporary.filePath(QStringLiteral("data")), 60000})
                 .success,
             "isolated storage must initialize");
+    storage::RecordingSettings recording;
+    require(!recording.webcamEnabled() && recording.webcamSize() == 150 &&
+                recording.webcamShape() == QStringLiteral("square"),
+            "webcam defaults must be disabled and a 150 px square");
+    require(recording.setWebcamEnabled(true) && recording.setWebcamSize(500) &&
+                recording.setWebcamShape(QStringLiteral("circle")),
+            "webcam settings must persist");
+    require(!recording.setWebcamSize(49) && !recording.setWebcamSize(501) &&
+                !recording.setWebcamShape(QStringLiteral("oval")),
+            "webcam settings reject invalid bounds and shapes");
     snow_shot::presentation::GlobalShortcutManager shortcuts;
     settings::BuiltInSettingsBackend backend(shortcuts);
     constexpr auto autoHideBinding =
@@ -83,6 +93,11 @@ int main(int argc, char** argv) {
             "recording auto-exit preference must be flushable");
     storage::ConfigurationStore reloaded(temporary.filePath(QStringLiteral("data/config.json")),
                                          true, true, 60000);
+    require(reloaded.value(QStringLiteral("screen_recording/enable_webcam")).toBool() &&
+                reloaded.value(QStringLiteral("screen_recording/webcam_size")).toInt() == 500 &&
+                reloaded.value(QStringLiteral("screen_recording/webcam_shape")).toString() ==
+                    QStringLiteral("circle"),
+            "webcam values survive a configuration reload");
     require(reloaded.value(key).toBool(), "recording auto-exit must survive configuration reload");
     require(reloaded.value(autoHideKey).toBool(),
             "recording toolbar auto-hide must survive configuration reload");
@@ -121,6 +136,9 @@ int main(int argc, char** argv) {
     require(backend.resetSection(settings::SettingsSectionReset::ScreenRecording) &&
                 storage::RecordingSettings().mouseHighlightRadius() == 41,
             "recording settings reset must restore the original highlight radius");
+    require(!recording.webcamEnabled() && recording.webcamSize() == 150 &&
+                recording.webcamShape() == QStringLiteral("square"),
+            "recording reset restores webcam defaults");
     applicationStorage.shutdown();
     return 0;
 }

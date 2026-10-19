@@ -540,6 +540,8 @@ include([==[{(ROOT / 'cmake/SnowShotMiniMacOS.cmake').as_posix()}]==])
         for language in plist['CFBundleLocalizations']:
             strings = (resources / 'mini' / (language + '.lproj') / 'InfoPlist.strings').read_text(encoding='utf-8')
             self.assertIn('Snow Shot Mini', strings)
+            self.assertIn('"NSCameraUsageDescription" = "', strings)
+        self.assertTrue(plist['NSCameraUsageDescription'])
         instructions = (resources / 'dmg-mini-background.svg').read_text(encoding='utf-8')
         self.assertIn('Snow Shot Mini', instructions)
         self.assertIn('Snow Shot Mini.app', (resources / 'dmg-mini-layout.applescript').read_text(encoding='utf-8'))
@@ -580,8 +582,10 @@ include([==[{(ROOT / 'cmake/SnowShotMiniMacOS.cmake').as_posix()}]==])
         for language in plist['CFBundleLocalizations']:
             strings = (resources / (language + '.lproj') / 'InfoPlist.strings').read_text()
             for key in ('CFBundleName', 'CFBundleDisplayName', 'NSAppleEventsUsageDescription',
-                        'NSMicrophoneUsageDescription', 'NSAudioCaptureUsageDescription'):
+                        'NSCameraUsageDescription', 'NSMicrophoneUsageDescription',
+                        'NSAudioCaptureUsageDescription'):
                 self.assertIn('"' + key + '" = "', strings)
+        self.assertTrue(plist['NSCameraUsageDescription'])
         main = (ROOT / 'snow_shot/src/app/main.cpp').read_text()
         self.assertIn('setApplicationDisplayName(', main)
         self.assertIn('QString applicationName = snow_shot::app::edition::applicationName()', main)

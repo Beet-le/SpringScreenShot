@@ -512,6 +512,12 @@ class RecordingSettings final {
     bool setMouseTrailColor(const QColor& color) const;
     [[nodiscard]] QColor mouseClickColor() const;
     bool setMouseClickColor(const QColor& color) const;
+    [[nodiscard]] bool webcamEnabled() const;
+    bool setWebcamEnabled(bool enabled) const;
+    [[nodiscard]] int webcamSize() const;
+    bool setWebcamSize(int size) const;
+    [[nodiscard]] QString webcamShape() const;
+    bool setWebcamShape(const QString& shape) const;
     [[nodiscard]] bool showKeyboard() const;
     bool setShowKeyboard(bool show) const;
     [[nodiscard]] bool mouseHighlightEnabled() const;

@@ -190,6 +190,10 @@ Keep this folder to recover the recording.</source>
             <translation>錄製作業失敗</translation>
         </message>
         <message>
+            <source>The webcam could not be initialized.</source>
+            <translation>無法初始化攝影機。</translation>
+        </message>
+        <message>
             <source>Unable to create the recording directory</source>
             <translation>無法建立錄製目錄</translation>
         </message>
@@ -200,6 +204,10 @@ Keep this folder to recover the recording.</source>
         <message>
             <source>Unknown recording error</source>
             <translation>未知錄製錯誤</translation>
+        </message>
+        <message>
+            <source>Webcam unavailable: %1</source>
+            <translation>攝影機無法使用：%1</translation>
         </message>
     </context>
     <context>

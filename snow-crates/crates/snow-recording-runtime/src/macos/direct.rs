@@ -111,6 +111,7 @@ pub(super) fn native_config(
             audio
         });
     Ok(NativeRecordingConfig {
+        webcam: config.webcam.clone(),
         audio_mode: config.audio_mode,
         capture,
         output,
@@ -410,6 +411,7 @@ mod tests {
     }
     fn config() -> DirectRecordingConfig {
         DirectRecordingConfig {
+            webcam: None,
             audio_mode: Default::default(),
             system_audio_gain_db: 0,
             microphone_gain_db: 0,

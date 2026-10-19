@@ -159,6 +159,7 @@ PinToScreenManagement(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef QuickSave(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef RecordScreen(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef RecorderDelay(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef RecordingCamera(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef RecordingClick(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef RecordingCursor(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef RecordingFolder(const adqt::icons::IconColors& colors = {});

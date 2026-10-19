@@ -1895,6 +1895,27 @@ bool RecordingSettings::setMouseClickColor(const QColor& color) const {
     return setColorValue(QStringLiteral("screen_recording/mouse_click_color"), color);
 }
 
+bool RecordingSettings::webcamEnabled() const {
+    return cache().value(QStringLiteral("screen_recording/enable_webcam")).toBool();
+}
+bool RecordingSettings::setWebcamEnabled(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/enable_webcam"), enabled);
+}
+
+int RecordingSettings::webcamSize() const {
+    return cache().value(QStringLiteral("screen_recording/webcam_size")).toInt();
+}
+bool RecordingSettings::setWebcamSize(int size) const {
+    return cache().setValue(QStringLiteral("screen_recording/webcam_size"), size);
+}
+
+QString RecordingSettings::webcamShape() const {
+    return cache().value(QStringLiteral("screen_recording/webcam_shape")).toString();
+}
+bool RecordingSettings::setWebcamShape(const QString& shape) const {
+    return cache().setValue(QStringLiteral("screen_recording/webcam_shape"), shape);
+}
+
 bool RecordingSettings::showKeyboard() const {
     return cache().value(QStringLiteral("screen_recording/show_keyboard")).toBool();
 }

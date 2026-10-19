@@ -76,6 +76,7 @@ limited_integer!(DelaySeconds, 0, 10);
 limited_integer!(HistoryPageSize, 1, 200);
 limited_integer!(TrailDuration, 100, 2000);
 limited_integer!(KeyboardSize, 32, 128);
+limited_integer!(WebcamSize, 50, 500);
 limited_integer!(Percentage, 0, 100);
 limited_integer!(ArtifactChunkSize, 1, 262144);
 limited_integer!(ExportQuality, 1, 100);
@@ -337,6 +338,7 @@ choices!(PostProcessingEffect {
     ProgressBar,
     PlaybackTime
 });
+choices!(WebcamShape { Square, Circle });
 input!(RecordingOptions {
     path: Option<String>,
     format: Option<RecordingFormat>, quality: Option<Percentage>, start_delay_seconds: Option<DelaySeconds>, microphone: Option<bool>,
@@ -345,6 +347,7 @@ input!(RecordingOptions {
     encoding_preset: Option<EncodingPreset>, r#loop: Option<bool>, capture_toolbar: Option<bool>,
     post_processing: Option<bool>, post_processing_effect: Option<PostProcessingEffect>, progress_bar_color: Option<String>,
     show_cursor: Option<bool>, show_keyboard: Option<bool>, mouse_highlight: Option<bool>,
+    webcam: Option<bool>, webcam_size: Option<WebcamSize>, webcam_shape: Option<WebcamShape>,
     record_mouse_clicks: Option<bool>, mouse_trail_duration_ms: Option<TrailDuration>, keyboard_size: Option<KeyboardSize>,
     keyboard_background: Option<String>, keyboard_foreground: Option<String>, mouse_trail: Option<String>,
     mouse_click: Option<String>, mouse_highlight_color: Option<String>
@@ -1335,6 +1338,43 @@ mod audio_gain_tests {
                     serde_json::json!({"system_audio_gain_db":value})
                 )
                 .is_err()
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod webcam_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn recording_webcam_options_validate_types_and_style_boundaries() {
+        for size in [50, 150, 500] {
+            for shape in ["square", "circle"] {
+                assert!(
+                    schema(
+                        "snow_shot_recording_start",
+                        Some(json!({
+                            "region": [0, 0, 320, 240],
+                            "options": {"webcam": true, "webcam_size": size, "webcam_shape": shape}
+                        }))
+                    )
+                    .is_ok()
+                );
+            }
+        }
+        for (key, value) in [
+            ("webcam", json!(1)),
+            ("webcam_size", json!(49)),
+            ("webcam_size", json!(501)),
+            ("webcam_size", json!(150.5)),
+            ("webcam_shape", json!("oval")),
+        ] {
+            let mut input = json!({"region": [0, 0, 320, 240], "options": {}});
+            input["options"][key] = value;
+            assert!(
+                schema("snow_shot_recording_start", Some(input)).is_err(),
+                "{key}"
             );
         }
     }

@@ -4,6 +4,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+typedef struct SnowWebcam SnowWebcam;
 typedef struct SnowRecordingSessionImpl SnowRecordingSession;
 typedef struct SnowRecordingSourceImpl SnowRecordingSource;
 typedef struct SnowRecordingRenderTaskImpl SnowRecordingRenderTask;
@@ -155,7 +156,7 @@ typedef struct SnowCaptureExclusions {
 } SnowCaptureExclusions;
 #endif
 
-#define SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION 12u
+#define SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION 13u
 
 /* Strings are bounded UTF-8 key names, copied during session creation. */
 typedef struct SnowCaptureKeyboardLabel {
@@ -229,6 +230,10 @@ typedef struct SnowCaptureDirectRecordingConfig {
     int32_t microphone_gain_db;
     /* v12: highlight radius in output pixels (8..128); older callers use 41. */
     uint32_t mouse_highlight_radius;
+    /* v13: retained camera source; null disables webcam. Shape: 0 square, 1 circle. */
+    const SnowWebcam* webcam_source;
+    uint32_t webcam_size;
+    uint32_t webcam_shape;
 } SnowCaptureDirectRecordingConfig;
 
 #define SNOW_RECORDING_DEFERRED_OPTIONS_VERSION 1u

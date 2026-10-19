@@ -14,6 +14,7 @@ use crossbeam_channel::{Receiver, Sender, bounded, select_biased};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PreviewConfig {
+    pub webcam: Option<snow_webcam::Config>,
     /// Native desktop units: points on macOS, physical pixels on Windows.
     pub region: (i32, i32, u32, u32),
     /// Physical display pixels used to rasterize fixed-size preview styles.
@@ -38,6 +39,9 @@ impl PreviewConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(webcam) = &self.webcam {
+            webcam.style.validate()?;
+        }
         if !snow_recording_model::render::MOUSE_HIGHLIGHT_RADIUS_RANGE
             .contains(&self.highlight_radius)
         {
@@ -100,6 +104,7 @@ pub struct EffectsPreview {
     keyboard_surface: TileSurface,
     position: Option<(i32, i32)>,
     continuity: u64,
+    webcam: crate::webcam::WebcamOverlay,
 }
 
 impl std::ops::Deref for EffectsPreview {
@@ -133,6 +138,7 @@ impl EffectsPreview {
             keyboard_surface: TileSurface::new(output),
             position: None,
             continuity: 0,
+            webcam: Default::default(),
         }
     }
     pub fn observe(&mut self, position: Option<(i32, i32)>, at: u64) {
@@ -181,6 +187,15 @@ impl EffectsPreview {
     pub fn render(&mut self, now: u64) -> Result<PreviewLayers, String> {
         self.surface.clear();
         self.keyboard_surface.clear();
+        if let Some(webcam) = &self.config.webcam {
+            let frame = webcam.source.snapshot(Instant::now());
+            self.webcam.prepare(
+                frame.frame.as_deref(),
+                webcam.style,
+                self.config.effects_output(),
+            );
+            self.webcam.draw_to(&mut self.surface);
+        }
         self.observe(self.position, now);
         if let Some(position) = self.position {
             let center = crate::mouse_effects::scale_point(
@@ -219,9 +234,20 @@ impl EffectsPreview {
         {
             Some(now.saturating_add(16))
         } else {
-            self.keyboard
+            let keyboard = self
+                .keyboard
                 .as_ref()
-                .and_then(|k| k.model.next_frame_at(now))
+                .and_then(|k| k.model.next_frame_at(now));
+            let camera = self
+                .config
+                .webcam
+                .as_ref()
+                .is_some_and(|webcam| webcam.source.snapshot(Instant::now()).error.is_none());
+            match (keyboard, camera) {
+                (Some(at), true) => Some(at.min(now.saturating_add(33))),
+                (None, true) => Some(now.saturating_add(33)),
+                (value, false) => value,
+            }
         }
     }
     pub fn allocated_bytes(&self) -> usize {
@@ -547,6 +573,7 @@ mod tests {
 
     fn config() -> PreviewConfig {
         PreviewConfig {
+            webcam: None,
             region: (-400, -200, 1920, 1080),
             canvas: (1920, 1080),
             output: (1920, 1080),
@@ -719,6 +746,88 @@ mod tests {
             };
             assert_eq!(alpha(400 + radius - 2, 200), 255);
             assert_eq!(alpha(400 + radius, 200), 0);
+        }
+    }
+    #[test]
+    fn webcam_preview_keeps_physical_pixels_at_every_dpi_and_clears_failure_without_input() {
+        struct OneFrame(Option<snow_webcam::RawFrame>);
+        impl snow_webcam::CameraBackend for OneFrame {
+            fn poll(&mut self, timeout: Duration) -> Result<Option<snow_webcam::RawFrame>, String> {
+                if self.0.is_none() {
+                    std::thread::sleep(timeout);
+                }
+                Ok(self.0.take())
+            }
+        }
+        let source = snow_webcam::Source::with_backend(
+            snow_webcam::CaptureOptions { size: 150, fps: 30 },
+            |_| {
+                Ok(Box::new(OneFrame(Some(snow_webcam::RawFrame {
+                    width: 150,
+                    height: 150,
+                    stride: 600,
+                    rgba: [220, 20, 10, 255].repeat(150 * 150),
+                    at: Instant::now(),
+                }))))
+            },
+        )
+        .unwrap();
+        source.set_active(true);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while source.snapshot(Instant::now()).frame.is_none() {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        for canvas in [(640, 480), (1280, 960), (1920, 1440)] {
+            for output in [(320, 240), (1920, 1080)] {
+                let mut cfg = config();
+                cfg.region = (0, 0, 640, 480);
+                cfg.canvas = canvas;
+                cfg.output = output;
+                cfg.trail = [0; 4];
+                cfg.click = [0; 4];
+                cfg.highlight = [0; 4];
+                cfg.keyboard = None;
+                cfg.show_keyboard = false;
+                cfg.webcam = Some(snow_webcam::Config {
+                    source: source.clone(),
+                    style: Default::default(),
+                });
+                let mut preview = EffectsPreview::new(cfg, None);
+                let frame = preview.render(0).unwrap();
+                let mut bounds = (u32::MAX, u32::MAX, 0, 0);
+                let mut count = 0;
+                for tile in frame.mouse {
+                    for (i, pixel) in tile.pixels.chunks_exact(4).enumerate() {
+                        if pixel[3] == 0 {
+                            continue;
+                        }
+                        let (x, y) = (tile.x + i as u32 % TILE_SIZE, tile.y + i as u32 / TILE_SIZE);
+                        bounds.0 = bounds.0.min(x);
+                        bounds.1 = bounds.1.min(y);
+                        bounds.2 = bounds.2.max(x);
+                        bounds.3 = bounds.3.max(y);
+                        count += 1;
+                    }
+                }
+                assert_eq!(bounds, (48, canvas.1 - 198, 197, canvas.1 - 49));
+                assert_eq!(count, 150 * 150);
+                assert_eq!(preview.next_frame_at(0), Some(33));
+                source.report_error("disconnected".into());
+                assert!(preview.render(33).unwrap().is_empty());
+                assert_eq!(
+                    preview.next_frame_at(33),
+                    None,
+                    "a failed camera must not keep notifying the UI"
+                );
+                source.retry_failed();
+                source.set_active(true);
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while source.snapshot(Instant::now()).frame.is_none() {
+                    assert!(Instant::now() < deadline);
+                    std::thread::yield_now();
+                }
+            }
         }
     }
     struct Solid;

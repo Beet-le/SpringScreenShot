@@ -2823,6 +2823,15 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("screen_recording/mouse_trail_duration_ms"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/mouse_trail_duration_ms"))},
+            {QStringLiteral("screen_recording/enable_webcam"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screen_recording/enable_webcam"))},
+            {QStringLiteral("screen_recording/webcam_size"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screen_recording/webcam_size"))},
+            {QStringLiteral("screen_recording/webcam_shape"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screen_recording/webcam_shape"))},
             {QStringLiteral("screen_recording/keyboard_size"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/keyboard_size"))},

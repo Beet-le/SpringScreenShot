@@ -1179,6 +1179,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-image",
+ "objc2-core-media",
  "objc2-core-video",
  "objc2-foundation",
  "objc2-image-io",
@@ -2212,6 +2213,7 @@ dependencies = [
  "snow-memory",
  "snow-recording-export",
  "snow-screen-recorder",
+ "snow-webcam",
 ]
 
 [[package]]
@@ -2222,6 +2224,7 @@ dependencies = [
  "snow-core",
  "snow-macos",
  "snow-recording-model",
+ "snow-webcam",
  "windows",
 ]
 
@@ -2230,6 +2233,7 @@ name = "snow-recording-effects-c"
 version = "0.1.0"
 dependencies = [
  "snow-recording-effects",
+ "snow-webcam",
 ]
 
 [[package]]
@@ -2253,6 +2257,7 @@ dependencies = [
  "snow-memory",
  "snow-recording-effects",
  "snow-recording-model",
+ "snow-webcam",
  "symphonia",
  "tempfile",
  "thiserror",
@@ -2297,6 +2302,7 @@ dependencies = [
  "snow-recording-effects",
  "snow-recording-export",
  "snow-recording-model",
+ "snow-webcam",
  "tempfile",
  "thiserror",
  "uuid",
@@ -2394,6 +2400,18 @@ name = "snow-visual-region-detector-c"
 version = "0.1.0"
 dependencies = [
  "visual-region-detector",
+]
+
+[[package]]
+name = "snow-webcam"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "snow-core",
+ "snow-macos",
+ "snow-recording-model",
+ "windows",
+ "windows-core",
 ]
 
 [[package]]
