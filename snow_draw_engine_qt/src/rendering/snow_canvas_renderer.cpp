@@ -3493,13 +3493,15 @@ void resetFilterRenderDiagnosticsForCurrentThread() {
     g_filterDiagnostics = {};
 }
 
-void recordReferenceScenePresentation(bool rebuilt, std::size_t retainedBytes) {
+void recordReferenceScenePresentation(bool rebuilt, std::size_t retainedBytes,
+                                      std::size_t updatedPixels) {
     if (!rebuilt) {
         resetFilterRenderDiagnosticsForCurrentThread();
     }
     g_filterDiagnostics.usedFilterPath = true;
     g_filterDiagnostics.referenceSceneBuildCount = rebuilt ? 1 : 0;
     g_filterDiagnostics.referenceSceneHits = rebuilt ? 0 : 1;
+    g_filterDiagnostics.referenceSceneUpdatedPixels = updatedPixels;
     g_filterDiagnostics.retainedReferenceSceneBytes = retainedBytes;
 }
 
@@ -3507,6 +3509,7 @@ void accumulateFilterRenderDiagnostics(FilterRenderDiagnostics& target,
                                        const FilterRenderDiagnostics& source) {
     target.referenceSceneBuildCount += source.referenceSceneBuildCount;
     target.referenceSceneHits += source.referenceSceneHits;
+    target.referenceSceneUpdatedPixels += source.referenceSceneUpdatedPixels;
     target.retainedReferenceSceneBytes =
         std::max(target.retainedReferenceSceneBytes, source.retainedReferenceSceneBytes);
     target.executionPlanBuildCount += source.executionPlanBuildCount;

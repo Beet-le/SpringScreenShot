@@ -34,7 +34,7 @@ class SnowCanvasReferenceScene final {
     SnowCanvasFilterRenderReference m_reference;
     QSize m_pixelSize;
     QImage m_image;
-    std::uint64_t m_sceneRevision = 0;
+    QRegion m_pendingDamage;
     std::uint64_t m_spotlightFingerprint = 0;
     std::uint64_t m_backgroundRevision = 0;
     SnowCanvasCustomRenderer* m_backgroundRenderer = nullptr;

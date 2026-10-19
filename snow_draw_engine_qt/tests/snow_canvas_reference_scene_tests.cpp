@@ -1,4 +1,7 @@
 #include "snow_canvas_reference_scene_fixture.h"
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 namespace {
 QImage scaledReference(const Fixture& fixture, const QImage& reference, double dpr = 1.0,
@@ -221,18 +224,10 @@ void referenceSceneEditsReuseImmutableEraserMasks() {
     fixture.draw(SnowCanvasTool::Shape, {3, 3}, {15, 15}, false);
     const auto edited = fixture.render();
     const auto diagnostics = snow_canvas_renderer::filterRenderDiagnosticsForCurrentThread();
-    if (diagnostics.referenceSceneBuildCount != 1 || diagnostics.penRasterizedTileCount != 0 ||
-        diagnostics.penAtlasHits == 0) {
-        std::cerr << "reference rebuilds=" << diagnostics.referenceSceneBuildCount
-                  << " rasterized tiles=" << diagnostics.penRasterizedTileCount
-                  << " atlas hits=" << diagnostics.penAtlasHits
-                  << " atlas misses=" << diagnostics.penAtlasMisses
-                  << " atlas bytes=" << diagnostics.retainedPenAtlasBytes << '\n';
-    }
     require(diagnostics.referenceSceneBuildCount == 1 && diagnostics.penRasterizedTileCount == 0 &&
-                diagnostics.penAtlasHits != 0 && diagnostics.pristineTileHits == 1 &&
+                diagnostics.referenceSceneUpdatedPixels < 160u * 120u / 2u &&
                 fixture.renderer.originalCalls == originalCalls,
-            "editing other reference content must reuse immutable eraser masks");
+            "a small edit updates only damaged pixels and preserves immutable eraser backing");
     fixture.canvas.clearRenderState();
     require(fixture.render() == edited, "reference mask clearing must preserve restored pixels");
     require(
@@ -242,6 +237,66 @@ void referenceSceneEditsReuseImmutableEraserMasks() {
                 1 &&
             fixture.renderer.originalCalls == originalCalls + 1,
         "explicit clearing rebuilds the reference masks and pristine source");
+}
+
+void accumulatedEditsMatchFreshReferencePixels() {
+    for (const auto type : {SnowCanvasFilterType::Mosaic, SnowCanvasFilterType::GaussianBlur,
+                            SnowCanvasFilterType::Grayscale, SnowCanvasFilterType::Inversion,
+                            SnowCanvasFilterType::Emboss, SnowCanvasFilterType::Brightness}) {
+        Fixture fixture({320, 240}, {20.25, -10.5, 160, 120});
+        fixture.filter(type);
+        fixture.draw(SnowCanvasTool::BrushEraser, {180, 150}, {270, 190});
+        fixture.render();
+        // Several document patches can arrive before a paint event consumes the damage.
+        fixture.draw(SnowCanvasTool::Shape, {10, 12}, {24, 28}, false);
+        fixture.draw(SnowCanvasTool::Shape, {110, 100}, {130, 120}, false);
+        fixture.draw(SnowCanvasTool::Shape, {290, 210}, {310, 230}, false);
+        const auto incremental = fixture.render();
+        fixture.canvas.clearRenderState();
+        require(fixture.render() == incremental,
+                "accumulated reference damage matches a fresh full-resolution render");
+        require(fixture.canvas.undo(), "undo the last accumulated edit");
+        const auto undone = fixture.render();
+        fixture.canvas.clearRenderState();
+        require(fixture.render() == undone, "undo damage restores exact reference pixels");
+        require(fixture.canvas.redo(), "redo the last accumulated edit");
+        require(fixture.render() == incremental, "redo damage restores exact reference pixels");
+        fixture.zoom(0.75);
+        require(fixture.render(1.25) == scaledReference(fixture, incremental, 1.25),
+                "partial reference updates preserve fractional zoom and DPR sampling");
+    }
+}
+
+void editsBeneathFiltersPreserveSamplingAtImageEdges() {
+    Fixture fixture;
+    const auto created = fixture.runtime.applyAnnotationTransaction(QByteArrayLiteral(
+        R"({"version":1,"operations":[{"type":"rectangle","bounds":[14,10,5,20],"style":{"fill":[255,0,0,255]}},{"type":"rectangle","bounds":[30,25,10,10],"style":{"fill":[0,0,255,255]}}]})"));
+    require(!created.isEmpty(), "create underlying annotations inside and beyond the source grid");
+    const auto ids = QJsonDocument::fromJson(created)
+                         .object()
+                         .value(QStringLiteral("created_element_ids"))
+                         .toArray();
+    require(
+        !fixture.runtime
+             .applyAnnotationTransaction(QByteArrayLiteral(
+                 R"({"version":1,"operations":[{"type":"rectangle_filter","bounds":[20.25,-10.5,160,120],"style":{"filter":"gaussian_blur","strength":0.7}}]})"))
+             .isEmpty(),
+        "create an edge-to-edge filter above the annotations");
+    const auto before = fixture.render();
+    const auto deletion =
+        QJsonDocument(
+            QJsonObject{{QStringLiteral("version"), 1},
+                        {QStringLiteral("operations"),
+                         QJsonArray{QJsonObject{{QStringLiteral("type"), QStringLiteral("delete")},
+                                                {QStringLiteral("ids"), ids}}}}})
+            .toJson(QJsonDocument::Compact);
+    require(!fixture.runtime.applyAnnotationTransaction(deletion).isEmpty(),
+            "remove underlying annotations without resetting the reference cache");
+    const auto edited = fixture.render();
+    require(edited != before, "removing underlying annotations changes the filtered pixels");
+    fixture.canvas.clearRenderState();
+    require(fixture.render() == edited,
+            "partial updates include sampling dependencies from underneath edge filters");
 }
 
 } // namespace
@@ -259,5 +314,7 @@ int main(int argc, char** argv) {
     changingTheReferenceGridRebuildsOnce();
     erasersRetainOriginalReferencePixelsAndExportThem();
     referenceSceneEditsReuseImmutableEraserMasks();
+    accumulatedEditsMatchFreshReferencePixels();
+    editsBeneathFiltersPreserveSamplingAtImageEdges();
     return 0;
 }

@@ -291,7 +291,21 @@ QByteArray RuntimeSession::serializeDocumentSnapshot() const {
 }
 
 QByteArray RuntimeSession::documentCheckpoint() const {
-    return serializedRuntimeBytes(m_runtime.get(), &snow_runtime_document_checkpoint_bytes);
+    if (m_runtime.get() == nullptr)
+        return {};
+    const auto revision = snow_runtime_document_revision(m_runtime.get());
+    if (m_checkpointRevision == revision)
+        return m_checkpoint;
+    auto bytes = serializedRuntimeBytes(m_runtime.get(), &snow_runtime_document_checkpoint_bytes);
+    // Bound retained canonical bytes without limiting checkpoints for large documents.
+    constexpr qsizetype maximumRetainedBytes = 16 * 1024 * 1024;
+    m_checkpointRevision.reset();
+    m_checkpoint = {};
+    if (!bytes.isEmpty() && bytes.size() <= maximumRetainedBytes) {
+        m_checkpoint = bytes;
+        m_checkpointRevision = revision;
+    }
+    return bytes;
 }
 
 QByteArray RuntimeSession::serializeSelectedDrawTemplate() const {
@@ -353,6 +367,8 @@ bool RuntimeSession::restoreDocumentHistoryPreservingEditorStyles(const QByteArr
             static_cast<std::size_t>(payload.size()), changedViewports.outParam()) != SNOW_OK) {
         return false;
     }
+    m_checkpointRevision.reset();
+    m_checkpoint = {};
     m_smartErase.reset();
     syncChangedViewports(changedViewports.get());
     return true;
@@ -373,6 +389,8 @@ bool RuntimeSession::clearDocumentPreservingViewports() {
         return false;
     }
 
+    m_checkpointRevision.reset();
+    m_checkpoint = {};
     m_smartErase.reset();
     if (lifetime.expired()) {
         return false;
@@ -490,6 +508,9 @@ bool RuntimeSession::replaceRuntime(ScopedRuntimeHandle replacement) {
         return false;
     }
     m_runtime = leaseRuntime(std::move(replacement));
+    // Imported runtimes can reuse a revision number with entirely different content.
+    m_checkpointRevision.reset();
+    m_checkpoint = {};
     const auto replacementLease = m_runtime;
     m_clients.attachAfterRuntimeReplacement(detachedClients, runtime, isCurrent);
     if (!isCurrent()) {
@@ -505,6 +526,8 @@ bool RuntimeSession::replaceRuntime(ScopedRuntimeHandle replacement) {
 void RuntimeSession::destroyRuntimeAsync() {
     // Active presentation scopes keep the retired engine alive until they unwind.
     m_runtime.reset();
+    m_checkpointRevision.reset();
+    m_checkpoint = {};
     clearDrawingCachesForCurrentThread();
 }
 

@@ -68,13 +68,26 @@ class PreviewSurface final : public QWidget {
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
         const auto theme = styles::ThemeManager::instance().themeColorScheme().map;
-        painter.fillRect(rect(), theme.colorBgContainer);
         constexpr int tile = 10;
-        for (int y = 0; y < height(); y += tile)
-            for (int x = 0; x < width(); x += tile)
-                if ((x / tile + y / tile) & 1)
-                    painter.fillRect(QRect(x, y, tile, tile), theme.colorFillSecondary);
+        if (m_background != theme.colorBgContainer || m_foreground != theme.colorFillSecondary ||
+            m_checkerboard.style() == Qt::NoBrush) {
+            m_background = theme.colorBgContainer;
+            m_foreground = theme.colorFillSecondary;
+            QPixmap pattern(tile * 2, tile * 2);
+            pattern.fill(m_background);
+            QPainter patternPainter(&pattern);
+            patternPainter.fillRect(QRect(tile, 0, tile, tile), m_foreground);
+            patternPainter.fillRect(QRect(0, tile, tile, tile), m_foreground);
+            patternPainter.end();
+            m_checkerboard = QBrush(pattern);
+        }
+        painter.fillRect(rect(), m_checkerboard);
     }
+
+  private:
+    QBrush m_checkerboard;
+    QColor m_background;
+    QColor m_foreground;
 };
 ScreenshotToolPalette::Options editorOptions() {
     auto options = screenshotDrawingToolbarOptions();
@@ -249,6 +262,8 @@ struct ImageEditingWindow::Impl {
                     previous->cancelWorkflow();
                 if (!lifetime)
                     return;
+                if (previous)
+                    previous->releaseTargetImage();
                 if (session == previous)
                     session = nullptr;
             }
@@ -398,13 +413,12 @@ struct ImageEditingWindow::Impl {
         colorSampling->begin(picker, [this] { cancelColorSampling(); });
         canvas->setCursor(ScreenshotCanvasColorSamplerWindow::samplingCursor());
         canvas->setFocus();
-        const auto snapshot = document.snapshot();
-        if (!snapshot.error.isEmpty()) {
+        const auto source = document.exportSource();
+        if (!source.isValid()) {
             cancelColorSampling();
             return;
         }
-        colorArtifact =
-            std::make_shared<ScreenshotExportArtifact>(imageEditingExportSource(snapshot));
+        colorArtifact = std::make_shared<ScreenshotExportArtifact>(source);
         const auto generation = colorGeneration;
         if (!colorArtifact->requestImage(&q, [this, generation](auto result) {
                 if (generation != colorGeneration || closing)
@@ -804,6 +818,9 @@ Session* ImageEditingWindow::Impl::ensureSession() {
     if (!session)
         session = sessions.value(document.baseState()).controller;
     if (session) {
+        session->setTarget(
+            {QStringLiteral("image-editing:%1:%2").arg(quintptr(&q)).arg(document.baseState()),
+             document.image(), document.bounds()});
         session->setProviders(providers.recognition, providers.qrRecognition,
                               providers.tableRecognition);
         return session;
@@ -1039,12 +1056,13 @@ void ImageEditingWindow::Impl::exportContent(ExportOperation operation) {
     } else if (recognition && recognitionView) {
         content = ScreenshotExportSource::fromImage(recognitionView->printViewportSnapshot());
     } else {
-        const auto snapshot = document.snapshot();
-        if (!snapshot.error.isEmpty()) {
-            finish(false, snapshot.error);
+        QString error;
+        auto source = document.exportSource(&error);
+        if (!source.isValid()) {
+            finish(false, error);
             return;
         }
-        content = imageEditingExportSource(snapshot);
+        content = std::move(source);
     }
     const QPointer<ImageEditingWindow> lifetime(&q);
     showNotice(Notice::Exporting);

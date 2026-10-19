@@ -456,6 +456,8 @@ void ScreenshotRecognitionSessionController::setTarget(ScreenshotRecognitionTarg
     if (target.key == m_target.key && target.canvasRect == m_target.canvasRect &&
         target.formattedTextDocument == m_target.formattedTextDocument &&
         target.formattedPlainText == m_target.formattedPlainText) {
+        if (m_target.image.isNull())
+            m_target.image = std::move(target.image);
         return;
     }
     if (!notify(&ScreenshotRecognitionSessionController::resetTargetState))
@@ -473,6 +475,11 @@ void ScreenshotRecognitionSessionController::setTarget(ScreenshotRecognitionTarg
                 [this, key = m_target.key]() { handleTextDocumentChanged(key); });
         m_textCache.insert(m_target.key, std::move(entry));
     }
+}
+
+void ScreenshotRecognitionSessionController::releaseTargetImage() {
+    if (!m_active)
+        m_target.image = {};
 }
 
 void ScreenshotRecognitionSessionController::refreshFormattedTarget(
@@ -751,10 +758,11 @@ QHash<QString, QByteArray> ScreenshotRecognitionSessionController::contentCheckp
     };
     if (const auto entry = m_textCache.constFind(m_target.key); entry != m_textCache.cend()) {
         if (entry->editingSession)
-            add(QStringLiteral("text"), entry->editingSession->text());
+            result.insert(QStringLiteral("text"), entry->editingSession->contentCheckpoint());
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
         if (entry->translationSession)
-            add(QStringLiteral("translation"), entry->translationSession->text());
+            result.insert(QStringLiteral("translation"),
+                          entry->translationSession->contentCheckpoint());
 #endif
     }
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
@@ -764,8 +772,7 @@ QHash<QString, QByteArray> ScreenshotRecognitionSessionController::contentCheckp
         const QString key = QStringLiteral("table:") + it.key();
         const auto cached = m_tableCache.constFind(it.key());
         if (cached != m_tableCache.cend() && cached->session) {
-            const auto current = QCryptographicHash::hash(
-                cached->session->document.toHtml().toUtf8(), QCryptographicHash::Sha256);
+            const auto current = cached->session->document.contentCheckpoint();
             if (current != cached->initialDocumentCheckpoint) {
                 result.insert(key, current);
                 continue;
@@ -778,7 +785,7 @@ QHash<QString, QByteArray> ScreenshotRecognitionSessionController::contentCheckp
 #if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
     for (auto it = m_latexCache.cbegin(); it != m_latexCache.cend(); ++it)
         if (m_latexEntryTargets.value(it.key()) == m_target.key && it.value())
-            add(QStringLiteral("latex:") + it.key(), it.value()->text());
+            result.insert(QStringLiteral("latex:") + it.key(), it.value()->contentCheckpoint());
 #endif
 #if SNOW_SHOT_ENABLE_QR_RECOGNITION
     if (m_qrResults.contains(m_target.key))
@@ -3101,9 +3108,7 @@ void ScreenshotRecognitionSessionController::materializeTableEntry(
         guard->m_tableResults.insert(key, entry.result);
         guard->m_tableEntries.insert(key, std::move(entry));
         guard->m_tableEntryTargets.insert(key, target);
-        guard->m_tableCache.insert(
-            key, {session, QCryptographicHash::hash(session->document.toHtml().toUtf8(),
-                                                    QCryptographicHash::Sha256)});
+        guard->m_tableCache.insert(key, {session, session->document.contentCheckpoint()});
         if (guard->m_active && guard->m_mode == Mode::Table) {
             guard->m_tableCacheKey = key;
             if (!guard->notify(&ScreenshotRecognitionSessionController::applyTableSession, session))

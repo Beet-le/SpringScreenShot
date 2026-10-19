@@ -263,6 +263,7 @@ void ScreenshotImageConversionController::reset(bool discardCache) {
     cancelRequests();
     m_active = false;
     m_state = State::Idle;
+    m_image = {};
     m_source.clear();
     m_error.clear();
     if (discardCache) {
@@ -270,7 +271,6 @@ void ScreenshotImageConversionController::reset(bool discardCache) {
             m_api->cancel(m_settingsToken);
         m_settingsToken = 0;
         m_cache.clear();
-        m_image = {};
         m_key.clear();
     }
     if (m_modal != nullptr) {

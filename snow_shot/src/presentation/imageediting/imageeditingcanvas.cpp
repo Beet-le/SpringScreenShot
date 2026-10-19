@@ -60,8 +60,6 @@ void ImageEditingCanvas::actualSize() {
 }
 void ImageEditingCanvas::syncCamera() {
     setViewportCamera(m_center.x(), m_center.y(), m_zoom);
-    if (parentWidget())
-        parentWidget()->update();
 }
 QPointF ImageEditingCanvas::pixelAt(QPointF view) const {
     return m_document.imagePixelAt(canvasToViewTransform().inverted().map(view));
@@ -85,7 +83,7 @@ void ImageEditingCanvas::mousePressEvent(QMouseEvent* event) {
         m_cropping = true;
         m_firstPixel = m_lastPixel = pixelAt(event->position());
         event->accept();
-        update();
+        update(cropPreviewDamage());
         return;
     }
     SnowCanvasWidget::mousePressEvent(event);
@@ -99,8 +97,9 @@ void ImageEditingCanvas::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
     if (m_cropping) {
+        const auto previous = cropPreviewDamage();
         m_lastPixel = pixelAt(event->position());
-        update();
+        update(QRegion(previous) | cropPreviewDamage());
         event->accept();
         return;
     }
@@ -114,6 +113,7 @@ void ImageEditingCanvas::mouseReleaseEvent(QMouseEvent* event) {
         return;
     }
     if (m_cropping && event->button() == Qt::LeftButton) {
+        const auto previous = cropPreviewDamage();
         m_cropping = false;
         m_lastPixel = pixelAt(event->position());
         const bool rows = m_mode == Mode::CropRows;
@@ -122,7 +122,7 @@ void ImageEditingCanvas::mouseReleaseEvent(QMouseEvent* event) {
                                : ImageEditingDocument::CropAxis::Columns,
                           qRound(rows ? m_firstPixel.y() : m_firstPixel.x()),
                           qRound(rows ? m_lastPixel.y() : m_lastPixel.x()));
-        update();
+        update(previous);
         event->accept();
         return;
     }
@@ -145,8 +145,9 @@ void ImageEditingCanvas::wheelEvent(QWheelEvent* event) {
 }
 void ImageEditingCanvas::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Escape && m_cropping) {
+        const auto previous = cropPreviewDamage();
         m_cropping = false;
-        update();
+        update(previous);
         event->accept();
         return;
     }
@@ -193,25 +194,42 @@ void ImageEditingCanvas::renderOriginalBackground(QPainter& painter,
                                                   const SnowCanvasRenderContext& context) {
     renderBeforeCanvas(painter, context);
 }
+QRectF ImageEditingCanvas::cropStrip(int* pixelCount) const {
+    const auto bounds = m_document.bounds();
+    const bool rows = m_mode == Mode::CropRows;
+    const int extent = rows ? m_document.image().height() : m_document.image().width();
+    if (extent == 0)
+        return {};
+    const int first = std::clamp(qRound(rows ? m_firstPixel.y() : m_firstPixel.x()), 0, extent);
+    const int last = std::clamp(qRound(rows ? m_lastPixel.y() : m_lastPixel.x()), 0, extent);
+    const double scale = (rows ? bounds.height() : bounds.width()) / extent;
+    if (pixelCount)
+        *pixelCount = std::abs(first - last);
+    return rows ? QRectF(bounds.x(), bounds.y() + std::min(first, last) * scale, bounds.width(),
+                         std::abs(first - last) * scale)
+                : QRectF(bounds.x() + std::min(first, last) * scale, bounds.y(),
+                         std::abs(first - last) * scale, bounds.height());
+}
+QRect ImageEditingCanvas::cropPreviewDamage() const {
+    if (!m_cropping || cropStrip().isEmpty())
+        return {};
+    return canvasToViewTransform()
+        .mapRect(cropStrip())
+        .toAlignedRect()
+        .adjusted(-2, -2, 2, 2)
+        .intersected(rect());
+}
 void ImageEditingCanvas::renderAfterCanvas(QPainter& painter,
                                            const SnowCanvasRenderContext& context) {
     if (!m_cropping)
         return;
-    const auto bounds = m_document.bounds();
-    const bool rows = m_mode == Mode::CropRows;
-    const int extent = rows ? m_document.image().height() : m_document.image().width();
-    const int first = std::clamp(qRound(rows ? m_firstPixel.y() : m_firstPixel.x()), 0, extent);
-    const int last = std::clamp(qRound(rows ? m_lastPixel.y() : m_lastPixel.x()), 0, extent);
-    const double scale = (rows ? bounds.height() : bounds.width()) / extent;
-    const QRectF strip = rows ? QRectF(bounds.x(), bounds.y() + std::min(first, last) * scale,
-                                       bounds.width(), std::abs(first - last) * scale)
-                              : QRectF(bounds.x() + std::min(first, last) * scale, bounds.y(),
-                                       std::abs(first - last) * scale, bounds.height());
-    const QRectF view = context.canvasToViewTransform.mapRect(strip);
+    int pixels = 0;
+    const QRectF view = context.canvasToViewTransform.mapRect(cropStrip(&pixels));
+    if (view.isEmpty())
+        return;
     painter.fillRect(view, QColor(240, 65, 65, 95));
     painter.setPen(Qt::white);
-    painter.drawText(
-        view, Qt::AlignCenter,
-        QCoreApplication::translate("ImageEditingWindow", "%1 px").arg(std::abs(first - last)));
+    painter.drawText(view, Qt::AlignCenter,
+                     QCoreApplication::translate("ImageEditingWindow", "%1 px").arg(pixels));
 }
 } // namespace snow_shot::presentation

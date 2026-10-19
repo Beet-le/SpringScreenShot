@@ -111,6 +111,9 @@ class ScreenshotRecognitionSessionController final : public QObject {
     ~ScreenshotRecognitionSessionController() override;
 
     void setTarget(ScreenshotRecognitionTarget target);
+    // Retain inactive drafts/history without keeping another crop's full-resolution raster.
+    // setTarget with the same identity restores the pixels before the next activation.
+    void releaseTargetImage();
     // Independent image editors show results directly, without image overlays or companion windows.
     void setIndependentEditing(bool enabled);
     [[nodiscard]] QHash<QString, QByteArray> contentCheckpoints() const;

@@ -119,6 +119,7 @@ void reachableSessionsPreserveDraftsAndSavedCheckpoints() {
     require(!window.dirty(), "exported original recognition starts clean");
     window.palette()->moveRequested();
     require(window.document()->crop(Axis::Rows, 4, 8), "reachable-session fixture crops rows");
+    require(!original->hasTarget(), "inactive crop session releases its source raster");
     window.palette()->ocrRequested();
     provider.complete(presentation(window.document()->bounds()));
     const QPointer<Session> cropped = window.recognition();
@@ -131,8 +132,10 @@ void reachableSessionsPreserveDraftsAndSavedCheckpoints() {
     require(window.document()->undo(), "crop undo returns to the original image");
     drainEvents();
     require(original && cropped, "undo retains both current and redo-reachable sessions");
+    require(!cropped->hasTarget(),
+            "redo-reachable recognition retains drafts without source pixels");
     window.palette()->ocrRequested();
-    require(window.recognition() == original &&
+    require(window.recognition() == original && original->hasTarget() &&
                 original->textDraft() == QStringLiteral("Recognized text"),
             "undo reuses original recognition and its draft");
     window.palette()->moveRequested();

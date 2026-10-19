@@ -38,6 +38,8 @@ class ImageEditingCanvas final : public SnowCanvasWidget, private SnowCanvasCust
     void syncImage();
     void syncCamera();
     QPointF pixelAt(QPointF view) const;
+    QRectF cropStrip(int* pixelCount = nullptr) const;
+    QRect cropPreviewDamage() const;
     std::uint64_t contentRevision() const override;
     QList<SnowCanvasBaseImageSource> baseImageSources() const override;
     std::optional<SnowCanvasFilterRenderReference> filterRenderReference() const override;

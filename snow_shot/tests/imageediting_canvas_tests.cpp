@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QPaintEvent>
 #include <QPointingDevice>
 #include <QTabletEvent>
 #include <array>
@@ -260,6 +261,40 @@ void blankOutsideGesturesCannotCreateAnnotations() {
     drag(fixture.canvas, fixture.view({100, 80}), fixture.view({100, 120}));
     require(crops == 1, "inside-image crop gestures remain functional");
 }
+void cropPreviewsRepaintOnlyTheirDamageAndCancelCleanly() {
+    for (const auto mode :
+         {ImageEditingCanvas::Mode::CropRows, ImageEditingCanvas::Mode::CropColumns}) {
+        Fixture fixture;
+        fixture.canvas.setMode(mode);
+        QApplication::processEvents();
+        const auto before = fixture.canvas.grab().toImage();
+        class PaintRegions final : public QObject {
+          public:
+            QRegion painted;
+            bool eventFilter(QObject*, QEvent* event) override {
+                if (event->type() == QEvent::Paint)
+                    painted += static_cast<QPaintEvent*>(event)->region();
+                return false;
+            }
+        } events;
+        fixture.canvas.installEventFilter(&events);
+        mouse(fixture.canvas, QEvent::MouseButtonPress, fixture.view({20, 20}), Qt::LeftButton,
+              Qt::LeftButton);
+        events.painted = {};
+        mouse(fixture.canvas, QEvent::MouseMove, fixture.view({26, 26}), Qt::NoButton,
+              Qt::LeftButton);
+        const auto damage = events.painted.boundingRect();
+        require(!damage.isEmpty() && (mode == ImageEditingCanvas::Mode::CropRows
+                                          ? damage.height() < fixture.canvas.height() / 2
+                                          : damage.width() < fixture.canvas.width() / 2),
+                "crop motion repaints the preview strip without repainting the full canvas");
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(&fixture.canvas, &escape);
+        QApplication::processEvents();
+        require(fixture.canvas.grab().toImage() == before && !fixture.document.dirty(),
+                "cancelling the preview restores every pixel without editing the document");
+    }
+}
 } // namespace
 
 void runImageEditingCanvasTests() {
@@ -267,4 +302,5 @@ void runImageEditingCanvasTests() {
     rotationAndTextControlsRemainUsableOutsideImage();
     documentPixelsRemainClippedWhileControlsAreVisible();
     blankOutsideGesturesCannotCreateAnnotations();
+    cropPreviewsRepaintOnlyTheirDamageAndCancelCleanly();
 }

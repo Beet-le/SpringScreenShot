@@ -28,7 +28,7 @@ void require(bool value, const char* message) {
 double milliseconds(const QElapsedTimer& timer) {
     return double(timer.nsecsElapsed()) / 1e6;
 }
-QJsonObject run(const QString& name, QSize size, int annotations) {
+QJsonObject run(const QString& name, QSize size, int annotations, bool filtered = false) {
     ImageEditingSource source;
     source.image = QImage(size, QImage::Format_ARGB32_Premultiplied);
     source.image.fill(QColor(230, 240, 250, 160));
@@ -53,12 +53,23 @@ QJsonObject run(const QString& name, QSize size, int annotations) {
                 operations = {};
             }
         }
-        source.canvasSession = runtime.serializeDocumentSession();
     }
+    if (filtered) {
+        require(
+            !runtime
+                 .applyAnnotationTransaction(QByteArrayLiteral(
+                     R"({"version":1,"operations":[{"type":"rectangle_filter","bounds":[0,0,800,600],"style":{"filter":"gaussian_blur","strength":0.5}}]})"))
+                 .isEmpty(),
+            "filter fixture");
+    }
+    if (annotations || filtered)
+        source.canvasSession = runtime.serializeDocumentSession();
     const auto before = snow::test_support::memorySnapshot();
     QElapsedTimer timer;
     double openMs = 0, cropMs = 0, undoMs = 0, redoMs = 0, exportMs = 0;
+    double checkpointMs = 0, snapshotMs = 0;
     std::vector<double> cameraMs;
+    std::vector<double> editMs;
     for (int pass = 0; pass < 3; ++pass) {
         timer.start();
         auto editor = std::make_unique<ImageEditingWindow>();
@@ -86,6 +97,27 @@ QJsonObject run(const QString& name, QSize size, int annotations) {
             QApplication::processEvents();
             cameraMs.push_back(milliseconds(timer));
         }
+        editor->canvas()->fit();
+        QApplication::processEvents();
+        for (int edit = 0; edit < 12; ++edit) {
+            const QJsonObject operation{
+                {QStringLiteral("type"), QStringLiteral("rectangle")},
+                {QStringLiteral("bounds"), QJsonArray{20 + edit * 12, 30, 8, 8}}};
+            const auto transaction =
+                QJsonDocument(QJsonObject{{QStringLiteral("version"), 1},
+                                          {QStringLiteral("operations"), QJsonArray{operation}}})
+                    .toJson(QJsonDocument::Compact);
+            timer.start();
+            require(
+                !editor->document()->runtime().applyAnnotationTransaction(transaction).isEmpty(),
+                "small annotation edit");
+            QApplication::processEvents();
+            editMs.push_back(milliseconds(timer));
+        }
+        timer.start();
+        for (int query = 0; query < 100; ++query)
+            require(editor->dirty(), "edited content remains dirty");
+        checkpointMs += milliseconds(timer) / 100;
         timer.start();
         require(editor->document()->crop(ImageEditingDocument::CropAxis::Rows, size.height() / 3,
                                          size.height() / 2),
@@ -97,7 +129,9 @@ QJsonObject run(const QString& name, QSize size, int annotations) {
         timer.start();
         require(editor->document()->redo(), "redo");
         redoMs += milliseconds(timer);
+        timer.start();
         const auto snapshot = editor->document()->snapshot();
+        snapshotMs += milliseconds(timer);
         auto artifact = std::make_shared<ScreenshotExportArtifact>(
             ScreenshotExportSource::fromPinnedViewport({snapshot.canvasSession,
                                                         snapshot.image,
@@ -126,10 +160,14 @@ QJsonObject run(const QString& name, QSize size, int annotations) {
         QApplication::processEvents();
     }
     std::sort(cameraMs.begin(), cameraMs.end());
+    std::sort(editMs.begin(), editMs.end());
     const auto after = snow::test_support::memorySnapshot();
     return {{QStringLiteral("fixture"), name},
             {QStringLiteral("open_mean_ms"), openMs / 3},
             {QStringLiteral("pan_zoom_p95_ms"), cameraMs[size_t(cameraMs.size() * 0.95)]},
+            {QStringLiteral("small_edit_p95_ms"), editMs[size_t(editMs.size() * 0.95)]},
+            {QStringLiteral("dirty_check_mean_ms"), checkpointMs / 3},
+            {QStringLiteral("snapshot_mean_ms"), snapshotMs / 3},
             {QStringLiteral("crop_mean_ms"), cropMs / 3},
             {QStringLiteral("undo_mean_ms"), undoMs / 3},
             {QStringLiteral("redo_mean_ms"), redoMs / 3},
@@ -159,6 +197,8 @@ int main(int argc, char** argv) {
         report.append(run(QStringLiteral("4k"), QSize(3840, 2160), 0));
         report.append(run(QStringLiteral("tall"), QSize(2160, 16000), 0));
         report.append(run(QStringLiteral("annotation-heavy"), QSize(3840, 2160), 500));
+        report.append(run(QStringLiteral("filtered-4k"), QSize(3840, 2160), 0, true));
+        report.append(run(QStringLiteral("filtered-tall"), QSize(2160, 16000), 0, true));
         std::cout << QJsonDocument(report).toJson().constData();
     } catch (const std::exception& error) {
         std::cerr << error.what();

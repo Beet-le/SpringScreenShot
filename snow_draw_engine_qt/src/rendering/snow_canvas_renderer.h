@@ -27,6 +27,7 @@ struct FilterRenderDiagnostics {
     bool usedFilterPath = false;
     std::size_t referenceSceneBuildCount = 0;
     std::size_t referenceSceneHits = 0;
+    std::size_t referenceSceneUpdatedPixels = 0;
     std::size_t retainedReferenceSceneBytes = 0;
     std::size_t executionPlanBuildCount = 0;
     std::size_t dependencyItemVisits = 0;
@@ -152,7 +153,8 @@ void copyPainterFontAndHints(QPainter& destination, const QPainter& source);
 std::size_t hatchTextureCacheEntryCountForCurrentThread();
 FilterRenderDiagnostics filterRenderDiagnosticsForCurrentThread();
 void resetFilterRenderDiagnosticsForCurrentThread();
-void recordReferenceScenePresentation(bool rebuilt, std::size_t retainedBytes);
+void recordReferenceScenePresentation(bool rebuilt, std::size_t retainedBytes,
+                                      std::size_t updatedPixels);
 void accumulateFilterRenderDiagnostics(FilterRenderDiagnostics& target,
                                        const FilterRenderDiagnostics& source);
 std::size_t watermarkLayoutCacheBuildCountForCurrentThread();

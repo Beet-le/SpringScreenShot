@@ -21,6 +21,7 @@ std::uint64_t SnowCanvasReferenceScene::viewportId() const {
 
 void SnowCanvasReferenceScene::clearRenderState() {
     m_image = {};
+    m_pendingDamage = {};
     m_backgroundRenderer = nullptr;
     m_displayCache.clearRenderState();
     m_penMasks.clear();
@@ -70,12 +71,29 @@ bool SnowCanvasReferenceScene::sync(SnowRuntime runtime,
         m_reference = reference;
         m_pixelSize = pixelSize;
     }
+    const auto previousRevision = m_displayCache.patchCursor().scene_revision;
     if (!m_displayCache.sync(runtime, m_viewport.get())) {
         return false;
     }
     if (m_displayCache.filterIndices().empty()) {
         clearRenderState();
         return false;
+    }
+    if (!m_image.isNull() && previousRevision != m_displayCache.patchCursor().scene_revision) {
+        const QRect sourceRect(QPoint(), m_pixelSize);
+        // Consume every patch before another sync replaces its dirty rectangles. Effects can
+        // read neighboring pixels, so propagate damage through the ordered filter passes.
+        QRegion damage;
+        if (m_displayCache.sceneDirtyRectCount() == 0)
+            damage = sourceRect;
+        else
+            for (std::uint32_t index = 0; index < m_displayCache.sceneDirtyRectCount(); ++index)
+                damage += snow_canvas_display::dirtyRectToUpdateRect(
+                    m_displayCache.sceneDirtyRects()[index]);
+        // Clip after expansion: a filter at the image edge may sample changed pixels outside it.
+        m_pendingDamage += snow_canvas_renderer::sceneDamageThroughFilters(
+                               m_displayCache.executionPlan(1.0), damage)
+                               .intersected(sourceRect);
     }
     return true;
 }
@@ -124,34 +142,36 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
     if (request.painter == nullptr || !sync(runtime, reference))
         return false;
 
-    const auto sceneRevision = m_displayCache.patchCursor().scene_revision;
     const auto backgroundRevision =
         request.backgroundRenderer != nullptr ? request.backgroundRenderer->contentRevision() : 0;
     auto sourceRequest = request;
     sourceRequest.spotlightCutouts = m_displayCache.spotlightCutouts();
     sourceRequest.spotlightCutoutCount = m_displayCache.spotlightCutoutCount();
     const auto spotlightKey = snow_canvas_renderer::spotlightFingerprint(sourceRequest);
-    const bool rebuild = m_image.isNull() || m_sceneRevision != sceneRevision ||
-                         m_spotlightFingerprint != spotlightKey ||
-                         m_backgroundRenderer != request.backgroundRenderer ||
-                         m_backgroundRevision != backgroundRevision ||
-                         m_clearBackgroundEnabled != request.clearBackgroundEnabled ||
-                         m_font != request.painter->font() ||
-                         m_renderHints != request.painter->renderHints();
+    const bool fullRebuild = m_image.isNull() || m_spotlightFingerprint != spotlightKey ||
+                             m_backgroundRenderer != request.backgroundRenderer ||
+                             m_backgroundRevision != backgroundRevision ||
+                             m_clearBackgroundEnabled != request.clearBackgroundEnabled ||
+                             m_font != request.painter->font() ||
+                             m_renderHints != request.painter->renderHints();
+    const QRegion damage = fullRebuild ? QRegion(QRect(QPoint(), m_pixelSize)) : m_pendingDamage;
+    const bool rebuild = !damage.isEmpty();
     if (rebuild) {
-        // Replace the retained surface while immutable stroke masks survive content edits.
-        m_image = {};
-        QImage image = snowCanvasAllocateImage(m_pixelSize, QImage::Format_ARGB32_Premultiplied);
-        if (image.isNull()) {
-            return false;
+        if (m_image.isNull()) {
+            m_image = snowCanvasAllocateImage(m_pixelSize, QImage::Format_ARGB32_Premultiplied);
+            if (m_image.isNull())
+                return false;
         }
-        image.fill(request.clearBackgroundEnabled
-                       ? snow_canvas_renderer::toQColor(m_displayCache.sceneInfo().clear_color)
-                       : Qt::transparent);
-        QPainter painter(&image);
+        QPainter painter(&m_image);
+        painter.setClipRegion(damage);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.fillRect(m_image.rect(), request.clearBackgroundEnabled
+                                             ? snow_canvas_renderer::toQColor(
+                                                   m_displayCache.sceneInfo().clear_color)
+                                             : Qt::transparent);
+        painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
         snow_canvas_renderer::copyPainterFontAndHints(painter, *request.painter);
-        const SnowCanvasRenderContext context{image.rect(), QRegion(image.rect()),
-                                              sourceTransform(), 1.0};
+        const SnowCanvasRenderContext context{m_image.rect(), damage, sourceTransform(), 1.0};
         snow_canvas_filter_render::RenderWorkspace workspace;
         sourceRequest.painter = &painter;
         sourceRequest.displayInfo = &m_displayCache.sceneInfo();
@@ -174,8 +194,7 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
         snow_canvas_renderer::renderSceneItems(sourceRequest);
         painter.end();
         m_displayCache.clearRenderState();
-        m_image = std::move(image);
-        m_sceneRevision = sceneRevision;
+        m_pendingDamage = {};
         m_spotlightFingerprint = spotlightKey;
         m_backgroundRevision = backgroundRevision;
         m_backgroundRenderer = request.backgroundRenderer;
@@ -216,8 +235,11 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
     painter.setCompositionMode(QPainter::CompositionMode_Source);
     painter.drawImage(target, m_image);
     painter.restore();
+    std::size_t updatedPixels = 0;
+    for (const auto& rect : damage)
+        updatedPixels += static_cast<std::size_t>(rect.width()) * rect.height();
     snow_canvas_renderer::recordReferenceScenePresentation(
-        rebuild, static_cast<std::size_t>(m_image.sizeInBytes()));
+        rebuild, static_cast<std::size_t>(m_image.sizeInBytes()), updatedPixels);
     if (request.diagnostics != nullptr) {
         *request.diagnostics = snow_canvas_renderer::filterRenderDiagnosticsForCurrentThread();
     }

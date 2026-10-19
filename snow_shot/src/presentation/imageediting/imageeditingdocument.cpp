@@ -41,6 +41,41 @@ exteriorSamplingSources(const QList<SnowCanvasBaseImageSource>& sources, const Q
     return result;
 }
 
+QImage removeStrip(const QImage& image, const ImageEditingDocument::Crop& crop,
+                   const std::function<bool()>& cancelled) {
+    if (image.isNull() || image.depth() < 8 || (cancelled && cancelled()))
+        return {};
+    const bool rows = crop.axis == ImageEditingDocument::CropAxis::Rows;
+    const int extent = rows ? image.height() : image.width();
+    if (crop.start < 0 || crop.length <= 0 || crop.length >= extent ||
+        crop.start > extent - crop.length)
+        return {};
+    const QSize size(image.width() - (rows ? 0 : crop.length),
+                     image.height() - (rows ? crop.length : 0));
+    QImage result = snowCanvasAllocateImage(size, image.format());
+    if (result.isNull())
+        return {};
+    result.setColorSpace(image.colorSpace());
+    result.setColorTable(image.colorTable());
+    const qsizetype pixelBytes = image.depth() / 8;
+    for (int y = 0; y < result.height(); ++y) {
+        if ((y & 63) == 0 && cancelled && cancelled())
+            return {};
+        uchar* destination = result.scanLine(y);
+        if (rows) {
+            std::memcpy(destination, image.constScanLine(y < crop.start ? y : y + crop.length),
+                        result.width() * pixelBytes);
+        } else {
+            const uchar* source = image.constScanLine(y);
+            std::memcpy(destination, source, crop.start * pixelBytes);
+            std::memcpy(destination + crop.start * pixelBytes,
+                        source + (crop.start + crop.length) * pixelBytes,
+                        (result.width() - crop.start) * pixelBytes);
+        }
+    }
+    return result;
+}
+
 QImage joinStrip(const QImage& current, const ImageEditingDocument::Crop& crop,
                  const std::function<bool()>& cancelled) {
     if (cancelled && cancelled())
@@ -78,6 +113,7 @@ QImage joinStrip(const QImage& current, const ImageEditingDocument::Crop& crop,
 ImageEditingDocument::ImageEditingDocument(QObject* parent)
     : QObject(parent), m_runtime(SnowCanvasRuntimeConfig{screenshotCanvasStyleDefaults()}) {
     m_runtime.setDocumentChangedHandler([this] {
+        m_exportCache = {};
         pruneCrops();
         emit changed();
     });
@@ -86,16 +122,17 @@ ImageEditingDocument::ImageEditingDocument(QObject* parent)
 bool ImageEditingDocument::load(const ImageEditingSource& source) {
     if (source.image.isNull() || !source.canvasRect.isValid() || source.resultStyle)
         return false;
-    SnowCanvasRuntime replacement(SnowCanvasRuntimeConfig{screenshotCanvasStyleDefaults()});
-    if (!source.canvasSession.isEmpty() &&
-        !replacement.restoreDocumentSession(source.canvasSession))
-        return false;
-    if (source.canvasSession.isEmpty() && !source.canvasHistory.isEmpty() &&
-        !replacement.restoreDocumentHistory(source.canvasHistory))
-        return false;
     QImage image = source.image.depth() < 8 ? source.image.convertToFormat(QImage::Format_ARGB32)
                                             : source.image;
-    if (image.isNull() || !m_runtime.cloneDocumentSessionFrom(replacement))
+    if (image.isNull())
+        return false;
+    // Restore builds and validates a replacement runtime before publishing it. A second
+    // runtime and deep clone would duplicate the complete document and undo history.
+    const bool restored =
+        !source.canvasSession.isEmpty()   ? m_runtime.restoreDocumentSession(source.canvasSession)
+        : !source.canvasHistory.isEmpty() ? m_runtime.restoreDocumentHistory(source.canvasHistory)
+                                          : m_runtime.reset();
+    if (!restored)
         return false;
     m_image = std::move(image);
     if (m_image.devicePixelRatio() != 1)
@@ -139,42 +176,15 @@ ImageEditingDocument::prepareCrop(const QImage& image, CropAxis axis, int first,
     if (image.isNull() || crop.length == 0 || crop.length >= extent || (cancelled && cancelled()))
         return crop;
     const bool rows = axis == CropAxis::Rows;
-    const QSize size(image.width() - (rows ? 0 : crop.length),
-                     image.height() - (rows ? crop.length : 0));
-    crop.result = snowCanvasAllocateImage(size, image.format());
+    crop.result = removeStrip(image, crop, cancelled);
     if (crop.result.isNull())
         return crop;
     crop.removed = image.copy(rows ? QRect(0, crop.start, image.width(), crop.length)
                                    : QRect(crop.start, 0, crop.length, image.height()));
-    if (crop.removed.isNull()) {
-        crop.result = {};
-        return crop;
-    }
-    crop.result.setColorSpace(image.colorSpace());
-    crop.result.setColorTable(image.colorTable());
-    const qsizetype pixelBytes = image.depth() / 8;
-    if (pixelBytes == 0) {
+    if (crop.removed.isNull() || (cancelled && cancelled())) {
         crop.result = {};
         crop.removed = {};
         return crop;
-    }
-    for (int y = 0; y < crop.result.height(); ++y) {
-        if ((y & 63) == 0 && cancelled && cancelled()) {
-            crop.result = {};
-            crop.removed = {};
-            return crop;
-        }
-        uchar* destination = crop.result.scanLine(y);
-        if (rows) {
-            std::memcpy(destination, image.constScanLine(y < crop.start ? y : y + crop.length),
-                        crop.result.width() * pixelBytes);
-        } else {
-            const uchar* source = image.constScanLine(y);
-            std::memcpy(destination, source, crop.start * pixelBytes);
-            std::memcpy(destination + crop.start * pixelBytes,
-                        source + (crop.start + crop.length) * pixelBytes,
-                        (crop.result.width() - crop.start) * pixelBytes);
-        }
     }
     return crop;
 }
@@ -217,11 +227,8 @@ void ImageEditingDocument::prepareHistoryTransition(HistoryTransition& transitio
                                                     const std::function<bool()>& cancelled) {
     if (transition.image.isNull())
         return;
-    transition.image =
-        transition.redo ? prepareCrop(transition.image, transition.crop.axis, transition.crop.start,
-                                      transition.crop.start + transition.crop.length, cancelled)
-                              .result
-                        : joinStrip(transition.image, transition.crop, cancelled);
+    transition.image = transition.redo ? removeStrip(transition.image, transition.crop, cancelled)
+                                       : joinStrip(transition.image, transition.crop, cancelled);
 }
 bool ImageEditingDocument::applyHistoryTransition(HistoryTransition transition) {
     if (baseState() != transition.state || m_image.cacheKey() != transition.sourceKey ||
@@ -268,7 +275,7 @@ bool ImageEditingDocument::redo() {
     return travel(true);
 }
 void ImageEditingDocument::updateSources() {
-    m_runtime.clearRenderState();
+    m_exportCache = {};
     m_runtime.setBaseImageSources(baseImageSources());
 }
 QList<SnowCanvasBaseImageSource> ImageEditingDocument::baseImageSources() const {
@@ -277,13 +284,24 @@ QList<SnowCanvasBaseImageSource> ImageEditingDocument::baseImageSources() const 
     return sources;
 }
 QByteArray ImageEditingDocument::checkpoint() const {
-    QByteArray bytes = m_runtime.documentCheckpoint();
+    const QByteArray bytes = m_runtime.documentCheckpoint();
     if (bytes.isEmpty())
         return QByteArrayLiteral("unserializable:") +
                QByteArray::number(m_runtime.documentRevision()) + ":" +
                QByteArray::number(baseState());
-    bytes += QByteArray::number(baseState());
-    return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256);
+    const auto state = baseState();
+    if (!m_checkpointContent.isEmpty() && bytes.constData() == m_checkpointContent.constData() &&
+        state == m_checkpointBaseState)
+        return m_checkpoint;
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    hash.addData(bytes);
+    hash.addData(QByteArray::number(state));
+    m_checkpoint = hash.result();
+    // Share the runtime's bounded cache; retaining the bytes also makes identity comparisons
+    // safe when a different runtime happens to have the same document revision.
+    m_checkpointContent = bytes.size() <= 16 * 1024 * 1024 ? bytes : QByteArray{};
+    m_checkpointBaseState = state;
+    return m_checkpoint;
 }
 bool ImageEditingDocument::dirty() const {
     return !m_image.isNull() && checkpoint() != m_saved;
@@ -292,6 +310,36 @@ void ImageEditingDocument::markExported(QByteArray checkpoint) {
     m_saved = std::move(checkpoint);
     emit changed();
 }
+ScreenshotExportSource ImageEditingDocument::exportSource(QString* error) const {
+    if (error)
+        error->clear();
+    if (m_image.isNull())
+        return {};
+    if (!m_runtime.hasDocumentContent()) {
+        m_exportCache = {};
+        return ScreenshotExportSource::fromImage(m_image);
+    }
+    const auto content = checkpoint();
+    const auto smartEraseKey = m_runtime.smartEraseSnapshot().cacheKey();
+    if (m_exportCache.source.isValid() && m_exportCache.checkpoint == content &&
+        m_exportCache.smartEraseKey == smartEraseKey)
+        return m_exportCache.source;
+    m_exportCache = {};
+    const auto source = snapshot();
+    if (!source.error.isEmpty()) {
+        if (error)
+            *error = source.error;
+        return {};
+    }
+    auto output = imageEditingExportSource(source);
+    // Copies share immutable rendered pixels, while each export owns its own cancellation.
+    // Retain one result only, and avoid keeping an additional tall-image raster between actions.
+    constexpr qint64 maximumRetainedBytes = 64 * 1024 * 1024;
+    if (qint64(m_image.width()) * m_image.height() <= maximumRetainedBytes / 4)
+        m_exportCache = {content, smartEraseKey, output};
+    return output;
+}
+
 ImageEditingSource ImageEditingDocument::snapshot() const {
     ImageEditingSource result;
     result.image = m_image;

@@ -7,10 +7,12 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QCryptographicHash>
 #include <QImage>
 #include <QMimeData>
 #include <QPointF>
 #include <QTextCursor>
+#include <QTextBlock>
 #include <QTextBlockFormat>
 
 #include <algorithm>
@@ -804,6 +806,50 @@ void translationHistoryEstablishesSuccessfulAndPartialBaselines() {
             "a partial translation should gain independent edit history after streaming stops");
 }
 
+void streamingTextUpdatesPreserveUnchangedBlocksAndCursorAnchors() {
+    const QString prefix =
+        QStringLiteral("Stable first paragraph\n") + QString(8192, QLatin1Char('x'));
+    ScreenshotOcrTextEditingSession session(prefix);
+    QTextCursor anchor(session.document());
+    anchor.setPosition(7);
+    const QTextBlock first = session.document()->begin();
+    const int firstRevision = first.revision();
+    for (int chunk = 1; chunk <= 20; ++chunk)
+        session.replaceTextWithoutHistory(prefix + QString(chunk, QLatin1Char('y')));
+    require(session.text() == prefix + QString(20, QLatin1Char('y')) && !session.canUndo(),
+            "streaming appends preserve the complete content without creating history");
+    require(anchor.position() == 7 && first.revision() == firstRevision,
+            "streaming appends preserve cursor anchors and untouched paragraph layout revisions");
+    session.replaceTextWithoutHistory(prefix + QStringLiteral(" corrected"));
+    require(anchor.position() == 7 && session.text() == prefix + QStringLiteral(" corrected"),
+            "streaming corrections replace only the changed suffix");
+    session.establishBaseline(session.text());
+    QTextCursor cursor(session.document());
+    cursor.movePosition(QTextCursor::End);
+    cursor.insertText(QStringLiteral(" edited"));
+    session.undo();
+    require(session.text() == prefix + QStringLiteral(" corrected"),
+            "native edits remain independently undoable after incremental streaming");
+}
+
+void replacementTextMatchesQtNewlineAndUnicodeSemantics() {
+    for (const bool preserve : {false, true}) {
+        ScreenshotOcrTextEditingSession session(QStringLiteral("before"), preserve);
+        const QStringList values{
+            QStringLiteral("first\r\nsecond\rthird\nlast"), QStringLiteral("first\nsecond\n"),
+            QStringLiteral("left\u00a0right\u2028line\u2029paragraph \U0001f600"),
+            QStringLiteral("left\u00a0right\u2028line\u2029paragraph \U0001f601"), QString{}};
+        for (const auto& text : values) {
+            QTextDocument reference;
+            reference.setPlainText(text);
+            session.replaceTextWithoutHistory(text);
+            require(session.document()->toRawText() == reference.toRawText() &&
+                        session.text() == (preserve ? text : reference.toPlainText()),
+                    "incremental replacements preserve Qt paragraphs and exact-source mode");
+        }
+    }
+}
+
 void tableDocumentPreservesSpansAndExportsCoveredCoordinates() {
     const ScreenshotTableDocument document = ScreenshotTableDocument::fromHtml(QStringLiteral(
         "<table><tr><th rowspan=\"2\">Group</th><th colspan=\"2\">Values</th></tr>"
@@ -909,6 +955,50 @@ void tableDocumentMergeSplitClearAndValidationPolicies() {
                 !document.clear(ScreenshotTableRange{}),
             "invalid and inapplicable edits should be rejected without mutation");
 }
+void cachedTextAndTableCheckpointsFollowContentMutations() {
+    const auto hash = [](const QString& text) {
+        return QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha256);
+    };
+    ScreenshotOcrTextEditingSession text(QStringLiteral("first\r\nsecond"), true);
+    require(text.contentCheckpoint() == hash(text.text()),
+            "initial source checkpoint matches text");
+    text.replaceTextWithoutHistory(QStringLiteral("first\nsecond"));
+    require(text.contentCheckpoint() == hash(text.text()),
+            "source newline changes invalidate a checkpoint even with identical document pixels");
+    text.establishHistory(text.text());
+    for (int i = 0; i < 30; ++i) {
+        QTextCursor cursor(text.document());
+        cursor.movePosition(QTextCursor::End);
+        cursor.insertText(QStringLiteral("x"));
+        require(text.contentCheckpoint() == hash(text.text()),
+                "native edits invalidate checkpoints");
+    }
+    for (int i = 0; i < 30; ++i)
+        text.undo();
+    require(text.text() == QStringLiteral("first\nsecond") && !text.canUndo(),
+            "delta history returns to its exact baseline");
+    for (int i = 0; i < 30; ++i)
+        text.redo();
+    require(text.contentCheckpoint() == hash(text.text()),
+            "redo invalidates the content checkpoint");
+
+    auto table = ScreenshotTableDocument::fromPlainText(QStringLiteral("A\tB\nC\tD"));
+    const auto original = table;
+    const auto saved = table.contentCheckpoint();
+    require(saved == hash(table.toHtml()), "table checkpoint preserves canonical HTML identity");
+    require(table.setCellText(0, 0, QStringLiteral("Changed")), "change checkpoint fixture cell");
+    require(table.contentCheckpoint() != saved && original.contentCheckpoint() == saved,
+            "copying and editing a table does not invalidate another document's identity");
+    require(table.merge({0, 0, 1, 1}) && table.contentCheckpoint() == hash(table.toHtml()),
+            "merge invalidates cached table identity");
+    require(table.split({0, 0, 1, 1}) && table.contentCheckpoint() == hash(table.toHtml()),
+            "split invalidates cached table identity");
+    require(table.clear({0, 0, 1, 1}) && table.contentCheckpoint() == hash(table.toHtml()),
+            "clear invalidates cached table identity");
+    table = original;
+    require(table.contentCheckpoint() == saved,
+            "table history replacement restores its checkpoint");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -936,8 +1026,11 @@ int main(int argc, char** argv) {
     textEditingHistoryInvalidatesRedoBranchesAndSurvivesReentry();
     textEditingHistoryIgnoresEditorLayoutFormatting();
     translationHistoryEstablishesSuccessfulAndPartialBaselines();
+    streamingTextUpdatesPreserveUnchangedBlocksAndCursorAnchors();
+    replacementTextMatchesQtNewlineAndUnicodeSemantics();
     tableDocumentPreservesSpansAndExportsCoveredCoordinates();
     tableDocumentExportsExcelTextCells();
     tableDocumentMergeSplitClearAndValidationPolicies();
+    cachedTextAndTableCheckpointsFollowContentMutations();
     return 0;
 }

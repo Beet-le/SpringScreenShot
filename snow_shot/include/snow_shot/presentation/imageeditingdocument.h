@@ -94,6 +94,7 @@ class ImageEditingDocument final : public QObject {
     bool dirty() const;
     void markExported(QByteArray checkpoint);
     ImageEditingSource snapshot() const;
+    ScreenshotExportSource exportSource(QString* error = nullptr) const;
 
   signals:
     void changed();
@@ -116,5 +117,14 @@ class ImageEditingDocument final : public QObject {
     QHash<quint64, CropEntry> m_crops;
     quint64 m_serial = 0;
     QByteArray m_saved;
+    mutable QByteArray m_checkpointContent;
+    mutable QByteArray m_checkpoint;
+    mutable quint64 m_checkpointBaseState = 0;
+    struct ExportCache {
+        QByteArray checkpoint;
+        QByteArray smartEraseKey;
+        ScreenshotExportSource source;
+    };
+    mutable ExportCache m_exportCache;
 };
 } // namespace snow_shot::presentation
