@@ -32,7 +32,7 @@ struct ScreenshotPinnedViewportExportSource final {
     std::optional<ScreenshotClipboardPlacement> clipboardPlacement = std::nullopt;
     std::optional<ScreenshotClipboardAppearance> clipboardAppearance = std::nullopt;
     // Original sampling context may extend beyond the visible background image.
-    QList<SnowCanvasBaseImageSource> samplingSources;
+    QList<SnowCanvasBaseImageSource> samplingSources = {};
 };
 
 struct ScreenshotExportImageResult final {

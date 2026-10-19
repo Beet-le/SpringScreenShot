@@ -197,7 +197,7 @@ void erasersRetainOriginalReferencePixelsAndExportThem() {
             requireReuse(snow_canvas_renderer::filterRenderDiagnosticsForCurrentThread());
         }
         const QList<CanvasExportSource> sources{
-            {fixture.renderer.image, fixture.renderer.reference.canvasRect, {}}};
+            {fixture.renderer.image, fixture.renderer.reference.canvasRect}};
         const auto exported = fixture.runtime.renderToImage(fixture.renderer.reference.canvasRect,
                                                             fixture.renderer.image.size(), sources);
         require(exported == reference,
