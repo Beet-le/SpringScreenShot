@@ -374,7 +374,7 @@ function Test-SnowQtSystemCodecKit {
             continue
         }
         $text = if ($feature.Name -ceq "system_png") { $guiText } else { $coreText }
-        $visibility = if ($feature.Name -ceq "timezone") { "PUBLIC" } else { "PRIVATE" }
+        $visibility = if ($feature.Name -cin @("timezone", "concurrent")) { "PUBLIC" } else { "PRIVATE" }
         $enabled = if ($feature.Name -ceq "ltcg") {
             $ltcgEnabled
         } elseif ($feature.Name -cin @("system_png", "system_zlib")) {

@@ -74,7 +74,7 @@ def write_static_qt_feature_targets(prefix):
     core = prefix / 'lib/cmake/Qt6Core/Qt6CoreTargets.cmake'
     core.parent.mkdir(parents=True, exist_ok=True)
     core.write_text('add_library(Qt6::Core STATIC IMPORTED)\n'
-                    'QT_ENABLED_PUBLIC_FEATURES "timezone;static"\n'
+                    'QT_ENABLED_PUBLIC_FEATURES "timezone;static;concurrent"\n'
                     'QT_ENABLED_PRIVATE_FEATURES "ltcg;system_zlib"\n'
                     'QT_DISABLED_PRIVATE_FEATURES "timezone_locale"\n')
     gui = prefix / 'lib/cmake/Qt6Gui/Qt6GuiTargets.cmake'
@@ -132,6 +132,12 @@ class QtKitValidation(unittest.TestCase):
         self.run_validator('--kit-only')
         self.run_validator(success=False)
         self.assertEqual(self.validator.toolchain_policy()['qtVersion'], QT_VERSION)
+
+    def test_release_kit_requires_concurrent_even_with_a_matching_stamp(self):
+        targets = self.prefix / 'lib/cmake/Qt6Core/Qt6CoreTargets.cmake'
+        targets.write_text(targets.read_text().replace(';concurrent', ''))
+        result = self.run_validator(success=False)
+        self.assertIn('concurrent=True', result.stderr)
 
     def test_stale_installed_version_cannot_be_hidden_by_a_current_stamp(self):
         for module in ('Qt6', 'Qt6Core'):
@@ -1309,6 +1315,7 @@ if name == 'openssl':
             with self.subTest(target=target, host=host):
                 calls = self.static_qt_configure_arguments(target, host)
                 configure = next(call for call in calls if call[0] == 'configure')
+                self.assertIn('-DQT_FEATURE_concurrent=ON', configure)
                 self.assertFalse(any(call[0] == 'arch' for call in calls))
                 self.assertNotIn('-DQT_NO_HANDLE_APPLE_SINGLE_ARCH_CROSS_COMPILING=ON',
                                  configure)
@@ -1479,7 +1486,8 @@ if name == 'openssl':
     def test_release_build_verifies_installed_qt_features_independently_of_stamp(self):
         targets = self.root / 'Qt kit/lib/cmake/Qt6Core/Qt6CoreTargets.cmake'
         original = targets.read_text()
-        for text in (original.replace('timezone;static', 'static'),
+        for text in (original.replace(';concurrent', ''),
+                     original.replace('timezone;static', 'static'),
                      original.replace('ltcg;system_zlib', 'ltcg;system_zlib;timezone_locale'),
                      original.replace('system_zlib', 'system_zlib_extra')):
             with self.subTest(targets=text):

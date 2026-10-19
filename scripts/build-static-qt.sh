@@ -154,7 +154,7 @@ mkdir -p "$build_dir"
         -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON \
         -DFEATURE_timezone=ON -DFEATURE_timezone_locale=OFF \
         -DFEATURE_dup3=OFF \
-        -DQT_FEATURE_concurrent=OFF -DQT_FEATURE_dbus=OFF \
+        -DQT_FEATURE_concurrent=ON -DQT_FEATURE_dbus=OFF \
         -DQT_FEATURE_linguist=ON -DQT_FEATURE_printsupport=OFF \
         -DQT_FEATURE_qdoc=OFF -DQT_FEATURE_qmake=OFF -DQT_FEATURE_sql=OFF \
         -DQT_FEATURE_testlib=OFF -DQT_FEATURE_assistant=OFF \

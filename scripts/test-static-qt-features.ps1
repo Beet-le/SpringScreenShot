@@ -225,6 +225,8 @@ QT_DISABLED_PRIVATE_FEATURES "timezone_locale"
     Set-Content -LiteralPath $corePath -Value $coreTargets
     Require (Test-SnowQtDevelopmentModules $qtDir) "A complete development kit must be recognized."
     Set-Content -LiteralPath $corePath -Value ($coreTargets -replace ';concurrent', '')
+    Require (-not (Test-SnowQtSystemCodecKit -Qt6Dir $qtDir)) `
+        "Production kits must retain Qt Concurrent for cloud upload and printing."
     Require (-not (Test-SnowQtDevelopmentModules $qtDir)) `
         "Stale component files must not hide a disabled QtConcurrent feature."
     Require-Rejected { Resolve-SnowQtDir -Qt6Dir $qtDir -Preset windows-msvc-performance } `
@@ -249,6 +251,8 @@ QT_DISABLED_PRIVATE_FEATURES "timezone_locale"
     Write-StaticQtBuildStamp -Path $stampPath -Version "6.12.0" -BuildConfiguration Release `
         -Fingerprint "dependencies" -SourceArchive "https://example.invalid/qt.tar.xz" -BuildParallelism 4 -HostArchitecture x64
     $originalStamp = Get-Content -LiteralPath $stampPath -Raw
+    Require (($originalStamp | ConvertFrom-Json).DisabledFeatures -notcontains 'concurrent') `
+        'Production provenance must not disable the required Qt Concurrent module.'
     $nativeStamp = $originalStamp | ConvertFrom-Json
     $staleGraphicsStamp = $originalStamp | ConvertFrom-Json
     $staleGraphicsStamp.SourcePatches = @($staleGraphicsStamp.SourcePatches | Where-Object {

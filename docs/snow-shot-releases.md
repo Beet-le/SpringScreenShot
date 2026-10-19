@@ -150,10 +150,10 @@ viewer and use bundled codecs to match the Debug runtime. Windows bootstrap also
 discovers kits under `.tools/qt/<version>/`.
 
 For a Release development kit used by `windows-msvc-performance`, pass
-`-DevelopmentModules` to `scripts/build-static-qt.ps1`. It enables Test and
-Concurrent and can add them incrementally to an already validated production
-kit. Performance discovery requires these modules. They are separate static
-libraries and are not linked into the production Snow Shot executable.
+`-DevelopmentModules` to `scripts/build-static-qt.ps1`. It enables Qt Test and
+can add it incrementally to an already validated production kit. Performance
+discovery requires Test and Concurrent. Production kits always include Concurrent
+for cloud uploads and printing; Qt Test is not linked into the shipping application.
 
 macOS continues using Cocoa time-zone names; Qt already excludes these CLDR
 tables on Apple platforms. Its static kit uses the same feature policy and
