@@ -1196,6 +1196,18 @@ class CursorPositionRestorer final {
     QPoint m_position;
 };
 
+#ifdef Q_OS_WIN
+void withNativeLeftButtonDown(const std::function<void()>& action) {
+    std::array<BYTE, 256> originalKeys{};
+    require(GetKeyboardState(originalKeys.data()) != FALSE, "read native thread button state");
+    const auto restoreKeys = qScopeGuard([&] { SetKeyboardState(originalKeys.data()); });
+    auto keys = originalKeys;
+    keys[VK_LBUTTON] = 0x80;
+    require(SetKeyboardState(keys.data()) != FALSE, "hold left button during native handoff");
+    action();
+}
+#endif
+
 class PinnedWindowTestApplication final : public QApplication {
   public:
     using QApplication::QApplication;
@@ -2394,7 +2406,7 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
     verifyProjection();
 #ifdef Q_OS_WIN
     require(Access::beginPreviewNativeMove(window), "prepare a pending native preview drag");
-    Access::previewNativeMessage(window, WM_CAPTURECHANGED);
+    withNativeLeftButtonDown([&] { Access::previewNativeMessage(window, WM_CAPTURECHANGED); });
     require(
         Access::previewNativeMoveActive(window) && preview->isVisible() &&
             !Access::auxiliaryInteractionActive(window),
@@ -6945,7 +6957,7 @@ void pinnedNativeDragAcceptsCursorMovementShortcuts(SnowCanvasRuntime&) {
         hwnd, WM_NCLBUTTONDOWN, HTCAPTION,
         MAKELPARAM(static_cast<WORD>(startingCursor.x()), static_cast<WORD>(startingCursor.y()))));
     discardPostedSystemDrag(hwnd);
-    SendMessageW(hwnd, WM_CAPTURECHANGED, 0, 0);
+    withNativeLeftButtonDown([&] { SendMessageW(hwnd, WM_CAPTURECHANGED, 0, 0); });
     static_cast<void>(SendMessageW(hwnd, WM_ENTERSIZEMOVE, 0, 0));
 
     const QPoint cursorBeforeShortcut = platformCursorPosition();
@@ -9775,6 +9787,118 @@ void pinnedSettledWheelScalingAdvancesPastRoundedLevel(SnowCanvasRuntime&) {
     require(processUntilDeleted(guardedWindow, 2000),
             "settled wheel scaling test pin was not deleted");
 }
+
+#ifdef Q_OS_WIN
+void pinnedNativeCaptureReleaseEndsGeometry() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    std::array<BYTE, 256> originalKeys{};
+    require(GetKeyboardState(originalKeys.data()) != FALSE, "read native thread button state");
+    const auto restoreKeys = qScopeGuard([&] { SetKeyboardState(originalKeys.data()); });
+    const auto setLeftDown = [&](bool down) {
+        auto keys = originalKeys;
+        keys[VK_LBUTTON] = down ? 0x80 : 0;
+        require(SetKeyboardState(keys.data()) != FALSE, "set native thread button state");
+    };
+    for (const bool moved : {false, true}) {
+        for (const UINT completion :
+             {WM_CAPTURECHANGED, WM_CANCELMODE, WM_LBUTTONUP, WM_NCLBUTTONUP, WM_EXITSIZEMOVE}) {
+            ScreenshotPinnedWindow window;
+            auto* platform = Access::installObservedPlatform(window);
+            QImage image(400, 200, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::blue);
+            ScreenshotPinnedWindow::Config config;
+            config.screen = QGuiApplication::primaryScreen();
+            config.nativeGeometry = QRect(QPoint(100, 100), image.size());
+            config.initialWindowSize = image.size();
+            config.canvasSourceRect = QRectF(QPointF(), QSizeF(image.size()));
+            config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+            config.enableEditing = false;
+            config.automaticTextRecognition = false;
+            Access::restoreOffscreen(window, config);
+            const QRect initial = window.currentNativeGeometry();
+            require(Access::beginPreviewNativeMove(window), "start native move transaction");
+
+            setLeftDown(true);
+            Access::previewNativeMessage(window, WM_CAPTURECHANGED);
+            require(Access::nativeController(window).hasInteractiveTransaction() &&
+                        Access::previewNativeMoveActive(window),
+                    "capture handoff while held must preserve the pending move");
+            if (moved) {
+                Access::previewNativeMessage(window, WM_ENTERSIZEMOVE);
+                platform->observed = Access::nativeController(window).updateMove(
+                    initial.translated(12, 6), QPoint(12, 6));
+            }
+            // USER32 can consume a plain click before WM_ENTERSIZEMOVE and
+            // report only capture loss, with no button-up or WM_EXITSIZEMOVE.
+            setLeftDown(false);
+            Access::previewNativeMessage(window, completion);
+            require(Access::geometrySettled(window) && !Access::previewNativeMoveActive(window) &&
+                        !Access::auxiliaryInteractionActive(window),
+                    "native completion must release geometry, drag feedback and auxiliaries");
+            require(window.currentNativeGeometry() == (moved ? initial.translated(12, 6) : initial),
+                    "completion must preserve the accepted move or the original click geometry");
+            auto* canvas = window.findChild<SnowCanvasWidget*>();
+            const QPointF local = canvas->rect().center();
+            const double before = Access::scale(window);
+            QWheelEvent wheel(local, canvas->mapToGlobal(local), {}, QPoint(0, 120), Qt::NoButton,
+                              Qt::NoModifier, Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(canvas, &wheel);
+            require(Access::scale(window) > before &&
+                        window.currentNativeGeometry().width() > initial.width(),
+                    "wheel input must zoom after native click, move or cancellation");
+            require(Access::moveWindow(window, window.currentNativeGeometry().translated(3, 4)),
+                    "other geometry commands must remain available after native completion");
+        }
+    }
+}
+
+void pinnedClickThenWheelNative() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const CursorPositionRestorer restoreCursor;
+    ScreenshotPinnedWindow window;
+    QImage image(400, 200, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::blue);
+    ScreenshotPinnedWindow::Config config;
+    config.screen = QGuiApplication::primaryScreen();
+    config.nativeGeometry = physicalPinGeometry(*config.screen, QPoint(100, 100), image.size());
+    config.initialWindowSize = image.size();
+    config.canvasSourceRect = QRectF(QPointF(), QSizeF(image.size()));
+    config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+    config.enableEditing = false;
+    config.automaticTextRecognition = false;
+    require(window.present(config), "click-wheel pin presentation failed");
+    window.setAttribute(Qt::WA_DeleteOnClose, false);
+    waitForUi(80);
+    const HWND hwnd = toNativeHwnd(window.winId());
+    setSystemCursorPosition(window.currentNativeGeometry().center());
+    waitForUi(30);
+    const auto nativeWheel = [&] {
+        INPUT wheel{};
+        wheel.type = INPUT_MOUSE;
+        wheel.mi.dwFlags = MOUSEEVENTF_WHEEL;
+        wheel.mi.mouseData = WHEEL_DELTA;
+        require(SendInput(1, &wheel, sizeof(wheel)) == 1, "click-wheel native wheel failed");
+        waitForUi(80);
+    };
+    nativeWheel();
+    require(Access::scale(window) > 100, "native wheel must zoom before clicking a pin");
+    const QPoint clickPosition = window.currentNativeGeometry().center();
+    setSystemCursorPosition(clickPosition);
+    require(WindowFromPoint(POINT{clickPosition.x(), clickPosition.y()}) == hwnd,
+            "click-wheel pointer must target the fixture");
+    INPUT click[2]{};
+    click[0].type = click[1].type = INPUT_MOUSE;
+    click[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+    click[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+    require(SendInput(2, click, sizeof(INPUT)) == 2, "click-wheel native click failed");
+    waitForUi(150);
+    require(Access::geometrySettled(window) && !Access::previewNativeMoveActive(window),
+            "a native click without movement must finish its pending move");
+    const double before = Access::scale(window);
+    nativeWheel();
+    require(Access::scale(window) > before, "native wheel must zoom after clicking a pin");
+}
+#endif
 
 void pinnedWheelStepsFollowPreferences() {
     using Access = ScreenshotPinnedWindowTestAccess;
@@ -25114,6 +25238,16 @@ int main(int argc, char* argv[]) {
         // without this, lazily initialized storage lands in the developer's
         // real AppData (see IsolatedPinnedStorage).
         IsolatedPinnedStorage processStorage;
+#ifdef Q_OS_WIN
+        if (app.arguments().contains(QStringLiteral("--native-capture-release-only"))) {
+            pinnedNativeCaptureReleaseEndsGeometry();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--click-wheel-native-only"))) {
+            pinnedClickThenWheelNative();
+            return 0;
+        }
+#endif
         if (app.arguments().contains(QStringLiteral("--color-swatch-only"))) {
             pinnedColorSwatchWindowTests();
             ScreenshotExportCoordinator::shared().shutdown();

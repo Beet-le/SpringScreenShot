@@ -4990,6 +4990,17 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-pinned-wheel-step-tests PROPERTIES
         LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    if(WIN32)
+        add_test(NAME snow-shot-pinned-native-capture-release-tests
+            COMMAND snow-shot-pinned-window-tests --native-capture-release-only -platform offscreen)
+        set_tests_properties(snow-shot-pinned-native-capture-release-tests PROPERTIES
+            LABELS "unit;windows" RUN_SERIAL TRUE TIMEOUT 60
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+        add_test(NAME snow-shot-pinned-click-wheel-native-tests
+            COMMAND snow-shot-pinned-window-tests --click-wheel-native-only -platform windows)
+        set_tests_properties(snow-shot-pinned-click-wheel-native-tests PROPERTIES
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 60)
+    endif()
     add_test(NAME snow-shot-pinned-angle-wheel-tests
         COMMAND snow-shot-pinned-window-tests --angle-wheel-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-angle-wheel-tests PROPERTIES

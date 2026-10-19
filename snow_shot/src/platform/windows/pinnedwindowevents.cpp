@@ -291,11 +291,16 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             window.m_hideToTop->refreshPointer();
         }
 
-        // Qt and USER32 release capture while handing off a pending drag.
-        // WM_EXITSIZEMOVE and mouse release still finish the transaction.
+        const bool automaticButtonRelease = nativeMessage->message == WM_CAPTURECHANGED &&
+                                            nativeMessage->lParam == 0 &&
+                                            (GetKeyState(VK_LBUTTON) & 0x8000) == 0;
+        // Qt and USER32 release capture while handing off a held-button drag.
+        // A plain click can instead end USER32's pre-move tracking without
+        // WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE or a button-up reaching this window.
+        // Its capture release must finish the pending geometry transaction.
         const bool pendingSystemMoveHandoff =
             nativeMessage->message == WM_CAPTURECHANGED && nativeMessage->lParam == 0 &&
-            !window.m_auxiliaryWindowInteractionActive &&
+            !automaticButtonRelease && !window.m_auxiliaryWindowInteractionActive &&
             window.m_nativeGeometryController != nullptr &&
             window.m_nativeGeometryController->phase() ==
                 ScreenshotPinnedNativeGeometryController::Phase::MovePending;
@@ -311,9 +316,6 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
         // Qt releases its automatic capture before dispatching the button-up
         // event. Keep a pending click alive for that release; explicit shared
         // geometry owns capture until its transaction has ended instead.
-        const bool automaticButtonRelease = nativeMessage->message == WM_CAPTURECHANGED &&
-                                            nativeMessage->lParam == 0 &&
-                                            (GetKeyState(VK_LBUTTON) & 0x8000) == 0;
         if (captureLost && !automaticButtonRelease && window.m_recognitionContent != nullptr &&
             window.m_recognitionContent->lineBoxSelectionActive()) {
             window.m_recognitionContent->cancelLineBoxSelection();
