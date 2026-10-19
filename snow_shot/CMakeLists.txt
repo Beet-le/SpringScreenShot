@@ -9777,6 +9777,33 @@ if(SNOW_SHOT_ENABLE_MCP)
     )
 endif()
 
+# Synthetic clean sources exercise deferred replay without desktop capture permissions.
+if(SNOW_SHOT_BUILD_BENCHMARKS AND (WIN32 OR APPLE))
+    set(_snow_postprocessing_benchmark_environment)
+    if(WIN32)
+        snow_windows_rust_environment(_snow_postprocessing_benchmark_environment
+            "${SNOW_SHOT_RUST_TARGET}")
+        list(APPEND _snow_postprocessing_benchmark_environment
+            "LIBCLANG_PATH=${SNOW_SHOT_LIBCLANG_DIR}")
+    else()
+        list(APPEND _snow_postprocessing_benchmark_environment
+            "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+            "CARGO_PROFILE_RELEASE_DEBUG=2")
+    endif()
+    add_custom_target(snow-shot-recording-postprocessing-export-performance-benchmark
+        COMMAND "${CMAKE_COMMAND}" -E env ${_snow_postprocessing_benchmark_environment}
+            "CARGO_TARGET_DIR=${SNOW_RUST_CARGO_TARGET_DIR}"
+            "FFMPEG_DIR=${SNOW_FFMPEG_ROOT}"
+            "${CARGO_EXECUTABLE}" build --locked --release
+            --target ${SNOW_SHOT_RUST_TARGET}
+            --package snow-recording-export --features bench-timing
+            --example postprocessing_export_benchmark
+            --example native_effects_compositor_benchmark
+        WORKING_DIRECTORY "${SNOW_SHOT_CAPTURE_CRATES_DIR}"
+        USES_TERMINAL VERBATIM)
+    unset(_snow_postprocessing_benchmark_environment)
+endif()
+
 # The same fixed-frame encoder experiment validates VideoToolbox on macOS.
 if(APPLE AND SNOW_SHOT_BUILD_BENCHMARKS)
     add_custom_target(snow-shot-recording-encoder-performance-benchmark

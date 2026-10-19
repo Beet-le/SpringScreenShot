@@ -229,6 +229,195 @@ fn webcam_deferred_formats_replay_gaps_rewinds_and_retries_on_source_time() {
 }
 
 #[test]
+fn held_composition_matches_forced_redraw_across_inputs_expiry_webcam_and_playback() {
+    use snow_recording_effects::keyboard_overlay::KeyEvent;
+    for overlay in [
+        PlaybackOverlay::None,
+        PlaybackOverlay::PlaybackTime { rgba: [255; 4] },
+    ] {
+        let fixture = fixture_with_source(
+            crate::ExportFormat::Mp4,
+            crate::VideoCodec::H264,
+            (320, 120),
+            true,
+            false,
+            (0, 15),
+            false,
+        );
+        add_webcam(&fixture, snow_recording_model::WebcamShape::Circle);
+        let mut metadata = fixture.metadata.clone();
+        metadata.render.playback_overlay = overlay;
+        metadata.render.effects.mouse_click_rgba = [255, 100, 20, 255];
+        metadata.render.effects.mouse_trail_rgba = [255, 40, 60, 180];
+        metadata.render.effects.show_keyboard = true;
+        metadata.render.effects.keyboard = Some(snow_recording_model::KeyboardOverlayConfig {
+            font: None,
+            keycap_size: 32,
+            background_rgba: [0, 0, 0, 180],
+            text_rgba: [255; 4],
+            border_rgba: [255; 4],
+            labels: Default::default(),
+        });
+        let shape = CursorShapeRecord {
+            shape_id: 1,
+            hotspot_x: 0,
+            hotspot_y: 0,
+            width: 2,
+            height: 2,
+            mode: CursorShapeCompositionMode::AlphaBlend,
+            shape_rgba: [0, 255, 0, 255].repeat(4),
+        };
+        let key = KeyEvent {
+            at_ms: 100,
+            key: 65,
+            down: true,
+            label: "A".into(),
+            modifiers: Vec::new(),
+        };
+        let mut outputs = Vec::new();
+        for force_redraw in [false, true] {
+            let mut events = vec![
+                (0, RecordedInput::CursorShape(shape.clone())),
+                (
+                    0,
+                    RecordedInput::Cursor(CursorFrameRecord {
+                        timestamp_ms: 0,
+                        x: 4,
+                        y: 4,
+                        visible: true,
+                        shape_id: Some(1),
+                    }),
+                ),
+                (
+                    33,
+                    RecordedInput::Click(snow_recording_model::RecordedMouseClick {
+                        x: 160,
+                        y: 60,
+                        button: snow_recording_model::InputMouseButton::Left,
+                        down: true,
+                        key: KeyEvent {
+                            at_ms: 33,
+                            key: 0x200,
+                            label: "Left click".into(),
+                            ..key.clone()
+                        },
+                    }),
+                ),
+                (100, RecordedInput::Key(key.clone())),
+                (
+                    200,
+                    RecordedInput::Cursor(CursorFrameRecord {
+                        timestamp_ms: 200,
+                        x: 16,
+                        y: 4,
+                        visible: true,
+                        shape_id: Some(1),
+                    }),
+                ),
+                (
+                    300,
+                    RecordedInput::Key(KeyEvent {
+                        at_ms: 300,
+                        down: false,
+                        ..key.clone()
+                    }),
+                ),
+                (700, RecordedInput::Reset),
+                (
+                    733,
+                    RecordedInput::Pointer {
+                        position: Some((240, 60)),
+                        continuity: 0,
+                        at_ms: 800,
+                    },
+                ),
+            ];
+            if force_redraw {
+                // Re-admitting the same shape changes no pixels, but invalidates every
+                // composition. This supplies an independent full-redraw reference.
+                events.extend(metadata.timeline.iter().map(|frame| {
+                    (
+                        frame.timestamp_ms,
+                        RecordedInput::CursorShape(shape.clone()),
+                    )
+                }));
+            }
+            events.sort_by_key(|event| event.0);
+            let footer = read_recording_bundle_footer(&fixture.bundle).unwrap();
+            let mut bundle = File::open(&fixture.bundle).unwrap();
+            let paths: Vec<_> = footer
+                .assets
+                .iter()
+                .enumerate()
+                .map(|(i, asset)| {
+                    let path = fixture
+                        ._directory
+                        .path()
+                        .join(format!("comparison-{force_redraw}-{i}.bin"));
+                    if asset.kind == BundleAssetKind::InputEvents {
+                        let mut writer = InputStoreWriter::new(&path).unwrap();
+                        for (sequence, (timestamp_ms, event)) in events.iter().enumerate() {
+                            writer
+                                .push(&RecordedInputEvent {
+                                    timestamp_ms: *timestamp_ms,
+                                    sequence: sequence as u64,
+                                    event: event.clone(),
+                                })
+                                .unwrap();
+                        }
+                        writer.finish().unwrap();
+                    } else {
+                        bundle.seek(SeekFrom::Start(asset.offset)).unwrap();
+                        std::io::copy(
+                            &mut (&mut bundle).take(asset.len),
+                            &mut File::create(&path).unwrap(),
+                        )
+                        .unwrap();
+                    }
+                    path
+                })
+                .collect();
+            drop(bundle);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&fixture.bundle)
+                .unwrap()
+                .set_len(footer.video_payload_len)
+                .unwrap();
+            let assets: Vec<_> = footer
+                .assets
+                .iter()
+                .zip(&paths)
+                .map(|(asset, path)| RecordingBundleAsset {
+                    kind: asset.kind,
+                    asset_id: asset.asset_id.as_deref(),
+                    path,
+                })
+                .collect();
+            snow_recording_model::write_recording_bundle(
+                &fixture.bundle,
+                &footer.manifest,
+                &assets,
+            )
+            .unwrap();
+            let result = render_bundle(
+                &fixture.bundle,
+                fixture.config.clone(),
+                metadata.clone(),
+                &CancellationToken::default(),
+                |_, _, _, _| {},
+            )
+            .unwrap();
+            outputs.push(std::fs::read(result.output_path).unwrap());
+        }
+        assert!(
+            outputs[0] == outputs[1],
+            "held output differs from full redraw: {overlay:?}"
+        );
+    }
+}
+
+#[test]
 fn deferred_static_output_holds_composed_images_without_losing_audio_or_endpoint() {
     let fixture = fixture(
         crate::ExportFormat::Mp4,
@@ -1842,7 +2031,7 @@ fn animation_guard_avoids_scans_until_idle_without_changing_decoded_frames() {
             pixels.extend((0..32 * 24).flat_map(|_| [20, 30, 40, 255]));
             effects.apply_rgba(&mut pixels, frame).unwrap();
             encoder.set_frame_reuse(
-                if guard && reusable_effect_frame(&effects, &metadata, frame.timestamp_ms) {
+                if guard && reusable_effect_frame(&effects, frame.timestamp_ms) {
                     crate::streaming::VideoFrameReuse::ReuseConversion
                 } else {
                     crate::streaming::VideoFrameReuse::Encode

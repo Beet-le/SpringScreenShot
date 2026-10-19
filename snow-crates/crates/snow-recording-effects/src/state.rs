@@ -37,6 +37,10 @@ impl CoalescedPointer {
         self.pending = Some((position, at_ms));
     }
 
+    pub(crate) fn has_due_observation(&self, now: u64) -> bool {
+        self.pending.is_some_and(|(_, at_ms)| at_ms <= now)
+    }
+
     pub fn advance(
         &mut self,
         effects: &mut InputEffectsState,

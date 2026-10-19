@@ -34,6 +34,7 @@ pub struct RecordedEffects {
     playback: PlaybackRenderer,
     tiles: TileSurface,
     webcam: crate::webcam::WebcamOverlay,
+    observation_revision: u64,
 }
 
 impl RecordedEffects {
@@ -118,6 +119,7 @@ impl RecordedEffects {
             playback,
             tiles: TileSurface::new(output),
             webcam: crate::webcam::WebcamOverlay::default(),
+            observation_revision: 0,
         })
     }
 
@@ -131,11 +133,29 @@ impl RecordedEffects {
         frame: Option<&snow_webcam::Frame>,
         style: snow_recording_model::WebcamStyle,
     ) {
-        self.webcam.prepare(
+        if self.webcam.prepare(
             frame,
             style,
             (self.config.output_width, self.config.output_height),
-        );
+        ) {
+            self.observation_revision = self.observation_revision.wrapping_add(1);
+        }
+    }
+
+    /// Changes admitted through `observe` and `set_webcam_frame` that can affect pixels.
+    /// Animation and playback time are independent; direct `input_effects` mutations
+    /// are not tracked by this revision.
+    pub fn observation_revision(&self) -> u64 {
+        self.observation_revision
+    }
+
+    /// Clock-driven invalidation, including pointer observations admitted ahead
+    /// of their source timestamp. Observation revisions are checked separately.
+    pub fn needs_frame(&self, now: u64) -> bool {
+        self.input_effects
+            .has_active_animation(&self.config.effects, now)
+            || (self.config.effects.mouse_trail_rgba[3] != 0
+                && self.pointer.has_due_observation(now))
     }
 
     /// Input observations stay on the source clock; the playback badge uses clip time.
@@ -153,6 +173,30 @@ impl RecordedEffects {
             return Err("effect input admission order is not monotonic".into());
         }
         self.last_admission = Some((event.timestamp_ms, event.sequence));
+        let effects = &self.config.effects;
+        let changes_pixels = match &event.event {
+            RecordedInput::CursorShape(_) => effects.show_cursor,
+            // Capture may sample a stationary cursor on every slot. Its timestamp
+            // does not affect rendering; only its visual state invalidates pixels.
+            RecordedInput::Cursor(next) => {
+                effects.show_cursor
+                    && self.cursor.as_ref().is_none_or(|previous| {
+                        (previous.x, previous.y, previous.visible, previous.shape_id)
+                            != (next.x, next.y, next.visible, next.shape_id)
+                    })
+            }
+            RecordedInput::Pointer { .. } => effects.mouse_trail_rgba[3] != 0,
+            RecordedInput::Click(_) => {
+                effects.record_mouse_clicks || effects.mouse_click_rgba[3] != 0
+            }
+            RecordedInput::Key(_) | RecordedInput::KeyboardReset => {
+                effects.show_keyboard || effects.record_mouse_clicks
+            }
+            RecordedInput::Reset => true,
+        };
+        if changes_pixels {
+            self.observation_revision = self.observation_revision.wrapping_add(1);
+        }
         match &event.event {
             RecordedInput::CursorShape(shape) => self.store_shape(shape),
             RecordedInput::Cursor(cursor) => {
@@ -453,6 +497,182 @@ mod tests {
     }
     fn pixels() -> Vec<u8> {
         [20, 40, 60, 255].repeat(120 * 100)
+    }
+    #[test]
+    fn stationary_cursor_samples_do_not_invalidate_visible_pixels() {
+        let mut effects =
+            RecordedEffects::new(config(PlaybackOverlay::None), (120, 100), None).unwrap();
+        let cursor = CursorFrameRecord {
+            timestamp_ms: 0,
+            x: 10,
+            y: 20,
+            visible: true,
+            shape_id: Some(1),
+        };
+        effects
+            .observe(&input(0, 0, RecordedInput::Cursor(cursor.clone())))
+            .unwrap();
+        let revision = effects.observation_revision();
+        effects
+            .observe(&input(
+                1,
+                33,
+                RecordedInput::Cursor(CursorFrameRecord {
+                    timestamp_ms: 33,
+                    ..cursor.clone()
+                }),
+            ))
+            .unwrap();
+        assert_eq!(effects.observation_revision(), revision);
+        for (i, cursor) in [
+            CursorFrameRecord {
+                x: 11,
+                ..cursor.clone()
+            },
+            CursorFrameRecord {
+                visible: false,
+                ..cursor.clone()
+            },
+            CursorFrameRecord {
+                shape_id: Some(2),
+                ..cursor
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let revision = effects.observation_revision();
+            effects
+                .observe(&input(i as u64 + 2, 34, RecordedInput::Cursor(cursor)))
+                .unwrap();
+            assert_ne!(effects.observation_revision(), revision);
+        }
+    }
+    #[test]
+    fn future_pointer_observation_wakes_idle_replay_on_its_source_clock() {
+        let mut policy = config(PlaybackOverlay::None);
+        policy.effects.show_cursor = false;
+        policy.effects.mouse_trail_rgba = [255; 4];
+        let mut effects = RecordedEffects::new(policy, (120, 100), None).unwrap();
+        effects
+            .observe(&input(
+                0,
+                0,
+                RecordedInput::Pointer {
+                    position: Some((30, 40)),
+                    continuity: 0,
+                    at_ms: 100,
+                },
+            ))
+            .unwrap();
+        effects.apply_rgba(&mut pixels(), frame(0, 0, 0.0)).unwrap();
+        assert!(!effects.needs_frame(99));
+        assert!(effects.needs_frame(100));
+        effects
+            .apply_rgba(&mut pixels(), frame(3, 100, 0.0))
+            .unwrap();
+        assert!(!effects.pointer.has_due_observation(100));
+    }
+    #[test]
+    fn observation_revision_tracks_visible_inputs_and_webcam_replacement() {
+        let mut policy = config(PlaybackOverlay::None);
+        policy.effects.show_cursor = false;
+        let mut effects = RecordedEffects::new(policy.clone(), (120, 100), None).unwrap();
+        effects
+            .observe(&input(
+                0,
+                0,
+                RecordedInput::Pointer {
+                    position: Some((10, 10)),
+                    continuity: 0,
+                    at_ms: 0,
+                },
+            ))
+            .unwrap();
+        effects
+            .observe(&input(
+                1,
+                0,
+                RecordedInput::Key(KeyEvent {
+                    at_ms: 0,
+                    key: 65,
+                    down: true,
+                    label: "A".into(),
+                    modifiers: Vec::new(),
+                }),
+            ))
+            .unwrap();
+        assert_eq!(
+            effects.observation_revision(),
+            0,
+            "disabled effects cannot change output"
+        );
+        let camera = snow_webcam::Frame {
+            revision: 1,
+            at: std::time::Instant::now(),
+            size: 1,
+            rgba: Arc::new(vec![255; 4]),
+        };
+        let style = snow_recording_model::WebcamStyle::default();
+        effects.set_webcam_frame(Some(&camera), style);
+        let revision = effects.observation_revision();
+        effects.set_webcam_frame(Some(&camera), style);
+        assert_eq!(effects.observation_revision(), revision);
+        effects.set_webcam_frame(None, style);
+        assert_ne!(
+            effects.observation_revision(),
+            revision,
+            "hiding a webcam changes pixels"
+        );
+
+        policy.effects.show_cursor = true;
+        policy.effects.mouse_trail_rgba = [255; 4];
+        policy.effects.mouse_click_rgba = [255; 4];
+        let mut effects = RecordedEffects::new(policy, (120, 100), None).unwrap();
+        for (sequence, event) in [
+            RecordedInput::CursorShape(CursorShapeRecord {
+                shape_id: 1,
+                hotspot_x: 0,
+                hotspot_y: 0,
+                width: 1,
+                height: 1,
+                mode: CursorShapeCompositionMode::AlphaBlend,
+                shape_rgba: vec![255; 4],
+            }),
+            RecordedInput::Cursor(CursorFrameRecord {
+                timestamp_ms: 0,
+                x: 10,
+                y: 10,
+                visible: true,
+                shape_id: Some(1),
+            }),
+            RecordedInput::Pointer {
+                position: Some((10, 10)),
+                continuity: 0,
+                at_ms: 0,
+            },
+            RecordedInput::Click(RecordedMouseClick {
+                x: 10,
+                y: 10,
+                button: InputMouseButton::Left,
+                down: true,
+                key: KeyEvent {
+                    at_ms: 0,
+                    key: 0x200,
+                    down: true,
+                    label: "Left click".into(),
+                    modifiers: Vec::new(),
+                },
+            }),
+            RecordedInput::Reset,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let revision = effects.observation_revision();
+            effects.observe(&input(sequence as u64, 0, event)).unwrap();
+            assert_ne!(effects.observation_revision(), revision);
+        }
     }
     #[test]
     fn recorded_highlight_uses_configured_output_pixel_radius() {

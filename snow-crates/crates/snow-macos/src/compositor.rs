@@ -22,6 +22,9 @@ use snow_media::{
 };
 use std::ptr::NonNull;
 
+mod batch;
+use batch::OverlayBatcher;
+
 struct MetalCopy {
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     cache: CFRetained<CVMetalTextureCache>,
@@ -52,6 +55,7 @@ pub struct Compositor {
     format: PixelFormat,
     color: ColorDescription,
     color_space: CFRetained<CGColorSpace>,
+    overlay_batcher: OverlayBatcher,
 }
 // SAFETY: methods require exclusive access; Core Image contexts and CoreVideo
 // pools support use on worker threads. No main-thread Cocoa objects are held.
@@ -168,6 +172,7 @@ impl Compositor {
                 format,
                 color,
                 color_space,
+                overlay_batcher: OverlayBatcher::default(),
             })
         })
     }
@@ -266,6 +271,25 @@ impl Compositor {
         highlight: &[RgbaOverlay<'_>],
         opaque: bool,
     ) -> MacResult<PixelBuffer> {
+        self.compose_impl(
+            layers,
+            background_overlays,
+            overlays,
+            highlight,
+            opaque,
+            true,
+        )
+    }
+
+    fn compose_impl(
+        &mut self,
+        layers: &[Layer<'_>],
+        background_overlays: &[RgbaOverlay<'_>],
+        overlays: &[RgbaOverlay<'_>],
+        highlight: &[RgbaOverlay<'_>],
+        opaque: bool,
+        batch_overlays: bool,
+    ) -> MacResult<PixelBuffer> {
         for overlay in background_overlays.iter().chain(highlight).chain(overlays) {
             let needed = overlay.stride.checked_mul(overlay.height as usize);
             if overlay.width == 0
@@ -321,45 +345,57 @@ impl Compositor {
             }
             let srgb =
                 CGColorSpace::with_name(Some(kCGColorSpaceSRGB)).ok_or(MacError::Inactive)?;
-            for (overlay, multiply) in background_overlays
-                .iter()
-                .map(|tile| (tile, false))
-                .chain(highlight.iter().map(|tile| (tile, true)))
-                .chain(overlays.iter().map(|tile| (tile, false)))
-            {
-                let data = objc2_foundation::NSData::with_bytes(overlay.bytes);
-                let image = CIImage::imageWithBitmapData_bytesPerRow_size_format_colorSpace(
-                    &data,
-                    overlay.stride,
-                    CGSize {
-                        width: f64::from(overlay.width),
-                        height: f64::from(overlay.height),
-                    },
-                    objc2_core_image::kCIFormatRGBA8,
-                    Some(&srgb),
-                );
-                let positioned = image.imageByApplyingTransform(CGAffineTransform {
-                    a: 1.0,
-                    b: 0.0,
-                    c: 0.0,
-                    d: 1.0,
-                    tx: f64::from(overlay.x),
-                    ty: f64::from(self.size.height)
-                        - f64::from(overlay.y)
-                        - f64::from(overlay.height),
-                });
-                result = if multiply {
-                    let parameters = objc2_foundation::NSDictionary::from_slices(
-                        &[objc2_foundation::ns_string!("inputBackgroundImage")],
-                        &[&*result as &objc2::runtime::AnyObject],
+            for (mut group, multiply) in [
+                (background_overlays, false),
+                (highlight, true),
+                (overlays, false),
+            ] {
+                while !group.is_empty() {
+                    let (packed, count);
+                    let overlay = if batch_overlays {
+                        (packed, count) = self.overlay_batcher.prepare(group, self.size);
+                        &packed
+                    } else {
+                        count = 1;
+                        &group[0]
+                    };
+                    let data = objc2_foundation::NSData::with_bytes(overlay.bytes);
+                    let image = CIImage::imageWithBitmapData_bytesPerRow_size_format_colorSpace(
+                        &data,
+                        overlay.stride,
+                        CGSize {
+                            width: f64::from(overlay.width),
+                            height: f64::from(overlay.height),
+                        },
+                        objc2_core_image::kCIFormatRGBA8,
+                        Some(&srgb),
                     );
-                    positioned.imageByApplyingFilter_withInputParameters(
-                        objc2_foundation::ns_string!("CIMultiplyBlendMode"),
-                        &parameters,
-                    )
-                } else {
-                    positioned.imageByCompositingOverImage(&result)
-                };
+                    let positioned = image.imageByApplyingTransform(CGAffineTransform {
+                        a: 1.0,
+                        b: 0.0,
+                        c: 0.0,
+                        d: 1.0,
+                        tx: f64::from(overlay.x),
+                        ty: f64::from(self.size.height)
+                            - f64::from(overlay.y)
+                            - f64::from(overlay.height),
+                    });
+                    result = if multiply {
+                        let parameters = objc2_foundation::NSDictionary::from_slices(
+                            &[objc2_foundation::ns_string!("inputBackgroundImage")],
+                            &[&*result as &objc2::runtime::AnyObject],
+                        );
+                        positioned.imageByApplyingFilter_withInputParameters(
+                            objc2_foundation::ns_string!("CIMultiplyBlendMode"),
+                            &parameters,
+                        )
+                    } else {
+                        positioned.imageByCompositingOverImage(&result)
+                    };
+                    // NSData copied the packed bytes, so the scratch can be reused
+                    // by the next group while the native image graph retains its data.
+                    group = &group[count..];
+                }
             }
             if self.color == ColorDescription::HDR10 {
                 for (key, value) in [
@@ -513,6 +549,94 @@ fn metal_texture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batched_overlays_match_individual_layers_with_alpha_highlights_hdr_and_clipping() {
+        let size = PixelSize::new(256, 192).unwrap();
+        let rectangles = [
+            (4, 3, 48, 40, 8),
+            (60, 7, 40, 41, 12),
+            (110, 9, 30, 48, 0),
+            (135, 15, 50, 33, 4),
+            (200, 160, 30, 30, 8),
+            (240, 170, 32, 32, 12),
+        ];
+        let storage: Vec<_> = rectangles
+            .iter()
+            .enumerate()
+            .map(|(index, &(_, _, w, h, padding))| {
+                let stride = w as usize * 4 + padding;
+                let mut bytes = vec![0xa5; stride * h as usize];
+                for y in 0..h as usize {
+                    for x in 0..w as usize {
+                        let alpha = ((x * 13 + y * 7 + index * 31) % 256) as u8;
+                        let from = y * stride + x * 4;
+                        bytes[from..from + 4].copy_from_slice(&[
+                            (u16::from(alpha) * 220 / 255) as u8,
+                            (u16::from(alpha) * 70 / 255) as u8,
+                            (u16::from(alpha) * 130 / 255) as u8,
+                            alpha,
+                        ]);
+                    }
+                }
+                bytes
+            })
+            .collect();
+        let overlays: Vec<_> = rectangles
+            .iter()
+            .zip(&storage)
+            .map(|(&(x, y, width, height, padding), bytes)| RgbaOverlay {
+                x,
+                y,
+                width,
+                height,
+                stride: width as usize * 4 + padding,
+                bytes,
+            })
+            .collect();
+        for format in [
+            PixelFormat::Bgra8,
+            PixelFormat::Rgba16Float,
+            PixelFormat::P010,
+        ] {
+            let mut compositor = Compositor::new(size, format, 4).unwrap();
+            for opaque in [false, true] {
+                for mixed_layers in [false, true] {
+                    let background = if mixed_layers { &overlays[..2] } else { &[] };
+                    let highlight = if mixed_layers { &overlays[1..4] } else { &[] };
+                    let expected = compositor
+                        .compose_impl(&[], background, &overlays, highlight, opaque, false)
+                        .unwrap()
+                        .to_cpu()
+                        .unwrap();
+                    let actual = compositor
+                        .compose_impl(&[], background, &overlays, highlight, opaque, true)
+                        .unwrap()
+                        .to_cpu()
+                        .unwrap();
+                    assert_eq!(
+                        actual.bytes, expected.bytes,
+                        "format={format:?}, opaque={opaque}, mixed_layers={mixed_layers}"
+                    );
+                    // Reusing the batch for a smaller scene cannot retain earlier pixels.
+                    let expected = compositor
+                        .compose_impl(&[], &[], &overlays[..2], &[], opaque, false)
+                        .unwrap()
+                        .to_cpu()
+                        .unwrap();
+                    let actual = compositor
+                        .compose_impl(&[], &[], &overlays[..2], &[], opaque, true)
+                        .unwrap()
+                        .to_cpu()
+                        .unwrap();
+                    assert_eq!(
+                        actual.bytes, expected.bytes,
+                        "reused batch format={format:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn recreated_contexts_are_released_before_worker_pool_drains() {

@@ -459,7 +459,9 @@ pub fn render_bundle_range_with_speed(
     video.seek_to(first, cancellation)?;
     let mut webcam = crate::webcam::WebcamReplay::open(path, cancellation)?;
     let mut audio = ExportAudioReplay::open(path, &footer, &config, range, speed)?;
-    let mut rgba = RasterBuffer::zeroed(config.width as usize * config.height as usize * 4);
+    // Allocate only when composition needs storage. A wholly held output never
+    // needs a second canvas, and HDR composition never uses an RGBA canvas.
+    let mut rgba = RasterBuffer::default();
     let mut hdr_conversion = if output_hdr {
         let mut conversion = ffmpeg::software::scaling::Context::get(
             ffmpeg::format::Pixel::RGB48LE,
@@ -496,6 +498,10 @@ pub fn render_bundle_range_with_speed(
     }
     let mut previous_telemetry = Instant::now();
     let mut previous_progress_width = None;
+    let mut previous_effect_identity = None;
+    let mut previous_effects_idle = false;
+    #[cfg(feature = "bench-timing")]
+    let mut skipped_compositions = 0u64;
     for index in 0..total {
         let output_frame = snow_recording_model::RenderFrame {
             index,
@@ -540,7 +546,7 @@ pub fn render_bundle_range_with_speed(
         check_cancel(cancellation)?;
         #[cfg(feature = "bench-timing")]
         let stage_started = Instant::now();
-        video.advance(source_index, cancellation)?;
+        let source_changed = video.advance(source_index, cancellation)?;
         if let Some(webcam) = &mut webcam {
             let image = webcam.frame_at(frame.timestamp_ms, cancellation)?;
             effects.set_webcam_frame(image.as_deref(), webcam.style());
@@ -566,7 +572,38 @@ pub fn render_bundle_range_with_speed(
         // complete composed images only when the bar could actually be held.
         let playback_unchanged = progress_width == previous_progress_width;
         previous_progress_width = progress_width;
-        if let Some(conversion) = &mut hdr_conversion {
+        let effect_identity = (
+            effects.observation_revision(),
+            snow_recording_effects::playback::playback_content_key(
+                metadata.render.playback_overlay,
+                config.width,
+                snow_recording_model::RenderFrame {
+                    timestamp_ms: playback_ms,
+                    ..frame
+                },
+                Some(timeline),
+            )
+            .map_err(RecordingExportError::Export)?,
+        );
+        // Replay owns all effect mutations through observe/set_webcam_frame. A held
+        // source plus unchanged observations and settled effects proves pixel identity
+        // before copying the canvas. Check both sides of animation expiry: the first
+        // settled frame must still erase the final visible animation pixels.
+        // MP4 already represents holds by the next PTS (or the exact final endpoint).
+        // Other formats retain their bounded delay/frame-grid policies in the encoder.
+        let hold_composition = !source_changed
+            && config.format == crate::ExportFormat::Mp4
+            && !fixed_rate_retime
+            && previous_effects_idle
+            && previous_effect_identity == Some(effect_identity)
+            && reusable_effect_frame(&effects, frame.timestamp_ms);
+        if hold_composition {
+            #[cfg(feature = "bench-timing")]
+            {
+                skipped_compositions += 1;
+                stage_times[2] += stage_started.elapsed();
+            }
+        } else if let Some(conversion) = &mut hdr_conversion {
             let rgb = hdr_rgb.as_mut().expect("HDR composition frame");
             video.copy_rgb48(rgb)?;
             let tiles = effects
@@ -574,7 +611,7 @@ pub fn render_bundle_range_with_speed(
                 .map_err(RecordingExportError::Export)?;
             blend_hdr_tiles(rgb, &tiles);
             let converted = hdr_encoded.as_mut().expect("HDR encode frame");
-            let reusable = reusable_effect_frame(&effects, &metadata, frame.timestamp_ms);
+            let reusable = reusable_effect_frame(&effects, frame.timestamp_ms);
             #[cfg(feature = "bench-timing")]
             if reusable && playback_unchanged && hdr_valid {
                 hdr_reuse_checks += 1;
@@ -609,6 +646,7 @@ pub fn render_bundle_range_with_speed(
                 stage_times[3] += stage_started.elapsed();
             }
         } else {
+            rgba.resize(config.width as usize * config.height as usize * 4, 0);
             video.copy_rgba(&mut rgba)?;
             effects
                 .apply_rgba_at_playback_time(&mut rgba, frame, playback_ms)
@@ -616,9 +654,7 @@ pub fn render_bundle_range_with_speed(
             // Known changing animations cannot reuse prepared pixels. For
             // other slots, exact complete-pixel equality remains authoritative.
             encoder.set_frame_reuse(
-                if playback_unchanged
-                    && reusable_effect_frame(&effects, &metadata, frame.timestamp_ms)
-                {
+                if playback_unchanged && reusable_effect_frame(&effects, frame.timestamp_ms) {
                     if fixed_rate_retime {
                         crate::streaming::VideoFrameReuse::ReuseConversion
                     } else {
@@ -635,12 +671,13 @@ pub fn render_bundle_range_with_speed(
             #[cfg(feature = "bench-timing")]
             let stage_started = Instant::now();
             rgba = encoder.push_raster_rgba_frame_at_pts(frame.pts, rgba)?;
-            rgba.resize(config.width as usize * config.height as usize * 4, 0);
             #[cfg(feature = "bench-timing")]
             {
                 stage_times[3] += stage_started.elapsed();
             }
         }
+        previous_effect_identity = Some(effect_identity);
+        previous_effects_idle = reusable_effect_frame(&effects, frame.timestamp_ms);
         #[cfg(feature = "bench-timing")]
         let stage_started = Instant::now();
         audio.emit_until(
@@ -690,6 +727,7 @@ pub fn render_bundle_range_with_speed(
             },
             total.saturating_sub(report.encoded_frames),
         );
+        eprintln!("deferred composition: skipped={skipped_compositions}");
     }
     #[cfg(feature = "bench-timing")]
     let durations = {
@@ -737,10 +775,8 @@ fn deferred_software_threads(config: &StreamingEncoderConfig, physical: usize) -
         .then(|| physical.clamp(1, 8) as u8)
 }
 
-fn reusable_effect_frame(effects: &RecordedEffects, metadata: &RenderMetadata, at_ms: u64) -> bool {
-    !effects
-        .input_effects
-        .has_active_animation(&metadata.render.effects, at_ms)
+fn reusable_effect_frame(effects: &RecordedEffects, at_ms: u64) -> bool {
+    !effects.needs_frame(at_ms)
 }
 
 fn equal_rgb48(a: &ffmpeg::frame::Video, b: &ffmpeg::frame::Video) -> bool {

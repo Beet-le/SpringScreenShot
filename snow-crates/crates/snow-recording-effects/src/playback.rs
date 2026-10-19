@@ -22,6 +22,30 @@ pub fn progress_bar_width(width: u32, progress: f64) -> u32 {
     (f64::from(width) * progress.clamp(0.0, 1.0)).floor() as u32
 }
 
+/// Visible playback content for a fixed overlay, canvas and finalized timeline.
+/// The final slot displays the exact endpoint, even before the next whole second.
+pub fn playback_content_key(
+    overlay: PlaybackOverlay,
+    width: u32,
+    frame: RenderFrame,
+    timeline: Option<FinalizedTimeline>,
+) -> Result<u64, String> {
+    match overlay {
+        PlaybackOverlay::None => Ok(0),
+        PlaybackOverlay::ProgressBar { .. } => {
+            Ok(u64::from(progress_bar_width(width, frame.progress)))
+        }
+        PlaybackOverlay::PlaybackTime { .. } => {
+            let timeline = timeline.ok_or("playback time requires a finalized timeline")?;
+            Ok(if frame.index + 1 >= timeline.frame_count() {
+                timeline.duration_ms()
+            } else {
+                frame.timestamp_ms.min(timeline.duration_ms())
+            } / 1000)
+        }
+    }
+}
+
 pub fn draw_progress_bar(surface: &mut impl Surface, progress: f64, rgba: [u8; 4]) {
     let (width, height) = surface.size();
     let top = height - progress_bar_height(height);
@@ -209,11 +233,9 @@ impl PlaybackRenderer {
             }
             PlaybackOverlay::PlaybackTime { .. } => {
                 let timeline = timeline.ok_or("playback time requires a finalized timeline")?;
-                let elapsed = if frame.index + 1 >= timeline.frame_count() {
-                    timeline.duration_ms()
-                } else {
-                    frame.timestamp_ms.min(timeline.duration_ms())
-                };
+                let elapsed =
+                    playback_content_key(self.overlay, self.output.0, frame, Some(timeline))?
+                        * 1000;
                 self.draw_time(surface, elapsed, timeline.duration_ms())?;
             }
         }
@@ -384,6 +406,33 @@ fn validate_cap(cap: &Keycap) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::surface::{RgbaSurface, TILE_SIZE, TileSurface};
+
+    #[test]
+    fn content_key_includes_second_boundaries_and_early_final_endpoint() {
+        let timeline = FinalizedTimeline::new(3000, 60).unwrap();
+        let overlay = PlaybackOverlay::PlaybackTime { rgba: [255; 4] };
+        for (index, expected) in [
+            (0, 0),
+            (59, 0),
+            (60, 1),
+            (119, 1),
+            (120, 2),
+            (178, 2),
+            (179, 3),
+        ] {
+            assert_eq!(
+                playback_content_key(
+                    overlay,
+                    1920,
+                    timeline.frame(index).unwrap(),
+                    Some(timeline)
+                )
+                .unwrap(),
+                expected
+            );
+        }
+        assert!(playback_content_key(overlay, 1920, timeline.frame(0).unwrap(), None).is_err());
+    }
 
     struct Glyph;
     impl KeycapRasterizer for Glyph {

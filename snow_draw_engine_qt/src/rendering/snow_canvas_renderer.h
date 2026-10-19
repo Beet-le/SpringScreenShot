@@ -139,7 +139,7 @@ struct SceneRenderRequest {
     const SnowSpotlightCutout* spotlightCutouts = nullptr;
     std::uint32_t spotlightCutoutCount = 0;
     // Canvas coordinates keep this independent of the live or reference viewport.
-    QRectF spotlightRenderArea;
+    QRectF spotlightRenderArea{};
     bool hasSpotlightRenderArea = false;
 };
 
