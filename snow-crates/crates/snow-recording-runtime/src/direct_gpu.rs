@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use snow_capture::gpu::GpuCapturedFrame;
 use snow_d3d11::{Rect, SharedDevice, Texture, VideoLayer, VideoProcessor};
-use snow_recording_effects::surface::{TILE_SIZE, TileSurface};
+use snow_recording_effects::surface::{TILE_SIZE, Tile, TileSurface};
 use snow_recording_export::gpu::GpuEncoderFrame;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -238,9 +238,8 @@ impl OverlayTexture {
         })
     }
 
-    fn upload(&mut self, surface: &TileSurface) -> Result<u64> {
-        let next: HashMap<_, _> = surface
-            .snapshot()
+    fn upload(&mut self, tiles: Vec<Tile>) -> Result<u64> {
+        let next: HashMap<_, _> = tiles
             .into_iter()
             .map(|tile| ((tile.x, tile.y), tile.pixels))
             .collect();
@@ -306,13 +305,15 @@ impl OverlayTexture {
 pub(super) struct GpuVisualCompositor {
     #[cfg(test)]
     final_rgb: Option<Texture>,
+    #[cfg(test)]
+    force_empty_overlays: bool,
     #[cfg(any(test, feature = "bench-synthetic-input"))]
     pub inject_failure: bool,
     device: SharedDevice,
     processor: VideoProcessor,
     scratch: [Texture; 2],
     cursor_output: Texture,
-    overlay: OverlayTexture,
+    overlay: Option<OverlayTexture>,
     webcam: Option<WebcamTexture>,
     tiles: TileSurface,
     cursor_shader: ID3D11ComputeShader,
@@ -409,18 +410,19 @@ impl GpuVisualCompositor {
                 )
                 .map_err(gpu_error)?;
         }
-        let overlay = OverlayTexture::new(&device, size)?;
         drop(_lock);
         Ok(Self {
             device,
             #[cfg(test)]
             final_rgb: None,
+            #[cfg(test)]
+            force_empty_overlays: false,
             #[cfg(any(test, feature = "bench-synthetic-input"))]
             inject_failure: false,
             processor,
             scratch,
             cursor_output,
-            overlay,
+            overlay: None,
             webcam: None,
             tiles: TileSurface::new(size),
             cursor_shader: cursor_shader.ok_or_else(|| gpu_error("missing cursor shader"))?,
@@ -586,18 +588,19 @@ impl GpuVisualCompositor {
             config.mouse_click_rgba,
             source_size,
         );
-        self.overlay_upload_bytes += self.overlay.upload(&self.tiles)?;
-        self.processor
-            .blit(
-                &[
-                    self.layer(self.scratch[index].clone(), false),
-                    self.layer(self.overlay.texture.clone(), true),
-                ],
-                self.scratch[1 - index].raw(),
-                0,
-            )
-            .map_err(|error| gpu_error(format!("effects pass: {error:#}")))?;
-        index = 1 - index;
+        if let Some(overlay) = self.upload_overlay()? {
+            self.processor
+                .blit(
+                    &[
+                        self.layer(self.scratch[index].clone(), false),
+                        self.layer(overlay, true),
+                    ],
+                    self.scratch[1 - index].raw(),
+                    0,
+                )
+                .map_err(|error| gpu_error(format!("effects pass: {error:#}")))?;
+            index = 1 - index;
+        }
         let mut background = self.scratch[index].clone();
         if config.show_cursor
             && let Some(cursor) = cursor
@@ -617,28 +620,46 @@ impl GpuVisualCompositor {
                 .draw_to(&mut self.tiles, timestamp)
                 .map_err(gpu_error)?;
         }
-        self.overlay_upload_bytes += self.overlay.upload(&self.tiles)?;
-        self.processor
-            .blit(
-                &[
-                    self.layer(background, false),
-                    self.layer(self.overlay.texture.clone(), true),
-                ],
-                self.scratch[1 - index].raw(),
-                0,
-            )
-            .map_err(|error| gpu_error(format!("keyboard pass: {error:#}")))?;
+        if let Some(overlay) = self.upload_overlay()? {
+            self.processor
+                .blit(
+                    &[self.layer(background, false), self.layer(overlay, true)],
+                    self.scratch[1 - index].raw(),
+                    0,
+                )
+                .map_err(|error| gpu_error(format!("keyboard pass: {error:#}")))?;
+            background = self.scratch[1 - index].clone();
+        }
         #[cfg(test)]
         {
-            self.final_rgb = Some(self.scratch[1 - index].clone());
+            self.final_rgb = Some(background.clone());
         }
         self.processor
             .blit(
-                &[self.layer(self.scratch[1 - index].clone(), false)],
+                &[self.layer(background, false)],
                 &output.texture()?,
                 output.slice(),
             )
             .map_err(|error| gpu_error(format!("NV12 pass: {error:#}")))
+    }
+
+    fn upload_overlay(&mut self) -> Result<Option<Texture>> {
+        let tiles = self.tiles.snapshot();
+        let empty = tiles.is_empty();
+        #[cfg(test)]
+        let empty = empty && !self.force_empty_overlays;
+        if empty {
+            // The texture is not sampled by this pass. Keep its last contents
+            // and diff against them when effects reappear; no clear or full-frame
+            // blend is needed while empty. Allocate only after a visible effect.
+            return Ok(None);
+        }
+        if self.overlay.is_none() {
+            self.overlay = Some(OverlayTexture::new(&self.device, self.size)?);
+        }
+        let overlay = self.overlay.as_mut().unwrap();
+        self.overlay_upload_bytes += overlay.upload(tiles)?;
+        Ok(Some(overlay.texture.clone()))
     }
 
     fn layer(&self, texture: Texture, alpha: bool) -> VideoLayer {
@@ -1134,6 +1155,15 @@ mod tests {
         let mut gpu = GpuVisualCompositor::new(device.clone(), size, size, 30)?;
         let mut cpu_state = VisualCompositor::new(size);
         let mut gpu_state = VisualCompositor::new(size);
+        gpu.compose(&mut gpu_state, &config, &observation, 0, None, &surface)?;
+        assert!(
+            gpu.overlay.is_none(),
+            "empty effects must not allocate a texture"
+        );
+        assert_eq!(gpu.overlay_upload_bytes, 0);
+        for pixel in read_downscale_rgb(&device, gpu.final_rgb.as_ref().unwrap())?.chunks_exact(4) {
+            assert_eq!(&pixel[..3], &bgra[..3]);
+        }
         for state in [&mut cpu_state, &mut gpu_state] {
             state.input_effects.keyboard = Some(KeyboardOverlay::new(size, Box::new(Rasterizer)));
             for (at_ms, down) in [(0, true), (150, false)] {
@@ -1160,22 +1190,23 @@ mod tests {
             CursorCompositionMode::AlphaBlend,
             [230, 80, 10, 160].repeat(64),
         );
-        let mut desc = observation.layers[0].texture.desc();
-        desc.Usage = D3D11_USAGE_STAGING;
-        desc.BindFlags = 0;
-        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-        let mut staging = None;
-        unsafe {
-            device
-                .device()
-                .CreateTexture2D(&desc, None, Some(&mut staging))
-        }
-        .map_err(gpu_error)?;
-        let staging = staging.unwrap();
-        for (index, timestamp) in [0, 33, 66, 100, 150, 250, 400, 600, 1800, 2200]
+        for (index, timestamp) in [0, 33, 66, 100, 150, 250, 400, 600, 1800, 2200, 2400]
             .into_iter()
             .enumerate()
         {
+            if timestamp >= 2200 {
+                config.mouse_trail_rgba = [0; 4];
+            }
+            if timestamp == 2400 {
+                for state in [&mut cpu_state, &mut gpu_state] {
+                    state.input_effects.clicks.push_back(RenderClick {
+                        timestamp_ms: timestamp,
+                        x: 30,
+                        y: 30,
+                        button: ObservedMouseButton::Left,
+                    });
+                }
+            }
             let webcam = snow_webcam::Frame {
                 revision: index as u64 + 1,
                 at: Instant::now(),
@@ -1199,11 +1230,12 @@ mod tests {
             let cursor = AttachedCursorSample {
                 x: 145 + index as i32 * 2,
                 y: 150,
-                visible: timestamp < 400,
+                visible: !(400..2200).contains(&timestamp),
                 shape: CursorShapeState::Embedded(shape.clone()),
             };
             let expected =
                 cpu_state.compose_with_cursor(&config, &cpu_frame, timestamp, Some(&cursor))?;
+            let uploaded_before = gpu.overlay_upload_bytes;
             gpu.compose(
                 &mut gpu_state,
                 &config,
@@ -1212,35 +1244,25 @@ mod tests {
                 Some(&cursor),
                 &surface,
             )?;
-            unsafe {
-                device
-                    .context()
-                    .CopyResource(&staging, gpu.final_rgb.as_ref().unwrap().raw());
+            if timestamp == 2200 {
+                assert_eq!(gpu.overlay_upload_bytes, uploaded_before);
+                assert_eq!(
+                    gpu.final_rgb.as_ref().unwrap().desc().Format,
+                    DXGI_FORMAT_R8G8B8A8_UNORM
+                );
             }
-            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            unsafe {
-                device
-                    .context()
-                    .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-            }
-            .map_err(gpu_error)?;
+            let final_rgb = gpu.final_rgb.as_ref().unwrap();
+            let pixels = read_downscale_rgb(&device, final_rgb)?;
+            let channels = if final_rgb.desc().Format == DXGI_FORMAT_R8G8B8A8_UNORM {
+                [0, 1, 2]
+            } else {
+                [2, 1, 0]
+            };
             let mut max_error = 0;
-            for y in 0..size.1 as usize {
-                let row = unsafe {
-                    std::slice::from_raw_parts(
-                        mapped.pData.cast::<u8>().add(y * mapped.RowPitch as usize),
-                        size.0 as usize * 4,
-                    )
-                };
-                for (x, pixel) in row.chunks_exact(4).enumerate() {
-                    let reference = &expected[(y * size.0 as usize + x) * 4..][..4];
-                    for (channel, component) in [2, 1, 0].into_iter().enumerate() {
-                        max_error = max_error.max(pixel[component].abs_diff(reference[channel]));
-                    }
+            for (pixel, reference) in pixels.chunks_exact(4).zip(expected.chunks_exact(4)) {
+                for (channel, component) in channels.into_iter().enumerate() {
+                    max_error = max_error.max(pixel[component].abs_diff(reference[channel]));
                 }
-            }
-            unsafe {
-                device.context().Unmap(&staging, 0);
             }
             assert!(
                 max_error <= 4,
@@ -2027,6 +2049,94 @@ mod tests {
             (end - start) as f64 * 1000.0 / frequency.Frequency as f64 / f64::from(iterations),
             cpu_ms,
         ))
+    }
+
+    #[test]
+    #[ignore = "requires offscreen D3D11, a native encoder, and the Release performance preset"]
+    fn hardware_empty_overlay_stage_benchmark() -> Result<()> {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+        use windows::core::Interface;
+        if cfg!(debug_assertions) {
+            panic!("use windows-msvc-performance Release");
+        }
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
+        let adapter = unsafe { factory.EnumAdapters1(0) }
+            .map_err(gpu_error)?
+            .cast()
+            .map_err(gpu_error)?;
+        let device = SharedDevice::create(&adapter).map_err(gpu_error)?;
+        let _lock = device.lock();
+        let directory = tempfile::tempdir()?;
+        for size in [(1920, 1080), (3840, 2160)] {
+            let mut config = config(directory.path().join("empty.mp4"), CaptureBackendKind::Auto);
+            config.region.width = size.0;
+            config.region.height = size.1;
+            config.show_cursor = false;
+            config.show_keyboard = false;
+            config.mouse_trail_rgba = [0; 4];
+            config.mouse_click_rgba = [0; 4];
+            let encoder = StreamingEncoder::builder(config.streaming_config())
+                .gpu_input(snow_recording_export::gpu::GpuInputConfig {
+                    device: device.clone(),
+                })
+                .create()?;
+            let surface = encoder.allocate_gpu_frame()?.unwrap();
+            let observation = GpuCapturedFrame::from_layers(
+                vec![downscale_pattern_layer(
+                    &device,
+                    size,
+                    size,
+                    DownscalePattern::Checkerboard,
+                    0,
+                    0,
+                    false,
+                )?],
+                size,
+                snow_capture::FrameMetadata::default(),
+            )?;
+            let mut compositors = [
+                GpuVisualCompositor::new(device.clone(), size, size, 60)?,
+                GpuVisualCompositor::new(device.clone(), size, size, 60)?,
+            ];
+            // Test-only control reproduces the previous two transparent passes,
+            // including their full-size overlay allocation and upload path.
+            compositors[0].force_empty_overlays = true;
+            let mut state = VisualCompositor::new(size);
+            for compositor in &mut compositors {
+                time_completed_gpu_batch(&device, 20, || {
+                    compositor.compose(&mut state, &config, &observation, 0, None, &surface)
+                })?;
+            }
+            assert!(compositors[0].overlay.is_some());
+            assert!(compositors[1].overlay.is_none());
+            assert_eq!(
+                read_downscale_rgb(&device, compositors[0].final_rgb.as_ref().unwrap())?,
+                read_downscale_rgb(&device, compositors[1].final_rgb.as_ref().unwrap())?
+            );
+            for pair in 0u32..10 {
+                for index in if pair.is_multiple_of(2) {
+                    [0, 1]
+                } else {
+                    [1, 0]
+                } {
+                    let (gpu_ms, completed_ms) = time_completed_gpu_batch(&device, 120, || {
+                        compositors[index].compose(
+                            &mut state,
+                            &config,
+                            &observation,
+                            0,
+                            None,
+                            &surface,
+                        )
+                    })?;
+                    eprintln!(
+                        "GPU empty overlays {size:?} pair={pair} bypass={}: gpu_ms/frame={gpu_ms:.4} completed_wall_ms/frame={completed_ms:.4}",
+                        index == 1
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]

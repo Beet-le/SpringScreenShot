@@ -263,3 +263,115 @@ stage cost, not delivered recording cadence; GPU results apply to the measured
 adapter and driver. Use the preserved-binary alternating-pair recording workflow
 above before claiming throughput changes, preserving source and binary hashes
 and feature settings.
+
+## Deferred conversion and empty GPU overlays
+
+Deferred Windows 3840x2160/60-fps MP4 H.264 exports with automatic threads,
+VeryFast, and x264-first selection cap the software encoder at four workers.
+The existing 30-fps cap remains eight. Eligible SDR exports use four swscale
+workers when the resolved software cap is at least four; explicit thread
+settings and other resolutions, codecs, presets, and platforms keep their
+existing policy. Hardware export uses the same CPU color conversion because
+offline replay currently supplies CPU frames. HDR keeps its P010 scaler.
+
+`FrameConverter` lends owned raster storage to FFmpeg through a read-only,
+reference-counted AVBuffer. Its release callback owns an Arc, including during
+error cleanup. The raster is recycled only after swscale releases every foreign
+reference. This removes the experimental converter's full input-frame copy
+while preserving BT.709 conversion, initialized SIMD padding, and frame reuse.
+Live CPU recording keeps its existing default converter; the benchmark's
+`--conversion-threads` switch can still select the owned converter explicitly.
+
+The final export comparison used frozen baseline/candidate executables, five
+alternating pairs per case (50 exports), and the same FFmpeg DLLs. These were
+Windows x64 Release runs on 2026-10-19, on a Ryzen 9 5950X with 12 enabled physical
+cores / 24 logical processors, 64 GiB RAM, and a Radeon RX 6750 XT. Each fixture
+is three seconds of 3840x2160/60-fps SDR H.264, quality 80, VeryFast, with no
+audio or webcam. Automatic software encoding resolved to twelve workers before
+and four afterward. Times below are medians; memory is median peak process
+private bytes sampled every 20 ms, excluding dedicated GPU memory.
+
+| Source / effects / encoder | Previous time | New time | Time reduction | Previous private memory | New private memory |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Moving / combined / x264 | 6.677 s | 4.493 s | 32.7% | 1904.7 MiB | 1133.6 MiB |
+| Static / progress bar / x264 | 4.924 s | 3.009 s | 38.9% | 1884.5 MiB | 1138.7 MiB |
+| Static / playback time / x264 | 0.245 s | 0.224 s | 8.6% | 1136.3 MiB | 567.8 MiB |
+| Static / none / x264 | 0.105 s | 0.096 s | 8.0% | 1026.4 MiB | 457.9 MiB |
+| Moving / combined / AMF | 7.235 s | 5.899 s | 18.5% | 248.6 MiB | 252.6 MiB |
+
+Combined effects include a progress bar, mouse trail, click rings, and keyboard
+overlay. The AMF gain costs about 4.1 MiB of extra private memory. For static
+none/time cases, the large private-memory reduction is primarily encoder
+commitment: peak working sets remain approximately 177/393 MiB. Moving x264 peak
+working set falls from 1518.5 to 972.7 MiB. Static frame reuse remains enabled.
+The conversion tests produce identical pixels across supported layouts and
+identical H.264 output with fixed encoder threads; changing x264's thread count
+can change its bitstream at the same quality setting.
+
+Every accepted export passed duration/dimension checks, and no competing build,
+test, or benchmark was detected during its pair. Interrupted pairs are excluded
+in full and retained separately. Raw results, commands, process-memory samples'
+peaks, output files, and executable hashes are under
+`build/recording-pipeline-optimization/export-confirm-20261019-221219/`;
+`build/recording-pipeline-optimization/confirmation-summary.json` also records
+paired timing estimates. These measurements cover this host and fixture set;
+they do not establish ARM64/macOS results or live recording throughput.
+
+To reproduce a deferred export in the configured Release performance environment,
+build the benchmark from `snow-crates`, prepare fixtures outside measurement,
+and run each comparison in a fresh process:
+
+```powershell
+cargo build -p snow-recording-export --locked --release --features bench-timing `
+  --target x86_64-pc-windows-msvc --target-dir ../build/windows-msvc-performance/cargo `
+  --example postprocessing_export_benchmark
+# From the repository root; prepare requires a new directory.
+./build/windows-msvc-performance/cargo/x86_64-pc-windows-msvc/release/examples/postprocessing_export_benchmark.exe `
+  prepare build/export-fixture-4k-moving 3840 2160 moving
+./build/windows-msvc-performance/cargo/x86_64-pc-windows-msvc/release/examples/postprocessing_export_benchmark.exe `
+  render build/export-fixture-4k-moving build/export-moving.mp4 combined 0 0
+```
+
+The last two render arguments select hardware preference (0/1) and encoder
+threads (0 means automatic). Use `static` when preparing the static fixture,
+and `none`, `bar`, or `time` for the corresponding effect case. Preserve both
+executables before comparing changes, alternate their order, and keep builds
+and other benchmarks separate from measurement.
+
+The D3D11 compositor skips mouse and keyboard passes whose tile snapshots are
+empty. It allocates the full-size overlay texture on first visible use, retains
+the last uploaded tile map, and clears obsolete tiles when a visible layer next
+uses the texture. Mouse effects remain below the cursor and keyboard effects
+remain above it. Empty recordings avoid one RGBA texture: 7.91 MiB of logical
+pixel storage at 1080p or 31.64 MiB at 4K, before driver allocation alignment.
+
+To measure completed GPU work in the configured Release performance environment,
+run this focused test from `snow-crates`, with no concurrent builds or benchmarks:
+
+```powershell
+cargo test -p snow-recording-runtime --lib --release --target x86_64-pc-windows-msvc `
+  --target-dir ../build/windows-msvc-performance/cargo `
+  direct::gpu::tests::hardware_empty_overlay_stage_benchmark `
+  -- --ignored --nocapture --exact
+```
+
+It compares the previous transparent passes with empty-layer bypass in ten
+alternating pairs of 120 frames after warmup, at 1080p and 4K. The legacy control
+exists only in test builds. RGB output equality and lazy allocation are checked
+before timing. D3D11 timestamp queries and an event fence report completed GPU
+and wall time, including desktop composition and NV12 conversion, excluding
+capture and encoding. These are stage measurements, not a recording-FPS claim.
+
+On 2026-10-19, the Windows x64 Release benchmark on a Radeon RX 6750 XT
+(driver 32.0.21045.5002) produced these medians across the ten batch pairs:
+
+| Output | Previous GPU stage | Empty-layer bypass | Reduction |
+| --- | ---: | ---: | ---: |
+| 1920x1080 | 0.1202 ms/frame | 0.0743 ms/frame | 38.2% |
+| 3840x2160 | 0.3976 ms/frame | 0.1972 ms/frame | 50.4% |
+
+The run passed RGB equality and allocation checks, with no competing build,
+test, or benchmark detected. Separate offscreen tests passed for effect
+expiration/reappearance, webcam/cursor/keyboard ordering, and decoded H.264
+thin-stroke preservation. Raw results and executable identity are retained under
+`build/recording-pipeline-optimization/gpu-confirm-20261019-222010/`.

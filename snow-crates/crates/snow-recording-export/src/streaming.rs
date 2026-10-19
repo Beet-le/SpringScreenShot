@@ -446,7 +446,6 @@ pub struct StreamingEncoder {
     gif_packet: Option<ffmpeg::Packet>,
     stream_index: usize,
     stream_time_base: ffmpeg::Rational,
-    #[cfg(any(test, feature = "bench-experiments"))]
     frame_converter: Option<crate::frame_converter::FrameConverter>,
     scaler: Option<crate::output_scaler::OutputScaler>,
     #[cfg(target_os = "macos")]
@@ -1087,7 +1086,6 @@ impl StreamingEncoder {
             hdr_source: None,
             #[cfg(windows)]
             hardware_frames,
-            #[cfg(any(test, feature = "bench-experiments"))]
             frame_converter: None,
             encode_frame: if gpu_enabled {
                 ffmpeg::frame::Video::empty()
@@ -1139,6 +1137,10 @@ impl StreamingEncoder {
 
     #[cfg(any(test, feature = "bench-experiments"))]
     pub fn set_conversion_threads(&mut self, threads: u8) -> Result<()> {
+        self.configure_conversion_threads(threads)
+    }
+
+    pub(crate) fn configure_conversion_threads(&mut self, threads: u8) -> Result<()> {
         if self.cpu_hdr_input {
             return if threads == 0 {
                 Ok(())
@@ -1180,7 +1182,7 @@ impl StreamingEncoder {
             converter.use_bt709()?;
         }
         self.report.conversion_backend = if self.frame_converter.is_some() {
-            "legacy_sws_scale_frame"
+            "owned_sws_scale_frame"
         } else {
             "legacy_sws_scale"
         }
@@ -2139,43 +2141,16 @@ impl StreamingEncoder {
             self.report
                 .timings
                 .record("encode.writable", convert_started);
-            #[cfg(any(test, feature = "bench-experiments"))]
-            if let Some(converter) = self.frame_converter.as_mut() {
-                #[cfg(feature = "bench-timing")]
-                let writable_started = std::time::Instant::now();
-                converter.ensure_input_writable()?;
-                #[cfg(feature = "bench-timing")]
-                self.report
-                    .timings
-                    .record("encode.input_writable", writable_started);
-                #[cfg(feature = "bench-timing")]
-                let copy_started = std::time::Instant::now();
-                converter.copy_input(&pending.rgba)?;
-                #[cfg(feature = "bench-timing")]
-                {
-                    self.report
-                        .timings
-                        .record("encode.input_copy", copy_started);
-                    self.report.timings.copied_bytes +=
-                        u64::from(self.width) * u64::from(self.height) * 4;
-                }
-            }
             #[cfg(feature = "bench-timing")]
             let color_started = std::time::Instant::now();
-            #[cfg(any(test, feature = "bench-experiments"))]
             if let Some(converter) = self.frame_converter.as_mut() {
-                converter.convert_prepared(&mut self.encode_frame)?;
+                pending.rgba = converter.convert(pending.rgba, &mut self.encode_frame)?;
             } else {
                 self.scaler
                     .as_mut()
                     .expect("CPU scaler")
                     .run_owned_rgba(&pending.rgba, &mut self.encode_frame)?;
             }
-            #[cfg(not(any(test, feature = "bench-experiments")))]
-            self.scaler
-                .as_mut()
-                .expect("CPU scaler")
-                .run_owned_rgba(&pending.rgba, &mut self.encode_frame)?;
             #[cfg(feature = "bench-timing")]
             self.report
                 .timings
@@ -3076,7 +3051,7 @@ mod tests {
         assert_eq!(encoder.report.conversion_backend, "legacy_sws_scale");
         for count in [1, 2, 4] {
             encoder.set_conversion_threads(count).unwrap();
-            assert_eq!(encoder.report.conversion_backend, "legacy_sws_scale_frame");
+            assert_eq!(encoder.report.conversion_backend, "owned_sws_scale_frame");
             assert_eq!(
                 encoder.report.effective_conversion_threads,
                 Some(usize::from(count))
@@ -3086,6 +3061,47 @@ mod tests {
         assert_eq!(encoder.report.conversion_threads, 0);
         assert_eq!(encoder.report.conversion_backend, "legacy_sws_scale");
         assert_eq!(encoder.report.effective_conversion_threads, legacy_threads);
+    }
+
+    #[test]
+    fn owned_threaded_conversion_preserves_bt709_and_reused_frame_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut outputs = Vec::new();
+        for threads in [0, 1, 2, 4] {
+            let path = directory.path().join(format!("workers-{threads}.mp4"));
+            let mut config = encoder_config(path.clone(), ExportFormat::Mp4);
+            config.width = 128;
+            config.height = 96;
+            config.encode_threads = 1;
+            config.prefer_hardware_h264 = false;
+            let mut encoder = StreamingEncoder::builder(config)
+                .offline_output()
+                .create()
+                .unwrap();
+            encoder.configure_conversion_threads(threads).unwrap();
+            encoder.set_frame_reuse(VideoFrameReuse::ReuseConversion);
+            let mut raster = RasterBuffer::new();
+            for pts in 0..8 {
+                raster.resize(128 * 96 * 4, 0);
+                for (index, pixel) in raster.chunks_exact_mut(4).enumerate() {
+                    pixel.copy_from_slice(&[(index % 251) as u8, (index / 128) as u8, 210, 255]);
+                }
+                // Exercise repeated content, changing content, and encoder-held
+                // destination frames while the input storage is recycled.
+                raster[0] = if pts < 4 { 0 } else { 255 };
+                raster = encoder.push_raster_rgba_frame_at_pts(pts, raster).unwrap();
+            }
+            let report = encoder.finish_at_pts(8).unwrap();
+            assert_eq!(report.encoded_frames, 8);
+            assert_eq!(decoded_video_frame_count(&path), (8, 128, 96));
+            outputs.push(std::fs::read(path).unwrap());
+        }
+        for candidate in &outputs[1..] {
+            assert!(
+                candidate == &outputs[0],
+                "threaded conversion changed encoded BT.709 output"
+            );
+        }
     }
 
     #[test]
@@ -3231,7 +3247,11 @@ mod tests {
                     let mut converter =
                         crate::frame_converter::FrameConverter::new(width, height, format, threads)
                             .unwrap();
-                    converter.convert(&padded, &mut candidate).unwrap();
+                    let input = padded.clone();
+                    let address = input.as_ptr();
+                    let recycled = converter.convert(input, &mut candidate).unwrap();
+                    assert_eq!(recycled.as_ptr(), address);
+                    assert_eq!(recycled.as_slice(), padded.as_slice());
                     assert_eq!(
                         packed(&baseline),
                         packed(&candidate),

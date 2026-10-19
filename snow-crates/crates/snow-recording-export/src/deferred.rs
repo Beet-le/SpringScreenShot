@@ -448,6 +448,11 @@ pub fn render_bundle_range_with_speed(
         builder = builder.hdr10_cpu_input();
     }
     let mut encoder = builder.create()?;
+    encoder.configure_conversion_threads(deferred_conversion_threads(
+        &config,
+        software_threads,
+        output_hdr,
+    ))?;
     let mut video = SequentialVideoSource::open(
         path,
         source.timeline,
@@ -762,17 +767,33 @@ pub fn render_bundle_range_with_speed(
 
 fn deferred_software_threads(config: &StreamingEncoderConfig, physical: usize) -> Option<u8> {
     // Windows 4K/30/VeryFast x264 replay: eight threads saved about 19–21% private
-    // memory, improved moving throughput and traded about 6–7% static throughput. Keep
-    // unmeasured domains and explicit settings on their existing policy.
+    // memory, improved moving throughput and traded about 6–7% static throughput.
+    // 4K/60 reaches the same throughput with four workers while using about
+    // 41% less private memory than twelve. Preserve explicit settings and
+    // unmeasured domains, including the existing eight-worker 30-fps policy.
     (cfg!(windows)
         && config.encode_threads == 0
         && (config.width, config.height) == (3840, 2160)
-        && config.fps == 30
+        && matches!(config.fps, 30 | 60)
         && config.format == crate::ExportFormat::Mp4
         && config.codec == crate::VideoCodec::H264
         && config.software_h264_priority == crate::SoftwareH264Priority::X264First
         && config.video.speed == snow_recording_model::VideoEncodingSpeed::VeryFast)
-        .then(|| physical.clamp(1, 8) as u8)
+        .then(|| physical.clamp(1, if config.fps == 60 { 4 } else { 8 }) as u8)
+}
+
+fn deferred_conversion_threads(
+    config: &StreamingEncoderConfig,
+    software_threads: Option<u8>,
+    output_hdr: bool,
+) -> u8 {
+    // Share the measured automatic 4K/60 domain with the encoder policy. HDR
+    // retains its P010 scaler; low-core machines retain the serial converter.
+    if !output_hdr && config.fps == 60 && software_threads.is_some_and(|threads| threads >= 4) {
+        4
+    } else {
+        0
+    }
 }
 
 fn reusable_effect_frame(effects: &RecordedEffects, at_ms: u64) -> bool {

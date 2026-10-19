@@ -18,7 +18,6 @@ pub mod bench_timing;
 mod animation;
 #[doc(hidden)]
 pub mod ffmpeg_util;
-#[cfg(any(test, feature = "bench-experiments"))]
 mod frame_converter;
 mod gif_encoder;
 mod gif_palette;

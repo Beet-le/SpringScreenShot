@@ -1917,17 +1917,38 @@ fn deferred_thread_cap_only_applies_to_the_measured_automatic_domain() {
     config.encode_threads = 0;
     let expected = cfg!(windows).then_some(8);
     assert_eq!(deferred_software_threads(&config, 12), expected);
+    assert_eq!(deferred_conversion_threads(&config, expected, false), 0);
     assert_eq!(
         deferred_software_threads(&config, 4),
         cfg!(windows).then_some(4)
     );
     config.prefer_hardware_h264 = true;
     assert_eq!(deferred_software_threads(&config, 12), expected);
+    config.fps = 60;
+    let threads = deferred_software_threads(&config, 12);
+    assert_eq!(
+        deferred_conversion_threads(&config, threads, false),
+        if cfg!(windows) { 4 } else { 0 }
+    );
+    assert_eq!(deferred_conversion_threads(&config, threads, true), 0);
+    assert_eq!(deferred_conversion_threads(&config, Some(2), false), 0);
+    assert_eq!(
+        deferred_software_threads(&config, 12),
+        cfg!(windows).then_some(4)
+    );
+    assert_eq!(
+        deferred_software_threads(&config, 2),
+        cfg!(windows).then_some(2)
+    );
+    assert_eq!(
+        deferred_software_threads(&config, 0),
+        cfg!(windows).then_some(1)
+    );
     for mutation in [0, 1, 2, 3, 4, 5, 6] {
         let mut other = config.clone();
         match mutation {
             0 => other.encode_threads = 3,
-            1 => other.fps = 60,
+            1 => other.fps = 50,
             2 => other.width = 1920,
             3 => other.codec = crate::VideoCodec::H265,
             4 => other.format = crate::ExportFormat::Gif,
@@ -1935,6 +1956,7 @@ fn deferred_thread_cap_only_applies_to_the_measured_automatic_domain() {
             _ => other.video.speed = VideoEncodingSpeed::Medium,
         }
         assert_eq!(deferred_software_threads(&other, 12), None);
+        assert_eq!(deferred_conversion_threads(&other, None, false), 0);
     }
 }
 
