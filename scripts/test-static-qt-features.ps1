@@ -173,13 +173,35 @@ QString QWinTimeZonePrivate::displayName(QTimeZone::TimeType timeType,
 
 '@
     [IO.File]::WriteAllText($patchTarget, ($upstreamFragment -replace "`r`n", "`n") + "`n")
+    $graphicsTarget = Join-Path $patchSource "qtbase/src/widgets/graphicsview/qgraphicsscene.cpp"
+    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $graphicsTarget) -Force
+    $graphicsFragment = @'
+    updateAll = false;
+    QRectF exposedSceneRect;
+    if (exposedRegion && indexMethod != QGraphicsScene::NoIndex) {
+        exposedSceneRect = exposedRegion->boundingRect().adjusted(-1, -1, 1, 1);
+        if (viewTransform)
+            exposedSceneRect = viewTransform->inverted().mapRect(exposedSceneRect);
+    }
+'@
+    [IO.File]::WriteAllText($graphicsTarget, ($graphicsFragment -replace "`r`n", "`n") + "`n")
     Install-QtSourcePatches -Source $patchSource
     $patchedHash = (Get-FileHash -LiteralPath $patchTarget -Algorithm SHA256).Hash
+    $graphicsHash = (Get-FileHash -LiteralPath $graphicsTarget -Algorithm SHA256).Hash
+    Require ((Get-Content -LiteralPath $graphicsTarget -Raw).Contains(
+        'QRectF(exposedRegion->boundingRect()).adjusted(-1, -1, 1, 1)')) `
+        "Graphics View must expand exposed bounds after converting to floating-point coordinates."
     Require ((Get-Content -LiteralPath $patchTarget -Raw) -match 'QT_REQUIRE_CONFIG\(timezone\);') `
         "The patch must be applied to the requested source tree, including one nested in this repository."
     Install-QtSourcePatches -Source $patchSource
     Require ((Get-FileHash -LiteralPath $patchTarget -Algorithm SHA256).Hash -ceq $patchedHash) `
         "Reapplying the audited patch must preserve its exact result."
+    Require ((Get-FileHash -LiteralPath $graphicsTarget -Algorithm SHA256).Hash -ceq $graphicsHash) `
+        "Reapplying the Graphics View patch must preserve its exact result."
+    [IO.File]::WriteAllText($graphicsTarget, "unrecognized upstream source`n")
+    Require-Rejected { Install-QtSourcePatches -Source $patchSource 2>$null } `
+        "An unrecognized Graphics View implementation must fail before configuration."
+    [IO.File]::WriteAllText($graphicsTarget, ($graphicsFragment -replace "`r`n", "`n") + "`n")
     [IO.File]::WriteAllText($patchTarget, "unrecognized upstream source`n")
     Require-Rejected { Install-QtSourcePatches -Source $patchSource 2>$null } `
         "A patch that does not match upstream source must fail before configuration."
@@ -228,6 +250,12 @@ QT_DISABLED_PRIVATE_FEATURES "timezone_locale"
         -Fingerprint "dependencies" -SourceArchive "https://example.invalid/qt.tar.xz" -BuildParallelism 4 -HostArchitecture x64
     $originalStamp = Get-Content -LiteralPath $stampPath -Raw
     $nativeStamp = $originalStamp | ConvertFrom-Json
+    $staleGraphicsStamp = $originalStamp | ConvertFrom-Json
+    $staleGraphicsStamp.SourcePatches = @($staleGraphicsStamp.SourcePatches | Where-Object {
+        $_.File -cne 'qtbase-graphicsview-exposed-rect.patch'
+    })
+    Require (-not (Test-SnowStaticQtStamp -Stamp $staleGraphicsStamp)) `
+        'Qt kits without the Graphics View correction must be rejected.'
     Require (Test-SnowQtHostToolHashes -Stamp $nativeStamp -Prefix $testRoot) 'Native host-tool hashes must match their stamp.'
     $nativeTool = Join-Path $testRoot 'bin/moc.exe'
     [IO.File]::WriteAllText($nativeTool, 'replaced host tool')

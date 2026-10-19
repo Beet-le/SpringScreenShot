@@ -2349,6 +2349,17 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     snow_shot_add_image_codec_smoke_test()
     set_property(DIRECTORY PROPERTY LINK_LIBRARIES snow_test_cli_guard_qt)
+
+    add_executable(snow-shot-qt-graphicsview-rendering-tests tests/qt_graphicsview_rendering_tests.cpp)
+    target_link_libraries(snow-shot-qt-graphicsview-rendering-tests PRIVATE Qt6::Widgets)
+    snow_shot_import_offscreen_platform(snow-shot-qt-graphicsview-rendering-tests)
+    snow_apply_strict_warnings(snow-shot-qt-graphicsview-rendering-tests)
+    snow_apply_release_options(snow-shot-qt-graphicsview-rendering-tests POLICY size)
+    add_test(NAME snow-shot-qt-graphicsview-rendering-tests
+        COMMAND snow-shot-qt-graphicsview-rendering-tests -platform offscreen)
+    set_tests_properties(snow-shot-qt-graphicsview-rendering-tests PROPERTIES
+        LABELS unit TIMEOUT 30 ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+
     add_test(NAME snow-shot-image-codec-backend-smoke-tests
              COMMAND snow-shot-image-codec-backend-smoke-tests)
 

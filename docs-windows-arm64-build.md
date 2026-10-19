@@ -114,6 +114,22 @@ kit. `build-static-qt.ps1 -Architecture arm64 -Configuration Debug` builds a
 development kit with Qt Test and Concurrent. Performance builds also require
 those modules; pass `-DevelopmentModules` when preparing a Release kit for them.
 
+The Windows Qt source policy includes `qtbase-graphicsview-exposed-rect.patch`.
+MSVC 19.51 ARM64 can miscompile Qt 6.12's integer rectangle adjustment followed
+by conversion to `QRectF`: a negative paint boundary such as `-1` becomes
+`4294967295`. The scene index then culls visible OCR text on full viewport
+repaints; interior repaints after interaction can appear to repair it. The patch
+converts the exposed rectangle to floating-point coordinates before expanding
+it, retaining the scene index and OCR glyph caches. Rebuild Qt and relink Snow
+Shot; changing application code alone does not replace a statically linked Qt.
+The source-patch fingerprint rejects kits built without this correction.
+
+The focused `snow-shot-qt-graphicsview-rendering-tests` target checks full and
+partial damage, first-frame text, negative scene coordinates, transformed views,
+and fractional device pixel ratios. It is also available without building the
+app through `test-support/qt-graphicsview`. Validate an optimized ARM64 build on
+Windows ARM64, since an x64 or Debug pass does not cover this compiler failure.
+
 ## Build and prepare OCR
 
 The configure/build presets are `snow-shot-msvc-arm64-debug`, `performance`,
