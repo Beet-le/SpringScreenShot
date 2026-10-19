@@ -19,7 +19,61 @@ fn rgba_visible_equal(left: &[u8], right: &[u8]) -> bool {
         // SAFETY: AVX2 is available; both slices contain the same number of complete pixels.
         return unsafe { rgba_visible_equal_avx2(left, right) };
     }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: ARM64 provides NEON; the slices contain complete, equally sized pixels.
+        unsafe { rgba_visible_equal_neon(left, right) }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
     rgba_visible_equal_scalar(left, right)
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn rgba_visible_equal_neon(left: &[u8], right: &[u8]) -> bool {
+    use std::arch::aarch64::*;
+
+    // Byte lanes keep the alpha mask independent of the target's endianness.
+    let rgb_mask = unsafe {
+        vld1q_u8(
+            [
+                255, 255, 255, 0, 255, 255, 255, 0, 255, 255, 255, 0, 255, 255, 255, 0,
+            ]
+            .as_ptr(),
+        )
+    };
+    let mut offset = 0;
+    while offset + 64 <= left.len() {
+        let mut difference = vdupq_n_u8(0);
+        for block in [0, 16, 32, 48] {
+            // SAFETY: The loop bounds all four unaligned loads to both slices.
+            let (a, b) = unsafe {
+                (
+                    vld1q_u8(left.as_ptr().add(offset + block)),
+                    vld1q_u8(right.as_ptr().add(offset + block)),
+                )
+            };
+            difference = vorrq_u8(difference, veorq_u8(a, b));
+        }
+        if vmaxvq_u8(vandq_u8(difference, rgb_mask)) != 0 {
+            return false;
+        }
+        offset += 64;
+    }
+    while offset + 16 <= left.len() {
+        // SAFETY: The loop bounds both unaligned loads to the supplied slices.
+        let difference = unsafe {
+            veorq_u8(
+                vld1q_u8(left.as_ptr().add(offset)),
+                vld1q_u8(right.as_ptr().add(offset)),
+            )
+        };
+        if vmaxvq_u8(vandq_u8(difference, rgb_mask)) != 0 {
+            return false;
+        }
+        offset += 16;
+    }
+    rgba_visible_equal_scalar(&left[offset..], &right[offset..])
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -876,6 +930,32 @@ mod tests {
         let visible = Frame::new(2, 1, PixelFormat::Rgba8, vec![1, 2, 4, 4, 5, 6, 7, 8]).unwrap();
         assert!(base.visible_pixels_equal(&alpha));
         assert!(!base.visible_pixels_equal(&visible));
+    }
+
+    #[test]
+    #[cfg(target_arch = "aarch64")]
+    #[ignore = "paired Release-only ARM64 kernel measurement"]
+    fn neon_release_benchmark_rgba_equality() {
+        use std::hint::black_box;
+
+        for (name, pixels) in [("1080p", 1920 * 1080), ("4k", 3840 * 2160)] {
+            let left: Vec<u8> = (0..pixels * 4).map(|i| i as u8).collect();
+            let mut right = left.clone();
+            for alpha in right.iter_mut().skip(3).step_by(4) {
+                *alpha ^= 255;
+            }
+            for mismatch in [false, true] {
+                if mismatch {
+                    right[pixels * 4 - 2] ^= 128;
+                }
+                crate::neon_benchmark::paired(
+                    &format!("stitch_rgba_equality_{name}_late_mismatch_{mismatch}"),
+                    8,
+                    || rgba_visible_equal_scalar(black_box(&left), black_box(&right)),
+                    || unsafe { rgba_visible_equal_neon(black_box(&left), black_box(&right)) },
+                );
+            }
+        }
     }
 
     #[test]
