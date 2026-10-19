@@ -1,5 +1,6 @@
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "snow_shot/platform/applicationqos.h"
+#include "snow_shot/platform/filemanager.h"
 #include "snow_shot/presentation/components/screenshothistorypagewidget.h"
 
 #include "snowimageqtcodec.h"
@@ -291,6 +292,14 @@ void clearLayoutItems(QLayout* layout) {
 
 class ApplicationStorageHistoryDataSource final : public ScreenshotHistoryPageDataSource {
   public:
+    bool revealRecord(const QString& id) override {
+        auto& applicationStorage = storage::ApplicationStorage::instance();
+        if (!applicationStorage.isInitialized())
+            return false;
+        const auto path = applicationStorage.captureHistory().revealPath(id);
+        return path && snow_shot::platform::revealInFileManager(*path);
+    }
+
     explicit ApplicationStorageHistoryDataSource(QObject* parent = nullptr)
         : ScreenshotHistoryPageDataSource(parent) {
         auto& applicationStorage = storage::ApplicationStorage::instance();
@@ -739,13 +748,14 @@ class HistoryEntryWidget final : public QFrame {
                        std::function<void(bool)> selectionChanged,
                        std::function<void()> editRequested, std::function<void()> copyRequested,
                        std::function<void()> pinRequested, std::function<void()> stitchRequested,
-                       std::function<void()> splitRequested, std::function<void()> deleteRequested,
-                       QWidget* parent = nullptr)
+                       std::function<void()> splitRequested, std::function<void()> revealRequested,
+                       std::function<void()> deleteRequested, QWidget* parent = nullptr)
         : QFrame(parent), m_record(record), m_assets(assets),
           m_selectionChanged(std::move(selectionChanged)),
           m_editRequested(std::move(editRequested)), m_copyRequested(std::move(copyRequested)),
           m_pinRequested(std::move(pinRequested)), m_stitchRequested(std::move(stitchRequested)),
           m_splitRequested(std::move(splitRequested)),
+          m_revealRequested(std::move(revealRequested)),
           m_deleteRequested(std::move(deleteRequested)) {
         setObjectName(QStringLiteral("screenshotHistoryEntry-%1").arg(record.id));
         setFrameShape(QFrame::NoFrame);
@@ -1088,6 +1098,10 @@ class HistoryEntryWidget final : public QFrame {
 
   private:
     void retranslateMoreActions() {
+        if (m_revealAction != nullptr) {
+            m_revealAction->setText(history_page::revealActionText());
+            m_revealAction->setToolTip(m_revealAction->text());
+        }
         if (m_pinAction != nullptr) {
             m_pinAction->setText(HistoryEntryWidget::tr("Pin to screen"));
             m_pinAction->setToolTip(
@@ -1127,6 +1141,9 @@ class HistoryEntryWidget final : public QFrame {
         split->setObjectName(QStringLiteral("screenshotHistoryEntrySplit"));
         split->setEnabled(m_record.result.has_value());
         m_splitAction = split;
+        auto* reveal = menu->addItem(QString(), custom_outlined_icons::RevealInFolder());
+        reveal->setObjectName(QStringLiteral("screenshotHistoryEntryReveal"));
+        m_revealAction = reveal;
         auto* remove = menu->addItem(QString(), outlined_icons::IconDelete());
         remove->setObjectName(QStringLiteral("screenshotHistoryEntryDelete"));
         m_deleteAction = remove;
@@ -1154,6 +1171,10 @@ class HistoryEntryWidget final : public QFrame {
                 }
             });
         });
+        connect(reveal, &QAction::triggered, this, [this]() {
+            if (m_revealRequested)
+                m_revealRequested();
+        });
         return menu;
     }
 
@@ -1173,6 +1194,7 @@ class HistoryEntryWidget final : public QFrame {
     std::function<void()> m_pinRequested;
     std::function<void()> m_stitchRequested;
     std::function<void()> m_splitRequested;
+    std::function<void()> m_revealRequested;
     std::function<void()> m_deleteRequested;
     QBoxLayout* m_layout = nullptr;
     adqt::widgets::AdCheckbox* m_selectionCheckbox = nullptr;
@@ -1183,6 +1205,7 @@ class HistoryEntryWidget final : public QFrame {
     adqt::widgets::AdButton* m_copyButton = nullptr;
     adqt::widgets::AdButton* m_moreButton = nullptr;
     QPointer<adqt::widgets::AdContextMenu> m_moreMenu;
+    QPointer<QAction> m_revealAction;
     QPointer<QAction> m_pinAction;
     QPointer<QAction> m_stitchAction;
     QPointer<QAction> m_splitAction;
@@ -1692,6 +1715,10 @@ void ScreenshotHistoryPageWidget::rebuildEntries() {
                 [this, id = record.id]() { emit pinRequested(id); },
                 [this, record]() { emit collageRequested({record}); },
                 [this, record]() { emit splitRequested(record); },
+                [this, id = record.id]() {
+                    if (!m_dataSource || !m_dataSource->revealRecord(id))
+                        history_page::showRevealFailure(this);
+                },
                 [this, id = record.id]() { removeEntry(id); }, m_entriesHost);
             entry->applyTheme(m_colorScheme);
             m_entryWidgetsById.insert(record.id, entry);

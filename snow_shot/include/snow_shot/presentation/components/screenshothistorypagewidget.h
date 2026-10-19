@@ -70,6 +70,9 @@ class ScreenshotHistoryPageDataSource : public QObject {
                                       quint64) {}
     virtual void requestResultImage(const snow_shot::storage::CaptureHistoryRecord&, quint64) {}
     virtual void remove(const QString& id) = 0;
+    [[nodiscard]] virtual bool revealRecord(const QString&) {
+        return false;
+    }
     [[nodiscard]] virtual bool requestRemoveMany(const QVector<QString>& ids) = 0;
     virtual void reportReadFailure(const snow_shot::storage::CaptureHistoryRecord&,
                                    const QString&) {}

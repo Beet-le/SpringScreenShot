@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/components/pinnedwindowmanagementpagewidget.h"
+#include "snow_shot/presentation/components/historypagecommon.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "../../test-support/virtualmemory.h"
 #include "snow_shot/presentation/components/thumbnailcache.h"
@@ -14,6 +15,7 @@
 #include "widgets/pagination.h"
 #include "widgets/image.h"
 #include "widgets/context_menu.h"
+#include "widgets/message.h"
 #include <QElapsedTimer>
 #include <QTimeZone>
 #include <QThread>
@@ -50,6 +52,12 @@ class Fixture final : public PinnedWindowManagementDataSource {
   public:
     QVector<storage::PinnedWindowSummary> items;
     QString shown;
+    QStringList revealed;
+    bool revealSucceeds = true;
+    bool revealRecord(const QString& id) override {
+        revealed.append(id);
+        return revealSucceeds;
+    }
     QVector<QString> removed;
     QVector<QSize> previewSizes;
     int fullImageRequests = 0;
@@ -611,10 +619,16 @@ void pinnedEntryMoreActionsUseOnlyTheirRecord() {
         QPointer<adqt::widgets::AdContextMenu> menu = row->findChild<adqt::widgets::AdContextMenu*>(
             QStringLiteral("pinnedManagementEntryMoreMenu"));
         require(menu && menu->isPopupVisible() && !menu->nativeMenuEnabled() &&
-                    menu->actions().size() == 2,
+                    menu->actions().size() == 3,
                 "hovering More opens the shared widget menu");
         auto* stitch = menu->actions().at(0);
         auto* split = menu->actions().at(1);
+        auto* reveal = menu->actions().at(2);
+        require(reveal->objectName() == QStringLiteral("pinnedManagementEntryReveal") &&
+                    reveal->text() == presentation::components::history_page::revealActionText() &&
+                    reveal->toolTip() == reveal->text() && reveal->isEnabled() &&
+                    !reveal->icon().isNull(),
+                "More offers a themed, platform-specific reveal action after splitting");
         require(stitch->text() == QStringLiteral("Stitch Image") && stitch->isEnabled() &&
                     !stitch->icon().isNull() &&
                     split->text() == QStringLiteral("Image Splitting") && split->isEnabled() &&
@@ -632,10 +646,18 @@ void pinnedEntryMoreActionsUseOnlyTheirRecord() {
         activatePinnedMenuAction(menu, menu->actions().at(1));
         require(splitId == row->property("recordId").toString() && !menu,
                 "splitting dispatches only its saved pin and retires the menu");
+        more->click();
+        QCoreApplication::processEvents();
+        menu = row->findChild<adqt::widgets::AdContextMenu*>(
+            QStringLiteral("pinnedManagementEntryMoreMenu"));
+        require(menu, "reopen More for reveal");
+        activatePinnedMenuAction(menu, menu->actions().at(2));
+        require(!menu && fixture.revealed.last() == row->property("recordId").toString(),
+                "reveal dispatches only its row and retires the menu");
     }
-    require(requests == 3 && splitRequests == 3 && selection->isChecked() &&
-                fixture.fullImageRequests == 0 && fixture.shown.isEmpty() &&
-                fixture.removed.isEmpty(),
+    require(requests == 3 && splitRequests == 3 && fixture.revealed.size() == 3 &&
+                selection->isChecked() && fixture.fullImageRequests == 0 &&
+                fixture.shown.isEmpty() && fixture.removed.isEmpty(),
             "image action dispatch preserves selection and pins without restoring or decoding");
 
     auto* more = rows.front()->findChild<adqt::widgets::AdButton*>(
@@ -670,6 +692,12 @@ void pinnedEntryMoreActionsUseOnlyTheirRecord() {
                     translator.translate("PinnedWindowManagementPageWidget", "Image Splitting") &&
                 menu->actions().at(1)->toolTip() == menu->actions().at(1)->text(),
             "language changes retranslate both actions in the open menu");
+        const QString revealLabel = presentation::components::history_page::revealActionText();
+        require(menu->actions().at(2)->text() == revealLabel &&
+                    menu->actions().at(2)->toolTip() == revealLabel &&
+                    !translator.translate("HistoryFileLocation", "Open in Explorer").isEmpty() &&
+                    !translator.translate("HistoryFileLocation", "Reveal in Finder").isEmpty(),
+                "language changes retranslate the platform reveal action in the open menu");
         QCoreApplication::removeTranslator(&translator);
     }
     menu->dismissPopup();
@@ -677,10 +705,35 @@ void pinnedEntryMoreActionsUseOnlyTheirRecord() {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QCoreApplication::processEvents();
     require(!menu && more->isVisible(), "dismissal retires the menu and leaves More usable");
+    QString failureMessage;
+    auto* messages = adqt::widgets::AdMessageService::instance(&page);
+    QObject::connect(
+        messages, &adqt::widgets::AdMessage::messageOpened, &page,
+        [&](adqt::widgets::AdMessageHandle* handle) { failureMessage = handle->content(); });
+    fixture.revealSucceeds = false;
     more->click();
     QCoreApplication::processEvents();
     menu = rows.front()->findChild<adqt::widgets::AdContextMenu*>(
         QStringLiteral("pinnedManagementEntryMoreMenu"));
+    require(menu, "reopen More for failure fixture");
+    activatePinnedMenuAction(menu, menu->actions().at(2));
+    require(!menu &&
+                failureMessage == QStringLiteral("Unable to open this entry's file location.") &&
+                QApplication::activeModalWidget() == nullptr && fixture.removed.isEmpty() &&
+                fixture.shown.isEmpty() && selection->isChecked(),
+            "failed pin reveal reports a non-modal error and preserves pins and selection");
+    adqt::widgets::AdMessageService::destroyAll(&page);
+    more->click();
+    QCoreApplication::processEvents();
+    menu = rows.front()->findChild<adqt::widgets::AdContextMenu*>(
+        QStringLiteral("pinnedManagementEntryMoreMenu"));
+    for (auto& item : fixture.items) {
+        if (item.id == rows.front()->property("recordId").toString())
+            item.pending = true;
+    }
+    page.refresh();
+    require(menu && !menu->actions().at(2)->isEnabled(),
+            "pending pins retain a visible disabled reveal action");
     fixture.items.clear();
     page.refresh();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);

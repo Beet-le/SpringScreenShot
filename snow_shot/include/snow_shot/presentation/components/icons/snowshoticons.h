@@ -179,6 +179,7 @@ RecordingRenderSettings(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef RecordingTrim(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef RefreshCapture(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Restart(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef RevealInFolder(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Save(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ScanQrcode(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ScreenshotCopy(const adqt::icons::IconColors& colors = {});

@@ -122,6 +122,7 @@
     "CollagePdfSettingsWidget",
     "CollageWindow",
     "HistoryEntryWidget",
+    "HistoryFileLocation",
     "ImageSplitDocument",
     "ImageSplitEditorWidget",
     "ImageSplitExport",

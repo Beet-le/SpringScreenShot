@@ -21,6 +21,7 @@
 #include "widgets/pagination.h"
 #include "widgets/context_menu.h"
 #include "widgets/popconfirm.h"
+#include "widgets/message.h"
 #include "widgets/scroll_area.h"
 #include "snow_shot/storage/storageusagetracker.h"
 
@@ -123,6 +124,12 @@ class MutableHistoryDataSource : public ScreenshotHistoryPageDataSource {
         removedIds.push_back(id);
     }
     QVector<QString> removedIds;
+    QStringList revealedIds;
+    bool revealSucceeds = true;
+    bool revealRecord(const QString& id) override {
+        revealedIds.append(id);
+        return revealSucceeds;
+    }
     bool requestRemoveMany(const QVector<QString>& ids) override {
         removedBatches.push_back(ids);
         return acceptRemoval;
@@ -1012,18 +1019,25 @@ void moreMenuOffersPinStitchAndDelete() {
     hover(more);
     flushEvents();
     QPointer<adqt::widgets::AdContextMenu> menu = visibleMenu(pinnableEntry);
-    require(menu != nullptr && menu->actions().size() == 4 && !menu->nativeMenuEnabled(),
+    require(menu != nullptr && menu->actions().size() == 5 && !menu->nativeMenuEnabled(),
             "hovering More must show the shared widget action menu");
     QAction* pin = menu->actions().at(0);
     QAction* stitch = menu->actions().at(1);
     QAction* split = menu->actions().at(2);
-    QAction* remove = menu->actions().at(3);
+    QAction* reveal = menu->actions().at(3);
+    QAction* remove = menu->actions().at(4);
+    require(reveal->objectName() == QStringLiteral("screenshotHistoryEntryReveal") &&
+                reveal->text() ==
+                    snow_shot::presentation::components::history_page::revealActionText() &&
+                reveal->toolTip() == reveal->text() && reveal->isEnabled() &&
+                !reveal->icon().isNull(),
+            "the platform reveal action sits between splitting and Delete with its icon");
     require(pin->text() == QStringLiteral("Pin to screen") && pin->isEnabled() &&
                 stitch->text() == QStringLiteral("Stitch Image") && stitch->isEnabled() &&
                 split->text() == QStringLiteral("Image Splitting") && split->isEnabled() &&
                 remove->text() == QStringLiteral("Delete") && menu->actionDanger(remove) &&
                 menu->actionGeometry(pin).isValid(),
-            "the More menu offers Pin to screen, Stitch Image, Image Splitting, and danger Delete");
+            "the More menu preserves its existing image actions and danger Delete");
     QEvent languageChange(QEvent::LanguageChange);
     QApplication::sendEvent(pinnableEntry, &languageChange);
     flushEvents();
@@ -1048,8 +1062,66 @@ void moreMenuOffersPinStitchAndDelete() {
                 plainMenu->actions().at(0)->toolTip() ==
                     QStringLiteral("This screenshot cannot be pinned"),
             "Pin to screen must stay unavailable when the history entry has no image");
-    plainMenu->dismissPopup();
+    require(plainMenu->actions().at(3)->isEnabled(),
+            "resultless history still supports revealing its stored source or directory");
+    activateMenuAction(plainMenu, plainMenu->actions().at(3));
     flushEvents();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(dataSource.revealedIds == QStringList{QStringLiteral("record-1")},
+            "resultless reveal uses its own record");
+
+    auto* selected = plainEntry->findChild<adqt::widgets::AdCheckbox*>();
+    selected->setChecked(true);
+    more->click();
+    flushEvents();
+    menu = visibleMenu(pinnableEntry);
+    require(menu, "reopen the menu for reveal translation");
+    for (const QString& locale : {QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
+        QTranslator translator;
+        require(translator.load(QStringLiteral(":/i18n/snow_shot_%1.qm").arg(locale)),
+                "load reveal action translations");
+        QCoreApplication::installTranslator(&translator);
+        QApplication::sendEvent(pinnableEntry, &languageChange);
+        const QString label = snow_shot::presentation::components::history_page::revealActionText();
+        require(menu && menu->actions().at(3)->text() == label &&
+                    menu->actions().at(3)->toolTip() == label &&
+                    !translator.translate("HistoryFileLocation", "Open in Explorer").isEmpty() &&
+                    !translator.translate("HistoryFileLocation", "Reveal in Finder").isEmpty(),
+                "open history menus translate their reveal label and tooltip");
+        QCoreApplication::removeTranslator(&translator);
+    }
+    activateMenuAction(menu, menu->actions().at(3));
+    flushEvents();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(!menu && selected->isChecked() &&
+                dataSource.revealedIds.last() == QStringLiteral("record-0") &&
+                dataSource.removedIds.isEmpty() && dataSource.readFailures == 0,
+            "reveal preserves selection, targets only its row, and retires the popup");
+
+    dataSource.revealSucceeds = false;
+    QString failureMessage;
+    auto* messages = adqt::widgets::AdMessageService::instance(&page);
+    QObject::connect(
+        messages, &adqt::widgets::AdMessage::messageOpened, &page,
+        [&](adqt::widgets::AdMessageHandle* handle) { failureMessage = handle->content(); });
+    more->click();
+    flushEvents();
+    menu = visibleMenu(pinnableEntry);
+    require(menu, "reopen reveal failure fixture menu");
+    // Exercise keyboard dispatch as well as the successful mouse activations above.
+    menu->setActiveAction(menu->actions().at(3));
+    QKeyEvent revealKey(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &revealKey);
+    flushEvents();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(!menu && dataSource.removedIds.isEmpty() && dataSource.readFailures == 0 &&
+                dataSource.records().size() == 2 && selected->isChecked(),
+            "failed reveal preserves history and selection without invoking read-failure cleanup");
+    require(dataSource.revealedIds.size() == 3 &&
+                failureMessage == QStringLiteral("Unable to open this entry's file location.") &&
+                QApplication::activeModalWidget() == nullptr,
+            "failed reveal displays a non-modal error");
+    adqt::widgets::AdMessageService::destroyAll(&page);
 
     hover(more);
     flushEvents();

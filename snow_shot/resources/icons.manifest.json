@@ -1063,6 +1063,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "RevealInFolder",
+      "name": "reveal-in-folder",
+      "source": "../src/presentation/components/icons/resources/reveal-in-folder.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "Save",
       "name": "save",
       "source": "../src/presentation/components/icons/resources/save.svg",

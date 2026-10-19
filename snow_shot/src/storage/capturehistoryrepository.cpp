@@ -662,6 +662,32 @@ class CaptureHistoryRepositoryImpl final : public CaptureHistoryRepository {
         return future;
     }
 
+    std::optional<QString> revealPath(const QString& id) const override {
+        std::shared_lock access(m_relocationMutex);
+        std::lock_guard queue(m_queueMutex);
+        if (m_suspended || m_stopping)
+            return std::nullopt;
+        std::lock_guard state(m_stateMutex);
+        const auto index = m_recordIndex.constFind(id);
+        if (!m_indexHealthy || index == m_recordIndex.cend())
+            return std::nullopt;
+        const auto& stored = m_snapshot.records[*index];
+        const QDir directory(recordPath(id));
+        if (!containedPath(m_root, directory.absolutePath()) || !directory.exists())
+            return std::nullopt;
+        QString name;
+        if (stored.resultFileName)
+            name = *stored.resultFileName;
+        else if (stored.displayFileNames.size() == 1)
+            name = stored.displayFileNames.constFirst();
+        if (!name.isEmpty()) {
+            const QString path = directory.filePath(name);
+            if (containedPath(m_root, path) && QFileInfo(path).isFile())
+                return path;
+        }
+        return directory.absolutePath();
+    }
+
     std::optional<CaptureHistoryAssetSet>
     displayAssets(const CaptureHistoryRecord& record) const override {
         std::shared_lock access(m_relocationMutex);
@@ -1368,7 +1394,7 @@ class CaptureHistoryRepositoryImpl final : public CaptureHistoryRepository {
     CaptureHistoryUsage m_usage;
     QString m_error;
     bool m_indexHealthy = true;
-    std::mutex m_queueMutex;
+    mutable std::mutex m_queueMutex;
     std::condition_variable m_condition;
     std::condition_variable m_drained;
     std::deque<Command> m_queue;

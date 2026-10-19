@@ -811,6 +811,25 @@ Files:
         </message>
     </context>
     <context>
+        <name>HistoryFileLocation</name>
+        <message>
+            <source>Open Containing Folder</source>
+            <translation>Open Containing Folder</translation>
+        </message>
+        <message>
+            <source>Open in Explorer</source>
+            <translation>Open in Explorer</translation>
+        </message>
+        <message>
+            <source>Reveal in Finder</source>
+            <translation>Reveal in Finder</translation>
+        </message>
+        <message>
+            <source>Unable to open this entry's file location.</source>
+            <translation>Unable to open this entry's file location.</translation>
+        </message>
+    </context>
+    <context>
         <name>ImageSplitDocument</name>
         <message>
             <source>Choose a split direction.</source>

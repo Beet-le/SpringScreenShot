@@ -51,6 +51,8 @@ struct TextControls {
 };
 
 void configureSourceFilter(adqt::widgets::AdSelect* filter);
+[[nodiscard]] QString revealActionText();
+void showRevealFailure(QWidget* parent);
 void configureDateFilter(adqt::widgets::AdDateRangePicker* filter);
 void configurePagination(adqt::widgets::AdPagination* pagination);
 void configureSelectionAction(adqt::widgets::AdButton* button, bool destructive);

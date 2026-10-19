@@ -5,6 +5,7 @@
 
 #include "snow_shot/presentation/components/historyselectionbar.h"
 #include "snow_shot/presentation/components/actionpopupmenu.h"
+#include "snow_shot/platform/filemanager.h"
 #include "snow_shot/presentation/components/historypagecommon.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/components/thumbnailcache.h"
@@ -151,6 +152,14 @@ QString swatchAppearanceKey(const PinnedColorSwatchStyle& style) {
 
 class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSource {
   public:
+    bool revealRecord(const QString& id) override {
+        auto& applicationStorage = storage::ApplicationStorage::instance();
+        if (!applicationStorage.isInitialized())
+            return false;
+        const auto path = applicationStorage.pinnedWindows().revealPath(id);
+        return path && platform::revealInFileManager(*path);
+    }
+
     explicit ApplicationPinnedDataSource(QObject* parent)
         : PinnedWindowManagementDataSource(parent) {
         m_previewCache.setMaxCost(32 * 1024);
@@ -932,6 +941,16 @@ void PinnedWindowManagementPageWidget::rebuildEntries() {
                         splitLabel, presentation::icons::custom::outlined::ImageSplitting());
                     split->setObjectName(QStringLiteral("pinnedManagementEntrySplit"));
                     split->setToolTip(splitLabel);
+                    const QString revealLabel = history_page::revealActionText();
+                    auto* reveal = menu->addItem(
+                        revealLabel, presentation::icons::custom::outlined::RevealInFolder());
+                    reveal->setObjectName(QStringLiteral("pinnedManagementEntryReveal"));
+                    reveal->setToolTip(revealLabel);
+                    reveal->setEnabled(!row->property("pending").toBool());
+                    connect(reveal, &QAction::triggered, row, [this, id] {
+                        if (!m_source || !m_source->revealRecord(id))
+                            history_page::showRevealFailure(this);
+                    });
                     connect(stitch, &QAction::triggered, row,
                             [this, id] { emit collageRequested({id}); });
                     connect(split, &QAction::triggered, row,
@@ -1008,6 +1027,13 @@ void PinnedWindowManagementPageWidget::rebuildEntries() {
         more->setText(tr("More"));
         more->setToolTip(tr("More actions"));
         more->setAccessibleName(tr("More actions"));
+        row->setProperty("pending", record.pending);
+        for (auto* reveal :
+             row->findChildren<QAction*>(QStringLiteral("pinnedManagementEntryReveal"))) {
+            reveal->setText(history_page::revealActionText());
+            reveal->setToolTip(reveal->text());
+            reveal->setEnabled(!record.pending);
+        }
         for (auto* stitch :
              row->findChildren<QAction*>(QStringLiteral("pinnedManagementEntryStitch"))) {
             stitch->setText(tr("Stitch Image"));

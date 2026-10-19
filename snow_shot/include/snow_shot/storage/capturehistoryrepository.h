@@ -42,6 +42,10 @@ class CaptureHistoryRepository {
     virtual ~CaptureHistoryRepository() = default;
 
     [[nodiscard]] virtual QVector<CaptureHistoryRecord> records() const = 0;
+    // Resolves the managed file or entry directory without reading payloads or repairing records.
+    [[nodiscard]] virtual std::optional<QString> revealPath(const QString&) const {
+        return std::nullopt;
+    }
     [[nodiscard]] virtual CaptureHistorySnapshot recordsSnapshot() const {
         return {0, records()};
     }

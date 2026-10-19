@@ -1908,6 +1908,36 @@ std::optional<quint64> PinnedWindowRepository::previewSourceRevision(const QStri
                                            : std::optional<quint64>(found->previewSourceRevision);
 }
 
+std::optional<QString> PinnedWindowRepository::revealPath(const QString& id) const {
+    std::lock_guard access(m_accessMutex);
+    if (m_suspended || !m_impl || !safeId(id))
+        return std::nullopt;
+    std::lock_guard locker(m_impl->mutex);
+    const auto found = m_impl->records.constFind(id);
+    if (found == m_impl->records.cend())
+        return std::nullopt;
+    const QDir directory(payloadDirectory(m_impl->root, id));
+    if (!directory.exists())
+        return std::nullopt;
+    const auto& payloads = found->payloads;
+    QStringList keys;
+    if (payloads.contains(QStringLiteral("animation")))
+        keys = {QStringLiteral("animation")};
+    else if (found->record.sourceKind == PinnedWindowSourceKind::ClipboardText)
+        keys = {QStringLiteral("text"), QStringLiteral("html")};
+    else
+        keys = {QStringLiteral("image")};
+    for (const auto& key : keys) {
+        const QString name = payloads.value(key).toString();
+        if (safeFileName(name)) {
+            const QString path = directory.filePath(name);
+            if (QFileInfo(path).isFile())
+                return path;
+        }
+    }
+    return directory.absolutePath();
+}
+
 PinnedSourceIdentity PinnedWindowRepository::sourceIdentity(const QString& id) const {
     std::lock_guard access(m_accessMutex);
     if (!m_impl)
