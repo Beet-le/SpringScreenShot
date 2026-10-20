@@ -702,6 +702,9 @@ class ScreenshotPinnedWindowTestAccess {
     static void setRecognitionInteraction(ScreenshotPinnedWindow& window, bool enabled) {
         window.m_ocrMode = enabled;
     }
+    static void setRecognitionSupported(ScreenshotPinnedWindow& window, bool supported) {
+        window.m_ocrSupported = supported;
+    }
     static void doubleForHideTest(ScreenshotPinnedWindow& window) {
         static_cast<void>(window.handleDoubleClick(window.rect().center()));
     }
@@ -3321,6 +3324,100 @@ void pinnedRecognitionShortcutTogglesResults() {
         require(action->isChecked() == visible &&
                     (offscreen || window->persistenceSnapshot().recognitionVisible == visible),
                 "each recognition shortcut press must toggle result visibility");
+    }
+}
+
+void pinnedMouseActionsToggleRecognition(Qt::MouseButton button) {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const snow_shot::storage::PinToScreenSettings settings;
+    const bool middle = button == Qt::MiddleButton;
+    const QString previousAction =
+        middle ? settings.middleMouseButtonAction() : settings.doubleClickAction();
+    const auto setAction = [&](const QString& action) {
+        return middle ? settings.setMiddleMouseButtonAction(action)
+                      : settings.setDoubleClickAction(action);
+    };
+    const auto restore = qScopeGuard([&] { setAction(previousAction); });
+    require(setAction(QStringLiteral("show_text_recognition_results")),
+            "configure mouse recognition action");
+    const auto activation = middle ? QEvent::MouseButtonPress : QEvent::MouseButtonDblClick;
+    const auto send = [&](QWidget* receiver, QEvent::Type type, const QPoint& point) {
+        QMouseEvent event(type, QPointF(point), QPointF(receiver->mapToGlobal(point)), button,
+                          type == QEvent::MouseButtonRelease ? Qt::NoButton : button,
+                          Qt::NoModifier);
+        QCoreApplication::sendEvent(receiver, &event);
+    };
+    {
+        auto config = cachedOcrPinConfig(nullptr);
+        config.initialWindowSize = QSize(600, 400);
+        config.nativeGeometry =
+            physicalPinGeometry(*config.screen, QPoint(40, 40), config.initialWindowSize);
+        ScreenshotPinnedWindow window;
+        auto* session = Access::hiddenSelectionOffscreen(window, config);
+        auto* canvas = window.findChild<SnowCanvasWidget*>();
+        auto* action = pinnedMenuActionNamed(window, QStringLiteral("screenshotPinnedOcrAction"));
+        require(session && canvas && action && !session->active(),
+                "mouse recognition fixture starts with hidden cached results");
+        const QPoint background(20, window.height() - 30);
+        send(&window, activation, background);
+        require(session->active() && action->isChecked() &&
+                    session->mode() == ScreenshotRecognitionSessionController::Mode::Text,
+                "mouse action must show cached text results without a provider");
+        send(&window, QEvent::MouseButtonRelease, background);
+        require(session->active(), "mouse release must not toggle recognition again");
+        waitForUi(20);
+        auto* content = window.findChild<ScreenshotRecognitionWindow*>(
+            QStringLiteral("screenshotPinnedRecognitionContent"));
+        require(content && content->isVisible(), "mouse action must display recognition content");
+        auto* layer = content->findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"));
+        require(layer && !ocrGlyphItems(layer).isEmpty(), "recognition text must be rendered");
+        const QPoint text = layer->viewport()->mapTo(
+            content,
+            layer->mapFromScene(ocrGlyphItems(layer).front()->sceneBoundingRect().center()));
+        require(!content->isOcrBackgroundAt(text), "text exclusion must target selectable OCR");
+        send(content, activation, text);
+        send(content, QEvent::MouseButtonRelease, text);
+        require(session->active(), "selectable OCR text must not toggle recognition");
+        content->clearTextSelection();
+        setPinnedWindowHovered(window, true);
+        auto* controls = window.findChild<QFrame*>(QStringLiteral("screenshotPinnedControlsPanel"));
+        require(controls && controls->isVisible(), "mouse recognition controls must be visible");
+        send(&window, activation, controls->mapTo(&window, controls->rect().center()));
+        send(controls, activation, controls->rect().center());
+        require(session->active(), "window controls must not toggle recognition");
+        const QPoint contentBackground(20, content->height() - 30);
+        require(content->isOcrBackgroundAt(contentBackground),
+                "toggle-off gesture must target draggable OCR background");
+        send(content, QEvent::MouseButtonDblClick, contentBackground);
+        require(!session->active() && !action->isChecked(),
+                "a repeated mouse action must hide recognition results");
+        send(content, QEvent::MouseButtonRelease, contentBackground);
+        require(!session->active(), "release must leave recognition hidden");
+        send(canvas, activation, canvas->mapFrom(&window, background));
+        send(canvas, QEvent::MouseButtonRelease, canvas->mapFrom(&window, background));
+        require(session->active() && action->isChecked(),
+                "canvas mouse action must restore cached results exactly once");
+        auto* editor = window.findChild<ScreenshotPinnedEditController*>();
+        require(!editor || !editor->editMode(), "mouse recognition must not enter annotation mode");
+        window.close();
+    }
+    for (const bool available : {true, false}) {
+        IdleOcrRecognition recognition;
+        auto config = cachedOcrPinConfig(available ? &recognition : nullptr);
+        config.recognitionResults = {};
+        ScreenshotPinnedWindow window;
+        auto* session = Access::hiddenSelectionOffscreen(window, config);
+        Access::setRecognitionSupported(window, true);
+        const QPoint point(20, window.height() - 30);
+        require(recognition.requests == 0, "manual OCR must not start before the gesture");
+        send(&window, activation, point);
+        send(&window, QEvent::MouseButtonRelease, point);
+        waitForUi(20);
+        require(session->active() == available && recognition.requests == (available ? 1 : 0),
+                "mouse action must request available OCR once and ignore unavailable OCR");
+        auto* editor = window.findChild<ScreenshotPinnedEditController*>();
+        require(!editor || !editor->editMode(), "manual OCR must not open annotation mode");
+        window.close();
     }
 }
 
@@ -26236,6 +26333,11 @@ int main(int argc, char* argv[]) {
             pinnedDrawingToolsRemainUsableAfterRecognition();
             pinnedEditingRecognitionShortcutsUsePaletteCommands();
             pinnedRecognitionShortcutTogglesResults();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--mouse-recognition-only"))) {
+            pinnedMouseActionsToggleRecognition(Qt::LeftButton);
+            pinnedMouseActionsToggleRecognition(Qt::MiddleButton);
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--recognition-context-menu-only"))) {

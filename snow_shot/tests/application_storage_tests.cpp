@@ -973,10 +973,12 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
     const QMap<QString, QStringList> allowedStringValues{
         {QStringLiteral("pin_to_screen/middle_mouse_button_action"),
          {QStringLiteral("none"), QStringLiteral("reset_zoom"), QStringLiteral("thumbnail_mode"),
-          QStringLiteral("hide_to_top"), QStringLiteral("close"), QStringLiteral("destroy")}},
+          QStringLiteral("hide_to_top"), QStringLiteral("show_text_recognition_results"),
+          QStringLiteral("close"), QStringLiteral("destroy")}},
         {QStringLiteral("pin_to_screen/double_click_action"),
          {QStringLiteral("none"), QStringLiteral("reset_zoom"), QStringLiteral("thumbnail_mode"),
-          QStringLiteral("hide_to_top"), QStringLiteral("close"), QStringLiteral("destroy")}},
+          QStringLiteral("hide_to_top"), QStringLiteral("show_text_recognition_results"),
+          QStringLiteral("close"), QStringLiteral("destroy")}},
         {QStringLiteral("text_recognition/fill_style"),
          {QStringLiteral("blur"), QStringLiteral("background_fill")}},
         {QStringLiteral("text_recognition/model_type"),
@@ -2344,7 +2346,8 @@ void pinnedMouseActionSettingsRoundTrip() {
             "pinned mouse actions must retain their defaults");
     for (const QString& action :
          {QStringLiteral("none"), QStringLiteral("reset_zoom"), QStringLiteral("thumbnail_mode"),
-          QStringLiteral("hide_to_top"), QStringLiteral("close"), QStringLiteral("destroy")}) {
+          QStringLiteral("hide_to_top"), QStringLiteral("show_text_recognition_results"),
+          QStringLiteral("close"), QStringLiteral("destroy")}) {
         require(pin.setDoubleClickAction(action) && pin.doubleClickAction() == action &&
                     pin.setMiddleMouseButtonAction(action) &&
                     pin.middleMouseButtonAction() == action,
@@ -2355,12 +2358,24 @@ void pinnedMouseActionSettingsRoundTrip() {
                 !pin.setMiddleMouseButtonAction(QStringLiteral("unsupported")) &&
                 pin.middleMouseButtonAction() == QStringLiteral("destroy"),
             "invalid pinned mouse actions must preserve the saved choices");
+    require(pin.setDoubleClickAction(QStringLiteral("show_text_recognition_results")) &&
+                pin.middleMouseButtonAction() == QStringLiteral("destroy"),
+            "selecting double-click recognition must preserve the middle-click action");
     require(applicationStorage.flushNow().success, "flush pinned mouse actions");
     applicationStorage.shutdown();
     static_cast<void>(initialize(executable, temporary.path()));
-    require(pin.doubleClickAction() == QStringLiteral("destroy") &&
+    require(pin.doubleClickAction() == QStringLiteral("show_text_recognition_results") &&
                 pin.middleMouseButtonAction() == QStringLiteral("destroy"),
-            "pinned Destroy actions must survive a storage restart");
+            "pinned recognition and Destroy actions must survive a storage restart");
+    require(pin.setMiddleMouseButtonAction(QStringLiteral("show_text_recognition_results")) &&
+                pin.setDoubleClickAction(QStringLiteral("reset_zoom")),
+            "middle-click recognition must be independently configurable");
+    require(applicationStorage.flushNow().success, "flush middle-click recognition");
+    applicationStorage.shutdown();
+    static_cast<void>(initialize(executable, temporary.path()));
+    require(pin.doubleClickAction() == QStringLiteral("reset_zoom") &&
+                pin.middleMouseButtonAction() == QStringLiteral("show_text_recognition_results"),
+            "middle-click recognition must survive a storage restart");
     applicationStorage.shutdown();
 }
 

@@ -1443,13 +1443,7 @@ void ScreenshotPinnedWindow::registerWindowShortcuts() {
                    static_cast<int>(ScreenshotRecognitionSessionController::Mode::Text));
     };
     recognition.activate = [this](const auto&) {
-        if (m_recognitionSession != nullptr && m_recognitionSession->active() &&
-            m_recognitionSession->mode() == ScreenshotRecognitionSessionController::Mode::Text) {
-            deactivateRecognition();
-        } else {
-            activateRecognitionMode(
-                static_cast<int>(ScreenshotRecognitionSessionController::Mode::Text), false);
-        }
+        toggleTextRecognitionResults();
         return true;
     };
     m_pinnedShortcutBindings.insert(QStringLiteral("show_text_recognition_results"),
@@ -5192,6 +5186,20 @@ void ScreenshotPinnedWindow::activateRecognitionMode(int mode, bool showToolbar)
     m_recognitionSession->activate(selectedMode);
     refreshContextMenu();
     schedulePersistence();
+}
+
+void ScreenshotPinnedWindow::toggleTextRecognitionResults() {
+    if (!recognitionModeAvailable(
+            static_cast<int>(ScreenshotRecognitionSessionController::Mode::Text))) {
+        return;
+    }
+    if (m_recognitionSession != nullptr && m_recognitionSession->active() &&
+        m_recognitionSession->mode() == ScreenshotRecognitionSessionController::Mode::Text) {
+        deactivateRecognition();
+    } else {
+        activateRecognitionMode(
+            static_cast<int>(ScreenshotRecognitionSessionController::Mode::Text), false);
+    }
 }
 
 void ScreenshotPinnedWindow::ensureRecognitionProviders() {
@@ -9320,6 +9328,8 @@ bool ScreenshotPinnedWindow::handleDoubleClick(const QPoint& position) {
         setThumbnailMode(!m_thumbnailMode);
     } else if (action == QStringLiteral("hide_to_top")) {
         toggleHideToTop();
+    } else if (action == QStringLiteral("show_text_recognition_results")) {
+        toggleTextRecognitionResults();
     } else if (action == QStringLiteral("close")) {
         static_cast<void>(
             m_mouseReleaseAction.arm(this, Qt::LeftButton, [this] { requestUserClose(); }));
@@ -9346,6 +9356,8 @@ bool ScreenshotPinnedWindow::handleMiddleClick(const QPoint& position) {
         setThumbnailMode(!m_thumbnailMode);
     } else if (action == QStringLiteral("hide_to_top")) {
         toggleHideToTop();
+    } else if (action == QStringLiteral("show_text_recognition_results")) {
+        toggleTextRecognitionResults();
     } else if (action == QStringLiteral("close")) {
         static_cast<void>(
             m_mouseReleaseAction.arm(this, Qt::MiddleButton, [this] { requestUserClose(); }));

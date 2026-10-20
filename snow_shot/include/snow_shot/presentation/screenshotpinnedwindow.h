@@ -384,6 +384,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     void beginAuxiliaryWindowInteraction();
     void endAuxiliaryWindowInteraction();
     void activateRecognitionMode(int mode, bool showToolbar = true);
+    void toggleTextRecognitionResults();
     void ensureRecognitionProviders();
     void deactivateRecognition();
     void updateRecognitionToolbarState();

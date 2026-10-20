@@ -1119,7 +1119,7 @@ void builtInCatalogIsCompleteAndValid() {
             "Pin to Screen must expose Double-click Action");
     const auto& pinSelect = std::get<settings::SettingsSelectDefinition>(pinDoubleClick->payload);
     require(pinSelect.binding == settings::SettingsSelectBinding::PinDoubleClickAction &&
-                pinSelect.options.size() == 6 &&
+                pinSelect.options.size() == 7 &&
                 pinSelect.options[0].value == QStringLiteral("none") &&
                 pinSelect.options[0].label.translated() == QStringLiteral("None") &&
                 pinSelect.options[1].value == QStringLiteral("reset_zoom") &&
@@ -1128,10 +1128,13 @@ void builtInCatalogIsCompleteAndValid() {
                 pinSelect.options[2].label.translated() == QStringLiteral("Thumbnail Mode") &&
                 pinSelect.options[3].value == QStringLiteral("hide_to_top") &&
                 pinSelect.options[3].label.translated() == QStringLiteral("Hide to Top") &&
-                pinSelect.options[4].value == QStringLiteral("close") &&
-                pinSelect.options[4].label.translated() == QStringLiteral("Close") &&
-                pinSelect.options[5].value == QStringLiteral("destroy") &&
-                pinSelect.options[5].label.translated() == QStringLiteral("Destroy"),
+                pinSelect.options[4].value == QStringLiteral("show_text_recognition_results") &&
+                pinSelect.options[4].label.translated() ==
+                    QStringLiteral("Show text recognition results") &&
+                pinSelect.options[5].value == QStringLiteral("close") &&
+                pinSelect.options[5].label.translated() == QStringLiteral("Close") &&
+                pinSelect.options[6].value == QStringLiteral("destroy") &&
+                pinSelect.options[6].label.translated() == QStringLiteral("Destroy"),
             "pinned double-click options must preserve the specified order, labels and values");
     require(
         catalog.section(QStringLiteral("pinned-windows"), QStringLiteral("pin-to-screen-settings"))
@@ -1148,7 +1151,7 @@ void builtInCatalogIsCompleteAndValid() {
     const auto& middleSelect =
         std::get<settings::SettingsSelectDefinition>(pinMiddleClick->payload);
     require(middleSelect.binding == settings::SettingsSelectBinding::PinMiddleClickAction &&
-                middleSelect.options.size() == 6 &&
+                middleSelect.options.size() == 7 &&
                 middleSelect.options[0].value == QStringLiteral("none") &&
                 middleSelect.options[0].label.translated() == QStringLiteral("None") &&
                 middleSelect.options[1].value == QStringLiteral("reset_zoom") &&
@@ -1157,10 +1160,13 @@ void builtInCatalogIsCompleteAndValid() {
                 middleSelect.options[2].label.translated() == QStringLiteral("Thumbnail Mode") &&
                 middleSelect.options[3].value == QStringLiteral("hide_to_top") &&
                 middleSelect.options[3].label.translated() == QStringLiteral("Hide to Top") &&
-                middleSelect.options[4].value == QStringLiteral("close") &&
-                middleSelect.options[4].label.translated() == QStringLiteral("Close") &&
-                middleSelect.options[5].value == QStringLiteral("destroy") &&
-                middleSelect.options[5].label.translated() == QStringLiteral("Destroy"),
+                middleSelect.options[4].value == QStringLiteral("show_text_recognition_results") &&
+                middleSelect.options[4].label.translated() ==
+                    QStringLiteral("Show text recognition results") &&
+                middleSelect.options[5].value == QStringLiteral("close") &&
+                middleSelect.options[5].label.translated() == QStringLiteral("Close") &&
+                middleSelect.options[6].value == QStringLiteral("destroy") &&
+                middleSelect.options[6].label.translated() == QStringLiteral("Destroy"),
             "pinned middle-click options must preserve the specified order, labels and values");
     require(
         catalog.section(QStringLiteral("pinned-windows"), QStringLiteral("pin-to-screen-settings"))

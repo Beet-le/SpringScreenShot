@@ -5744,6 +5744,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-pinned-window-tests --recognition-shortcut-only)
     add_test(NAME snow-shot-pinned-recognition-shortcut-offscreen-tests
         COMMAND snow-shot-pinned-window-tests --recognition-shortcut-only -platform offscreen)
+    add_test(NAME snow-shot-pinned-mouse-recognition-tests
+        COMMAND snow-shot-pinned-window-tests --mouse-recognition-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-mouse-recognition-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-pinned-recognition-context-menu-tests
         COMMAND snow-shot-pinned-window-tests --recognition-context-menu-only -platform offscreen)
     add_test(NAME snow-shot-pinned-ocr-box-selection-tests
