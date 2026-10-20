@@ -60,7 +60,42 @@ pub(crate) struct Effects {
     trail: FrameTrail,
     generation: u64,
     status: InputStatus,
+    render_policy: snow_recording_model::EffectsConfig,
+    last_geometry: Option<(DesktopTransform, PixelRect)>,
+    last_cursor: Option<(i32, i32, snow_macos::cursor::CursorShape)>,
+    dirty: bool,
+    was_animating: bool,
+    rendered: RenderedEffects,
 }
+
+/// Compare only sparse effect pixels; never scan the captured desktop to prove
+/// a held output. Revisions remain pending until the recorder submits them.
+#[derive(Default)]
+struct RenderedEffects {
+    tiles: Vec<Tile>,
+    highlight: Vec<Tile>,
+    revision: u64,
+}
+
+impl RenderedEffects {
+    fn update(&mut self, tiles: Vec<Tile>, highlight: Vec<Tile>) {
+        let same = |left: &[Tile], right: &[Tile]| {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|(left, right)| {
+                    left.x == right.x && left.y == right.y && left.pixels == right.pixels
+                })
+        };
+        if !same(&self.tiles, &tiles) || !same(&self.highlight, &highlight) {
+            self.revision = self
+                .revision
+                .checked_add(1)
+                .expect("effect revision overflow");
+            self.tiles = tiles;
+            self.highlight = highlight;
+        }
+    }
+}
+
 impl Effects {
     pub fn new(
         config: NativeEffectsConfig,
@@ -120,13 +155,39 @@ impl Effects {
                 )
             })
             .transpose()?;
-        Ok(Some(Self {
+        Ok(Some(Self::with_sources(
+            config, output, separate, input, cursor, keyboard,
+        )))
+    }
+
+    fn with_sources(
+        config: NativeEffectsConfig,
+        output: PixelSize,
+        separate: bool,
+        input: Option<InputObserver>,
+        cursor: Option<snow_macos::cursor::CursorSampler>,
+        keyboard: Option<KeyboardOverlay>,
+    ) -> Self {
+        Self {
             input,
             cursor,
             trail: FrameTrail::new(),
             input_effects: InputEffectsState {
                 keyboard,
                 ..InputEffectsState::new(config.trail_duration_ms)
+            },
+            render_policy: snow_recording_model::EffectsConfig {
+                mouse_trail_rgba: if config.trail {
+                    config.trail_rgba
+                } else {
+                    [0; 4]
+                },
+                mouse_click_rgba: if config.clicks {
+                    config.click_rgba
+                } else {
+                    [0; 4]
+                },
+                ..Default::default()
             },
             config,
             output,
@@ -137,7 +198,12 @@ impl Effects {
             show_cursor: separate,
             generation: 0,
             status: InputStatus::Active,
-        }))
+            last_geometry: None,
+            last_cursor: None,
+            dirty: true,
+            was_animating: false,
+            rendered: RenderedEffects::default(),
+        }
     }
     pub fn reset(&mut self, now: u64) {
         self.held_buttons = [false; 5];
@@ -145,12 +211,16 @@ impl Effects {
         self.highlight.clear();
         self.trail.clear();
         self.input_effects.reset_inputs(now);
+        self.dirty = true;
         if let Some(input) = &self.input {
             while input.events.try_recv().is_ok() {}
         }
     }
     pub fn highlight_tiles(&self) -> Vec<Tile> {
-        self.highlight.snapshot()
+        self.rendered.highlight.clone()
+    }
+    pub fn revision(&self) -> u64 {
+        self.rendered.revision
     }
     pub fn draw(
         &mut self,
@@ -159,6 +229,11 @@ impl Effects {
         destination: PixelRect,
         now: u64,
     ) -> Result<(Vec<Tile>, Option<String>)> {
+        let geometry = (transform, destination);
+        if self.last_geometry != Some(geometry) {
+            self.dirty = true;
+            self.last_geometry = Some(geometry);
+        }
         let generation = self.input.as_ref().map_or(0, InputObserver::generation);
         let status = self
             .input
@@ -177,6 +252,7 @@ impl Effects {
                     self.pending_input.clear();
                     self.held_buttons = [false; 5];
                     self.input_effects.reset_keyboard(now);
+                    self.dirty = true;
                 }
                 self.pending_input.push_back(event);
             }
@@ -214,6 +290,7 @@ impl Effects {
                     _ => None,
                 };
                 if let Some(button) = button {
+                    self.dirty = true;
                     self.input_effects.click(RenderClick {
                         timestamp_ms: at_ms,
                         x,
@@ -256,12 +333,13 @@ impl Effects {
                                 style,
                                 self.config.show_keyboard,
                             ));
+                            self.dirty = true;
                         }
                     }
                 }
             }
             if self.config.trail && matches!(event.kind, 5..=7 | 27) {
-                self.trail.observe(point, at_ms);
+                self.dirty |= self.trail.observe(point, at_ms);
             }
             if self.config.show_keyboard
                 && let Some(style) = &self.config.keyboard
@@ -273,30 +351,23 @@ impl Effects {
                     )
             {
                 self.input_effects.queue_key(event.event(at_ms, style));
+                self.dirty = true;
             }
         }
-        self.surface.clear();
-        self.highlight.clear();
-        let mut cursor_shape = None;
-        if let Some(cursor) = &mut self.cursor {
+        let cursor_shape = if let Some(cursor) = &mut self.cursor {
             let sample = cursor.sample().map_err(super::macos::native_error)?;
             let shape = sample.shape.ok_or_else(|| {
                 ScreenRecorderError::UnsupportedFeature(
                     "public system cursor shape became unavailable".into(),
                 )
             })?;
-            if let Some((x, y)) = project(sample.x, sample.y, transform, destination) {
-                snow_recording_effects::mouse_effects::draw_highlight_to(
-                    &mut self.highlight,
-                    (x, y),
-                    self.config.highlight_rgba,
-                    false,
-                    self.config.highlight_radius,
-                );
-                if self.show_cursor {
-                    cursor_shape = Some((x, y, shape));
-                }
-            }
+            project(sample.x, sample.y, transform, destination).map(|(x, y)| (x, y, shape))
+        } else {
+            None
+        };
+        if self.last_cursor != cursor_shape {
+            self.dirty = true;
+            self.last_cursor = cursor_shape;
         }
         if self.config.trail {
             self.trail.advance(
@@ -304,6 +375,23 @@ impl Effects {
                 (self.output.width, self.output.height),
                 (self.output.width, self.output.height),
                 now,
+            );
+        }
+        let animating = self
+            .input_effects
+            .has_active_animation(&self.render_policy, now);
+        if !self.dirty && !self.was_animating && !animating {
+            return Ok((self.rendered.tiles.clone(), interruption));
+        }
+        self.surface.clear();
+        self.highlight.clear();
+        if let Some((x, y, _)) = &self.last_cursor {
+            snow_recording_effects::mouse_effects::draw_highlight_to(
+                &mut self.highlight,
+                (*x, *y),
+                self.config.highlight_rgba,
+                false,
+                self.config.highlight_radius,
             );
         }
         self.input_effects.draw_mouse_layers_to(
@@ -322,12 +410,14 @@ impl Effects {
                 [0; 4]
             },
         );
-        if let Some((x, y, shape)) = cursor_shape {
+        if self.show_cursor
+            && let Some((x, y, shape)) = &self.last_cursor
+        {
             draw_cursor(
                 &mut self.surface,
-                &shape,
-                x,
-                y,
+                shape,
+                *x,
+                *y,
                 f64::from(destination.width) / transform.source.width,
                 f64::from(destination.height) / transform.source.height,
             );
@@ -335,7 +425,11 @@ impl Effects {
         self.input_effects
             .draw_keyboard_to(&mut self.surface, now)
             .map_err(ScreenRecorderError::Encode)?;
-        Ok((self.surface.snapshot(), interruption))
+        self.rendered
+            .update(self.surface.snapshot(), self.highlight.snapshot());
+        self.was_animating = animating;
+        self.dirty = false;
+        Ok((self.rendered.tiles.clone(), interruption))
     }
 }
 fn draw_cursor(
@@ -397,6 +491,154 @@ pub(crate) fn project(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn effects_fixture() -> (Effects, RecordingClock, DesktopTransform, PixelRect) {
+        let size = PixelSize::new(256, 128).unwrap();
+        let config = NativeEffectsConfig {
+            clicks: true,
+            trail: true,
+            ..Default::default()
+        };
+        let effects = Effects::with_sources(config, size, false, None, None, None);
+        let transform = DesktopTransform::new(
+            snow_media::geometry::DesktopRect {
+                space: snow_media::geometry::DesktopSpace::Points,
+                x: 0.0,
+                y: 0.0,
+                width: 256.0,
+                height: 128.0,
+            },
+            size,
+        )
+        .unwrap();
+        let destination = PixelRect {
+            x: 0,
+            y: 0,
+            width: 256,
+            height: 128,
+        };
+        (
+            effects,
+            RecordingClock::new(std::time::Instant::now()),
+            transform,
+            destination,
+        )
+    }
+
+    #[test]
+    fn inactive_configured_effects_reuse_pixels_and_expired_effects_clear_once() {
+        let (mut effects, clock, transform, destination) = effects_fixture();
+        for now in [0, 17, 34, 100, 500] {
+            assert!(
+                effects
+                    .draw(&clock, transform, destination, now)
+                    .unwrap()
+                    .0
+                    .is_empty()
+            );
+            assert_eq!(effects.revision(), 0);
+        }
+        effects.input_effects.click(RenderClick {
+            timestamp_ms: 600,
+            x: 100,
+            y: 64,
+            button: ObservedMouseButton::Left,
+        });
+        assert!(
+            !effects
+                .draw(&clock, transform, destination, 617)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+        let visible_revision = effects.revision();
+        assert!(visible_revision > 0);
+        assert!(
+            effects
+                .draw(&clock, transform, destination, 2000)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+        let cleared_revision = effects.revision();
+        assert_eq!(cleared_revision, visible_revision + 1);
+        for now in [2017, 2034, 3000] {
+            assert!(
+                effects
+                    .draw(&clock, transform, destination, now)
+                    .unwrap()
+                    .0
+                    .is_empty()
+            );
+            assert_eq!(effects.revision(), cleared_revision);
+        }
+    }
+
+    #[test]
+    fn cached_effects_match_unconditional_rendering_through_motion_expiry_and_reset() {
+        let (mut cached, clock, transform, destination) = effects_fixture();
+        let (mut reference, _, _, _) = effects_fixture();
+        for (now, position, reset) in [
+            (0, Some((10, 64)), false),
+            (17, Some((60, 64)), false),
+            (34, Some((90, 64)), false),
+            (51, Some((90, 64)), false),
+            (120, None, false),
+            (137, Some((190, 64)), false),
+            (154, Some((230, 64)), false),
+            (170, Some((230, 64)), false),
+            (800, Some((230, 64)), false),
+            (817, Some((230, 64)), false),
+            (834, Some((230, 64)), true),
+            (851, Some((10, 64)), false),
+            (868, Some((80, 64)), false),
+        ] {
+            for effects in [&mut cached, &mut reference] {
+                if reset {
+                    effects.reset(now);
+                }
+                effects.dirty |= effects.trail.observe(position, now);
+            }
+            reference.dirty = true;
+            let actual = cached.draw(&clock, transform, destination, now).unwrap().0;
+            let expected = reference
+                .draw(&clock, transform, destination, now)
+                .unwrap()
+                .0;
+            assert_eq!(actual.len(), expected.len(), "{now}");
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert_eq!((actual.x, actual.y), (expected.x, expected.y));
+                assert_eq!(actual.pixels, expected.pixels, "{now}");
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_revision_tracks_pixel_placement_highlight_and_removal() {
+        let tile = |x, value| Tile {
+            x,
+            y: 0,
+            pixels: std::sync::Arc::new(vec![value; 16]),
+        };
+        let mut rendered = RenderedEffects::default();
+        rendered.update(vec![tile(0, 3)], Vec::new());
+        let retained = rendered.tiles[0].pixels.clone();
+        assert_eq!(rendered.revision, 1);
+        rendered.update(vec![tile(0, 3)], Vec::new());
+        assert_eq!(rendered.revision, 1);
+        assert!(std::sync::Arc::ptr_eq(&retained, &rendered.tiles[0].pixels));
+        rendered.update(vec![tile(128, 3)], Vec::new());
+        assert_eq!(rendered.revision, 2);
+        rendered.update(vec![tile(128, 4)], Vec::new());
+        assert_eq!(rendered.revision, 3);
+        rendered.update(vec![tile(128, 4)], vec![tile(0, 8)]);
+        assert_eq!(rendered.revision, 4);
+        rendered.update(Vec::new(), Vec::new());
+        assert_eq!(rendered.revision, 5);
+        rendered.update(Vec::new(), Vec::new());
+        assert_eq!(rendered.revision, 5);
+    }
+
     #[test]
     fn scaled_cursor_endpoint_hotspot_matches_recorded_shape_placement() {
         let shape = snow_macos::cursor::CursorShape {

@@ -1153,4 +1153,67 @@ mod tests {
             copied.to_cpu().unwrap().bytes.as_ref()
         );
     }
+
+    #[test]
+    fn identical_metal_copy_recycles_small_pools_without_changing_retained_frames() {
+        let size = PixelSize::new(32, 18).unwrap();
+        let producer = Compositor::new(size, PixelFormat::Bgra8, 3).unwrap();
+        let mut copy = Compositor::new(size, PixelFormat::Bgra8, 4).unwrap();
+        let mut held = Vec::new();
+        for value in 0u8..128 {
+            let source = unsafe {
+                PixelBuffer::from_retained(
+                    producer.allocate_output().unwrap(),
+                    ColorDescription::SRGB,
+                )
+            }
+            .unwrap();
+            unsafe {
+                assert_eq!(
+                    CVPixelBufferLockBaseAddress(
+                        source.native_buffer(),
+                        CVPixelBufferLockFlags::empty()
+                    ),
+                    0
+                );
+                let stride = CVPixelBufferGetBytesPerRow(source.native_buffer());
+                CVPixelBufferGetBaseAddress(source.native_buffer())
+                    .cast::<u8>()
+                    .write_bytes(value, stride * size.height as usize);
+                CVPixelBufferUnlockBaseAddress(
+                    source.native_buffer(),
+                    CVPixelBufferLockFlags::empty(),
+                );
+            }
+            let image = copy.copy_identical(&source).unwrap();
+            assert!(
+                image
+                    .to_cpu()
+                    .unwrap()
+                    .bytes
+                    .iter()
+                    .all(|byte| *byte == value)
+            );
+            if held.len() < 3 {
+                held.push(image);
+            }
+            for (value, frame) in held.iter().enumerate() {
+                assert!(
+                    frame
+                        .to_cpu()
+                        .unwrap()
+                        .bytes
+                        .iter()
+                        .all(|byte| *byte == value as u8)
+                );
+            }
+        }
+        let fourth = copy.copy_identical(&held[0]).unwrap();
+        assert!(matches!(
+            copy.copy_identical(&held[0]),
+            Err(MacError::Timeout)
+        ));
+        drop(fourth);
+        assert!(copy.copy_identical(&held[0]).is_ok());
+    }
 }

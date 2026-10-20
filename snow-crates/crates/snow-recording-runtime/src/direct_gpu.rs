@@ -12,7 +12,7 @@ use windows::core::PCSTR;
 use super::*;
 
 #[path = "direct_gpu_resize.rs"]
-mod resize;
+pub(crate) mod resize;
 use resize::{AreaScaler, CropCopy};
 
 pub(super) fn eligible(config: &DirectRecordingConfig) -> bool {
@@ -21,14 +21,8 @@ pub(super) fn eligible(config: &DirectRecordingConfig) -> bool {
         && !crate::capture_policy::recording_gpu_backends(config.capture_backend).is_empty()
 }
 
-/// Probe the actual capture adapter, compositor and vendor encoder together.
-/// No CPU capture stream is allocated while this path is being negotiated.
-#[derive(Default)]
-pub(super) struct Negotiation {
-    pub adapter: Option<String>,
-    pub encoder_attempts: Vec<String>,
-    pub stage: Option<String>,
-}
+pub(crate) use crate::gpu_startup::Negotiation;
+use crate::gpu_startup::{ProbePurpose, prepare_capture, probe_encoder};
 
 pub(super) fn prepare(
     config: &DirectRecordingConfig,
@@ -54,118 +48,48 @@ pub(super) fn prepare(
         config.output_dimensions(),
         config.output_fps,
     )?;
-    struct ProbeFile(PathBuf);
-    impl Drop for ProbeFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
-    let path = ProbeFile(
-        std::env::temp_dir().join(format!("snow-gpu-probe-{}.mp4", uuid::Uuid::new_v4())),
-    );
-    let mut settings = config.streaming_config();
-    settings.output_path = path.0.clone();
-    settings.audio.clear();
-    diagnostics.stage = Some("encoder_startup".into());
-    if let Some(name) =
-        snow_recording_export::gpu::encoder_name(device.identity().vendor, config.codec)
-    {
-        diagnostics.encoder_attempts.push(name.into());
-    }
-    let mut encoder = StreamingEncoder::builder(settings)
-        .gpu_input(snow_recording_export::gpu::GpuInputConfig {
-            device: device.clone(),
-        })
-        .create()?;
     let mut probe_config = config.clone();
     probe_config.show_cursor = true;
-    for pts in 0..4 {
-        // Exercise the cursor shader even if the physical cursor is hidden or
-        // outside the recording region when startup is negotiated.
-        let cursor = AttachedCursorSample {
-            x: 0,
-            y: 0,
-            visible: true,
-            shape: CursorShapeState::Embedded(CursorShape::from_rgba(
+    probe_encoder(
+        config.streaming_config(),
+        ProbePurpose::LiveOutput,
+        device.clone(),
+        diagnostics,
+        |pts, surface| {
+            // Exercise the cursor shader even if the physical cursor is hidden or
+            // outside the recording region when startup is negotiated.
+            let cursor = AttachedCursorSample {
+                x: 0,
+                y: 0,
+                visible: true,
+                shape: CursorShapeState::Embedded(CursorShape::from_rgba(
+                    0,
+                    0,
+                    2,
+                    2,
+                    if pts % 2 == 0 {
+                        CursorCompositionMode::AlphaBlend
+                    } else {
+                        CursorCompositionMode::MaskedColor
+                    },
+                    vec![
+                        255, 0, 127, 128, 255, 255, 255, 255, 0, 0, 0, 0, 30, 60, 90, 255,
+                    ],
+                )),
+            };
+            compositor.compose(
+                state,
+                &probe_config,
+                &observation,
                 0,
-                0,
-                2,
-                2,
-                if pts % 2 == 0 {
-                    CursorCompositionMode::AlphaBlend
-                } else {
-                    CursorCompositionMode::MaskedColor
-                },
-                vec![
-                    255, 0, 127, 128, 255, 255, 255, 255, 0, 0, 0, 0, 30, 60, 90, 255,
-                ],
-            )),
-        };
-        let surface = encoder
-            .allocate_gpu_frame()?
-            .ok_or_else(|| gpu_error("startup encoder exhausted its surface pool"))?;
-        diagnostics.stage = Some("composition_probe".into());
-        compositor.compose(
-            state,
-            &probe_config,
-            &observation,
-            0,
-            Some(&cursor),
-            &surface,
-        )?;
-        diagnostics.stage = Some("submission_probe".into());
-        encoder.push_gpu_frame_at_pts(pts, surface)?;
-    }
-    diagnostics.stage = Some("packet_probe".into());
-    encoder.finish_at_pts(4)?;
-    let mut media = ffmpeg_next::format::input(&path.0).map_err(gpu_error)?;
-    if !media.packets().any(|(stream, packet)| {
-        stream.parameters().medium() == ffmpeg_next::media::Type::Video && packet.size() != 0
-    }) {
-        return Err(gpu_error(
-            "hardware encoder startup probe produced no video packet",
-        ));
-    }
-    drop(media);
-    diagnostics.stage = None;
+                Some(&cursor),
+                surface,
+            )
+        },
+    )?;
     state.input_effects.trail.clear();
     compositor.overlay_upload_bytes = 0;
     Ok(Some((stream, compositor, device)))
-}
-
-fn prepare_capture(
-    config: &DirectRecordingConfig,
-    include_cursor: bool,
-    diagnostics: &mut Negotiation,
-) -> snow_capture::error::CaptureResult<
-    Option<(snow_capture::gpu::GpuCaptureStream, GpuCapturedFrame)>,
-> {
-    use snow_capture::error::CaptureError;
-    use snow_capture::gpu::{GpuCaptureEvent, GpuCaptureStream};
-    crate::capture_policy::try_recording_gpu_capture(config.capture_backend, |backend| {
-        diagnostics.stage = Some("capture_startup".into());
-        let stream = GpuCaptureStream::spawn(
-            snow_capture::CaptureRegion {
-                x: config.region.x,
-                y: config.region.y,
-                width: config.region.width,
-                height: config.region.height,
-            },
-            backend,
-            capture::stream_config(config, include_cursor),
-        )?;
-        diagnostics.stage = Some("capture_probe".into());
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match stream.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                Ok(GpuCaptureEvent::Frame(frame)) => return Ok((stream, frame)),
-                Ok(GpuCaptureEvent::Error(error)) => return Err(error),
-                Ok(GpuCaptureEvent::StreamEnded) => return Err(CaptureError::WorkerDead),
-                Err(_) => return Err(CaptureError::Timeout),
-                _ => {}
-            }
-        }
-    })
 }
 
 fn gpu_error(error: impl std::fmt::Display) -> ScreenRecorderError {
@@ -206,7 +130,6 @@ struct OverlayTexture {
 struct WebcamTexture {
     texture: Texture,
     generation: u64,
-    upload: Vec<u8>,
 }
 
 impl OverlayTexture {
@@ -302,9 +225,18 @@ impl OverlayTexture {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DesktopRevision {
+    content: u64,
+    configuration: u64,
+    size: (u32, u32),
+}
+
 pub(super) struct GpuVisualCompositor {
     #[cfg(test)]
     final_rgb: Option<Texture>,
+    #[cfg(test)]
+    desktop_render_count: u64,
     #[cfg(test)]
     force_empty_overlays: bool,
     #[cfg(any(test, feature = "bench-synthetic-input"))]
@@ -312,9 +244,12 @@ pub(super) struct GpuVisualCompositor {
     device: SharedDevice,
     processor: VideoProcessor,
     scratch: [Texture; 2],
+    desktop_output: Option<Texture>,
+    desktop_revision: Option<DesktopRevision>,
     cursor_output: Texture,
     overlay: Option<OverlayTexture>,
     webcam: Option<WebcamTexture>,
+    webcam_upload: Vec<u8>,
     tiles: TileSurface,
     cursor_shader: ID3D11ComputeShader,
     cursor_constants: ID3D11Buffer,
@@ -416,14 +351,19 @@ impl GpuVisualCompositor {
             #[cfg(test)]
             final_rgb: None,
             #[cfg(test)]
+            desktop_render_count: 0,
+            #[cfg(test)]
             force_empty_overlays: false,
             #[cfg(any(test, feature = "bench-synthetic-input"))]
             inject_failure: false,
             processor,
             scratch,
+            desktop_output: None,
+            desktop_revision: None,
             cursor_output,
             overlay: None,
             webcam: None,
+            webcam_upload: Vec::new(),
             tiles: TileSurface::new(size),
             cursor_shader: cursor_shader.ok_or_else(|| gpu_error("missing cursor shader"))?,
             cursor_constants: cursor_constants
@@ -451,107 +391,12 @@ impl GpuVisualCompositor {
             return Err(gpu_error("injected VideoProcessor submission failure"));
         }
         let device = self.device.clone();
-        let _lock = device.lock();
         if !device.same_device(output.device()) {
             return Err(gpu_error("encoder output belongs to another GPU device"));
         }
+        // CPU rasterization and camera conversion never hold the shared D3D
+        // immediate-context lock needed by capture and hardware encoding.
         let source_size = frame.dimensions();
-        let mut index = self.desktop(&frame.layers, source_size)?;
-        if let Some(image) = state.webcam.image() {
-            let (x, y, side) = image.rect;
-            let (pixels, generation) = (image.pixels, image.generation);
-            if self
-                .webcam
-                .as_ref()
-                .is_none_or(|v| v.texture.dimensions() != (side, side))
-            {
-                self.webcam = Some(WebcamTexture {
-                    texture: device
-                        .texture(
-                            side,
-                            side,
-                            DXGI_FORMAT_B8G8R8A8_UNORM,
-                            (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
-                        )
-                        .map_err(gpu_error)?,
-                    generation: generation.wrapping_sub(1),
-                    upload: vec![0; pixels.len()],
-                });
-            }
-            let webcam = self.webcam.as_mut().unwrap();
-            if webcam.generation != generation {
-                for (from, to) in pixels
-                    .chunks_exact(4)
-                    .zip(webcam.upload.chunks_exact_mut(4))
-                {
-                    let alpha = u32::from(from[3]);
-                    for (out, input) in [2, 1, 0].into_iter().enumerate() {
-                        to[out] = ((u32::from(from[input]) * 255 + alpha / 2)
-                            .checked_div(alpha)
-                            .unwrap_or(0)
-                            .min(255)) as u8;
-                    }
-                    to[3] = from[3];
-                }
-                unsafe {
-                    device.context().UpdateSubresource(
-                        webcam.texture.raw(),
-                        0,
-                        None,
-                        webcam.upload.as_ptr().cast(),
-                        side * 4,
-                        0,
-                    );
-                }
-                self.overlay_upload_bytes += pixels.len() as u64;
-                webcam.generation = generation;
-            }
-            let layer = VideoLayer {
-                source: Rect::full((side, side)),
-                destination: Rect {
-                    x: x as i32,
-                    y: y as i32,
-                    width: side,
-                    height: side,
-                },
-                texture: webcam.texture.clone(),
-                rotation: 0,
-                alpha: true,
-            };
-            self.processor
-                .blit(
-                    &[self.layer(self.scratch[index].clone(), false), layer],
-                    self.scratch[1 - index].raw(),
-                    0,
-                )
-                .map_err(gpu_error)?;
-            index = 1 - index;
-        }
-        if config.show_cursor
-            && config.mouse_highlight_rgba[3] != 0
-            && let Some(sample) = cursor.filter(|c| {
-                c.visible
-                    && c.x >= 0
-                    && c.y >= 0
-                    && c.x < source_size.0 as i32
-                    && c.y < source_size.1 as i32
-            })
-        {
-            self.highlight(
-                &self.scratch[index].clone(),
-                scale_point(sample.x, sample.y, source_size, self.size),
-                config.mouse_highlight_rgba,
-                config.mouse_highlight_radius,
-            )?;
-            self.processor
-                .blit(
-                    &[self.layer(self.cursor_output.clone(), false)],
-                    self.scratch[1 - index].raw(),
-                    0,
-                )
-                .map_err(gpu_error)?;
-            index = 1 - index;
-        }
         self.tiles.clear();
         state
             .input_effects
@@ -588,20 +433,145 @@ impl GpuVisualCompositor {
             config.mouse_click_rgba,
             source_size,
         );
-        if let Some(overlay) = self.upload_overlay()? {
+        let mouse_tiles = self.tiles.snapshot();
+        self.tiles.clear();
+        state.input_effects.advance_keys(timestamp);
+        if let Some(keyboard) = state.input_effects.keyboard.as_mut() {
+            keyboard
+                .draw_to(&mut self.tiles, timestamp)
+                .map_err(gpu_error)?;
+        }
+        let keyboard_tiles = self.tiles.snapshot();
+        if let Some(image) = state.webcam.image()
+            && self.webcam.as_ref().is_none_or(|webcam| {
+                webcam.generation != image.generation
+                    || webcam.texture.dimensions() != (image.rect.2, image.rect.2)
+            })
+        {
+            let pixels = image.pixels;
+            self.webcam_upload.resize(pixels.len(), 0);
+            for (from, to) in pixels
+                .chunks_exact(4)
+                .zip(self.webcam_upload.chunks_exact_mut(4))
+            {
+                let alpha = u32::from(from[3]);
+                for (out, input) in [2, 1, 0].into_iter().enumerate() {
+                    to[out] = ((u32::from(from[input]) * 255 + alpha / 2)
+                        .checked_div(alpha)
+                        .unwrap_or(0)
+                        .min(255)) as u8;
+                }
+                to[3] = from[3];
+            }
+        }
+        let _lock = device.lock();
+        let revision = frame
+            .metadata()
+            .content_generation()
+            .map(|content| DesktopRevision {
+                content,
+                configuration: frame.metadata().configuration_generation(),
+                size: source_size,
+            });
+        let mut background = self.desktop(&frame.layers, source_size, revision)?;
+        let mut index = 0;
+        if let Some(image) = state.webcam.image() {
+            let (x, y, side) = image.rect;
+            let (pixels, generation) = (image.pixels, image.generation);
+            if self
+                .webcam
+                .as_ref()
+                .is_none_or(|v| v.texture.dimensions() != (side, side))
+            {
+                self.webcam = Some(WebcamTexture {
+                    texture: device
+                        .texture(
+                            side,
+                            side,
+                            DXGI_FORMAT_B8G8R8A8_UNORM,
+                            (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
+                        )
+                        .map_err(gpu_error)?,
+                    generation: generation.wrapping_sub(1),
+                });
+            }
+            let webcam = self.webcam.as_mut().unwrap();
+            if webcam.generation != generation {
+                unsafe {
+                    device.context().UpdateSubresource(
+                        webcam.texture.raw(),
+                        0,
+                        None,
+                        self.webcam_upload.as_ptr().cast(),
+                        side * 4,
+                        0,
+                    );
+                }
+                self.overlay_upload_bytes += pixels.len() as u64;
+                webcam.generation = generation;
+            }
+            let layer = VideoLayer {
+                source: Rect::full((side, side)),
+                destination: Rect {
+                    x: x as i32,
+                    y: y as i32,
+                    width: side,
+                    height: side,
+                },
+                texture: webcam.texture.clone(),
+                rotation: 0,
+                alpha: true,
+            };
+            self.processor
+                .blit(
+                    &[self.layer(background.clone(), false), layer],
+                    self.scratch[index].raw(),
+                    0,
+                )
+                .map_err(gpu_error)?;
+            background = self.scratch[index].clone();
+            index = 1 - index;
+        }
+        if config.show_cursor
+            && config.mouse_highlight_rgba[3] != 0
+            && let Some(sample) = cursor.filter(|c| {
+                c.visible
+                    && c.x >= 0
+                    && c.y >= 0
+                    && c.x < source_size.0 as i32
+                    && c.y < source_size.1 as i32
+            })
+        {
+            self.highlight(
+                &background,
+                scale_point(sample.x, sample.y, source_size, self.size),
+                config.mouse_highlight_rgba,
+                config.mouse_highlight_radius,
+            )?;
+            self.processor
+                .blit(
+                    &[self.layer(self.cursor_output.clone(), false)],
+                    self.scratch[index].raw(),
+                    0,
+                )
+                .map_err(gpu_error)?;
+            background = self.scratch[index].clone();
+            index = 1 - index;
+        }
+        if let Some(overlay) = self.upload_overlay(mouse_tiles)? {
             self.processor
                 .blit(
                     &[
-                        self.layer(self.scratch[index].clone(), false),
+                        self.layer(background.clone(), false),
                         self.layer(overlay, true),
                     ],
-                    self.scratch[1 - index].raw(),
+                    self.scratch[index].raw(),
                     0,
                 )
                 .map_err(|error| gpu_error(format!("effects pass: {error:#}")))?;
+            background = self.scratch[index].clone();
             index = 1 - index;
         }
-        let mut background = self.scratch[index].clone();
         if config.show_cursor
             && let Some(cursor) = cursor
         {
@@ -613,22 +583,15 @@ impl GpuVisualCompositor {
                 background = self.cursor_output.clone();
             }
         }
-        self.tiles.clear();
-        state.input_effects.advance_keys(timestamp);
-        if let Some(keyboard) = state.input_effects.keyboard.as_mut() {
-            keyboard
-                .draw_to(&mut self.tiles, timestamp)
-                .map_err(gpu_error)?;
-        }
-        if let Some(overlay) = self.upload_overlay()? {
+        if let Some(overlay) = self.upload_overlay(keyboard_tiles)? {
             self.processor
                 .blit(
                     &[self.layer(background, false), self.layer(overlay, true)],
-                    self.scratch[1 - index].raw(),
+                    self.scratch[index].raw(),
                     0,
                 )
                 .map_err(|error| gpu_error(format!("keyboard pass: {error:#}")))?;
-            background = self.scratch[1 - index].clone();
+            background = self.scratch[index].clone();
         }
         #[cfg(test)]
         {
@@ -643,8 +606,7 @@ impl GpuVisualCompositor {
             .map_err(|error| gpu_error(format!("NV12 pass: {error:#}")))
     }
 
-    fn upload_overlay(&mut self) -> Result<Option<Texture>> {
-        let tiles = self.tiles.snapshot();
+    fn upload_overlay(&mut self, tiles: Vec<Tile>) -> Result<Option<Texture>> {
         let empty = tiles.is_empty();
         #[cfg(test)]
         let empty = empty && !self.force_empty_overlays;
@@ -672,9 +634,53 @@ impl GpuVisualCompositor {
         }
     }
 
+    /// The clean desktop has its own output, so overlay passes cannot dirty it.
+    /// Swap it into the existing render targets while updating: changed frames
+    /// incur no extra full-frame copy, and overlay-only frames reuse the result.
+    fn desktop(
+        &mut self,
+        layers: &[VideoLayer],
+        source_size: (u32, u32),
+        revision: Option<DesktopRevision>,
+    ) -> Result<Texture> {
+        if revision.is_some() && self.desktop_revision == revision {
+            return Ok(self
+                .desktop_output
+                .as_ref()
+                .expect("cached desktop")
+                .clone());
+        }
+        if self.desktop_output.is_none() {
+            self.desktop_output = Some(
+                self.device
+                    .texture(
+                        self.size.0,
+                        self.size.1,
+                        DXGI_FORMAT_B8G8R8X8_UNORM,
+                        (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
+                    )
+                    .map_err(gpu_error)?,
+            );
+        }
+        self.desktop_revision = None;
+        std::mem::swap(&mut self.scratch[0], self.desktop_output.as_mut().unwrap());
+        let rendered = self.render_desktop(layers, source_size);
+        if matches!(rendered, Ok(1)) {
+            self.scratch.swap(0, 1);
+        }
+        std::mem::swap(&mut self.scratch[0], self.desktop_output.as_mut().unwrap());
+        rendered?;
+        self.desktop_revision = revision;
+        Ok(self.desktop_output.as_ref().unwrap().clone())
+    }
+
     /// Resize the complete desktop once in RGB. Native recording allocates no
     /// filtering intermediates; explicit crops use exact loads into existing storage.
-    fn desktop(&mut self, layers: &[VideoLayer], source_size: (u32, u32)) -> Result<usize> {
+    fn render_desktop(&mut self, layers: &[VideoLayer], source_size: (u32, u32)) -> Result<usize> {
+        #[cfg(test)]
+        {
+            self.desktop_render_count += 1;
+        }
         if source_size.0 <= self.size.0 && source_size.1 <= self.size.1 {
             self.native_desktop = None;
             self.scaler = None;
@@ -1076,6 +1082,78 @@ mod tests {
             record_mouse_clicks: false,
             show_keyboard: true,
         }
+    }
+
+    #[test]
+    #[ignore = "requires an offscreen D3D11 VideoProcessor"]
+    fn hardware_desktop_cache_survives_overlay_targets_and_invalidates_source_changes() -> Result<()>
+    {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+        use windows::core::Interface;
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
+        let adapter = unsafe { factory.EnumAdapters1(0) }
+            .map_err(gpu_error)?
+            .cast()
+            .map_err(gpu_error)?;
+        let device = SharedDevice::create(&adapter).map_err(gpu_error)?;
+        let _lock = device.lock();
+        let output = (64, 48);
+        for source in [output, (128, 96)] {
+            // Capture layers use source coordinates; the compositor owns the resize.
+            let layer = downscale_pattern_layer(
+                &device,
+                source,
+                source,
+                DownscalePattern::Checkerboard,
+                0,
+                0,
+                false,
+            )?;
+            let mut compositor = GpuVisualCompositor::new(device.clone(), source, output, 60)?;
+            let revision = DesktopRevision {
+                content: 1,
+                configuration: 1,
+                size: source,
+            };
+            let first = compositor.desktop(std::slice::from_ref(&layer), source, Some(revision))?;
+            let expected = read_downscale_rgb(&device, &first)?;
+            assert_eq!(compositor.desktop_render_count, 1);
+            let poison = [17u8; 64 * 48 * 4];
+            for texture in &compositor.scratch {
+                unsafe {
+                    device.context().UpdateSubresource(
+                        texture.raw(),
+                        0,
+                        None,
+                        poison.as_ptr().cast(),
+                        output.0 * 4,
+                        0,
+                    );
+                }
+            }
+            let held = compositor.desktop(std::slice::from_ref(&layer), source, Some(revision))?;
+            assert_eq!(compositor.desktop_render_count, 1);
+            assert_eq!(read_downscale_rgb(&device, &held)?, expected);
+            for revision in [
+                Some(DesktopRevision {
+                    content: 2,
+                    ..revision
+                }),
+                Some(DesktopRevision {
+                    content: 2,
+                    configuration: 2,
+                    ..revision
+                }),
+                None,
+                None,
+            ] {
+                let before = compositor.desktop_render_count;
+                let frame = compositor.desktop(std::slice::from_ref(&layer), source, revision)?;
+                assert_eq!(compositor.desktop_render_count, before + 1);
+                assert_eq!(read_downscale_rgb(&device, &frame)?, expected);
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -1562,7 +1640,7 @@ mod tests {
                                 &device, source, output, pattern, phase, rotation, cropped,
                             )?;
                             layer.destination = Rect::full(source);
-                            let index = compositor.desktop(&[layer], source)?;
+                            let index = compositor.render_desktop(&[layer], source)?;
                             assert_eq!(compositor.scaler.as_ref().unwrap().cached_view_count(), 1);
                             let pixels = read_downscale_rgb(&device, &compositor.scratch[index])?;
                             let energy = pixels
@@ -1699,7 +1777,7 @@ mod tests {
                     .collect::<Vec<_>>();
                 let reference = downscale_area_reference(pattern, source, output, phase);
                 for layers in [two_displays.as_slice(), many_displays.as_slice()] {
-                    let index = compositor.desktop(layers, source)?;
+                    let index = compositor.render_desktop(layers, source)?;
                     let actual = read_downscale_rgb(&device, &compositor.scratch[index])?;
                     for (position, (pixel, expected)) in
                         actual.chunks_exact(4).zip(&reference).enumerate()
@@ -1719,7 +1797,7 @@ mod tests {
                     compositor.crop_copy.as_ref().unwrap().cached_views(),
                     (1, true)
                 );
-                compositor.desktop(&[original], source)?;
+                compositor.render_desktop(&[original], source)?;
                 assert!(compositor.native_desktop.is_none());
                 assert_eq!(
                     compositor.crop_copy.as_ref().unwrap().cached_views(),
@@ -1737,7 +1815,7 @@ mod tests {
                 rotation,
                 true,
             )?;
-            let index = compositor.desktop(&[native], output)?;
+            let index = compositor.render_desktop(&[native], output)?;
             assert!(compositor.scaler.is_none() && compositor.native_desktop.is_none());
             assert_eq!(
                 compositor.crop_copy.as_ref().unwrap().cached_views(),
@@ -1767,7 +1845,7 @@ mod tests {
             0,
             false,
         )?;
-        compositor.desktop(&[full_native], output)?;
+        compositor.render_desktop(&[full_native], output)?;
         assert_eq!(
             compositor.crop_copy.as_ref().unwrap().cached_views(),
             (0, false)
@@ -1781,7 +1859,7 @@ mod tests {
             0,
             true,
         )?;
-        compositor.desktop(&[enlarged], (64, 48))?;
+        compositor.render_desktop(&[enlarged], (64, 48))?;
         assert_eq!(
             compositor.crop_copy.as_ref().unwrap().cached_views(),
             (0, false)
@@ -1792,7 +1870,7 @@ mod tests {
                 DownscalePattern::HorizontalStripes,
             ] {
                 let layer = downscale_pattern_layer(&device, source, source, pattern, 0, 0, true)?;
-                let index = compositor.desktop(&[layer], source)?;
+                let index = compositor.render_desktop(&[layer], source)?;
                 let actual = read_downscale_rgb(&device, &compositor.scratch[index])?;
                 let reference = downscale_area_reference(pattern, source, output, 0);
                 for (pixel, expected) in actual.chunks_exact(4).zip(&reference) {
@@ -2180,7 +2258,7 @@ mod tests {
                         0,
                     )
                     .map_err(gpu_error)?;
-                compositor.desktop(std::slice::from_ref(&filtered), source)?;
+                compositor.render_desktop(std::slice::from_ref(&filtered), source)?;
             }
             for pair in 0u32..5 {
                 for candidate in if pair.is_multiple_of(2) {
@@ -2190,7 +2268,7 @@ mod tests {
                 } {
                     let (gpu_ms, completed_ms) = time_completed_gpu_batch(&device, 120, || {
                         if candidate {
-                            compositor.desktop(std::slice::from_ref(&filtered), source)?;
+                            compositor.render_desktop(std::slice::from_ref(&filtered), source)?;
                             Ok(())
                         } else {
                             compositor

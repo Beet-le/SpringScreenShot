@@ -1,5 +1,59 @@
 # Recording performance experiments
 
+## Capture pipeline regression checks
+
+Use only the filters that cover the changed pipeline. From `snow-crates/`, with
+the platform FFmpeg environment initialized:
+
+```text
+cargo test -p snow-recording-runtime --lib deferred::tests
+cargo test -p snow-recording-runtime --lib capture_queue::tests
+cargo test -p snow-recording-runtime --lib direct::scheduling_tests
+cargo test -p snow-recording-runtime --lib direct::encoding::tests
+cargo test -p snow-recording-runtime --lib capture_failure::tests
+cargo test -p snow-recording-runtime --lib gpu_startup::tests
+cargo test -p snow-recording-export --lib streaming::recovery::tests
+cargo test -p snow-recording-export --lib failure_preservation_keeps_only_opted_in_plain_staging_after_drop
+cargo test -p snow-recording-export --lib offline_output_rejects_live_recovery
+```
+
+On macOS, the additional offscreen checks are:
+
+```text
+cargo test -p snow-recording-runtime --lib macos
+cargo test -p snow-macos --lib desktop::tests
+cargo test -p snow-macos --lib any_display_can_wake
+cargo test -p snow-macos --lib identical_metal_copy
+```
+
+On native Windows, run the WARP lease test and the explicitly ignored hardware
+tests on each relevant GPU vendor. These use generated pixels without desktop
+capture or injected user input:
+
+```text
+cargo test -p snow-capture --lib region_copies_preserve_pixels_and_bounded_immutable_leases
+cargo test -p snow-capture --lib gpu_backpressure_does_not_consume_the_final_desktop_update
+cargo test -p snow-recording-runtime --lib hardware_clean_source_ -- --ignored
+cargo test -p snow-recording-runtime --lib hardware_shared_probe_covers_direct_and_recording_source -- --ignored
+cargo test -p snow-recording-runtime --lib hardware_desktop_cache_ -- --ignored
+cargo test -p snow-recording-runtime --lib hardware_sparse_effects_and_webcam_match_cpu_draw_order_and_expiration -- --ignored
+cargo test -p snow-recording-export --lib hardware_static_image_survives_failure_without_a_successor -- --ignored
+```
+
+These checks establish correctness within their fixtures. Use the platform
+**performance** preset and the paired workload protocol below for performance
+claims, covering direct/deferred, native/downscaled/odd-size regions, static and
+moving content, effects/webcam, pause/resume, and GPU fallback. Windows type
+checking from another OS does not substitute for native driver validation.
+
+For deferred startup fallback, inspect `source.capture_report().startup` for the
+adapter, attempted encoders, failure stage and reason. Runtime recovery remains
+in `recovery_count` and `recovery_reason`; a startup fallback does not imply a
+mid-recording recovery. Direct recording reports expose the same startup
+diagnostics through their existing adapter/attempt/stage/reason fields.
+
+## Windows throughput protocol
+
 Use the `windows-msvc-performance` environment and Release builds. Benchmark
 controls are Rust-only and do not alter the C FFI or application settings.
 The workload covers the leftmost monitor and feeds synthetic observations to

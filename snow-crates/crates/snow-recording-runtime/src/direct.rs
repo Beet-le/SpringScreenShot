@@ -64,7 +64,7 @@ use buffer::VideoBuffer;
 pub(crate) mod capture;
 #[cfg(windows)]
 #[path = "direct_gpu.rs"]
-mod gpu;
+pub(crate) mod gpu;
 use capture::{DirectCapture, DirectCaptureEvent, DirectFrame};
 
 const AUDIO_SAMPLE_RATE: u32 = 48_000;
@@ -1000,8 +1000,8 @@ impl DirectRecordingSession {
                         mut gpu_compositor,
                         streaming_config,
                         mut fallback_reason,
-                    ) = match gpu_setup {
-                        Ok(Some((stream, processor, device))) => (
+                    ) = match negotiation.fallback(gpu_setup)? {
+                        Some((stream, processor, device)) => (
                             DirectCapture::Gpu(stream),
                             Some(processor),
                             streaming_config
@@ -1009,13 +1009,8 @@ impl DirectRecordingSession {
                                 .recoverable(),
                             None,
                         ),
-                        Err(ScreenRecorderError::Capture(error))
-                            if !error.allows_backend_fallback() =>
-                        {
-                            return Err(error.into());
-                        }
-                        result => {
-                            let reason = result.err().map(|error| error.to_string());
+                        None => {
+                            let reason = negotiation.fallback_reason();
                             if gpu::eligible(&config) && !config.retry_hardware_with_cpu_input() {
                                 streaming_config = streaming_config.software_only();
                             }
@@ -1051,11 +1046,12 @@ impl DirectRecordingSession {
                         Ok(encoder) => encoder,
                         #[cfg(windows)]
                         Err(error) if gpu_compositor.is_some() => {
+                            negotiation.stage = Some("encoder_startup".into());
+                            negotiation.fallback::<()>(Err(error))?;
+                            fallback_reason = negotiation.fallback_reason();
                             capture_stream.stop();
                             gpu_compositor.take();
                             capture_stream = DirectCapture::cpu(&config, include_cursor)?;
-                            fallback_reason = Some(format!("encoder startup: {error}"));
-                            negotiation.stage = Some("encoder_startup".into());
                             RecordingEncoder::new(
                                 fallback_config,
                                 start_optional_audio_stream(&config, audio_control.clone()),
@@ -1487,7 +1483,7 @@ fn run_direct_worker(inputs: DirectWorkerInputs) -> Result<DirectRecordingReport
         #[cfg(windows)]
         mut fallback_reason,
         #[cfg(windows)]
-        mut negotiation,
+        negotiation,
         control_rx,
         clock,
         asynchronous,
@@ -1496,8 +1492,6 @@ fn run_direct_worker(inputs: DirectWorkerInputs) -> Result<DirectRecordingReport
     } = inputs;
     #[cfg(windows)]
     let mut capture_stream = capture_stream;
-    #[cfg(windows)]
-    let adapter = negotiation.adapter.take();
     #[cfg(windows)]
     let mut gpu_metrics = gpu::Metrics::default();
     #[cfg(feature = "bench-pipeline-timing")]
@@ -1864,11 +1858,7 @@ fn run_direct_worker(inputs: DirectWorkerInputs) -> Result<DirectRecordingReport
         }
         let timestamp_ms = slot.at.as_millis() as u64;
         let active = compositor.has_active_animation(&config, timestamp_ms);
-        #[cfg(windows)]
-        let needs_recovery_image = encoder.needs_recovery_image();
-        #[cfg(not(windows))]
-        let needs_recovery_image = false;
-        if (changed || active || overlay_was_active || needs_recovery_image)
+        if encoder.needs_video_frame(changed || active || overlay_was_active)
             && let Some(frame) = latest_frame.as_ref()
         {
             #[cfg(feature = "bench-pipeline-timing")]
@@ -2028,6 +2018,12 @@ fn run_direct_worker(inputs: DirectWorkerInputs) -> Result<DirectRecordingReport
         .max(1)
         .min(u128::from(u64::MAX)) as u64;
     let report = encoder.finish_at_duration_ms(endpoint, duration_ms)?;
+    #[cfg(windows)]
+    let report = {
+        let mut report = report;
+        negotiation.apply(&mut report);
+        report
+    };
     clock_controller.finalize(final_at);
     #[cfg(feature = "bench-pipeline-timing")]
     let report = {
@@ -2072,14 +2068,7 @@ fn run_direct_worker(inputs: DirectWorkerInputs) -> Result<DirectRecordingReport
         .into();
         report.fallback_reason = fallback_reason.or(report.fallback_reason);
         report.hardware_fallback |= report.fallback_reason.is_some();
-        report.adapter = adapter;
-        if negotiation.encoder_attempts.last() != Some(&report.video_encoder) {
-            negotiation
-                .encoder_attempts
-                .push(report.video_encoder.clone());
-        }
-        report.encoder_attempts = negotiation.encoder_attempts;
-        report.fallback_stage = negotiation.stage.or_else(|| {
+        report.fallback_stage = report.fallback_stage.or_else(|| {
             report.fallback_reason.as_deref().map(|reason| {
                 if reason.contains("stop") || reason.contains("Stop") {
                     "stop"
@@ -2132,11 +2121,11 @@ fn report_from_encoder(
         pixel_counters: Default::default(),
         gpu_memory_bytes: 0,
         recovery_count: report.recovery_count,
-        adapter: None,
+        adapter: report.startup.adapter,
         selected_pipeline: "software".into(),
-        fallback_reason: report.recovery_reason,
-        fallback_stage: None,
-        encoder_attempts: Vec::new(),
+        fallback_reason: report.startup.fallback_reason.or(report.recovery_reason),
+        fallback_stage: report.startup.fallback_stage,
+        encoder_attempts: report.startup.encoder_attempts,
         abandoned_video_frames: report.abandoned_frames,
         overlay_upload_bytes: 0,
         half_resize: false,
@@ -2489,7 +2478,7 @@ fn frame_instant(frame: &CapturedFrame) -> Instant {
 
 #[derive(Default)]
 struct CaptureInbox {
-    frames: VecDeque<(DirectFrame, Instant, Instant)>,
+    frames: crate::capture_queue::CaptureQueue<(DirectFrame, Instant, Instant)>,
     superseded: u64,
     #[cfg(any(test, feature = "bench-synthetic-input"))]
     damage: Damage,
@@ -2508,19 +2497,14 @@ impl CaptureInbox {
 
     fn push(&mut self, frame: impl Into<DirectFrame>, received: Instant) {
         let frame = frame.into();
-        // Keep enough history to select the most recent frame at the output deadline,
-        // including one frame that arrived just after it. No unbounded backlog.
-        if self.frames.len() == 2 {
+        let at = frame.instant();
+        if let Some((frame, _, _)) = self.frames.push((frame, received, at)) {
             #[cfg(any(test, feature = "bench-synthetic-input"))]
-            if let Some((frame, _, _)) = self.frames.pop_front() {
-                self.observe_damage(&frame);
-            }
+            self.observe_damage(&frame);
             #[cfg(not(any(test, feature = "bench-synthetic-input")))]
-            self.frames.pop_front();
+            let _ = frame;
             self.superseded += 1;
         }
-        let at = frame.instant();
-        self.frames.push_back((frame, received, at));
     }
 
     #[cfg(any(test, feature = "bench-synthetic-input"))]
@@ -2539,19 +2523,16 @@ impl CaptureInbox {
 
     fn select(&mut self, clock: &RecordingClock, at: Duration) -> Option<(DirectFrame, Instant)> {
         let mut selected = None;
-        while self
+        while let Some((frame, received, _)) = self
             .frames
-            .front()
-            .is_some_and(|(_, _, captured)| clock.active_elapsed_duration(*captured) <= at)
+            .pop_if(|(_, _, captured)| clock.active_elapsed_duration(*captured) <= at)
         {
             if selected.is_some() {
                 self.superseded += 1;
             }
-            if let Some((frame, received, _)) = self.frames.pop_front() {
-                #[cfg(any(test, feature = "bench-synthetic-input"))]
-                self.observe_damage(&frame);
-                selected = Some((frame, received));
-            }
+            #[cfg(any(test, feature = "bench-synthetic-input"))]
+            self.observe_damage(&frame);
+            selected = Some((frame, received));
         }
         selected
     }
@@ -5398,10 +5379,10 @@ mod scheduling_tests {
         let mut inbox = CaptureInbox::default();
         inbox
             .frames
-            .push_back((frame(1).into(), start, start + Duration::from_millis(30)));
+            .push((frame(1).into(), start, start + Duration::from_millis(30)));
         inbox
             .frames
-            .push_back((frame(2).into(), start, start + Duration::from_millis(35)));
+            .push((frame(2).into(), start, start + Duration::from_millis(35)));
         assert_eq!(
             inbox
                 .select(&clock, Duration::from_millis(33))
@@ -5451,7 +5432,7 @@ mod scheduling_tests {
         let start = Instant::now();
         let clock = RecordingClock::new(start);
         let mut desktop = CaptureInbox::default();
-        desktop.frames.push_back((
+        desktop.frames.push((
             frame(42).into(),
             start + Duration::from_millis(35),
             start + Duration::from_millis(30),

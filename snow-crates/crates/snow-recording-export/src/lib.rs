@@ -42,7 +42,8 @@ pub use hdr::preserves_hdr_output;
 pub use snow_recording_model::PlaybackSpeed;
 pub use streaming::{
     StreamingAudioConfig, StreamingEncoder, StreamingEncoderBuilder, StreamingEncoderConfig,
-    StreamingEncoderReport, VideoFrameReuse, cleanup_stale_staging_files, scaled_output_dimensions,
+    StreamingEncoderReport, VideoFrameReuse, VideoStartupReport, cleanup_stale_staging_files,
+    scaled_output_dimensions,
 };
 
 #[cfg(target_os = "macos")]
