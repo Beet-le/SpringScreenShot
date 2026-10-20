@@ -1188,8 +1188,8 @@
             <translation>作用中視窗</translation>
         </message>
         <message>
-            <source>Add Edit with Snow Shot to the classic Windows context menu to pin a supported image or document file to the screen.</source>
-            <translation>將「使用 Snow Shot 編輯」新增至傳統 Windows 右鍵選單，以將支援的影像或文件檔案貼到螢幕。</translation>
+            <source>Add Edit with Snow Shot to the Windows context menu to pin a supported image or document file to the screen.</source>
+            <translation>將「使用 Snow Shot 編輯」新增至 Windows 快顯功能表，以將支援的影像或文件檔案貼到螢幕。</translation>
         </message>
         <message>
             <source>Add a mask to highlight text recognition results</source>
@@ -4186,10 +4186,6 @@
         <message>
             <source>Standalone Translation Window</source>
             <translation>獨立翻譯視窗</translation>
-        </message>
-        <message>
-            <source>Start Snow Shot in the background at sign‑in. Updates and file associations are managed by Windows.</source>
-            <translation>登入時在背景啟動 Snow Shot。更新與檔案關聯由 Windows 管理。</translation>
         </message>
         <message>
             <source>Start Snow Shot in the background when Windows starts</source>

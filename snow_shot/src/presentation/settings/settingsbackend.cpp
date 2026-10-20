@@ -440,8 +440,7 @@ QString BuiltInSettingsBackend::selectOptionsError(SettingsSelectBinding binding
 }
 
 bool BuiltInSettingsBackend::selectEnabled(SettingsSelectBinding binding) const {
-    if (app::distribution::isStoreManaged() && (binding == SettingsSelectBinding::UpdateMode ||
-                                                binding == SettingsSelectBinding::ContextMenuMode))
+    if (app::distribution::isStoreManaged() && binding == SettingsSelectBinding::UpdateMode)
         return false;
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     return binding != SettingsSelectBinding::TranslationService || m_translationService != nullptr;
@@ -1018,8 +1017,6 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
 
 bool BuiltInSettingsBackend::applyContextMenuSettings(const QJsonValue& mode,
                                                       const QJsonValue& shortcutValue) {
-    if (app::distribution::isStoreManaged())
-        return false;
 #ifdef Q_OS_WIN
     const auto requestedMode = storage::ConfigurationSchema::normalize(kContextMenuModeKey, mode);
     const auto requestedShortcuts =
@@ -2385,9 +2382,8 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
         accepted = accepted && result.success;
     }
 #ifdef Q_OS_WIN
-    if (!app::distribution::isStoreManaged() &&
-        (previous.value(contextMenuKey) != requestedContextMenu ||
-         previous.value(kContextMenuShortcutKey) != requestedContextMenuShortcuts))
+    if (previous.value(contextMenuKey) != requestedContextMenu ||
+        previous.value(kContextMenuShortcutKey) != requestedContextMenuShortcuts)
         accepted = applyContextMenuSettings(requestedContextMenu, requestedContextMenuShortcuts) &&
                    accepted;
 #endif
@@ -2932,7 +2928,10 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                 .toBool());
     case SettingsSectionReset::SystemGeneral: {
         if (app::distribution::isStoreManaged())
-            return true;
+            return applySelectValue(SettingsSelectBinding::ContextMenuMode,
+                                    storage::ConfigurationSchema::defaultValue(
+                                        QStringLiteral("system/context_menu_mode"))
+                                        .toVariant());
         emit synchronized();
         const auto result = applyStartupSettings(
             storage::ConfigurationSchema::defaultValue(QStringLiteral("system/auto_start_at_boot"))

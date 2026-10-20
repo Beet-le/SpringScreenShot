@@ -1188,8 +1188,8 @@
             <translation>Active window</translation>
         </message>
         <message>
-            <source>Add Edit with Snow Shot to the classic Windows context menu to pin a supported image or document file to the screen.</source>
-            <translation>Add Edit with Snow Shot to the classic Windows context menu to pin a supported image or document file to the screen.</translation>
+            <source>Add Edit with Snow Shot to the Windows context menu to pin a supported image or document file to the screen.</source>
+            <translation>Add Edit with Snow Shot to the Windows context menu to pin a supported image or document file to the screen.</translation>
         </message>
         <message>
             <source>Add a mask to highlight text recognition results</source>
@@ -4186,10 +4186,6 @@
         <message>
             <source>Standalone Translation Window</source>
             <translation>Standalone Translation Window</translation>
-        </message>
-        <message>
-            <source>Start Snow Shot in the background at sign‑in. Updates and file associations are managed by Windows.</source>
-            <translation>Start Snow Shot in the background at sign‑in. Updates and file associations are managed by Windows.</translation>
         </message>
         <message>
             <source>Start Snow Shot in the background when Windows starts</source>

@@ -1,6 +1,8 @@
 #ifndef SNOW_SHOT_EXPLORER_COMMAND_H
 #define SNOW_SHOT_EXPLORER_COMMAND_H
 
+#include "snow_shot/platform/windows/packagedcontextmenupreference.h"
+
 #include <windows.h>
 #include <shobjidl.h>
 
@@ -16,13 +18,15 @@ inline constexpr CLSID kEditCommandClsid = {
 
 using ProcessLauncher = HRESULT (*)(const std::wstring& executable,
                                     const std::wstring& commandLine);
+using PreferenceReader = packaged_context_menu::Preference (*)();
 
 [[nodiscard]] bool isSupportedPath(std::wstring_view path) noexcept;
 [[nodiscard]] HRESULT buildCommandLine(const std::wstring& executable,
                                        const std::vector<std::wstring>& paths,
                                        std::wstring* commandLine);
 [[nodiscard]] HRESULT createEditCommand(HMODULE module, ProcessLauncher launcher,
-                                        IExplorerCommand** command) noexcept;
+                                        IExplorerCommand** command,
+                                        PreferenceReader preferenceReader = nullptr) noexcept;
 
 } // namespace snow_shot::platform::windows::explorer
 

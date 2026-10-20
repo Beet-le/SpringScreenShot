@@ -2333,13 +2333,12 @@ SettingsItemDefinition loginItemSettingsItem() {
 #endif
 SettingsItemDefinition autoStartItem() {
     if (app::distribution::isStoreManaged())
-        return switchItem(
-            QStringLiteral("system.auto-start-at-boot"),
-            QT_TRANSLATE_NOOP("SettingsCatalog", "Launch at login"),
-            QT_TRANSLATE_NOOP("SettingsCatalog",
-                              "Start Snow Shot in the background at sign‑in. Updates and "
-                              "file associations are managed by Windows."),
-            QStringLiteral("system/auto_start_at_boot"), SettingsSwitchBinding::AutoStartAtBoot);
+        return switchItem(QStringLiteral("system.auto-start-at-boot"),
+                          QT_TRANSLATE_NOOP("SettingsCatalog", "Launch at login"),
+                          QT_TRANSLATE_NOOP("SettingsCatalog",
+                                            "Start Snow Shot in the background when you log in."),
+                          QStringLiteral("system/auto_start_at_boot"),
+                          SettingsSwitchBinding::AutoStartAtBoot);
     return switchItem(
         QStringLiteral("system.auto-start-at-boot"),
 #ifdef Q_OS_MACOS
@@ -2359,7 +2358,7 @@ SettingsItemDefinition contextMenuModeItem() {
         QStringLiteral("system.context-menu-mode"),
         QT_TRANSLATE_NOOP("SettingsCatalog", "Windows context menu"),
         QT_TRANSLATE_NOOP("SettingsCatalog",
-                          "Add Edit with Snow Shot to the classic Windows context menu to pin a "
+                          "Add Edit with Snow Shot to the Windows context menu to pin a "
                           "supported image or document file to the screen."),
         QStringLiteral("system/context_menu_mode"), SettingsSelectBinding::ContextMenuMode,
         {{QStringLiteral("image_files"),
@@ -5781,14 +5780,10 @@ SettingsCatalog buildBuiltInSettingsCatalog() {
     auto pages = builtInPages();
     if (app::distribution::isStoreManaged()) {
         for (auto& page : pages) {
-            page.sections.removeIf([](const SettingsSectionDefinition& section) {
-                return section.id == u"windows-context-menu-shortcuts";
-            });
             for (auto& section : page.sections)
                 section.items.removeIf([](const SettingsItemDefinition& item) {
                     return item.id == u"system.launch-as-administrator" ||
                            item.id == u"system.restart-as-administrator" ||
-                           item.configurationKey == u"system/context_menu_mode" ||
                            item.configurationKey == u"updates/mode";
                 });
         }

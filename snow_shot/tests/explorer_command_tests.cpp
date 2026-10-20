@@ -115,6 +115,11 @@ int launchCount = 0;
 std::wstring launchedExecutable;
 std::wstring launchedCommandLine;
 HRESULT launchResult = S_OK;
+snow_shot::platform::windows::packaged_context_menu::Preference menuPreference;
+
+auto readMenuPreference() {
+    return menuPreference;
+}
 
 HRESULT captureLaunch(const std::wstring& executable, const std::wstring& commandLine) {
     ++launchCount;
@@ -179,7 +184,8 @@ void pathAndCommandLinePolicy() {
 
 void commandBehavior() {
     ComPtr<IExplorerCommand> command;
-    require(createEditCommand(GetModuleHandleW(nullptr), captureLaunch, &command) == S_OK,
+    require(createEditCommand(GetModuleHandleW(nullptr), captureLaunch, &command,
+                              readMenuPreference) == S_OK,
             "native command can be constructed without application dependencies");
     const std::vector<Entry> selection{
         {L"C:\\images\\one.png"}, {L"\\\\server\\share\\图片 two.JPEG"}, {L"C:\\notes\\three.md"}};
@@ -202,6 +208,14 @@ void commandBehavior() {
                                                    selection[1].path, L"--edit-with-snow-shot",
                                                    selection[2].path},
             "Invoke forwards every supported selected path with its own typed operand");
+
+    menuPreference.enabled = false;
+    require(command->GetState(valid.Get(), FALSE, &state) == S_OK && state == ECS_HIDDEN &&
+                command->Invoke(valid.Get(), nullptr) == E_ACCESSDENIED && launchCount == 1,
+            "disabling hides an existing command and prevents stale menu invocations");
+    menuPreference.enabled = true;
+    require(command->GetState(valid.Get(), FALSE, &state) == S_OK && state == ECS_ENABLED,
+            "reenabling is visible without recreating the command or restarting Explorer");
 
     for (const auto& entries :
          {std::vector<Entry>{}, std::vector<Entry>{{L"C:\\images\\valid.png"}, {L"C:\\bad.exe"}},
@@ -228,7 +242,16 @@ void commandBehavior() {
     PWSTR title = nullptr;
     require(command->GetTitle(nullptr, &title) == S_OK && title && title[0] != L'\0',
             "command title loads from the package's localized native resources");
+    const std::wstring unassignedTitle(title);
     CoTaskMemFree(title);
+    for (const wchar_t accessKey : {L'E', L'7', L'\0'}) {
+        menuPreference.accessKey = accessKey;
+        const auto expected = unassignedTitle + (accessKey ? std::wstring(L" (&") + accessKey + L")"
+                                                           : std::wstring());
+        require(command->GetTitle(nullptr, &title) == S_OK && title && title == expected,
+                "existing commands reflect assigned, changed and cleared classic menu mnemonics");
+        CoTaskMemFree(title);
+    }
     PWSTR icon = nullptr;
     require(command->GetIcon(nullptr, &icon) == S_OK && icon &&
                 std::wstring_view(icon).ends_with(L",-102"),
@@ -320,6 +343,15 @@ void localizedTitles(HMODULE module, IExplorerCommand* command) {
                     title == titleResource(module, language),
                 "the actual command follows Windows preferred UI language and fallback ordering");
         CoTaskMemFree(title);
+        ComPtr<IExplorerCommand> assigned;
+        require(createEditCommand(module, captureLaunch, &assigned, readMenuPreference) == S_OK,
+                "create a command with the saved access key and the DLL's native resources");
+        menuPreference.accessKey = L'E';
+        require(assigned->GetTitle(nullptr, &title) == S_OK && title &&
+                    title == titleResource(module, language) + L" (&E)",
+                "every localized menu title keeps the assigned access key");
+        CoTaskMemFree(title);
+        menuPreference.accessKey = L'\0';
     }
     require(SetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, originalLanguages.data(), &count) !=
                 FALSE,

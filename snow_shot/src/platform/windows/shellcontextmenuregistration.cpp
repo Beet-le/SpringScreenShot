@@ -7,6 +7,9 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QSaveFile>
 #include <QSet>
 
 #include <algorithm>
@@ -21,6 +24,7 @@
 #endif
 #include <qt_windows.h>
 #include <shlobj.h>
+#include "snow_shot/platform/windows/packagedcontextmenupreference.h"
 #endif
 
 namespace snow_shot::platform::windows {
@@ -264,7 +268,12 @@ ShellContextMenuRegistration::ShellContextMenuRegistration(Options options)
       m_productId(options.productId.isEmpty() ? app::edition::productId() : options.productId),
       m_verbName(options.verbName.isEmpty() ? app::edition::registryName() + QStringLiteral(".Edit")
                                             : options.verbName),
-      m_registry(options.registry.read ? std::move(options.registry) : nativeRegistryAccess()) {
+      m_registry(options.registry.read ? std::move(options.registry) : nativeRegistryAccess()),
+      m_packagedPreferencePath(std::move(options.packagedPreferencePath)) {
+#ifdef Q_OS_WIN
+    if (m_packagedPreferencePath.isEmpty() && app::distribution::isStoreManaged())
+        m_packagedPreferencePath = QString::fromStdWString(packaged_context_menu::preferencePath());
+#endif
     const auto extensions = options.fileExtensions.isEmpty() ? app::supportedPinFileExtensions()
                                                              : std::move(options.fileExtensions);
     for (auto extension : extensions) {
@@ -417,14 +426,60 @@ ShellContextMenuRegistration::changeEnabled(bool enabled,
     return changeEnabled(enabled, QString(), commitPreference);
 }
 
+ShellContextMenuResult ShellContextMenuRegistration::changePackagedEnabled(
+    bool enabled, const QString& accessKey, const std::function<bool()>& commitPreference) const {
+    const auto failure = [] {
+        return ShellContextMenuResult{
+            false, contextMenuText(
+                       QT_TRANSLATE_NOOP("ShellContextMenuRegistration",
+                                         "Could not save the Windows context menu preference."))};
+    };
+    if (m_packagedPreferencePath.isEmpty())
+        return failure();
+    QFile previous(m_packagedPreferencePath);
+    const bool existed = previous.exists();
+    QByteArray previousBytes;
+    if (existed) {
+        if (!previous.open(QIODevice::ReadOnly))
+            return failure();
+        previousBytes = previous.readAll();
+        if (previous.error() != QFileDevice::NoError)
+            return failure();
+        previous.close();
+    }
+    const auto write = [&](const QByteArray& bytes) {
+        if (!QDir().mkpath(QFileInfo(m_packagedPreferencePath).absolutePath()))
+            return false;
+        QSaveFile file(m_packagedPreferencePath);
+        return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size() &&
+               file.commit();
+    };
+    if (!write((enabled ? QByteArray("1") : QByteArray("0")) + accessKey.toLatin1()))
+        return failure();
+    if (commitPreference && !commitPreference()) {
+        auto result = failure();
+        if (!(existed ? write(previousBytes) : QFile::remove(m_packagedPreferencePath)))
+            result.error +=
+                QLatin1Char(' ') +
+                contextMenuText(QT_TRANSLATE_NOOP(
+                                    "ShellContextMenuRegistration",
+                                    "Could not restore the Windows context menu registration. %1"))
+                    .arg(m_packagedPreferencePath);
+        return result;
+    }
+    if (m_registry.notifyChanged)
+        m_registry.notifyChanged();
+    return {true, {}};
+}
+
 ShellContextMenuResult
 ShellContextMenuRegistration::changeEnabled(bool enabled, const QString& accessKey,
                                             const std::function<bool()>& commitPreference) const {
-    if (app::distribution::isStoreManaged())
-        return {true, {}};
     const QString canonicalKey = shortcuts::canonicalMenuAccessKey(accessKey);
     if (!accessKey.isEmpty() && canonicalKey.isEmpty())
         return {false, invalidAccessKeyError()};
+    if (app::distribution::isStoreManaged())
+        return changePackagedEnabled(enabled, canonicalKey, commitPreference);
     const auto previous = snapshot();
     if (!previous.valid)
         return {false, previous.error};

@@ -3707,19 +3707,16 @@ int main(int argc, char** argv) {
             registry.catalog().item({QStringLiteral("general"), QStringLiteral("system-general"),
                                      QStringLiteral("system.auto-start-at-boot")});
         require(startup && QString::fromUtf8(startup->description.source) ==
-                               u"Start Snow Shot in the background at sign‑in. Updates and file "
-                               u"associations are managed by Windows.",
-                "Store startup description explains Windows-managed updates and file associations");
+                               u"Start Snow Shot in the background when you log in.",
+                "Store startup description explains only the behavior of this setting");
         require(
             registry.fieldForSwitch(settings::SettingsSwitchBinding::AutoStartAtBoot) &&
                 !registry.fieldForSwitch(settings::SettingsSwitchBinding::LaunchAsAdministrator) &&
                 !registry.fieldForSelect(settings::SettingsSelectBinding::UpdateMode) &&
-                !registry.fieldForSelect(settings::SettingsSelectBinding::ContextMenuMode),
-            "Store settings expose OS startup and omit native elevation, updater and registry "
-            "controls");
-        require(
-            !registry.field(QStringLiteral("windows-context-menu-shortcut.edit_with_snow_shot")),
-            "Store settings omit native Explorer access keys");
+                registry.fieldForSelect(settings::SettingsSelectBinding::ContextMenuMode),
+            "Store settings expose startup and context menu controls without elevation or updates");
+        require(registry.field(QStringLiteral("windows-context-menu-shortcut.edit_with_snow_shot")),
+                "Store settings expose the classic Explorer menu access key");
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--translation-confidence-only"))) {

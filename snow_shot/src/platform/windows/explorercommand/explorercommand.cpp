@@ -19,6 +19,10 @@ std::atomic<ULONG> serverLockCount{0};
 
 constexpr size_t kMaximumCommandLineLength = 32767;
 
+packaged_context_menu::Preference contextMenuPreference() {
+    return packaged_context_menu::readPreference(packaged_context_menu::preferencePath());
+}
+
 wchar_t asciiLower(wchar_t character) noexcept {
     return character >= L'A' && character <= L'Z' ? static_cast<wchar_t>(character + (L'a' - L'A'))
                                                   : character;
@@ -152,8 +156,9 @@ HRESULT launchProcess(const std::wstring& executable, const std::wstring& comman
 
 class EditCommand final : public IExplorerCommand {
   public:
-    EditCommand(HMODULE module, ProcessLauncher launcher) noexcept
-        : m_module(module), m_launcher(launcher) {
+    EditCommand(HMODULE module, ProcessLauncher launcher,
+                PreferenceReader preferenceReader) noexcept
+        : m_module(module), m_launcher(launcher), m_preferenceReader(preferenceReader) {
         ++objectCount;
     }
 
@@ -187,14 +192,23 @@ class EditCommand final : public IExplorerCommand {
         const int length = LoadStringW(m_module, 101, reinterpret_cast<PWSTR>(&text), 0);
         if (length <= 0)
             return HRESULT_FROM_WIN32(ERROR_RESOURCE_NAME_NOT_FOUND);
-        const size_t bytes = (static_cast<size_t>(length) + 1) * sizeof(wchar_t);
-        auto* copy = static_cast<PWSTR>(CoTaskMemAlloc(bytes));
-        if (!copy)
+        try {
+            std::wstring label;
+            for (int index = 0; index < length; ++index) {
+                label.push_back(text[index]);
+                if (text[index] == L'&')
+                    label.push_back(L'&');
+            }
+            const auto accessKey = m_preferenceReader().accessKey;
+            if (packaged_context_menu::isAccessKey(accessKey)) {
+                label.append(L" (&");
+                label.push_back(accessKey);
+                label.push_back(L')');
+            }
+            return SHStrDupW(label.c_str(), title);
+        } catch (...) {
             return E_OUTOFMEMORY;
-        memcpy(copy, text, bytes - sizeof(wchar_t));
-        copy[length] = L'\0';
-        *title = copy;
-        return S_OK;
+        }
     }
 
     HRESULT STDMETHODCALLTYPE GetIcon(IShellItemArray*, PWSTR* icon) override {
@@ -232,6 +246,8 @@ class EditCommand final : public IExplorerCommand {
             return E_POINTER;
         *state = ECS_HIDDEN;
         try {
+            if (!m_preferenceReader().enabled)
+                return S_OK;
             std::vector<std::wstring> paths;
             if (FAILED(selectionPaths(items, &paths)))
                 return S_OK;
@@ -248,6 +264,8 @@ class EditCommand final : public IExplorerCommand {
 
     HRESULT STDMETHODCALLTYPE Invoke(IShellItemArray* items, IBindCtx*) override {
         try {
+            if (!m_preferenceReader().enabled)
+                return E_ACCESSDENIED;
             std::vector<std::wstring> paths;
             HRESULT result = selectionPaths(items, &paths);
             if (FAILED(result))
@@ -288,6 +306,7 @@ class EditCommand final : public IExplorerCommand {
     std::atomic<ULONG> m_references{1};
     HMODULE m_module;
     ProcessLauncher m_launcher;
+    PreferenceReader m_preferenceReader;
 };
 
 class CommandFactory final : public IClassFactory {
@@ -394,14 +413,15 @@ HRESULT buildCommandLine(const std::wstring& executable, const std::vector<std::
     return S_OK;
 }
 
-HRESULT createEditCommand(HMODULE module, ProcessLauncher launcher,
-                          IExplorerCommand** command) noexcept {
+HRESULT createEditCommand(HMODULE module, ProcessLauncher launcher, IExplorerCommand** command,
+                          PreferenceReader preferenceReader) noexcept {
     if (!command)
         return E_POINTER;
     *command = nullptr;
     if (!launcher)
         return E_INVALIDARG;
-    auto* instance = new (std::nothrow) EditCommand(module, launcher);
+    auto* instance = new (std::nothrow)
+        EditCommand(module, launcher, preferenceReader ? preferenceReader : contextMenuPreference);
     if (!instance)
         return E_OUTOFMEMORY;
     *command = instance;

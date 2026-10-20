@@ -2,6 +2,7 @@
 #include "snow_shot/app/distribution.h"
 #include "snow_shot/platform/windows/administratorlaunch.h"
 #include "snow_shot/platform/windows/autostartregistration.h"
+#include "snow_shot/platform/windows/packagedcontextmenupreference.h"
 #include "snow_shot/storage/storagedirectorychange.h"
 
 #include <QCoreApplication>
@@ -75,25 +76,87 @@ int main(int argc, char** argv) {
                     .success,
             "Store installation maintenance never repairs native startup registrations");
 
+    QTemporaryDir fixture;
+    require(fixture.isValid(), "storage checks use an isolated writable fixture");
     shell_context_menu_tests::Registry registry;
-    ShellContextMenuRegistration shell(registry.options());
+    auto options = registry.options();
+    options.packagedPreferencePath = fixture.filePath(QStringLiteral("context-menu-enabled"));
+    const auto preferencePath = options.packagedPreferencePath.toStdWString();
+    ShellContextMenuRegistration shell(options);
     bool preferenceChanged = false;
     require(!ShellContextMenuRegistration::isSupported(),
-            "Store shell integration belongs to the manifest");
-    require(shell.changeEnabled(true, QString(),
+            "Store shell registration still belongs to the manifest");
+    require(packaged_context_menu::isEnabled(preferencePath),
+            "a new installation enables the command before the app first runs");
+    require(!shell.changeEnabled(false, [] { return false; }).success &&
+                !QFile::exists(options.packagedPreferencePath),
+            "a rejected first change restores the absent preference");
+    require(shell.changeEnabled(false, QString(),
                                 [&] {
                                     preferenceChanged = true;
                                     return true;
                                 })
                     .success &&
-                shell.setEnabled(false) && shell.refreshLabels(),
-            "legacy launch paths are harmless in a packaged process");
-    require(registry.writes == 0 && registry.notifications == 0 && registry.keys.isEmpty() &&
+                preferenceChanged && !packaged_context_menu::isEnabled(preferencePath),
+            "disabling persists a preference readable by the Qt-free Explorer command");
+    require(!shell.changeEnabled(true, [] { return false; }).success &&
+                !packaged_context_menu::isEnabled(preferencePath),
+            "configuration save failure rolls back the Explorer preference");
+    require(shell.setEnabled(true) && packaged_context_menu::isEnabled(preferencePath) &&
+                shell.refreshLabels(),
+            "reenabling and startup reconciliation restore the command");
+    require(registry.writes == 0 && registry.notifications == 2 && registry.keys.isEmpty(),
+            "packaged changes notify Explorer without writing classic registry entries");
+    require(shell.setEnabled(true, QStringLiteral("e")) &&
+                packaged_context_menu::readPreference(preferencePath) ==
+                    packaged_context_menu::Preference{true, L'E'},
+            "packaged preferences persist a canonical classic menu access key");
+    preferenceChanged = false;
+    require(!shell.changeEnabled(true, QStringLiteral("Ctrl+E"),
+                                 [&] {
+                                     preferenceChanged = true;
+                                     return true;
+                                 })
+                    .success &&
+                !preferenceChanged &&
+                packaged_context_menu::readPreference(preferencePath) ==
+                    packaged_context_menu::Preference{true, L'E'},
+            "invalid access keys cannot change either packaged preference");
+    require(!shell.changeEnabled(false, QStringLiteral("7"), [] { return false; }).success &&
+                packaged_context_menu::readPreference(preferencePath) ==
+                    packaged_context_menu::Preference{true, L'E'},
+            "failed commits restore the menu mode and access key together");
+    require(shell.setEnabled(false, QStringLiteral("7")) &&
+                packaged_context_menu::readPreference(preferencePath) ==
+                    packaged_context_menu::Preference{false, L'7'} &&
+                shell.setEnabled(true, QStringLiteral("7")) &&
+                packaged_context_menu::readPreference(preferencePath) ==
+                    packaged_context_menu::Preference{true, L'7'},
+            "disabled menus retain their assigned access keys when reenabled");
+    require(shell.setEnabled(true) && packaged_context_menu::readPreference(preferencePath) ==
+                                          packaged_context_menu::Preference{true},
+            "clearing the assignment leaves the menu enabled without an access key");
+    QFile malformed(options.packagedPreferencePath);
+    for (const QByteArray bytes : {QByteArray(), QByteArray("invalid"), QByteArray("1Eextra"),
+                                   QByteArray("1&"), QByteArray("1e"), QByteArray("2E")}) {
+        require(malformed.open(QIODevice::WriteOnly) && malformed.write(bytes) == bytes.size(),
+                "create an invalid preference");
+        malformed.close();
+        require(packaged_context_menu::readPreference(preferencePath) ==
+                    packaged_context_menu::Preference{false},
+                "invalid data cannot enable the command or supply a menu mnemonic");
+    }
+    options.packagedPreferencePath += QStringLiteral("/blocked");
+    preferenceChanged = false;
+    require(!ShellContextMenuRegistration(options)
+                    .changeEnabled(false,
+                                   [&] {
+                                       preferenceChanged = true;
+                                       return true;
+                                   })
+                    .success &&
                 !preferenceChanged,
-            "packaged shell paths never touch the registry or native preferences");
-
-    QTemporaryDir fixture;
-    require(fixture.isValid(), "storage checks use an isolated writable fixture");
+            "a native preference write failure never commits application settings");
     const auto first = snow_shot::storage::storageBootstrapPath(
         fixture.path(),
         QStringLiteral("C:/Program Files/WindowsApps/SnowApps.SnowShot_1.0.0.0_x64/bin"));

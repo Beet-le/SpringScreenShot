@@ -52,7 +52,8 @@ set_target_properties(snow_shot_explorer_command PROPERTIES
     OUTPUT_NAME SnowShotExplorerCommand
     AUTOMOC OFF AUTOUIC OFF AUTORCC OFF
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-target_include_directories(snow_shot_explorer_command PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_include_directories(snow_shot_explorer_command PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    "${_snow_explorer_root}/include")
 target_compile_definitions(snow_shot_explorer_command PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
 target_link_libraries(snow_shot_explorer_command PRIVATE ole32 shell32 shlwapi uuid user32)
 snow_apply_release_options(snow_shot_explorer_command POLICY size)
@@ -70,7 +71,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         AUTOMOC OFF AUTOUIC OFF AUTORCC OFF
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_include_directories(snow-shot-explorer-command-tests PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/generated")
+        "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        "${_snow_explorer_root}/include")
     target_compile_definitions(snow-shot-explorer-command-tests PRIVATE
         UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
     target_link_libraries(snow-shot-explorer-command-tests PRIVATE ole32 shell32 shlwapi uuid user32)
