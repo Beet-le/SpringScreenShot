@@ -45,6 +45,7 @@
 #include "snow_shot/platform/screenshotwindownames.h"
 #include "snow_recording.h"
 #include "widgets/button.h"
+#include "antd_icons.h"
 #include "../src/presentation/recording/recordingaudiogainpopover.h"
 #include "widgets/popover.h"
 #include "widgets/popup_surface_guard.h"
@@ -117,9 +118,13 @@ void setRecordingToolbarAutoHideTestCursor(ScreenRecordingToolbarWindow& toolbar
 
 struct SnowRecordingClipImpl {
     quint64 revision = 0;
+    quint64 position = 0;
+    bool playing = false;
     uint32_t speedPercent = 100;
 };
-struct SnowRecordingClipFrameImpl {};
+struct SnowRecordingClipFrameImpl {
+    QByteArray rgba{32 * 24 * 4, '\x7f'};
+};
 struct SnowRecordingClipExportImpl {};
 struct SnowRecordingSessionImpl {
     QString stagingFile;
@@ -155,6 +160,11 @@ std::atomic<int> clipAutoplays = 0;
 std::atomic<int> clipSpeedChanges = 0;
 std::atomic<uint32_t> clipPreviewSpeed = 100, clipExportSpeed = 100;
 bool failClipSpeed = false;
+bool clipPreviewEnabled = false, failClipSeek = false;
+int clipPreviewReads = 0, clipSeekCalls = 0;
+QByteArray clipPreviewError;
+QVector<quint64> clipBoundaries;
+std::function<void(SnowRecordingClipPreview&)> clipPreviewOverride;
 std::atomic<bool> clipDeferred = false;
 QString clipPath;
 quint64 clipFirst = 0, clipEnd = 0;
@@ -3070,12 +3080,19 @@ uint8_t snow_recording_clip_info(const SnowRecordingClip*, SnowRecordingClipInfo
     return 1;
 }
 uint64_t snow_recording_clip_boundary(const SnowRecordingClip*, uint64_t frame) {
+    if (!clipBoundaries.isEmpty())
+        return clipBoundaries.at(static_cast<qsizetype>(frame));
     return frame * 1000000 / 30;
 }
 uint64_t snow_recording_clip_seek(SnowRecordingClip* clip, uint64_t frame, uint64_t end,
                                   uint8_t play) {
+    ++clipSeekCalls;
+    if (failClipSeek)
+        return 0;
     clipFirst = frame;
     clipEnd = end;
+    clip->position = snow_recording_clip_boundary(clip, frame);
+    clip->playing = play != 0;
     clipAutoplays += play != 0;
     return ++clip->revision;
 }
@@ -3087,15 +3104,28 @@ uint64_t snow_recording_clip_set_speed(SnowRecordingClip* clip, uint32_t percent
     clipPreviewSpeed = percent;
     return ++clip->revision;
 }
-SnowRecordingClipFrame* snow_recording_clip_acquire(const SnowRecordingClip*,
-                                                    SnowRecordingClipPreview*) {
-    return nullptr;
+SnowRecordingClipFrame* snow_recording_clip_acquire(const SnowRecordingClip* clip,
+                                                    SnowRecordingClipPreview* preview) {
+    if (!clipPreviewEnabled)
+        return nullptr;
+    auto* frame = new SnowRecordingClipFrame;
+    *preview = {clip->revision, clip->position, clip->playing ? 1u : 0u,
+                reinterpret_cast<const uint8_t*>(frame->rgba.constData()),
+                static_cast<size_t>(frame->rgba.size())};
+    if (clipPreviewOverride)
+        clipPreviewOverride(*preview);
+    ++clipPreviewReads;
+    return frame;
 }
 void snow_recording_clip_frame_destroy(SnowRecordingClipFrame* frame) {
     delete frame;
 }
-size_t snow_recording_clip_error(const SnowRecordingClip*, char*, size_t) {
-    return 0;
+size_t snow_recording_clip_error(const SnowRecordingClip*, char* buffer, size_t capacity) {
+    if (clipPreviewError.isEmpty())
+        return 0;
+    if (buffer && capacity > 0)
+        qstrncpy(buffer, clipPreviewError.constData(), capacity);
+    return static_cast<size_t>(clipPreviewError.size()) + 1;
 }
 SnowRecordingClipExport* snow_recording_clip_export_start(const SnowRecordingClip*, uint64_t first,
                                                           uint64_t end, const char* path) {
@@ -5285,6 +5315,155 @@ void recordingWindowNameFallbackTests(const QString& directory) {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
+void recordingTrimPlaybackTests(const QString& directory) {
+    clipPreviewEnabled = true;
+    // Uneven presentation boundaries catch attempts to derive a frame from nominal FPS.
+    for (quint64 frame = 0; frame <= 30; ++frame)
+        clipBoundaries.append(frame * frame * 1000000 / 900);
+    const auto restorePreview = qScopeGuard([] {
+        clipPreviewEnabled = false;
+        clipPreviewOverride = {};
+        clipBoundaries.clear();
+        clipPreviewError.clear();
+        failClipSeek = false;
+        clipExportState = SNOW_RECORDING_RENDER_STATE_SUCCEEDED;
+    });
+    const auto wait = [](auto predicate) {
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!predicate() && deadline.elapsed() < 5000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        require(predicate(), "playback fixture receives the requested state");
+    };
+    const auto publish = [&](quint64 position, bool playing, bool stale = false) {
+        const int reads = clipPreviewReads;
+        clipPreviewOverride = [=](SnowRecordingClipPreview& preview) {
+            preview.position_us = position;
+            preview.playing = playing ? 1u : 0u;
+            if (stale)
+                preview.revision = 0;
+        };
+        wait([&] { return clipPreviewReads > reads; });
+        clipPreviewOverride = {};
+    };
+    for (bool deferred : {false, true}) {
+        ScreenRecordingController controller(testEffectsSource);
+        QString error;
+        require(controller.startAutomation(
+                    QRect(80, 80, 320, 240),
+                    {{QStringLiteral("post_processing"), deferred},
+                     {QStringLiteral("path"),
+                      directory + QStringLiteral("/playback-%1.mp4").arg(deferred)}},
+                    &error),
+                "start play/pause fixture");
+        waitForRecording(controller);
+        recordingToolbarButton("Trim Video")->click();
+        auto* copy = recordingToolbarButton("Copy recording");
+        wait([&] { return copy->isEnabled(); });
+        auto* panel = static_cast<RecordingTrimToolbar*>(palette()->recordingTrimPanel());
+        auto* toggle = panel->findChild<adqt::widgets::AdButton*>(
+            QStringLiteral("screenRecordingTrimPlayPause"));
+        auto* replay =
+            panel->findChild<adqt::widgets::AdButton*>(QStringLiteral("screenRecordingReplay"));
+        auto* speed =
+            panel->findChild<adqt::widgets::AdSelect*>(QStringLiteral("screenRecordingTrimSpeed"));
+        auto* first = panel->findChild<QSlider*>(QStringLiteral("screenRecordingTrimStart"));
+        auto* end = panel->findChild<QSlider*>(QStringLiteral("screenRecordingTrimEnd"));
+        require(toggle->isEnabled() && toggle->toolTip() == QStringLiteral("Pause"),
+                "opening trim autoplays and immediately offers Pause");
+        publish(clipBoundaries[7] + 100, true);
+        toggle->click();
+        require(clipFirst == 7 && toggle->toolTip() == QStringLiteral("Play"),
+                "Pause freezes the displayed variable-duration frame");
+        const int seeksBeforeSpeed = clipSeekCalls;
+        speed->setCurrentValue(125u);
+        require(clipSeekCalls == seeksBeforeSpeed && toggle->toolTip() == QStringLiteral("Play"),
+                "changing speed preserves paused playback without seeking");
+        toggle->click();
+        require(clipFirst == 7 && clipPreviewSpeed == 125 &&
+                    toggle->toolTip() == QStringLiteral("Pause"),
+                "Play resumes at the paused frame and retains speed");
+        speed->setCurrentValue(150u);
+        require(toggle->toolTip() == QStringLiteral("Pause"),
+                "changing speed also preserves playing state");
+        failClipSeek = true;
+        toggle->click();
+        failClipSeek = false;
+        require(toggle->toolTip() == QStringLiteral("Pause"),
+                "rejected playback requests do not change the accepted state");
+        const int beforeRapid = clipSeekCalls;
+        toggle->click();
+        toggle->click();
+        require(clipSeekCalls == beforeRapid + 2 && clipFirst == 7 &&
+                    toggle->toolTip() == QStringLiteral("Pause"),
+                "rapid clicks alternate immediately before another preview arrives");
+        publish(clipBoundaries[25], false, true);
+        require(toggle->toolTip() == QStringLiteral("Pause"),
+                "stale preview cannot undo a newer playback intent");
+        toggle->click();
+        require(clipFirst == 7, "stale preview cannot replace the accepted playback position");
+        panel->seekRequested(9);
+        require(clipFirst == 9 && toggle->toolTip() == QStringLiteral("Play"),
+                "timeline scrubbing pauses and updates the next resume position");
+        first->setValue(3);
+        end->setValue(20);
+        require(clipFirst == 19 && toggle->toolTip() == QStringLiteral("Play"),
+                "moving the trim end pauses at the final included frame");
+        toggle->click();
+        require(clipFirst == 19 && clipEnd == 20,
+                "a scrubbed final frame resumes without being mistaken for completion");
+        publish(clipBoundaries[20], false);
+        require(toggle->toolTip() == QStringLiteral("Play"),
+                "natural completion changes the action to Play");
+        toggle->click();
+        require(clipFirst == 3 && clipEnd == 20,
+                "Play after completion restarts at the selected beginning");
+        publish(clipBoundaries[12] + 1, true);
+        replay->click();
+        require(clipFirst == 3 && clipPreviewSpeed == 150 &&
+                    toggle->toolTip() == QStringLiteral("Pause"),
+                "Replay restarts the selection and retains speed");
+        first->setValue(19);
+        publish(clipBoundaries[20], false);
+        toggle->click();
+        require(clipFirst == 19 && clipEnd == 20,
+                "a completed one-frame selection restarts within its boundaries");
+        clipExportState = SNOW_RECORDING_RENDER_STATE_RUNNING;
+        copy->click();
+        const int exportingSeeks = clipSeekCalls;
+        toggle->click();
+        panel->playbackToggleRequested();
+        require(!toggle->isEnabled() && clipSeekCalls == exportingSeeks,
+                "export disables playback and guards direct requests");
+        clipExportState = SNOW_RECORDING_RENDER_STATE_SUCCEEDED;
+        wait([&] { return copy->isEnabled(); });
+        require(toggle->isEnabled() && toggle->toolTip() == QStringLiteral("Play"),
+                "export completion restores paused playback controls");
+        toggle->click();
+        clipPreviewError = "fixture preview failure";
+        wait([&] { return !toggle->isEnabled(); });
+        const int failedSeeks = clipSeekCalls;
+        panel->playbackToggleRequested();
+        require(toggle->toolTip() == QStringLiteral("Play") && copy->isEnabled() &&
+                    clipSeekCalls == failedSeeks,
+                "preview failure disables playback while leaving export available");
+        // A successful export must not re-enable a failed preview.
+        copy->click();
+        wait([&] { return copy->isEnabled(); });
+        require(!toggle->isEnabled(), "busy-state changes preserve playback failure availability");
+        QPointer<RecordingTrimToolbar> retired = panel;
+        recordingToolbarButton("Close recording")->click();
+        if (retired)
+            retired->playbackToggleRequested();
+        require(!controller.isOpen() && clipSeekCalls == failedSeeks,
+                "detaching the editor prevents further playback requests");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        clipPreviewError.clear();
+    }
+}
+
 void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
     const QString renders = qEnvironmentVariable("SNOW_TRIM_VISUAL_OUTPUT");
     QFont visualFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
@@ -5318,10 +5497,12 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
                 QCoreApplication::processEvents();
                 auto* host = toolbar.paletteHost();
                 QList<QPoint> points{panel->mapToGlobal(panel->rect().center())};
-                for (const char* name : {"screenRecordingReplay", "screenRecordingTrimSpeed",
-                                         "screenRecordingTrimStart", "screenRecordingTrimEnd"}) {
+                for (const char* name : {"screenRecordingReplay", "screenRecordingTrimPlayPause",
+                                         "screenRecordingTrimSpeed", "screenRecordingTrimStart",
+                                         "screenRecordingTrimEnd"}) {
                     auto* control = panel->findChild<QWidget*>(QString::fromLatin1(name));
                     require(control != nullptr, "trim input target exists");
+                    require(control->isEnabled() != busy, "busy trim disables every input");
                     points.append(control->mapToGlobal(control->rect().center()));
                 }
                 for (const auto& point : points) {
@@ -5369,8 +5550,36 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
     RecordingTrimToolbar range(&visualHost);
     range.setTimeline(30, 1000000,
                       [](int frame) { return static_cast<quint64>(frame) * 1000000 / 30; });
-    require(range.size() == QSize(440, 40) && range.firstFrame() == 0 && range.endFrame() == 30,
+    require(range.size() == QSize(480, 40) && range.firstFrame() == 0 && range.endFrame() == 30,
             "trim row starts at Select height with the entire clip selected");
+    auto* playPause =
+        range.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenRecordingTrimPlayPause"));
+    require(playPause && playPause->iconRef() == adqt::icons::antd::outlined::PlayCircle() &&
+                playPause->toolTip() == QStringLiteral("Play") &&
+                playPause->accessibleName() == playPause->toolTip(),
+            "paused trim offers the Ant Design Play Circle action");
+    range.setPlaying(true);
+    require(playPause->iconRef() == adqt::icons::antd::outlined::PauseCircle() &&
+                playPause->toolTip() == QStringLiteral("Pause") &&
+                playPause->accessibleName() == playPause->toolTip(),
+            "playing trim offers the matching Pause Circle action");
+    int toggleRequests = 0;
+    range.playbackToggleRequested = [&] { ++toggleRequests; };
+    for (int key : {Qt::Key_Space, Qt::Key_Return}) {
+        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+        QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+        QApplication::sendEvent(playPause, &press);
+        QApplication::sendEvent(playPause, &release);
+    }
+    require(toggleRequests == 2, "Space and Enter each activate the toggle once");
+    range.setPlaybackAvailable(false);
+    playPause->click();
+    range.setEnabled(false);
+    range.setEnabled(true);
+    require(!playPause->isEnabled() && toggleRequests == 2,
+            "unavailable playback remains disabled after the parent becomes ready");
+    range.setPlaybackAvailable(true);
+    range.setPlaying(false);
     auto* speed =
         range.findChild<adqt::widgets::AdSelect*>(QStringLiteral("screenRecordingTrimSpeed"));
     const QVector<quint32> percents{25, 50, 75, 100, 125, 150, 175, 200, 300};
@@ -5410,8 +5619,9 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
     end->setValue(30);
     first->setValue(0);
     range.seekRequested = [&](int frame) { preview = frame; };
-    QMouseEvent click(QEvent::MouseButtonPress, QPointF(280, 20), QPointF(280, 20), Qt::LeftButton,
-                      Qt::LeftButton, Qt::NoModifier);
+    const QPointF trackCenter((first->x() + first->width() + end->x()) / 2.0, range.height() / 2.0);
+    QMouseEvent click(QEvent::MouseButtonPress, trackCenter, range.mapToGlobal(trackCenter),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&range, &click);
     require(preview == 15, "track scrubbing snaps to the nearest presentation frame");
     first->setValue(6);
@@ -5432,6 +5642,8 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
                 end->toolTip().endsWith(QStringLiteral("00:00.800")),
             "trim tooltips expose frame boundary timecodes after dragging");
     range.setEnabled(false);
+    playPause->click();
+    require(toggleRequests == 2, "busy playback cannot emit toggle requests");
     preview = -1;
     QApplication::sendEvent(&range, &click);
     require(preview == -1, "disabled timeline cannot request a seek");
@@ -5482,6 +5694,11 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
             require(replay->size() == QSize(qRound(32 * scale), qRound(32 * scale)) &&
                         replay->iconSize() == QSize(qRound(24 * scale), qRound(24 * scale)),
                     "Replay uses Selection Tool control and icon dimensions at every scale");
+            require(playPause->size() == replay->size() &&
+                        playPause->iconSize() == replay->iconSize() &&
+                        replay->geometry().right() < playPause->geometry().left() &&
+                        playPause->geometry().right() < speed->geometry().left(),
+                    "playback matches Replay dimensions and sits before speed at every scale");
             require(speed->size() == QSize(qRound(72 * scale), qRound(32 * scale)) &&
                         speed->popupWidth() == qRound(96 * scale) &&
                         replay->geometry().right() < speed->geometry().left(),
@@ -5491,6 +5708,7 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
                         "trim handles provide enlarged scaled drag targets");
                 require(range.rect().contains(handle->geometry()) &&
                             !replay->geometry().intersects(handle->geometry()) &&
+                            !playPause->geometry().intersects(handle->geometry()) &&
                             !speed->geometry().intersects(handle->geometry()),
                         "trim targets stay inside the row and clear of Replay and speed");
             }
@@ -5519,19 +5737,19 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
             for (int y = 0; y < progress.height(); ++y) {
                 if (y >= railTop - 1 && y <= railBottom)
                     continue;
-                for (int x = qRound(230 * scale); x < qRound(330 * scale); ++x)
+                for (int x = qRound(270 * scale); x < qRound(370 * scale); ++x)
                     require(progress.pixelColor(x, y) == advanced.pixelColor(x, y),
                             "playback progress must not draw a marker outside the rail");
             }
-            const qreal trackWidth = range.width() - 176 * scale;
-            const qreal firstX = 148 * scale + trackWidth * 0.2;
-            const qreal endX = 148 * scale + trackWidth * 0.8;
+            const qreal trackWidth = range.width() - 216 * scale;
+            const qreal firstX = 188 * scale + trackWidth * 0.2;
+            const qreal endX = 188 * scale + trackWidth * 0.8;
             for (int y : {railTop, railBottom - 1}) {
                 require(progress.pixelColor(qCeil(firstX), y) ==
-                            progress.pixelColor(qRound(230 * scale), y),
+                            progress.pixelColor(qRound(270 * scale), y),
                         "progress rail meets the start handle with square corners");
                 require(progress.pixelColor(qFloor(endX) - 1, y) ==
-                            progress.pixelColor(qRound(330 * scale), y),
+                            progress.pixelColor(qRound(370 * scale), y),
                         "selected rail meets the end handle with square corners");
             }
             range.setPosition(500000);
@@ -5553,6 +5771,19 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
                                                                           : QStringLiteral("light"))
                                             .arg(qRound(scale * 100))),
                     "save trim visual fixture");
+                for (bool playing : {false, true}) {
+                    range.setPlaying(playing);
+                    require(previewTrimImage(visualHost, visualFont)
+                                .save(renders + QStringLiteral("/trim-%1-%2-%3.png")
+                                                    .arg(theme == ThemeMode::Dark
+                                                             ? QStringLiteral("dark")
+                                                             : QStringLiteral("light"))
+                                                    .arg(qRound(scale * 100))
+                                                    .arg(playing ? QStringLiteral("pause")
+                                                                 : QStringLiteral("play"))),
+                            "save both playback icons at every theme and scale");
+                }
+                range.setPlaying(false);
                 speed->showPopup();
                 QCoreApplication::processEvents();
                 require(
@@ -5607,6 +5838,13 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
     QCoreApplication::installTranslator(&translator);
     QEvent languageChange(QEvent::LanguageChange);
     QApplication::sendEvent(&range, &languageChange);
+    require(playPause->toolTip() == QStringLiteral("Translated Play") &&
+                playPause->accessibleName() == playPause->toolTip(),
+            "Play tooltip and accessible name retranslate live");
+    range.setPlaying(true);
+    require(playPause->toolTip() == QStringLiteral("Translated Pause") &&
+                playPause->accessibleName() == playPause->toolTip(),
+            "Pause tooltip and accessible name use the active language");
     require(first->accessibleName() == QStringLiteral("Translated Trim start") &&
                 range.findChild<adqt::widgets::AdButton*>()->toolTip() ==
                     QStringLiteral("Translated Replay"),
@@ -5619,6 +5857,7 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
                 speed->currentText() == QStringLiteral("Translated 1.75x"),
             "speed accessibility and labels retranslate without changing the rate");
     QCoreApplication::removeTranslator(&translator);
+    recordingTrimPlaybackTests(directory);
     for (bool deferred : {false, true}) {
         ScreenRecordingController controller(testEffectsSource);
         QString error;

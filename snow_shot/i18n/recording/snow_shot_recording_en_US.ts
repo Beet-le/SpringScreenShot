@@ -141,6 +141,14 @@
             <translation>%1x</translation>
         </message>
         <message>
+            <source>Pause</source>
+            <translation>Pause</translation>
+        </message>
+        <message>
+            <source>Play</source>
+            <translation>Play</translation>
+        </message>
+        <message>
             <source>Playback and export speed</source>
             <translation>Playback and export speed</translation>
         </message>

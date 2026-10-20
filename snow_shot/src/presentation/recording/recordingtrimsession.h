@@ -62,6 +62,7 @@ class RecordingTrimSession final : public QObject {
     std::shared_ptr<Publication> m_publication;
     void poll();
     void seek(int frame, bool play);
+    void togglePlayback();
     void setSpeed(quint32 percent);
     void setBusy(bool busy);
     void finishExport(bool ok, const QString& error);
@@ -80,6 +81,7 @@ class RecordingTrimSession final : public QObject {
     SnowRecordingClipExport* m_export = nullptr;
     SnowRecordingClipInfo m_info{};
     quint64 m_revision = 0;
+    quint64 m_position = 0;
     quint64 m_first = 0;
     quint64 m_end = 0;
     quint32 m_speedPercent = 100;
@@ -97,6 +99,7 @@ class RecordingTrimSession final : public QObject {
     bool m_detached = false;
     bool m_saveWhenReady = false;
     bool m_previewFailed = false;
+    bool m_playing = false;
     QPointer<RecordingRenderDialog> m_dialog;
     double m_percent = 0;
 };

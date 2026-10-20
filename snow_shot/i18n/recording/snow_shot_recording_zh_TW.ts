@@ -141,6 +141,14 @@
             <translation>%1x</translation>
         </message>
         <message>
+            <source>Pause</source>
+            <translation>暫停</translation>
+        </message>
+        <message>
+            <source>Play</source>
+            <translation>播放</translation>
+        </message>
+        <message>
             <source>Playback and export speed</source>
             <translation>播放與匯出速度</translation>
         </message>
