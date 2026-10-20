@@ -278,10 +278,12 @@ class ScreenshotRecognitionSessionController final : public QObject {
     void startQrRecognition();
     void startLatexRecognition();
     void loadRecognitionModels(bool refresh = false);
+    bool migrateRecognitionModelPreferences();
     bool updateRecognitionModels() const;
     void cancelModelRecognition(Mode mode);
     void failModelRecognition(const QString& message);
     [[nodiscard]] QString resolvedRecognitionModel(Mode mode) const;
+    [[nodiscard]] bool hasRecognitionModelResult(Mode mode, const QString& model) const;
     [[nodiscard]] bool recognitionModelAvailable(const QString& model) const;
     [[nodiscard]] QString recognitionCacheKey(Mode mode, const QString& model = {}) const;
     [[nodiscard]] bool recognitionEntryValid(const QString& model,
@@ -424,6 +426,7 @@ class ScreenshotRecognitionSessionController final : public QObject {
     SnowShotApiClient::RequestToken m_recognitionModelsToken = 0;
     quint64 m_recognitionModelsGeneration = 0;
     QString m_recognitionModelsError;
+    // Bound to a usable cached result or request, never to a pending catalog selection.
     QString m_recognitionEffectiveModel;
     bool m_recognitionModelsLoading = false;
     bool m_recognitionAwaitingModel = false;

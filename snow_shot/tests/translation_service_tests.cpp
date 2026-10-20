@@ -11,6 +11,70 @@ using namespace snow_shot::translation;
 using snow_shot::storage::ConfigurationStore;
 
 namespace {
+void aiModelSelectionMigratesOnlyAfterDiscovery(const QString& directory) {
+    for (const QString& legacy :
+         {QStringLiteral("qwen3.8-flash"), QStringLiteral("qwen-mt-flash")}) {
+        Server server;
+        server.models =
+            QJsonArray{QJsonObject{{QStringLiteral("model"), legacy},
+                                   {QStringLiteral("name"), QStringLiteral("Legacy")},
+                                   {QStringLiteral("translation_mode"), QStringLiteral("default")},
+                                   {QStringLiteral("supports_vision"), true}}};
+        SnowShotApiClient client(server.url());
+        ConfigurationStore settings(directory + QLatin1Char('/') + legacy + QStringLiteral(".json"),
+                                    true, true, 60000);
+        require(settings.setValue(QStringLiteral("screenshot_translation/model"), legacy),
+                "save legacy translation selection");
+        auto& service = TranslationService::forClient(client, settings, QLocale::English);
+        auto preferences = service.preferences();
+        preferences.modelId = legacy;
+        preferences.sourceLanguage = QStringLiteral("en");
+        preferences.targetLanguage = QStringLiteral("zh-Hans");
+        require(service.savePreferences(preferences), "save legacy translation preferences");
+        service.refreshModels();
+        waitUntil([&] { return !service.loadingModels(); }, "load older server catalog");
+        require(service.preferences().modelId == legacy,
+                "older backend preserves legacy selection");
+        server.rejectModels = true;
+        service.refreshModels(true);
+        waitUntil([&] { return !service.loadingModels(); }, "finish offline refresh");
+        require(service.preferences().modelId == legacy,
+                "offline refresh preserves legacy selection");
+        server.rejectModels = false;
+        server.models[0] =
+            QJsonObject{{QStringLiteral("model"), QStringLiteral("ai-model")},
+                        {QStringLiteral("name"), QStringLiteral("AI Model")},
+                        {QStringLiteral("translation_mode"), QStringLiteral("default")},
+                        {QStringLiteral("supports_vision"), true}};
+        service.refreshModels(true);
+        waitUntil([&] { return !service.loadingModels(); }, "discover AI Model");
+        require(service.preferences().modelId == QStringLiteral("ai-model") &&
+                    translationModelIndex(service.models(), legacy) == 0 &&
+                    service.models().first().supportsVision,
+                "successful catalog migrates saved selections and exposes vision");
+        QObject owner;
+        auto* job = service.createJob({QStringLiteral("Hello")}, preferences, &owner);
+        job->start();
+        waitUntil([&] { return server.streams.size() == 1; },
+                  "restored preferences start translation");
+        const auto body = server.streams.first().body;
+        require(body.value(QStringLiteral("model")) == QStringLiteral("ai-model") &&
+                    !body.contains(QStringLiteral("translation_options")) &&
+                    body.value(QStringLiteral("messages"))
+                        .toArray()
+                        .last()
+                        .toObject()
+                        .value(QStringLiteral("content"))
+                        .isString(),
+                "restored legacy preferences use ordinary text messages through AI Model");
+        job->cancel();
+        require(snowShotResolvedBuiltInModelId(service.models(),
+                                               QStringLiteral("custom:qwen-mt-flash")) ==
+                    QStringLiteral("custom:qwen-mt-flash"),
+                "custom identities are never migrated");
+    }
+}
+
 void discoverySharesRequestsAndCancellation(const QString& directory) {
     Server server;
     server.holdModels = true;
@@ -1035,6 +1099,7 @@ int main(int argc, char** argv) {
     invalidationNotificationsRespectReentrantRetry(directory.path());
     if (application.arguments().contains(QStringLiteral("--notification-lifetime-only")))
         return 0;
+    aiModelSelectionMigratesOnlyAfterDiscovery(directory.path());
     discoverySharesRequestsAndCancellation(directory.path());
     secondaryTargetsPersistAndReachEveryUnit(directory.path());
     detectionIsDeferredUntilRoutingNeedsIt(directory.path());

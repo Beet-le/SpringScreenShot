@@ -9091,7 +9091,7 @@ void ScreenshotToolPalette::refreshRecognitionModelSelect() {
     const QString selection =
         state.selection == screenshotDefaultVisionRecognitionModelId() && !defaultModel.isEmpty()
             ? defaultModel
-            : state.selection;
+            : snowShotResolvedBuiltInModelId(state.models, state.selection);
     auto selected =
         std::find_if(options.cbegin(), options.cend(), [&selection](const auto& option) {
             return option.value.toString() == selection;

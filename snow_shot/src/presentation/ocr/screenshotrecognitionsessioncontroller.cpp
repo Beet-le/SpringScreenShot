@@ -155,6 +155,11 @@ ScreenshotRecognitionSessionController::ScreenshotRecognitionSessionController(
                 if (changed == Mode::Latex)
                     selected = settings.latexModel();
 #endif
+                // Catalog aliases change future preferences, not this session's historical
+                // selections. Inactive tools also own cached results and editing history.
+                const QString current = recognitionModelSelection(changed);
+                if (snowShotBuiltInModelAlias(current, selected))
+                    return;
                 if (m_active && m_mode == changed) {
                     setRecognitionModel(selected);
                 } else {
@@ -335,8 +340,10 @@ void ScreenshotRecognitionSessionController::setProviders(
 #endif
         });
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION
-        connect(tableRecognition, &SnowShotApiClient::chatModelsChanged, this,
-                [this] { updateRecognitionModels(); });
+        connect(tableRecognition, &SnowShotApiClient::chatModelsChanged, this, [this] {
+            if (migrateRecognitionModelPreferences())
+                updateRecognitionModels();
+        });
         connect(tableRecognition, &SnowShotApiClient::baseUrlChanged, this, [this] {
             const bool affected =
                 m_active && (m_mode == Mode::Table || m_mode == Mode::Latex) &&
@@ -846,8 +853,38 @@ QString ScreenshotRecognitionSessionController::resolvedRecognitionModel(Mode mo
             return m_recognitionEffectiveModel;
         return m_tableRecognition ? m_tableRecognition->builtInVisionModel() : QString{};
     }
-#endif
+    const QString resolved =
+        m_tableRecognition
+            ? snowShotResolvedBuiltInModelId(m_tableRecognition->cachedChatModels(), selected)
+            : selected;
+    if (m_active && mode == m_mode && !m_recognitionEffectiveModel.isEmpty() &&
+        (m_recognitionEffectiveModel == selected || m_recognitionEffectiveModel == resolved))
+        return m_recognitionEffectiveModel;
+    return hasRecognitionModelResult(mode, selected) ? selected : resolved;
+#else
     return selected;
+#endif
+}
+
+bool ScreenshotRecognitionSessionController::hasRecognitionModelResult(Mode mode,
+                                                                       const QString& model) const {
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    if (model.isEmpty())
+        return false;
+    const QString key = recognitionCacheKey(mode, model);
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    if (mode == Mode::Table)
+        return m_tableCache.contains(key) || m_tableEntries.contains(key);
+#endif
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    if (mode == Mode::Latex)
+        return m_latexResults.contains(key);
+#endif
+#else
+    Q_UNUSED(mode)
+    Q_UNUSED(model)
+#endif
+    return false;
 }
 
 QString ScreenshotRecognitionSessionController::recognitionCacheKey(Mode mode,
@@ -927,6 +964,38 @@ bool ScreenshotRecognitionSessionController::recognitionModelAvailable(const QSt
 #endif
 }
 
+bool ScreenshotRecognitionSessionController::migrateRecognitionModelPreferences() {
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    if (!m_tableRecognition)
+        return true;
+    const QPointer<ScreenshotRecognitionSessionController> lifetime(this);
+    const auto& models = m_tableRecognition->cachedChatModels();
+    const auto settings = snow_shot::storage::ScreenshotRecognitionModelSettings();
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    const QString table = settings.tableModel();
+    const QString resolvedTable = snowShotResolvedBuiltInModelId(models, table);
+    if (table != resolvedTable) {
+        settings.setTableModel(resolvedTable);
+        if (!lifetime)
+            return false;
+        if (!m_tableRecognition)
+            return true;
+    }
+#endif
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    const QString latex = settings.latexModel();
+    const QString resolvedLatex =
+        snowShotResolvedBuiltInModelId(m_tableRecognition->cachedChatModels(), latex);
+    if (latex != resolvedLatex) {
+        settings.setLatexModel(resolvedLatex);
+        if (!lifetime)
+            return false;
+    }
+#endif
+#endif
+    return true;
+}
+
 void ScreenshotRecognitionSessionController::loadRecognitionModels(bool refresh) {
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION
     if (!m_active || (m_mode != Mode::Table && m_mode != Mode::Latex) || !m_tableRecognition ||
@@ -949,6 +1018,10 @@ void ScreenshotRecognitionSessionController::loadRecognitionModels(bool refresh)
                 return;
             m_recognitionModelsToken = 0;
             m_recognitionModelsLoading = false;
+            if (result.succeeded() && !migrateRecognitionModelPreferences())
+                return;
+            if (generation != m_recognitionModelsGeneration || !m_active || !m_tableRecognition)
+                return;
             if (!result.error.isEmpty() ||
                 !m_tableRecognition->hasBuiltInModels(
                     snow_shot::presentation::LanguageManager::instance().currentLocale().name())) {
@@ -1124,6 +1197,23 @@ void ScreenshotRecognitionSessionController::activateModelResult() {
         return;
     }
     const QString key = recognitionCacheKey(m_mode, model);
+    if (!hasRecognitionModelResult(m_mode, model) &&
+        model != screenshotDedicatedRecognitionModelId() && !recognitionModelAvailable(model)) {
+        if (m_recognitionModelsLoading && !model.startsWith(QStringLiteral("custom:"))) {
+            m_recognitionAwaitingModel = true;
+            if (!showRecognitionMessage())
+                return;
+            if (!updateBusyState())
+                return;
+        } else if (!notify(&ScreenshotRecognitionSessionController::failModelRecognition,
+                           tr("The selected recognition model is unavailable. Choose another model "
+                              "or retry."))) {
+            return;
+        }
+        return;
+    }
+    // Only usable results and requests bind an identity. Pending discovery must remain free
+    // to resolve a saved alias against the catalog that eventually arrives.
     m_recognitionEffectiveModel = model;
     if (!updateRecognitionModels())
         return;
@@ -1162,23 +1252,6 @@ void ScreenshotRecognitionSessionController::activateModelResult() {
         return;
     }
 #endif
-    if (model != screenshotDedicatedRecognitionModelId()) {
-        if (!recognitionModelAvailable(model)) {
-            if (m_recognitionModelsLoading && !model.startsWith(QStringLiteral("custom:"))) {
-                m_recognitionAwaitingModel = true;
-                if (!showRecognitionMessage())
-                    return;
-                if (!updateBusyState())
-                    return;
-                return;
-            }
-            if (!notify(&ScreenshotRecognitionSessionController::failModelRecognition,
-                        tr("The selected recognition model is unavailable. Choose another model or "
-                           "retry.")))
-                return;
-            return;
-        }
-    }
     m_recognitionAwaitingModel = false;
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     if (m_mode == Mode::Table)

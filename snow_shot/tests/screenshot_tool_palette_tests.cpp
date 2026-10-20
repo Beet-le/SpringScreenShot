@@ -7173,6 +7173,30 @@ void recognitionModelSelectorGroupsOptionsAndRetainsIndependentSelections() {
     options.showImageConversionTools = true;
     options.showSelectTool = true;
     ScreenshotToolPalette palette(options);
+    {
+        ScreenshotToolPalette aliasPalette(options);
+        for (const auto tool : {Tool::Table, Tool::Latex}) {
+            ScreenshotRecognitionModelState state;
+            state.selection = tool == Tool::Table ? QStringLiteral("qwen3.8-flash")
+                                                  : QStringLiteral("qwen-mt-flash");
+            state.models = {{QStringLiteral("ai-model"), QStringLiteral("AI Model"), true,
+                             QStringLiteral("default"), true}};
+            int changes = 0;
+            const auto connection =
+                QObject::connect(&aliasPalette, &ScreenshotToolPalette::recognitionModelChanged,
+                                 &aliasPalette, [&](const QString&) { ++changes; });
+            aliasPalette.setRecognitionModelState(tool, state);
+            aliasPalette.setActiveTool(tool);
+            const auto* aliasSelect = aliasPalette.findChild<AdSelect*>(
+                QStringLiteral("screenshotRecognitionModelSelect"));
+            require(aliasSelect && aliasSelect->currentValue() == QStringLiteral("ai-model") &&
+                        aliasSelect->toolTip() == QStringLiteral("AI Model") &&
+                        aliasSelect->options().size() == 2 && changes == 0,
+                    "both recognition selectors resolve retired IDs to the server's AI Model "
+                    "without emitting a model change or exposing standalone aliases");
+            QObject::disconnect(connection);
+        }
+    }
     ScreenshotRecognitionModelState tableState;
     tableState.selection = screenshotDedicatedRecognitionModelId();
     tableState.models = {

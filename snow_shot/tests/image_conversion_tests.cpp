@@ -166,6 +166,72 @@ QImage sampleImage() {
     return image;
 }
 
+void conversionAiModelMigrationPreservesHistoricalOutput(const QString& legacy) {
+    using Controller = ScreenshotImageConversionController;
+    using Format = SnowShotImageConversionFormat;
+    const snow_shot::storage::ScreenshotImageConversionSettings settings;
+    const QString previous = settings.visionModel();
+    const auto restore = qScopeGuard([&] { settings.setVisionModel(previous); });
+    require(settings.setVisionModel(legacy), "save legacy conversion selection");
+    ConversionServer server;
+    server.models = QJsonArray{QJsonObject{{QStringLiteral("model"), legacy},
+                                           {QStringLiteral("name"), QStringLiteral("Legacy")},
+                                           {QStringLiteral("supports_vision"), true}}};
+    SnowShotApiClient api(server.url());
+    Controller controller;
+    controller.setProvider(&api);
+    controller.activate(QStringLiteral("historical-ai"), sampleImage(), Format::Markdown);
+    until([&] { return controller.state() == Controller::State::Completed; });
+    require(settings.visionModel() == legacy, "older catalog preserves conversion preference");
+    const QString original = controller.source();
+    server.models = QJsonArray{QJsonObject{{QStringLiteral("model"), QStringLiteral("ai-model")},
+                                           {QStringLiteral("name"), QStringLiteral("AI Model")},
+                                           {QStringLiteral("supports_vision"), true}}};
+    bool completed = false;
+    const auto catalogToken = api.fetchChatModels(QLocale().name(), &controller, [&](auto result) {
+        require(result.succeeded(), "load AI Model conversion catalog");
+        completed = true;
+    });
+    require(catalogToken != 0, "AI Model catalog refresh starts");
+    until([&] { return completed; });
+    require(settings.visionModel() == QStringLiteral("ai-model") &&
+                controller.source() == original &&
+                controller.entries(QStringLiteral("historical-ai")).first().model == legacy &&
+                server.requests.size() == 1,
+            "catalog migration preserves historical output and its model identity");
+    controller.deactivate();
+    controller.activate(QStringLiteral("historical-ai"), sampleImage(), Format::Markdown);
+    require(controller.state() == Controller::State::Completed && controller.source() == original &&
+                controller.activeModel() == legacy && server.requests.size() == 1,
+            "reopening a migrated conversion restores its historical identity without uploading");
+    Controller restored;
+    restored.seed(QStringLiteral("historical-ai"),
+                  controller.entries(QStringLiteral("historical-ai")));
+    restored.activate(QStringLiteral("historical-ai"), sampleImage(), Format::Markdown);
+    require(restored.state() == Controller::State::Completed && restored.source() == original &&
+                restored.activeModel() == legacy,
+            "migrated conversions restore historical output offline without a catalog");
+    controller.activate(QStringLiteral("future-ai"), sampleImage(), Format::Html);
+    until([&] { return controller.state() == Controller::State::Completed; });
+    require(server.requests.last().value(QStringLiteral("model")) == QStringLiteral("ai-model"),
+            "future conversion uses AI Model");
+    controller.activate(QStringLiteral("historical-ai"), sampleImage(), Format::Markdown);
+    server.source = QStringLiteral("# Refreshed");
+    controller.retry();
+    until([&] { return controller.state() == Controller::State::Completed; });
+    require(controller.activeModel() == QStringLiteral("ai-model") &&
+                controller.source() == server.source && server.requests.size() == 3 &&
+                server.requests.last().value(QStringLiteral("model")) == QStringLiteral("ai-model"),
+            "explicit retry refreshes a historical result using the migrated model");
+    controller.deactivate();
+    const auto historical = controller.entries(QStringLiteral("historical-ai"));
+    controller.seed(QStringLiteral("historical-ai"), {historical.last(), historical.first()});
+    controller.activate(QStringLiteral("historical-ai"), sampleImage(), Format::Markdown);
+    require(controller.activeModel() == QStringLiteral("ai-model") &&
+                controller.source() == server.source && server.requests.size() == 3,
+            "an exact canonical cache entry takes precedence over a more recent legacy result");
+}
+
 void conversionNotificationsAllowOwnerDeletion() {
     using Controller = ScreenshotImageConversionController;
     using State = Controller::State;
@@ -2049,6 +2115,8 @@ void initializeRecognitionTestFonts() {
 
 void runImageConversionNetworkTests() {
     initializeRecognitionTestFonts();
+    for (const auto& legacy : {QStringLiteral("qwen3.8-flash"), QStringLiteral("qwen-mt-flash")})
+        conversionAiModelMigrationPreservesHistoricalOutput(legacy);
     settingsInitialAvailability();
     settingsIgnoreRetiredProviderCallbacks();
     conversionCacheUsesRecognitionKeys();
