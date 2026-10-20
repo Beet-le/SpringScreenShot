@@ -196,6 +196,8 @@ try {
         $env:RUNNER_OS = $runnerOs
     }
     & (Join-Path $PSScriptRoot 'test-snow-shot-winget-desktop.ps1')
+    & (Join-Path $PSScriptRoot 'test-snow-shot-winget-attachment.ps1')
+    & (Join-Path $PSScriptRoot 'test-snow-shot-winget-windows.ps1')
     # Provisioning must upgrade older clients using the requested official bundle.
     function Get-Command { param($Name, $ErrorAction); return @{ Source = 'Invoke-FixtureWinget' } }
     function Get-AppxPackage { param($Name); return @() }
@@ -207,12 +209,17 @@ try {
     }
     function Expand-Archive {
         param($LiteralPath, $DestinationPath, [switch]$Force)
-        $null = New-Item -ItemType Directory -Force -Path (Join-Path $DestinationPath 'x64')
-        [IO.File]::WriteAllText((Join-Path $DestinationPath 'x64/dependency.appx'), 'fixture')
+        foreach ($nativeArchitecture in @('x64', 'arm64')) {
+            $null = New-Item -ItemType Directory -Force -Path (Join-Path $DestinationPath $nativeArchitecture)
+            [IO.File]::WriteAllText((Join-Path $DestinationPath "$nativeArchitecture/dependency.appx"), 'fixture')
+        }
     }
     function Add-AppxPackage {
         param($Path, $DependencyPath, [switch]$ForceApplicationShutdown)
         Require ($DependencyPath.Count -gt 0) 'Client provisioning must install matching dependencies'
+        $nativeArchitecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+        Require (@($DependencyPath | Where-Object { (Split-Path (Split-Path $_ -Parent) -Leaf) -cne $nativeArchitecture }).Count -eq 0) `
+            'Client provisioning must select only the host architecture dependencies.'
         if ($script:dependenciesInUse -and -not $ForceApplicationShutdown) {
             throw 'Fixture dependency is in use (0x80073D02).'
         }

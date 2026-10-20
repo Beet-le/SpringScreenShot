@@ -68,6 +68,15 @@ $script:policyDenied = $false
 $script:terminationCompletes = $true
 $script:processes = @{}
 try {
+    foreach ($contents in @('', ' ', 'Window Dialog', "Window Dialog`r`n  `r`nWindow Dialog")) {
+        Require (-not (Test-SnowShotWingetInteractiveDialog 'Window Dialog' $contents)) `
+            'A shell launch container without prompt content must keep waiting for consent UI or process completion.'
+    }
+    Require (Test-SnowShotWingetInteractiveDialog 'Window Dialog' "Window Dialog`nCannot launch this app.`nClose") `
+        'An interactive launch failure must still fail unattended installation.'
+    Require (-not (Test-SnowShotWingetInteractiveDialog 'Open File - Security Warning' 'Run')) `
+        'The security warning must be diagnosed separately from the generic shell container.'
+
     foreach ($hostCase in @(
         @{ Environment = ''; OS = 'Windows' },
         @{ Environment = 'self-hosted'; OS = 'Windows' },
