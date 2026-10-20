@@ -583,21 +583,7 @@ $requiredStageFiles = @(
     "bin\snow_shot.exe",
     "bin\crashpad_handler.exe",
     "bin\snow-ocr-process.exe",
-    "share\snow-shot\licenses\LICENSE",
-    "share\snow-shot\licenses\COPYRIGHT",
-    "share\snow-shot\licenses\THIRD_PARTY_NOTICES.md",
-    "share\snow-shot\licenses\components\ant-design-qt\COPYRIGHT",
-    "share\snow-shot\licenses\components\ant-design-qt\LICENSE",
-    "share\snow-shot\licenses\components\snow-crates\COPYRIGHT",
-    "share\snow-shot\licenses\components\snow-crates\LICENSE",
-    "share\snow-shot\licenses\components\snow-image\COPYRIGHT",
-    "share\snow-shot\licenses\components\snow-image\LICENSE",
-    "share\snow-shot\licenses\components\snow-draw-engine-qt\COPYRIGHT",
-    "share\snow-shot\licenses\components\snow-draw-engine-qt\LICENSE",
-    "share\snow-shot\licenses\components\snow-rust-ffi\COPYRIGHT",
-    "share\snow-shot\licenses\components\snow-rust-ffi\LICENSE",
-    "share\snow-shot\licenses\third-party\INDEX.md",
-    "share\snow-shot\licenses\third-party\manifest.json"
+    "share\snow-shot\licenses\LICENSES.txt"
 )
 if ($store) { $requiredStageFiles += 'bin\SnowShotExplorerCommand.dll' }
 $missingStageFiles = @($requiredStageFiles | Where-Object {
@@ -605,6 +591,10 @@ $missingStageFiles = @($requiredStageFiles | Where-Object {
 })
 if ($missingStageFiles.Count -gt 0) {
     throw "Release staging is missing required runtime files: $($missingStageFiles -join ', ')"
+}
+$licenseFiles = @(Get-ChildItem -LiteralPath (Join-Path $installDirectory 'share/snow-shot/licenses') -Recurse -File -Force)
+if ($licenseFiles.Count -ne 1 -or $licenseFiles[0].Length -eq 0) {
+    throw 'Windows releases must contain one nonempty consolidated LICENSES.txt.'
 }
 
 $forbiddenRuntimeFiles = @(Get-ChildItem -LiteralPath $installDirectory -Recurse -File |

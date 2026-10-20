@@ -10724,46 +10724,55 @@ if(SNOW_SHOT_QT_STATIC)
     )
 endif()
 
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
-    "${CMAKE_CURRENT_SOURCE_DIR}/COPYRIGHT"
-    "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses"
-)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../ant_design_qt/THIRD_PARTY_NOTICES.md"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/third-party/project-notices/ant-design-icons"
-)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../snow_image/LICENSE"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../snow_image/COPYRIGHT"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/components/snow-image"
-)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../ant_design_qt/LICENSE"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../ant_design_qt/COPYRIGHT"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/components/ant-design-qt"
-)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../snow-crates/LICENSE"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../snow-crates/COPYRIGHT"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/components/snow-crates"
-)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../snow_draw_engine_qt/LICENSE"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../snow_draw_engine_qt/COPYRIGHT"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/components/snow-draw-engine-qt"
-)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../snow_rust_ffi/LICENSE"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../snow_rust_ffi/COPYRIGHT"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/components/snow-rust-ffi"
-)
-install(DIRECTORY
-    "${CMAKE_CURRENT_BINARY_DIR}/third-party-licenses/third-party/"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/third-party"
-    OPTIONAL
-)
+if(WIN32)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowShotLicenseBundle.cmake")
+    snow_install_license_bundle(
+        SOURCE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        THIRD_PARTY_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/third-party-licenses/third-party"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses"
+        COMPONENT SnowShot PRODUCT "Snow Shot")
+else()
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/COPYRIGHT"
+        "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses"
+    )
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../ant_design_qt/THIRD_PARTY_NOTICES.md"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/third-party/project-notices/ant-design-icons"
+    )
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../snow_image/LICENSE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../snow_image/COPYRIGHT"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/components/snow-image"
+    )
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../ant_design_qt/LICENSE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../ant_design_qt/COPYRIGHT"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/components/ant-design-qt"
+    )
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../snow-crates/LICENSE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../snow-crates/COPYRIGHT"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/components/snow-crates"
+    )
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../snow_draw_engine_qt/LICENSE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../snow_draw_engine_qt/COPYRIGHT"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/components/snow-draw-engine-qt"
+    )
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../snow_rust_ffi/LICENSE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../snow_rust_ffi/COPYRIGHT"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/components/snow-rust-ffi"
+    )
+    install(DIRECTORY
+        "${CMAKE_CURRENT_BINARY_DIR}/third-party-licenses/third-party/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/snow-shot/licenses/third-party"
+        OPTIONAL
+    )
+endif()
 
 foreach(_conversion_view_target IN ITEMS snow_shot snow-shot-recognition-window-tests
         snow-shot-mcp-document-tests

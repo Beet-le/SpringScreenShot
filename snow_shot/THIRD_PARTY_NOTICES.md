@@ -5,15 +5,25 @@ licenses. The release build generates a complete, versioned notice bundle from
 the resolved Rust dependency graph, installed vcpkg packages, the audited
 static Qt build, and repository-owned attribution files.
 
-Installed releases place that bundle under:
+Windows releases install all project and dependency notices in one UTF-8 document:
+
+```text
+share/snow-shot/licenses/LICENSES.txt
+```
+
+Snow Shot Mini uses `share/snow-shot-mini/licenses/LICENSES.txt`. Each original
+file is preserved in a labeled section, including full license texts, copyright
+and attribution notices, and the dependency index and provenance metadata. The
+complete directory bundle remains in the build output for auditing. macOS
+releases retain the directory layout below:
 
 ```text
 share/snow-shot/licenses/third-party/
 ```
 
-`INDEX.md` in that directory records every collected package and source
-license file. The bundle includes the Ant Design Icons MIT notice from
-`ant_design_qt/THIRD_PARTY_NOTICES.md`.
+`INDEX.md` in the directory bundle (also included in the Windows document) records
+every collected package and source license file. The bundle includes the Ant Design
+Icons MIT notice from `ant_design_qt/THIRD_PARTY_NOTICES.md`.
 
 The Qt 6.12 LTS toolchain is pinned by `scripts/qt-toolchain.json`. The Qt notice
 bundle preserves the source archive version and digest, license texts, and

@@ -1784,6 +1784,14 @@ mod tests {
             let old_helper = b"old helper";
             fs::write(root.join(crate::edition::APP_PATH), old_app).unwrap();
             fs::write(root.join(crate::edition::UPDATER_PATH), old_helper).unwrap();
+            let legacy_notice = format!(
+                "{}licenses/third-party/example/LICENSE",
+                crate::edition::SHARE_PREFIX
+            );
+            let license_bundle = format!("{}licenses/LICENSES.txt", crate::edition::SHARE_PREFIX);
+            let notice = b"original dependency notice";
+            fs::create_dir_all(root.join(&legacy_notice).parent().unwrap()).unwrap();
+            fs::write(root.join(&legacy_notice), notice).unwrap();
             let old_record = InstallationRecord {
                 platform: Some(crate::edition::PLATFORM.to_owned()),
                 product: crate::edition::PRODUCT.to_owned(),
@@ -1793,6 +1801,7 @@ mod tests {
                 files: vec![
                     descriptor(crate::edition::APP_PATH, old_app),
                     descriptor(crate::edition::UPDATER_PATH, old_helper),
+                    descriptor(&legacy_notice, notice),
                 ],
             };
             fs::write(
@@ -1812,6 +1821,7 @@ mod tests {
                 files: vec![
                     descriptor(crate::edition::APP_PATH, new_app),
                     descriptor(crate::edition::UPDATER_PATH, new_helper),
+                    descriptor(&license_bundle, notice),
                 ],
             };
             let new_record_bytes = serde_json::to_vec(&new_record).unwrap();
@@ -1821,12 +1831,14 @@ mod tests {
                 &[
                     (crate::edition::APP_PATH, new_app, None),
                     (crate::edition::UPDATER_PATH, new_helper, None),
+                    (&license_bundle, notice, None),
                     (INSTALLATION_RECORD, &new_record_bytes, None),
                 ],
             );
             let mut update_package = package(vec![
                 descriptor(crate::edition::APP_PATH, new_app),
                 descriptor(crate::edition::UPDATER_PATH, new_helper),
+                descriptor(&license_bundle, notice),
                 descriptor(INSTALLATION_RECORD, &new_record_bytes),
             ]);
             update_package.size = fs::metadata(&archive).unwrap().len();
@@ -1906,6 +1918,8 @@ mod tests {
                 );
                 assert!(!transaction_pending(&root));
                 assert!(work_path(&root, format!("backup/{}", crate::edition::APP_PATH)).is_file());
+                assert!(!root.join(&legacy_notice).exists());
+                assert_eq!(fs::read(root.join(&license_bundle)).unwrap(), notice);
             } else {
                 assert_eq!(result.unwrap_err().code, "startup_probe_failed");
                 assert_eq!(
@@ -1917,6 +1931,8 @@ mod tests {
                     "2.0.0"
                 );
                 assert!(!transaction_pending(&root));
+                assert_eq!(fs::read(root.join(&legacy_notice)).unwrap(), notice);
+                assert!(!root.join(&license_bundle).exists());
             }
         }
     }

@@ -147,6 +147,9 @@ function Assert-SnowMsixAuditedStage {
             throw "Invalid or unsupported executable in Store payload: $($file.Path)"
         }
         $license = $file.Path.StartsWith('share/snow-shot/licenses/', [StringComparison]::OrdinalIgnoreCase)
+        if ($license -and ($file.Path -cne 'share/snow-shot/licenses/LICENSES.txt' -or $file.Bytes -eq 0)) {
+            throw 'Store releases must contain one nonempty consolidated LICENSES.txt.'
+        }
         if (-not $license -and $extension -in @('.msi', '.msp', '.mst', '.msix', '.appx', '.msixbundle', '.appxbundle', '.appinstaller', '.lnk', '.url',
                 '.nsi', '.nsh', '.cmd', '.bat', '.ps1', '.psm1', '.psd1', '.js', '.jse', '.vbs', '.vbe', '.wsf', '.wsh',
                 '.hta', '.py', '.pyc', '.pyo', '.sh', '.bash', '.zsh')) {
@@ -158,8 +161,7 @@ function Assert-SnowMsixAuditedStage {
             'bin/audios/camera_shutter.mp3', 'bin/assets/ocr/asset-manifest.json',
             'bin/assets/qrcode/detect.prototxt', 'bin/assets/qrcode/detect.caffemodel',
             'bin/assets/qrcode/sr.prototxt', 'bin/assets/qrcode/sr.caffemodel',
-            'share/snow-shot/licenses/LICENSE', 'share/snow-shot/licenses/THIRD_PARTY_NOTICES.md',
-            'share/snow-shot/licenses/third-party/manifest.json')) {
+            'share/snow-shot/licenses/LICENSES.txt')) {
         if ($required -cnotin $actual.Path) { throw "Missing Store payload: $required" }
     }
     $manifest = Get-Content -LiteralPath (Join-Path $Stage 'bin/assets/ocr/asset-manifest.json') -Raw | ConvertFrom-Json

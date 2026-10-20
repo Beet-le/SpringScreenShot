@@ -24,8 +24,7 @@ function Write-Pe([string]$Path, [string]$Architecture) {
 function New-Fixture([string]$Stage, [string]$Architecture) {
     $files = @('bin/snow_shot.exe', 'bin/snow-shot-mcp.exe', 'bin/crashpad_handler.exe',
         'bin/SnowShotExplorerCommand.dll',
-        'bin/audios/camera_shutter.mp3', 'share/snow-shot/licenses/LICENSE',
-        'share/snow-shot/licenses/THIRD_PARTY_NOTICES.md', 'share/snow-shot/licenses/third-party/manifest.json',
+        'bin/audios/camera_shutter.mp3', 'share/snow-shot/licenses/LICENSES.txt',
         'bin/assets/qrcode/detect.prototxt', 'bin/assets/qrcode/detect.caffemodel',
         'bin/assets/qrcode/sr.prototxt', 'bin/assets/qrcode/sr.caffemodel',
         "bin/assets/ocr/runtimes/1.1.0/windows-$Architecture/snow-ocr-process-1.1.0-windows-$Architecture.exe",
@@ -200,15 +199,26 @@ endif()
         'SNOW_APPS_BUILD_SNOW_SHOT_MINI' -in $compatibility.Differences.Name) 'Store cache reuse must reject standalone channel and Mini.'
     $stage = Join-Path $testRoot $architecture
     New-Fixture $stage $architecture
-    $noticePath = Join-Path $stage 'share/snow-shot/licenses/third-party/test-helpers/benchmark-LICENSE.txt'
-    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $noticePath) -Force
-    [IO.File]::WriteAllText($noticePath, 'legitimate third-party license notice')
-    [IO.File]::WriteAllText((Join-Path (Split-Path -Parent $noticePath) 'LICENSE.ps1'), 'legitimate third-party license notice')
+    $noticePath = Join-Path $stage 'share/snow-shot/licenses/LICENSES.txt'
+    [IO.File]::WriteAllText($noticePath, 'legitimate third-party license notice for test-helpers/benchmark')
     $audit = Join-Path $testRoot "$architecture-audit.json"
     Write-Audit $stage $audit arm64
     Reject { Assert-SnowMsixAuditedStage $stage $audit $architecture } 'An ARM64 stage audit must not be accepted for an x64 package.'
     Write-Audit $stage $audit $architecture
     $null = Assert-SnowMsixAuditedStage $stage $audit $architecture
+    [IO.File]::WriteAllText($noticePath, '')
+    Write-Audit $stage $audit $architecture
+    Reject { Assert-SnowMsixAuditedStage $stage $audit $architecture } 'Empty consolidated notices must fail.'
+    Remove-Item -LiteralPath $noticePath
+    Write-Audit $stage $audit $architecture
+    Reject { Assert-SnowMsixAuditedStage $stage $audit $architecture } 'Missing consolidated notices must fail.'
+    [IO.File]::WriteAllText($noticePath, 'legitimate third-party license notice')
+    $legacyNotice = Join-Path $stage 'share/snow-shot/licenses/LICENSE'
+    [IO.File]::WriteAllText($legacyNotice, 'legacy loose notice')
+    Write-Audit $stage $audit $architecture
+    Reject { Assert-SnowMsixAuditedStage $stage $audit $architecture } 'Loose license files must fail.'
+    Remove-Item -LiteralPath $legacyNotice
+    Write-Audit $stage $audit $architecture
     $shellExtension = Join-Path $stage 'bin/SnowShotExplorerCommand.dll'
     Remove-Item -LiteralPath $shellExtension
     Write-Audit $stage $audit $architecture

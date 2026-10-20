@@ -256,20 +256,29 @@ if(WIN32 AND EXISTS "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
     install(FILES "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}" DESTINATION "${_mini_bindir}/audios"
         RENAME camera_shutter.mp3 COMPONENT SnowShotMini)
 endif()
-install(FILES LICENSE COPYRIGHT THIRD_PARTY_NOTICES.md
-    DESTINATION "${_mini_datadir}/snow-shot-mini/licenses"
-    COMPONENT SnowShotMini)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../ant_design_qt/THIRD_PARTY_NOTICES.md"
-    DESTINATION "${_mini_datadir}/snow-shot-mini/licenses/third-party/project-notices/ant-design-icons"
-    COMPONENT SnowShotMini)
-install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/third-party-licenses/third-party/"
-    DESTINATION "${_mini_datadir}/snow-shot-mini/licenses/third-party" OPTIONAL COMPONENT SnowShotMini)
-foreach(_project IN ITEMS snow_image ant_design_qt snow-crates snow_draw_engine_qt snow_rust_ffi)
-    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../${_project}/LICENSE"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../${_project}/COPYRIGHT"
-        DESTINATION "${_mini_datadir}/snow-shot-mini/licenses/components/${_project}"
+if(WIN32)
+    include("${CMAKE_CURRENT_LIST_DIR}/SnowShotLicenseBundle.cmake")
+    snow_install_license_bundle(
+        SOURCE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        THIRD_PARTY_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/third-party-licenses/third-party"
+        DESTINATION "${_mini_datadir}/snow-shot-mini/licenses"
+        COMPONENT SnowShotMini PRODUCT "Snow Shot Mini")
+else()
+    install(FILES LICENSE COPYRIGHT THIRD_PARTY_NOTICES.md
+        DESTINATION "${_mini_datadir}/snow-shot-mini/licenses"
         COMPONENT SnowShotMini)
-endforeach()
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../ant_design_qt/THIRD_PARTY_NOTICES.md"
+        DESTINATION "${_mini_datadir}/snow-shot-mini/licenses/third-party/project-notices/ant-design-icons"
+        COMPONENT SnowShotMini)
+    install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/third-party-licenses/third-party/"
+        DESTINATION "${_mini_datadir}/snow-shot-mini/licenses/third-party" OPTIONAL COMPONENT SnowShotMini)
+    foreach(_project IN ITEMS snow_image ant_design_qt snow-crates snow_draw_engine_qt snow_rust_ffi)
+        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../${_project}/LICENSE"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../${_project}/COPYRIGHT"
+            DESTINATION "${_mini_datadir}/snow-shot-mini/licenses/components/${_project}"
+            COMPONENT SnowShotMini)
+    endforeach()
+endif()
 if(APPLE)
     include("${CMAKE_CURRENT_LIST_DIR}/SnowShotMiniMacOS.cmake")
 elseif(NOT SNOW_SHOT_QT_STATIC)
