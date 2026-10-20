@@ -195,6 +195,7 @@ try {
         $env:RUNNER_ENVIRONMENT = $runnerEnvironment
         $env:RUNNER_OS = $runnerOs
     }
+    & (Join-Path $PSScriptRoot 'test-snow-shot-winget-desktop.ps1')
     # Provisioning must upgrade older clients using the requested official bundle.
     function Get-Command { param($Name, $ErrorAction); return @{ Source = 'Invoke-FixtureWinget' } }
     function Get-AppxPackage { param($Name); return @() }

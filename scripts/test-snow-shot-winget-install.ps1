@@ -158,6 +158,8 @@ function Assert-InstalledVersion([string]$Expected) {
     Invoke-WingetChecked @('list', '--name', $product.Name, '--exact', '--accept-source-agreements')
 }
 try {
+    . (Join-Path $PSScriptRoot 'snow-shot-winget-test-desktop.ps1')
+    Initialize-SnowShotWingetTestDesktop
     $current = New-SnowShotWingetManifest $Tag $output $Edition
     $previous = if ($SkipUpgrade) { $current } else { New-SnowShotWingetManifest $PreviousTag $output $Edition }
     foreach ($directory in @($current, $previous)) {
