@@ -9,6 +9,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QScopeGuard>
+#include <QSemaphore>
 
 #include <algorithm>
 #include <atomic>
@@ -162,6 +163,100 @@ void queueAndWorkerBoundsAreEnforced() {
             "bounded coordinator jobs did not all complete");
     require(peak.load(std::memory_order_acquire) <= 2,
             "coordinator exceeded its two-worker concurrency bound");
+}
+
+void queuedPromotionPreservesOwnershipAndPriority() {
+    ScreenshotExportCoordinator coordinator;
+    QObject receiver;
+    struct State {
+        QSemaphore blockers;
+        QSemaphore promoted;
+        std::atomic_int entered{0};
+        std::atomic_int backgroundRuns{0};
+        std::atomic_int promotedRuns{0};
+        std::atomic_int cancelledRuns{0};
+    };
+    auto state = std::make_shared<State>();
+    const int workers = std::clamp(QThread::idealThreadCount(), 1, 2);
+    const auto unblock = qScopeGuard([state, workers] {
+        state->blockers.release(workers);
+        state->promoted.release();
+    });
+    for (int i = 0; i < workers; ++i)
+        require(coordinator
+                    .submit(
+                        &receiver, ScreenshotExportCoordinator::Priority::Background,
+                        [state](const ScreenshotExportCancellation&) {
+                            ++state->entered;
+                            state->blockers.acquire();
+                            return ScreenshotExportTaskResult{};
+                        },
+                        [](ScreenshotExportTaskResult) {})
+                    .isValid(),
+                "promotion fixture occupies all workers");
+    require(processUntil([&] { return state->entered.load() == workers; }),
+            "promotion workers have started");
+    int completions = 0;
+    require(coordinator
+                .submit(
+                    &receiver, ScreenshotExportCoordinator::Priority::Background,
+                    [state](const ScreenshotExportCancellation&) {
+                        ++state->backgroundRuns;
+                        return ScreenshotExportTaskResult{};
+                    },
+                    [&](ScreenshotExportTaskResult result) {
+                        require(result.succeeded(), "background work still succeeds");
+                        ++completions;
+                    })
+                .isValid(),
+            "older background work is queued");
+    const auto promoted = coordinator.submit(
+        &receiver, ScreenshotExportCoordinator::Priority::Background,
+        [state](const ScreenshotExportCancellation&) {
+            ++state->promotedRuns;
+            state->promoted.acquire();
+            return ScreenshotExportTaskResult{};
+        },
+        [&](ScreenshotExportTaskResult result) {
+            require(result.succeeded(), "promoted work succeeds");
+            ++completions;
+        });
+    require(promoted.isValid(), "promotion candidate is queued");
+    const int pending = coordinator.pendingJobCount();
+    promoted.promoteToForeground();
+    promoted.promoteToForeground();
+    require(coordinator.pendingJobCount() == pending, "promotion retains one admission");
+    state->blockers.release();
+    require(processUntil([&] { return state->promotedRuns.load() == 1; }) &&
+                state->backgroundRuns.load() == 0,
+            "a promoted job precedes older background jobs when a worker becomes free");
+    promoted.promoteToForeground();
+    bool cancelled = false;
+    const auto cancelledJob = coordinator.submit(
+        &receiver, ScreenshotExportCoordinator::Priority::Background,
+        [state](const ScreenshotExportCancellation&) {
+            ++state->cancelledRuns;
+            return ScreenshotExportTaskResult{};
+        },
+        [&](ScreenshotExportTaskResult result) {
+            require(!cancelled && result.failureStage == ScreenshotExportFailureStage::Cancelled,
+                    "promoted cancellation completes exactly once");
+            cancelled = true;
+        });
+    require(cancelledJob.isValid(), "queued cancellation candidate is admitted");
+    cancelledJob.promoteToForeground();
+    cancelledJob.cancel();
+    cancelledJob.promoteToForeground();
+    require(processUntil([&] { return cancelled; }), "promoted queued cancellation completes");
+    state->blockers.release(workers);
+    state->promoted.release();
+    require(processUntil([&] { return completions == 2 && coordinator.pendingJobCount() == 0; }) &&
+                state->backgroundRuns.load() == 1 && state->promotedRuns.load() == 1 &&
+                state->cancelledRuns.load() == 0,
+            "promotion neither duplicates jobs nor loses cancellation");
+    coordinator.shutdown();
+    promoted.promoteToForeground();
+    ScreenshotExportJobHandle{}.promoteToForeground();
 }
 
 void queuedCancellationImmediatelyReleasesCapacity() {
@@ -494,11 +589,14 @@ int main(int argc, char** argv) {
         cancellationPropagates();
         destroyedReceiverSuppressesCompletion();
         queueAndWorkerBoundsAreEnforced();
+        queuedPromotionPreservesOwnershipAndPriority();
         queuedCancellationImmediatelyReleasesCapacity();
         shutdownCancelsAndDrains();
         idleWorkersRetireAndLaterWorkRestarts();
         shutdownAbandonsAWorkerThatIgnoresCancellation();
         shutdownDropsQueuedWorkWhenAbandoned();
+        if (application.arguments().contains(QStringLiteral("--scheduling-only")))
+            return EXIT_SUCCESS;
         clipboardCommitCancellationIsAsynchronous();
 #if defined(Q_OS_WIN) || defined(_WIN32)
         clipboardCommitRetriesTransientContention();

@@ -286,6 +286,7 @@ struct ScreenshotExportArtifact::Impl final {
         std::shared_ptr<std::vector<ClipboardSubscriber>> clipboardSubscribers;
         bool preparesClipboard = false;
         bool modeSealed = false;
+        bool foreground = false;
         ScreenshotExportJobHandle job;
         quint64 lastUsed = 0;
     };
@@ -761,6 +762,7 @@ void ScreenshotExportArtifact::startPngFromRows(int compressionLevel,
     std::shared_ptr<std::vector<Impl::EncodingSubscriber>> subscribers;
     std::shared_ptr<std::vector<Impl::ClipboardSubscriber>> clipboardSubscribers;
     bool preparesClipboard = false;
+    bool foreground = false;
     {
         QMutexLocker lock(&m_impl->mutex);
         if (m_impl->cancelled->load() ||
@@ -777,13 +779,16 @@ void ScreenshotExportArtifact::startPngFromRows(int compressionLevel,
         subscribers = pending.subscribers;
         clipboardSubscribers = pending.clipboardSubscribers;
         preparesClipboard = pending.preparesClipboard;
+        foreground = pending.foreground;
         pending.modeSealed = true;
     }
     const QPointer<ScreenshotExportArtifact> guarded(this);
     auto encoded = std::make_shared<ScreenshotExportEncodingResult>();
     auto clipboard = preparesClipboard ? std::make_shared<ScreenshotClipboardPayload>() : nullptr;
     const ScreenshotExportJobHandle job = ScreenshotExportCoordinator::shared().submit(
-        this, ScreenshotExportCoordinator::Priority::Background,
+        this,
+        foreground ? ScreenshotExportCoordinator::Priority::Foreground
+                   : ScreenshotExportCoordinator::Priority::Background,
         [source = std::move(source), encoded, subscribers, clipboardSubscribers, clipboard,
          observed = m_impl->encodingStarted, compression = m_impl->compressionLevel,
          placement = m_impl->source.m_clipboardPlacement,
@@ -838,16 +843,20 @@ void ScreenshotExportArtifact::startPngFromRows(int compressionLevel,
         return;
     }
     bool retained = false;
+    bool promote = false;
     {
         QMutexLocker lock(&m_impl->mutex);
         if (!m_impl->cancelled->load() &&
             m_impl->encodingAt(compressionLevel).phase == RequestPhase::Pending) {
             m_impl->encodingAt(compressionLevel).job = job;
+            promote = m_impl->encodingAt(compressionLevel).foreground;
             retained = true;
         }
     }
     if (!retained)
         job.cancel();
+    else if (promote)
+        job.promoteToForeground();
 }
 
 void ScreenshotExportArtifact::completePng(int compressionLevel,
@@ -878,6 +887,7 @@ void ScreenshotExportArtifact::completePng(int compressionLevel,
             clipboardSubscribers = std::move(*pending);
         m_impl->encodingAt(compressionLevel).preparesClipboard = false;
         m_impl->encodingAt(compressionLevel).modeSealed = false;
+        m_impl->encodingAt(compressionLevel).foreground = false;
     }
     if (!clipboardSubscribers.empty()) {
         if (!result.succeeded() || !clipboard || !clipboard->isValid()) {
@@ -1021,11 +1031,16 @@ bool ScreenshotExportArtifact::requestClipboard(QObject* receiver, ClipboardCall
     const int level = pngCompression(m_impl->compressionLevel);
     bool fused = false;
     bool start = false;
+    ScreenshotExportJobHandle promote;
     {
         QMutexLocker lock(&m_impl->mutex);
         if (m_impl->cancelled->load() || !m_impl->source.isValid())
             return false;
         auto& encoding = m_impl->encodingAt(level);
+        if (encoding.phase == RequestPhase::Empty || encoding.phase == RequestPhase::Pending) {
+            encoding.foreground = true;
+            promote = encoding.job;
+        }
         if (encoding.phase == RequestPhase::Empty ||
             (encoding.phase == RequestPhase::Pending &&
              (encoding.preparesClipboard || !encoding.modeSealed))) {
@@ -1043,6 +1058,7 @@ bool ScreenshotExportArtifact::requestClipboard(QObject* receiver, ClipboardCall
             }
         }
     }
+    promote.promoteToForeground();
     if (fused) {
         if (start)
             startPng(level);

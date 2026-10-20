@@ -96,6 +96,8 @@ bool hasSamePixels(const QImage& actual, const QImage& expected) {
 }
 
 ScreenshotImageRowSource rowSourceFor(const QImage& source, std::function<bool()> cancellation) {
+    // Model a row-only producer with unknown opacity. Its PNG retains alpha; exact-byte
+    // references must use this same contract rather than an opacity-verified QImage source.
     const QImage image = source.convertToFormat(QImage::Format_RGBA8888);
     const qsizetype rowBytes = static_cast<qsizetype>(image.width()) * 4;
     ScreenshotImageRowSource rows;
@@ -204,8 +206,7 @@ void clipboardSharesPendingConfiguredEncoding() {
                 [&](ScreenshotExportClipboardResult result) {
                     require(result.succeeded() &&
                                 result.payload.pngBytes() ==
-                                    snow_shot::image_codec::encodePng(
-                                        snow_shot::image_codec::srgbRowSource(image), 9) &&
+                                    snow_shot::image_codec::encodePng(rowSourceFor(image, {}), 9) &&
                                 result.payload.pngBytes().constData() == canonical.constData(),
                             "clipboard did not share the configured PNG encoding");
                     copied = true;
@@ -243,6 +244,85 @@ void clipboardReusesConfiguredPng() {
                     }),
                 "clipboard reuse request rejected");
         processUntil([&] { return copied; });
+    }
+}
+
+void clipboardDependenciesRunAheadOfBackgroundExports() {
+    for (const bool joinQueuedPng : {false, true}) {
+        auto& coordinator = ScreenshotExportCoordinator::shared();
+        QObject receiver;
+        struct State {
+            QSemaphore blockers;
+            std::atomic_int entered{0};
+            std::atomic_int order{0};
+            std::atomic_int encodingOrder{0};
+            std::atomic_int backgroundOrder{0};
+        };
+        auto state = std::make_shared<State>();
+        ScreenshotExportArtifact::PngCachePolicy policy;
+        policy.encodingStarted = [state] { state->encodingOrder = ++state->order; };
+        ScreenshotExportArtifact artifact(ScreenshotExportSource::fromImage(testImage()),
+                                          ScreenshotCompressionLevel::Medium, policy);
+        bool rowsReady = false;
+        require(artifact.requestRowSource(&receiver,
+                                          [&](ScreenshotImageRowSource rows, QString error) {
+                                              require(rows.isValid() && error.isEmpty(),
+                                                      "prepare priority fixture rows");
+                                              rowsReady = true;
+                                          }),
+                "priority fixture row request");
+        processUntil([&] { return rowsReady && coordinator.pendingJobCount() == 0; });
+        const int workers = std::clamp(QThread::idealThreadCount(), 1, 2);
+        const auto unblock = qScopeGuard([state, workers] { state->blockers.release(workers); });
+        for (int i = 0; i < workers; ++i)
+            require(coordinator
+                        .submit(
+                            &receiver, ScreenshotExportCoordinator::Priority::Foreground,
+                            [state](const ScreenshotExportCancellation&) {
+                                ++state->entered;
+                                state->blockers.acquire();
+                                return ScreenshotExportTaskResult{};
+                            },
+                            [](ScreenshotExportTaskResult) {})
+                        .isValid(),
+                    "occupy export pool for deterministic ordering");
+        processUntil([&] { return state->entered.load() == workers; });
+        require(coordinator
+                    .submit(
+                        &receiver, ScreenshotExportCoordinator::Priority::Background,
+                        [state](const ScreenshotExportCancellation&) {
+                            state->backgroundOrder = ++state->order;
+                            return ScreenshotExportTaskResult{};
+                        },
+                        [](ScreenshotExportTaskResult) {})
+                    .isValid(),
+                "queue an older unrelated background export");
+        bool pngReady = !joinQueuedPng;
+        if (joinQueuedPng) {
+            require(artifact.requestCanonicalPng(&receiver,
+                                                 [&](ScreenshotExportEncodingResult result) {
+                                                     require(result.succeeded(),
+                                                             "shared PNG consumer still succeeds");
+                                                     pngReady = true;
+                                                 }),
+                    "queue shared background PNG");
+            processUntil([&] { return coordinator.pendingJobCount() == workers + 2; });
+        }
+        bool copied = false;
+        require(artifact.requestClipboard(&receiver,
+                                          [&](ScreenshotExportClipboardResult result) {
+                                              require(result.succeeded(),
+                                                      "prioritized clipboard payload succeeds");
+                                              copied = true;
+                                          }),
+                "clipboard joins or starts PNG work");
+        processUntil([&] { return coordinator.pendingJobCount() == workers + 2; });
+        state->blockers.release();
+        processUntil([&] { return copied && pngReady && state->backgroundOrder.load() != 0; });
+        require(state->encodingOrder.load() == 1 && state->backgroundOrder.load() == 2,
+                "new clipboard PNG and late clipboard subscribers both precede background exports");
+        state->blockers.release(workers);
+        processUntil([&] { return coordinator.pendingJobCount() == 0; });
     }
 }
 
@@ -567,8 +647,7 @@ void failedPngRequestsCanRetryWithoutInvalidatingOtherLevels() {
                 [&](ScreenshotExportEncodingResult result) {
                     require(result.succeeded() &&
                                 result.image.bytes() ==
-                                    snow_shot::image_codec::encodePng(
-                                        snow_shot::image_codec::srgbRowSource(image), 9),
+                                    snow_shot::image_codec::encodePng(rowSourceFor(image, {}), 9),
                             "a new PNG request could not retry a transient failure");
                     ++callbacks;
                 }),
@@ -1109,7 +1188,9 @@ void clipboardAndSavesShareConfiguredEncoding(ScreenshotCompressionLevel saveCom
                                                                     {100, saveCompression})
                               .compression_level;
         require(clipboard == snow_shot::image_codec::encodePng(
-                                 snow_shot::image_codec::srgbRowSource(image), level),
+                                 rowBacked ? rowSourceFor(image, {})
+                                           : snow_shot::image_codec::srgbRowSource(image),
+                                 level),
                 "clipboard did not use the configured PNG encoding");
         require(canonical.constData() == clipboard.constData(),
                 "concurrent clipboard/save/history requests encoded the same PNG more than once");
@@ -2947,6 +3028,7 @@ int main(int argc, char** argv) {
             return EXIT_SUCCESS;
         }
         if (application.arguments().contains(QStringLiteral("--clipboard-fusion-only"))) {
+            clipboardDependenciesRunAheadOfBackgroundExports();
             clipboardPreparationFusesRowsAndClonesNativeOwnership();
             coldClipboardRequestsShareCanonicalRowsAndRetryFailures();
             cancelledColdClipboardRetainsConsumerLeaseUntilWorkerRetires();
@@ -2970,6 +3052,7 @@ int main(int argc, char** argv) {
         clipboardSharesPendingConfiguredEncoding();
         clipboardReusesConfiguredPng();
         clipboardPreparationFusesRowsAndClonesNativeOwnership();
+        clipboardDependenciesRunAheadOfBackgroundExports();
         coldClipboardRequestsShareCanonicalRowsAndRetryFailures();
         cancelledColdClipboardRetainsConsumerLeaseUntilWorkerRetires();
         latePngSubscriberRetainsLeaseDuringFusedClipboardCancellation();

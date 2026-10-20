@@ -5891,6 +5891,23 @@ if(SNOW_SHOT_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
+    add_executable(snow-shot-clipboard-preparation-tests
+        tests/screenshot_clipboard_preparation_tests.cpp
+        src/presentation/services/screenshotclipboardservice.cpp)
+    target_include_directories(snow-shot-clipboard-preparation-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
+    target_link_libraries(snow-shot-clipboard-preparation-tests PRIVATE
+        snow_shot_image_codec snow_shot_diagnostics Qt6::Gui)
+    if(WIN32)
+        target_link_libraries(snow-shot-clipboard-preparation-tests PRIVATE user32)
+    endif()
+    add_test(NAME snow-shot-clipboard-preparation-tests
+        COMMAND snow-shot-clipboard-preparation-tests)
+    set_tests_properties(snow-shot-clipboard-preparation-tests PROPERTIES
+        LABELS unit TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
     add_executable(snow-shot-export-coordinator-tests
         tests/screenshot_export_coordinator_tests.cpp
         include/snow_shot/presentation/screenshotclipboardservice.h
@@ -5907,6 +5924,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     endif()
     add_test(NAME snow-shot-export-coordinator-tests
              COMMAND snow-shot-export-coordinator-tests)
+    add_test(NAME snow-shot-export-scheduling-tests
+             COMMAND snow-shot-export-coordinator-tests --scheduling-only)
+    set_tests_properties(snow-shot-export-scheduling-tests PROPERTIES
+        LABELS unit TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-export-coordinator-tests PROPERTIES
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
