@@ -196,8 +196,19 @@ void verifyLoadingFeedback(snow_shot::presentation::ImageEditingSource original)
     auto flattened = original;
     flattened.flattened = true;
     window.present(flattened);
-    require(statusMessage(window) && statusMessage(window)->type() == AdMessage::Type::Warning,
-            "restoring only composited pixels displays a warning message");
+    require(!statusMessage(window) && window.canvas()->isEnabled() && toolbar->isEnabled(),
+            "composited images open normally without an annotation notice");
+    QEvent flattenedLanguageChange(QEvent::LanguageChange);
+    QApplication::sendEvent(surface, &flattenedLanguageChange);
+    require(!statusMessage(window), "language changes do not introduce an annotation notice");
+    auto flattenedLayered = layered;
+    flattenedLayered.flattened = true;
+    complete = false;
+    window.present(flattenedLayered);
+    awaitCondition([&] { return complete; }, "composited layered image finishes loading");
+    require(success && !statusMessage(window) && window.canvas()->isEnabled() &&
+                toolbar->isEnabled(),
+            "asynchronous composited loading dismisses its spinner without an annotation notice");
     ImageEditingSource failure;
     failure.error = QStringLiteral("Detailed source error");
     window.present(failure);
@@ -495,16 +506,22 @@ void verifyRecognitionFeedback(snow_shot::presentation::ImageEditingSource origi
         {[&] { return ScreenshotPinnedRecognitionProviders{&provider, nullptr, nullptr}; }});
     original.flattened = true;
     window.present(original);
-    QPointer<adqt::widgets::AdMessageHandle> imageWarning = statusMessage(window);
-    require(imageWarning && imageWarning->type() == AdMessage::Type::Warning,
-            "recognition fixture retains an unrelated image warning");
+    require(!statusMessage(window),
+            "recognition fixture opens a composited image without a notice");
+    ImageEditingSource failedSource;
+    failedSource.error = QStringLiteral("Image source fixture failed");
+    window.present(failedSource);
+    QPointer<adqt::widgets::AdMessageHandle> imageError = statusMessage(window);
+    require(imageError && imageError->type() == AdMessage::Type::Error &&
+                imageError->content() == failedSource.error,
+            "recognition fixture retains an unrelated image load error");
     window.palette()->ocrRequested();
     QPointer<adqt::widgets::AdMessageHandle> progress = editorMessage(window, recognitionKey);
     require(progress && progress->type() == AdMessage::Type::Loading &&
                 progress->content() == QStringLiteral("Recognizing text") &&
                 progress->noticeWidget()->window() == window.canvas()->window(),
             "text recognition uses a window-scoped loading message");
-    require(imageWarning && imageWarning->isOpen(),
+    require(imageError && imageError->isOpen(),
             "recognition progress does not replace image feedback");
     provider.complete(0, {}, QStringLiteral("Recognition fixture failed"));
     auto* failure = editorMessage(window, statusKey);
@@ -512,7 +529,7 @@ void verifyRecognitionFeedback(snow_shot::presentation::ImageEditingSource origi
                 failure->type() == AdMessage::Type::Error &&
                 failure->content() == QStringLiteral("Recognition fixture failed"),
             "recognition failure dismisses progress while keeping the error visible");
-    require(imageWarning && imageWarning->isOpen(),
+    require(imageError && imageError->isOpen(),
             "recognition cleanup does not dismiss unrelated image feedback");
     window.palette()->ocrRequested();
     require(editorMessage(window, recognitionKey), "failed recognition can retry with loading");

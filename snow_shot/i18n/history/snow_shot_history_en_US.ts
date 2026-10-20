@@ -1915,10 +1915,6 @@ Files:
             <translation>Discard Changes?</translation>
         </message>
         <message>
-            <source>Editable annotations could not be restored. The composited image was opened instead.</source>
-            <translation>Editable annotations could not be restored. The composited image was opened instead.</translation>
-        </message>
-        <message>
             <source>Export completed</source>
             <translation>Export completed</translation>
         </message>

@@ -1909,10 +1909,6 @@ Files:
             <translation>捨棄變更？</translation>
         </message>
         <message>
-            <source>Editable annotations could not be restored. The composited image was opened instead.</source>
-            <translation>無法還原可編輯的標註，已開啟合成後的影像。</translation>
-        </message>
-        <message>
             <source>Export completed</source>
             <translation>匯出完成</translation>
         </message>

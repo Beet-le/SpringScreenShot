@@ -143,7 +143,7 @@ struct ImageEditingWindow::Impl {
     QImage colorImage;
     quint64 colorGeneration = 0;
     quint64 loadGeneration = 0;
-    enum class Notice { None, Loading, LoadError, Flattened, Exporting, Exported };
+    enum class Notice { None, Loading, LoadError, Exporting, Exported };
     Notice notice = Notice::None;
 
     Impl(ImageEditingWindow& owner, ImageEditingServices service)
@@ -466,11 +466,6 @@ struct ImageEditingWindow::Impl {
             break;
         case Notice::LoadError:
             message(ImageEditingWindow::tr("The image could not be loaded."));
-            break;
-        case Notice::Flattened:
-            message(ImageEditingWindow::tr("Editable annotations could not be restored. The "
-                                           "composited image was opened instead."),
-                    AdMessage::Type::Warning);
             break;
         case Notice::Exporting:
             message(ImageEditingWindow::tr("Exporting…"), AdMessage::Type::Loading);
@@ -1136,8 +1131,6 @@ void ImageEditingWindow::present(ImageEditingSource source) {
     d.syncAvailability();
     d.canvas->fit();
     d.drawing(ImageEditingCanvas::Mode::Pan);
-    if (source.flattened)
-        d.showNotice(Impl::Notice::Flattened);
     emit loaded(true);
 }
 void ImageEditingWindow::presentSource(ScreenshotExportSource source) {
