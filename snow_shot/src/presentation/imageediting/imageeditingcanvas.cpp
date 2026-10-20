@@ -181,12 +181,15 @@ QList<SnowCanvasBaseImageSource> ImageEditingCanvas::baseImageSources() const {
 std::optional<SnowCanvasFilterRenderReference> ImageEditingCanvas::filterRenderReference() const {
     if (m_document.bounds().isEmpty())
         return {};
-    return SnowCanvasFilterRenderReference{m_document.bounds(), m_document.image().width() /
-                                                                    m_document.bounds().width()};
+    return SnowCanvasFilterRenderReference{
+        m_document.bounds(), m_document.image().width() / m_document.bounds().width(),
+        SnowCanvasFilterRenderReference::Presentation::Composite};
 }
 void ImageEditingCanvas::renderBeforeCanvas(QPainter& painter,
                                             const SnowCanvasRenderContext& context) {
-    painter.setTransform(context.canvasToViewTransform);
+    // Filter replay and eraser restoration translate their painter into a bounded tile.
+    // Compose the image projection with that view-to-tile transform to sample the same pixels.
+    painter.setTransform(context.canvasToViewTransform, true);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
     painter.drawImage(m_document.bounds(), m_document.image());
 }

@@ -213,26 +213,33 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
     const QRectF deviceTarget = painter.deviceTransform().mapRect(target);
     const QSize deviceSize(qRound(deviceTarget.width()), qRound(deviceTarget.height()));
     painter.setRenderHint(QPainter::SmoothPixmapTransform, deviceSize != m_pixelSize);
-    painter.setCompositionMode(QPainter::CompositionMode_Source);
-    if (request.backgroundContext != nullptr) {
-        painter.fillRect(
-            request.backgroundContext->viewportRect,
-            request.clearBackgroundEnabled
-                ? snow_canvas_renderer::toQColor(m_displayCache.sceneInfo().clear_color)
-                : Qt::transparent);
-    }
-    // The reference owns pixels only inside its canvas rectangle. Spotlight also
-    // covers the surrounding viewport; Source presentation replaces the interior
-    // (including transparent pixels) so the backdrop is never composited twice.
-    const QRect coveredInterior(qCeil(target.left()), qCeil(target.top()),
-                                qFloor(target.right()) - qCeil(target.left()),
-                                qFloor(target.bottom()) - qCeil(target.top()));
-    const QRegion outside = request.exposedRegion.subtracted(QRegion(coveredInterior));
-    if (!outside.isEmpty()) {
+    if (reference.presentation == SnowCanvasFilterRenderReference::Presentation::Composite) {
+        // The host has already painted its background. Clearing it would turn transparent
+        // and antialiased edge pixels black on an opaque backing store. The reference
+        // includes its entire backdrop, so composite it exactly once, including Spotlight.
         painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-        snow_canvas_renderer::renderSpotlightBackdrop(painter, request, outside);
+    } else {
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        if (request.backgroundContext != nullptr) {
+            painter.fillRect(
+                request.backgroundContext->viewportRect,
+                request.clearBackgroundEnabled
+                    ? snow_canvas_renderer::toQColor(m_displayCache.sceneInfo().clear_color)
+                    : Qt::transparent);
+        }
+        // The reference owns pixels only inside its canvas rectangle. Spotlight also
+        // covers the surrounding viewport; Source presentation replaces the interior
+        // (including transparent pixels) so the backdrop is never composited twice.
+        const QRect coveredInterior(qCeil(target.left()), qCeil(target.top()),
+                                    qFloor(target.right()) - qCeil(target.left()),
+                                    qFloor(target.bottom()) - qCeil(target.top()));
+        const QRegion outside = request.exposedRegion.subtracted(QRegion(coveredInterior));
+        if (!outside.isEmpty()) {
+            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+            snow_canvas_renderer::renderSpotlightBackdrop(painter, request, outside);
+        }
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
     }
-    painter.setCompositionMode(QPainter::CompositionMode_Source);
     painter.drawImage(target, m_image);
     painter.restore();
     std::size_t updatedPixels = 0;

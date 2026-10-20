@@ -8,8 +8,10 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPaintEvent>
+#include <QPainter>
 #include <QPointingDevice>
 #include <QTabletEvent>
+#include <QtMath>
 #include <array>
 #include <cmath>
 #include <stdexcept>
@@ -20,6 +22,30 @@ using namespace snow_shot::presentation;
 void require(bool condition, const char* message) {
     if (!condition)
         throw std::runtime_error(message);
+}
+
+QImage renderWidget(QWidget& widget, qreal dpr) {
+    QImage image(QSize(qCeil(widget.width() * dpr), qCeil(widget.height() * dpr)),
+                 QImage::Format_RGB32);
+    image.setDevicePixelRatio(dpr);
+    image.fill(Qt::magenta);
+    QPainter painter(&image);
+    widget.render(&painter);
+    return image;
+}
+
+void drawExportedPreview(QPainter& painter, const QRectF& imageRect, const QImage& exported) {
+    painter.save();
+    // The editor composites its complete scene over the host background. Source and
+    // SourceOver can round differently during resampling, even for opaque source pixels.
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    const auto deviceRect = painter.deviceTransform().mapRect(imageRect);
+    const QSize deviceSize(qRound(deviceRect.width()), qRound(deviceRect.height()));
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, deviceSize != exported.size());
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setClipRect(imageRect, Qt::IntersectClip);
+    painter.drawImage(imageRect, exported);
+    painter.restore();
 }
 
 void mouse(SnowCanvasWidget& canvas, QEvent::Type type, QPointF point,
@@ -123,6 +149,258 @@ struct Fixture {
                                                 {{document.image(), document.bounds()}});
     }
 };
+
+ImageEditingSource patternedSource() {
+    ImageEditingSource source;
+    source.image = QImage(640, 400, QImage::Format_ARGB32_Premultiplied);
+    source.canvasRect = QRectF(-25.5, 17.25, 320, 200);
+    for (int y = 0; y < source.image.height(); ++y) {
+        for (int x = 0; x < source.image.width(); ++x) {
+            source.image.setPixelColor(
+                x, y,
+                QColor((x * 17 + y * 3) % 256, (x * 5 + y * 19) % 256, (x * 11 + y * 7) % 256));
+        }
+    }
+    return source;
+}
+
+void backgroundCallbacksPreserveTileProjection() {
+    Fixture fixture;
+    auto source = patternedSource();
+    for (int y = 0; y < source.image.height(); ++y)
+        for (int x = 0; x < source.image.width(); ++x) {
+            auto color = source.image.pixelColor(x, y);
+            color.setAlpha((x * 11 + y * 17) % 256);
+            source.image.setPixelColor(x, y, color);
+        }
+    require(fixture.document.load(source), "load translucent tile projection fixture");
+    for (const qreal dpr : {1.0, 1.25, 2.0}) {
+        const SnowCanvasRenderContext context{QRect(0, 0, 480, 320),
+                                              QRegion(QRect(111, 73, 97, 81)),
+                                              QTransform(1.25, 0, 0, 1.25, 90.25, 31.5), dpr};
+        for (const bool original : {false, true}) {
+            QImage expected(QSize(qCeil(97 * dpr), qCeil(81 * dpr)),
+                            QImage::Format_ARGB32_Premultiplied);
+            expected.setDevicePixelRatio(dpr);
+            expected.fill(Qt::transparent);
+            auto actual = expected;
+            QPainter reference(&expected);
+            reference.translate(-111, -73);
+            reference.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            reference.drawImage(context.canvasToViewTransform.mapRect(source.canvasRect),
+                                source.image);
+            reference.end();
+            QPainter painter(&actual);
+            painter.translate(-111, -73);
+            if (original)
+                fixture.canvas.customRenderer()->renderOriginalBackground(painter, context);
+            else
+                fixture.canvas.customRenderer()->renderBeforeCanvas(painter, context);
+            painter.end();
+            require(actual == expected,
+                    "image backgrounds retain tile offsets, camera projection, DPR and alpha");
+        }
+    }
+}
+
+void filtersAndErasersMatchExportedImage() {
+    const auto source = patternedSource();
+    for (const auto type : {SnowCanvasFilterType::Inversion, SnowCanvasFilterType::GaussianBlur,
+                            SnowCanvasFilterType::RestoreBackground}) {
+        for (const bool pen : {false, true}) {
+            Fixture fixture;
+            require(fixture.document.load(source), "load patterned effect fixture");
+            const auto center = source.canvasRect.center();
+            require(fixture.canvas.setViewportCamera(center.x(), center.y(), 1),
+                    "position effect fixture camera");
+            if (type == SnowCanvasFilterType::RestoreBackground)
+                fixture.addRectangle(source.canvasRect.adjusted(20, 20, -20, -20));
+            const auto tool =
+                type == SnowCanvasFilterType::RestoreBackground
+                    ? (pen ? SnowCanvasTool::BrushEraser : SnowCanvasTool::RectangleEraser)
+                    : (pen ? SnowCanvasTool::PenFilter : SnowCanvasTool::RectangleFilter);
+            require(fixture.document.runtime().setQuickSelectionDisabledTools({tool}),
+                    "effect gestures create new elements over existing annotations");
+            if (type != SnowCanvasFilterType::RestoreBackground)
+                require(fixture.canvas.setCanvasFilterStyle(
+                            {type, 0.65, 1.0, 24}, SnowCanvasFilterStylePropertyType |
+                                                       SnowCanvasFilterStylePropertyStrength |
+                                                       SnowCanvasFilterStylePropertyOpacity |
+                                                       SnowCanvasFilterStylePropertyStrokeWidth),
+                        "configure effect fixture");
+            require(fixture.canvas.setCanvasBrushEraserCreationStyle({24}),
+                    "configure brush eraser fixture");
+            for (int stroke = 0; stroke < 2; ++stroke) {
+                require(fixture.canvas.setCanvasTool(tool), "activate effect fixture tool");
+                drag(fixture.canvas,
+                     fixture.view(source.canvasRect.topLeft() + QPointF(70 + stroke * 35, 45)),
+                     fixture.view(source.canvasRect.topLeft() + QPointF(250, 155 - stroke * 25)));
+                require(fixture.canvas.resetEditingState() &&
+                            fixture.canvas.setCanvasTool(SnowCanvasTool::Select),
+                        "hide effect selection and cursor overlays");
+                // Warm the retained source raster before the next edit damages a subregion.
+                static_cast<void>(fixture.canvas.grab());
+            }
+            const auto exported = fixture.exported();
+            require(exported != source.image, "effect fixture changes document pixels");
+            for (const qreal zoom : {1.0, 1.5}) {
+                require(fixture.canvas.setViewportCamera(center.x() + 5.25, center.y() - 3.5, zoom),
+                        "pan and zoom effect fixture");
+                const auto imageRect =
+                    fixture.canvas.canvasToViewTransform().mapRect(source.canvasRect);
+                const auto verifyPreview = [&](const QImage& actual) {
+                    const qreal dpr = actual.devicePixelRatio();
+                    QImage expected(actual.size(), actual.format());
+                    expected.setDevicePixelRatio(dpr);
+                    expected.fill(Qt::transparent);
+                    QPainter reference(&expected);
+                    drawExportedPreview(reference, imageRect, exported);
+                    reference.end();
+                    // Exclude widget chrome and image-edge clipping; compare every document
+                    // pixel across the effect boundary and the untouched surrounding image.
+                    const auto interior = QTransform::fromScale(dpr, dpr)
+                                              .mapRect(imageRect.adjusted(2, 2, -2, -2))
+                                              .toAlignedRect()
+                                              .intersected(actual.rect());
+                    require(actual.copy(interior) == expected.copy(interior),
+                            qPrintable(QStringLiteral("effect preview matches export (type %1, "
+                                                      "pen %2, zoom %3, DPR %4)")
+                                           .arg(static_cast<int>(type))
+                                           .arg(pen)
+                                           .arg(zoom)
+                                           .arg(dpr)));
+                };
+                verifyPreview(fixture.canvas.grab().toImage());
+                // Exercise fractional sampling on every run, regardless of the display DPR.
+                for (const qreal dpr : {1.0, 1.25, 1.5, 2.0})
+                    verifyPreview(renderWidget(fixture.canvas, dpr));
+            }
+        }
+    }
+}
+
+void effectsCompositeOverTheHostBackground() {
+    class Checkerboard final : public QWidget {
+      public:
+        static void paint(QPainter& painter, const QRect& bounds) {
+            painter.fillRect(bounds, Qt::white);
+            constexpr int tile = 10;
+            for (int y = 0; y < bounds.height(); y += tile)
+                for (int x = 0; x < bounds.width(); x += tile)
+                    if ((x / tile + y / tile) % 2)
+                        painter.fillRect(QRect(x, y, tile, tile), QColor(240, 240, 240));
+        }
+        void paintEvent(QPaintEvent*) override {
+            QPainter painter(this);
+            paint(painter, rect());
+        }
+    };
+    for (const auto tool : {SnowCanvasTool::RectangleFilter, SnowCanvasTool::PenFilter,
+                            SnowCanvasTool::RectangleEraser, SnowCanvasTool::BrushEraser}) {
+        for (const int alpha : {255, 96}) {
+            for (const bool spotlight : {false, true}) {
+                Checkerboard host;
+                host.resize(480, 400);
+                Fixture fixture;
+                fixture.canvas.setParent(&host);
+                fixture.canvas.setGeometry(host.rect());
+                fixture.canvas.show();
+                host.show();
+                QApplication::processEvents();
+                ImageEditingSource source;
+                source.image = QImage(240, 160, QImage::Format_ARGB32_Premultiplied);
+                source.image.fill(QColor(245, 245, 245, alpha));
+                // Transparent pixels touch an image edge and the eraser's path.
+                QPainter sourcePainter(&source.image);
+                sourcePainter.setCompositionMode(QPainter::CompositionMode_Source);
+                sourcePainter.fillRect(QRect(0, 60, 100, 50), Qt::transparent);
+                sourcePainter.end();
+                source.canvasRect = QRectF(-25.5, 17.25, 240, 160);
+                require(fixture.document.load(source), "load host composition fixture");
+                const auto center = source.canvasRect.center();
+                require(fixture.canvas.setViewportCamera(center.x(), center.y(), 1),
+                        "position host composition fixture");
+                const bool eraser =
+                    tool == SnowCanvasTool::RectangleEraser || tool == SnowCanvasTool::BrushEraser;
+                if (eraser)
+                    fixture.addRectangle(source.canvasRect.adjusted(20, 20, -20, -20));
+                if (spotlight) {
+                    require(
+                        !fixture.document.runtime()
+                             .applyAnnotationTransaction(QByteArrayLiteral(
+                                 R"({"version":1,"operations":[{"type":"spotlight","bounds":[90,70,30,20]}]})"))
+                             .isEmpty(),
+                        "add a source-grid spotlight backdrop");
+                    require(fixture.canvas.setCanvasSpotlightConfig({QColor(20, 40, 60), 0.4}),
+                            "configure translucent spotlight backdrop");
+                }
+                require(fixture.document.runtime().setQuickSelectionDisabledTools({tool}),
+                        "effect gestures create new elements");
+                require(fixture.canvas.setCanvasFilterStyle(
+                            {SnowCanvasFilterType::Inversion, 1, 1, 24},
+                            SnowCanvasFilterStylePropertyType |
+                                SnowCanvasFilterStylePropertyStrength |
+                                SnowCanvasFilterStylePropertyOpacity |
+                                SnowCanvasFilterStylePropertyStrokeWidth),
+                        "configure host composition filter");
+                require(fixture.canvas.setCanvasBrushEraserCreationStyle({24}),
+                        "configure host composition eraser");
+                require(fixture.canvas.setCanvasTool(tool), "activate host composition effect");
+                drag(fixture.canvas, fixture.view(source.canvasRect.topLeft() + QPointF(35, 35)),
+                     fixture.view(source.canvasRect.topLeft() + QPointF(150, 95)));
+                require(fixture.canvas.resetEditingState() &&
+                            fixture.canvas.setCanvasTool(SnowCanvasTool::Select),
+                        "hide effect controls");
+                const auto exported = fixture.exported();
+                require(!exported.isNull() && exported != source.image,
+                        "host composition fixture applies its effect");
+                for (const qreal zoom : {0.65, 1.2}) {
+                    require(fixture.canvas.setViewportCamera(center.x() + 0.25, center.y() - 0.35,
+                                                             zoom),
+                            "place image edges between physical pixels");
+                    const auto imageRect =
+                        fixture.canvas.canvasToViewTransform().mapRect(source.canvasRect);
+                    for (const qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+                        QImage expected(
+                            QSize(qCeil(host.width() * dpr), qCeil(host.height() * dpr)),
+                            QImage::Format_RGB32);
+                        expected.setDevicePixelRatio(dpr);
+                        QPainter reference(&expected);
+                        Checkerboard::paint(reference, host.rect());
+                        drawExportedPreview(reference, imageRect, exported);
+                        reference.end();
+                        auto actual = renderWidget(host, dpr);
+                        require(actual == expected,
+                                qPrintable(QStringLiteral("complete preview composites over host "
+                                                          "(tool %1, alpha %2, spotlight %3, "
+                                                          "zoom %4, DPR %5)")
+                                               .arg(static_cast<int>(tool))
+                                               .arg(alpha)
+                                               .arg(spotlight)
+                                               .arg(zoom)
+                                               .arg(dpr)));
+                        // Repainting disjoint edge strips must restore the parent before
+                        // compositing alpha again, while retaining the unexposed center.
+                        const QRegion damage =
+                            QRegion(host.rect()) - QRegion(QRect(180, 150, 120, 100));
+                        // Qt's clipped bilinear spans can round differently from full spans;
+                        // independently compose the export with the same damage region.
+                        reference.begin(&expected);
+                        reference.setClipRegion(damage);
+                        Checkerboard::paint(reference, host.rect());
+                        drawExportedPreview(reference, imageRect, exported);
+                        reference.end();
+                        QPainter painter(&actual);
+                        host.render(&painter, damage.boundingRect().topLeft(), damage);
+                        painter.end();
+                        require(actual == expected,
+                                "partial edge repaints preserve alpha and the untouched center");
+                    }
+                }
+            }
+        }
+    }
+}
 
 void resizeControlsRemainVisibleAndUsableAtEveryImageEdge() {
     struct Edge {
@@ -298,6 +576,9 @@ void cropPreviewsRepaintOnlyTheirDamageAndCancelCleanly() {
 } // namespace
 
 void runImageEditingCanvasTests() {
+    effectsCompositeOverTheHostBackground();
+    filtersAndErasersMatchExportedImage();
+    backgroundCallbacksPreserveTileProjection();
     resizeControlsRemainVisibleAndUsableAtEveryImageEdge();
     rotationAndTextControlsRemainUsableOutsideImage();
     documentPixelsRemainClippedWhileControlsAreVisible();
