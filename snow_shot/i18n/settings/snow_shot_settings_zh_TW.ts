@@ -4004,6 +4004,10 @@
             <translation>顯示原圖預覽</translation>
         </message>
         <message>
+            <source>Show recording status prompts</source>
+            <translation>顯示錄影狀態提示</translation>
+        </message>
+        <message>
             <source>Show screenshot guides when a capture starts</source>
             <translation>開始截圖時顯示輔助線</translation>
         </message>
@@ -4050,6 +4054,10 @@
         <message>
             <source>Show the sub-toolbar for the Edit Selection tool</source>
             <translation>顯示編輯選取範圍工具的子工具列</translation>
+        </message>
+        <message>
+            <source>Show the video format and microphone and speaker status in the center of the motion preview area.</source>
+            <translation>在動效預覽區域中央顯示影片格式以及麥克風和喇叭狀態。</translation>
         </message>
         <message>
             <source>Show toolbar</source>

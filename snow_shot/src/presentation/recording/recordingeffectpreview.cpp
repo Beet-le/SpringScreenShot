@@ -3,16 +3,124 @@
 #include "recordingeffectgeometry.h"
 #include "screenrecordingperfinstrumentation.h"
 #include "snow_shot/presentation/canvasstatusreadout.h"
+#include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/screenrecordingareawindow.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include <QApplication>
 #include <QDialog>
 #include <QPainter>
+#include "antd_icons.h"
+#include <algorithm>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #include <dwmapi.h>
 #endif
+
+class RecordingStatusPrompt final : public QWidget {
+    Q_DECLARE_TR_FUNCTIONS(RecordingStatusPrompt)
+
+  public:
+    explicit RecordingStatusPrompt(QWidget* parent) : QWidget(parent) {
+        setObjectName(QStringLiteral("screenRecordingStatusPrompt"));
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setFocusPolicy(Qt::NoFocus);
+        hide();
+        refresh();
+        connect(&snow_shot::presentation::styles::ThemeManager::instance(),
+                &snow_shot::presentation::styles::ThemeManager::themeChanged, this,
+                [this] { update(); });
+    }
+
+    void setStatus(const QString& format, bool microphone, bool speaker) {
+        if (m_format == format && m_microphone == microphone && m_speaker == speaker)
+            return;
+        m_format = format;
+        m_microphone = microphone;
+        m_speaker = speaker;
+        refresh();
+    }
+
+    void present(const QRectF& bounds, bool visible) {
+        m_bounds = bounds;
+        m_visible = visible;
+        updateLayout();
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, 150));
+        painter.drawRoundedRect(rect(), 6, 6);
+        painter.setPen(Qt::white);
+        const int textWidth = fontMetrics().horizontalAdvance(m_text);
+        painter.drawText(QRect(kPadding, 0, textWidth, height()), Qt::AlignCenter, m_text);
+        namespace custom = snow_shot::presentation::icons::custom::outlined;
+        const auto colors =
+            snow_shot::presentation::styles::ThemeManager::instance().themeColorScheme().map;
+        const auto microphoneColor = adqt::icons::IconColors::primary(
+            m_microphone ? colors.colorSuccess : colors.colorError);
+        const auto speakerColor =
+            adqt::icons::IconColors::primary(m_speaker ? colors.colorSuccess : colors.colorError);
+        const QRect microphone(kPadding + textWidth + kGap, (height() - kIconSize) / 2, kIconSize,
+                               kIconSize);
+        adqt::icons::paintIcon(&painter,
+                               m_microphone ? custom::RecordingMicrophone(microphoneColor)
+                                            : custom::RecordingMicrophoneOff(microphoneColor),
+                               microphone);
+        adqt::icons::paintIcon(&painter,
+                               m_speaker ? adqt::icons::antd::outlined::Sound(speakerColor)
+                                         : custom::RecordingSpeakerOff(speakerColor),
+                               microphone.translated(kIconSize + kGap, 0));
+    }
+
+    void changeEvent(QEvent* event) override {
+        QWidget::changeEvent(event);
+        if (event->type() == QEvent::LanguageChange || event->type() == QEvent::FontChange ||
+            event->type() == QEvent::ApplicationFontChange)
+            refresh();
+    }
+
+  private:
+    void refresh() {
+        m_text = m_format == QStringLiteral("gif")    ? tr("GIF")
+                 : m_format == QStringLiteral("webp") ? tr("WebP")
+                                                      : tr("MP4");
+        setAccessibleName(
+            tr("Format: %1; %2; %3")
+                .arg(m_text, m_microphone ? tr("Microphone enabled") : tr("Microphone disabled"),
+                     m_speaker ? tr("Speaker enabled") : tr("Speaker disabled")));
+        updateLayout();
+        update();
+    }
+
+    void updateLayout() {
+        const QSize desired(fontMetrics().horizontalAdvance(m_text) +
+                                2 * (kPadding + kGap + kIconSize),
+                            std::max(fontMetrics().height(), kIconSize) + 16);
+        const QRectF bounds = m_bounds.intersected(parentWidget()->rect());
+        const bool fits = bounds.width() >= desired.width() && bounds.height() >= desired.height();
+        resize(desired);
+        move(qRound(bounds.center().x() - width() / 2.0),
+             qRound(bounds.center().y() - height() / 2.0));
+        setVisible(m_visible && fits);
+        if (isVisible())
+            raise();
+    }
+
+    static constexpr int kPadding = 12;
+    static constexpr int kGap = 12;
+    static constexpr int kIconSize = 20;
+    QString m_format = QStringLiteral("mp4");
+    QString m_text;
+    bool m_microphone = false;
+    bool m_speaker = false;
+    bool m_visible = false;
+    QRectF m_bounds;
+};
 
 namespace {
 uint32_t rgba(const QColor& color) {
@@ -120,7 +228,7 @@ RecordingEffectPreview::RecordingEffectPreview(ScreenRecordingAreaWindow& area,
                                                std::unique_ptr<RecordingEffectsSource> source)
     : QObject(&area), m_area(area),
       m_source(source ? std::move(source) : std::make_unique<NativeRecordingEffectsSource>()),
-      m_readout(new CanvasStatusReadout(&area)) {
+      m_readout(new CanvasStatusReadout(&area)), m_statusPrompt(new RecordingStatusPrompt(&area)) {
     m_readout->setObjectName(QStringLiteral("screenRecordingMotionPreviewLabel"));
     m_readout->setMessage(CanvasStatusReadout::Message::MotionPreview);
     area.canvas()->setCustomRenderer(this);
@@ -141,6 +249,7 @@ RecordingEffectPreview::~RecordingEffectPreview() {
     stopAndClear();
     m_area.canvas()->setCustomRenderer(nullptr);
     delete m_readout;
+    delete m_statusPrompt;
 }
 
 void RecordingEffectPreview::configure(const QRect& capture, const QSize& output,
@@ -188,9 +297,16 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
     if (trail.alpha() == 0 && click.alpha() == 0 && !keyboard && highlight.alpha() == 0 &&
         !recordMouseClicks && playbackOverlay == 0 && !webcam) {
         stopAndClear();
-    } else {
-        m_configurationTimer.start();
     }
+    // Status prompts remain available even when no native effect observer is needed.
+    m_configurationTimer.start();
+}
+
+void RecordingEffectPreview::setStatusPrompts(bool enabled, const QString& format, bool microphone,
+                                              bool speaker) {
+    m_showStatusPrompts = enabled;
+    m_statusPrompt->setStatus(format, microphone, speaker);
+    updateReadout();
 }
 
 void RecordingEffectPreview::setEligible(bool eligible) {
@@ -219,6 +335,8 @@ void RecordingEffectPreview::synchronize() {
         stopAndClear();
         return;
     }
+    m_previewVisible = true;
+    updateReadout();
 #ifdef Q_OS_MACOS
     // Native input uses desktop points; every preview layer uses physical display pixels.
     const double canvasScale = m_area.devicePixelRatioF();
@@ -329,6 +447,8 @@ void RecordingEffectPreview::stopAndClear(bool present) {
     clearFrame();
     clearPlaybackFrame();
     m_readout->dismiss();
+    m_previewVisible = false;
+    m_statusPrompt->present(m_area.selectionRect(), false);
     if (present && m_area.isVisible()) {
         m_area.repaint();
         m_area.canvas()->repaint();
@@ -425,6 +545,7 @@ QRegion RecordingEffectPreview::frameRegion(const RecordingEffectsFrame& frame) 
 }
 
 void RecordingEffectPreview::updateReadout() {
+    m_statusPrompt->present(m_area.selectionRect(), m_previewVisible && m_showStatusPrompts);
     if (!m_running || !m_frame) {
         m_readout->dismiss();
         return;

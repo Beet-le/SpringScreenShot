@@ -89,6 +89,7 @@
     "RecordingKeyboardLabels",
     "RecordingRegionDragHandle",
     "RecordingRenderDialog",
+    "RecordingStatusPrompt",
     "RecordingTrimSession",
     "RecordingTrimToolbar",
     "ScreenRecordingController",

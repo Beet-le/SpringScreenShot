@@ -540,6 +540,8 @@ class RecordingSettings final {
     bool setCaptureToolbarInRecording(bool capture) const;
     [[nodiscard]] bool autoHideToolbar() const;
     bool setAutoHideToolbar(bool enabled) const;
+    [[nodiscard]] bool showStatusPrompts() const;
+    bool setShowStatusPrompts(bool enabled) const;
     [[nodiscard]] bool autoExitAfterRecordingEnds() const;
     bool setAutoExitAfterRecordingEnds(bool enabled) const;
     [[nodiscard]] bool notifyAfterExportCompletes() const;

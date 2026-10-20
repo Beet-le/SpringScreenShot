@@ -2248,6 +2248,17 @@ SettingsItemDefinition screenRecordingAutoHideToolbarItem() {
         SettingsSwitchBinding::ScreenRecordingAutoHideToolbar);
 }
 
+SettingsItemDefinition screenRecordingShowStatusPromptsItem() {
+    return switchItem(
+        QStringLiteral("screen-recording.show-status-prompts"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Show recording status prompts"),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "Show the video format and microphone and speaker status in the center "
+                          "of the motion preview area."),
+        QStringLiteral("screen_recording/show_status_prompts"),
+        SettingsSwitchBinding::ScreenRecordingShowStatusPrompts);
+}
+
 SettingsItemDefinition screenRecordingNotifyAfterExportCompletesItem() {
     return switchItem(QStringLiteral("screen-recording.notify-after-export-completes"),
                       QT_TRANSLATE_NOOP("SettingsCatalog", "Notify after export completes"),
@@ -3558,7 +3569,8 @@ QVector<SettingsPageDefinition> builtInPages() {
                  {screenRecordingAutoHideToolbarItem(),
                   screenRecordingAutoExitAfterRecordingEndsItem(),
                   screenRecordingNotifyAfterExportCompletesItem(),
-                  screenRecordingDeleteFilesOnRecordingCloseItem()},
+                  screenRecordingDeleteFilesOnRecordingCloseItem(),
+                  screenRecordingShowStatusPromptsItem()},
              },
          },
          SettingsPageKind::GeneratedSettings,
@@ -5179,6 +5191,9 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsSwitchBinding::ScreenRecordingAutoHideToolbar:
                         expectedKey = QStringLiteral("screen_recording/auto_hide_toolbar");
+                        break;
+                    case SettingsSwitchBinding::ScreenRecordingShowStatusPrompts:
+                        expectedKey = QStringLiteral("screen_recording/show_status_prompts");
                         break;
                     case SettingsSwitchBinding::ScreenRecordingAutoExitAfterRecordingEnds:
                         expectedKey =

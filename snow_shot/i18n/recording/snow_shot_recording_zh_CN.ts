@@ -116,6 +116,41 @@
         </message>
     </context>
     <context>
+        <name>RecordingStatusPrompt</name>
+        <message>
+            <source>Format: %1; %2; %3</source>
+            <translation>格式：%1；%2；%3</translation>
+        </message>
+        <message>
+            <source>GIF</source>
+            <translation>GIF</translation>
+        </message>
+        <message>
+            <source>MP4</source>
+            <translation>MP4</translation>
+        </message>
+        <message>
+            <source>Microphone disabled</source>
+            <translation>麦克风已关闭</translation>
+        </message>
+        <message>
+            <source>Microphone enabled</source>
+            <translation>麦克风已开启</translation>
+        </message>
+        <message>
+            <source>Speaker disabled</source>
+            <translation>扬声器已关闭</translation>
+        </message>
+        <message>
+            <source>Speaker enabled</source>
+            <translation>扬声器已开启</translation>
+        </message>
+        <message>
+            <source>WebP</source>
+            <translation>WebP</translation>
+        </message>
+    </context>
+    <context>
         <name>RecordingTrimSession</name>
         <message>
             <source>Choose a different file to preserve the original recording.</source>

@@ -300,6 +300,10 @@ struct ScreenRecordingController::Impl {
         QObject::connect(&snow_shot::storage::ApplicationStorage::instance().configuration(),
                          &snow_shot::storage::ConfigurationStore::valueChanged, &owner,
                          [this](const QString& key, const QJsonValue&) {
+                             if (key == QStringLiteral("screen_recording/show_status_prompts")) {
+                                 syncPreview();
+                                 return;
+                             }
                              if (key == QStringLiteral("screen_recording/enable_webcam") ||
                                  key == QStringLiteral("screen_recording/webcam_size") ||
                                  key == QStringLiteral("screen_recording/webcam_shape")) {
@@ -652,12 +656,14 @@ struct ScreenRecordingController::Impl {
                          uiSession->connections.get(), [this](bool enabled) {
                              setOption(microphoneEnabled, enabled);
                              snow_shot::storage::RecordingSettings().setMicrophoneEnabled(enabled);
+                             syncPreview();
                              syncAudioMeter();
                          });
         QObject::connect(palette, &ScreenshotToolPalette::recordingSystemAudioToggled,
                          uiSession->connections.get(), [this](bool enabled) {
                              setOption(systemAudioEnabled, enabled);
                              snow_shot::storage::RecordingSettings().setSystemAudioEnabled(enabled);
+                             syncPreview();
                              syncAudioMeter();
                          });
         QObject::connect(palette, &ScreenshotToolPalette::recordingMicrophoneGainChanged,
@@ -2265,6 +2271,10 @@ struct ScreenRecordingController::Impl {
                 : SNOW_RECORDING_PLAYBACK_OVERLAY_PROGRESS_BAR,
             progressBarColor, webcamEnabled ? webcam.get() : nullptr, webcamSize,
             webcamShape == QStringLiteral("circle") ? 1u : 0u);
+        const bool audioSupported = outputFormat == QStringLiteral("mp4");
+        uiSession->preview->setStatusPrompts(
+            snow_shot::storage::RecordingSettings().showStatusPrompts(), outputFormat,
+            audioSupported && microphoneEnabled, audioSupported && systemAudioEnabled);
         uiSession->preview->setEligible(true);
     }
 

@@ -4004,6 +4004,10 @@
             <translation>Show original image preview</translation>
         </message>
         <message>
+            <source>Show recording status prompts</source>
+            <translation>Show recording status prompts</translation>
+        </message>
+        <message>
             <source>Show screenshot guides when a capture starts</source>
             <translation>Show screenshot guides when a capture starts</translation>
         </message>
@@ -4050,6 +4054,10 @@
         <message>
             <source>Show the sub-toolbar for the Edit Selection tool</source>
             <translation>Show the sub-toolbar for the Edit Selection tool</translation>
+        </message>
+        <message>
+            <source>Show the video format and microphone and speaker status in the center of the motion preview area.</source>
+            <translation>Show the video format and microphone and speaker status in the center of the motion preview area.</translation>
         </message>
         <message>
             <source>Show toolbar</source>

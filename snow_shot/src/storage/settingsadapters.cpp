@@ -2000,6 +2000,14 @@ bool RecordingSettings::setAutoHideToolbar(bool enabled) const {
     return cache().setValue(QStringLiteral("screen_recording/auto_hide_toolbar"), enabled);
 }
 
+bool RecordingSettings::showStatusPrompts() const {
+    return cache().value(QStringLiteral("screen_recording/show_status_prompts")).toBool();
+}
+
+bool RecordingSettings::setShowStatusPrompts(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/show_status_prompts"), enabled);
+}
+
 bool RecordingSettings::autoExitAfterRecordingEnds() const {
     return cache()
         .value(QStringLiteral("screen_recording/auto_exit_after_recording_ends"))

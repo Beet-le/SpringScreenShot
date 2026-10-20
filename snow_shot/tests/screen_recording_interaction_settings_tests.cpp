@@ -43,6 +43,19 @@ int main(int argc, char** argv) {
             "webcam settings reject invalid bounds and shapes");
     snow_shot::presentation::GlobalShortcutManager shortcuts;
     settings::BuiltInSettingsBackend backend(shortcuts);
+    constexpr auto promptsBinding =
+        settings::SettingsSwitchBinding::ScreenRecordingShowStatusPrompts;
+    const QString promptsKey = QStringLiteral("screen_recording/show_status_prompts");
+    require(backend.switchEnabled(promptsBinding) && backend.switchValue(promptsBinding) &&
+                recording.showStatusPrompts() &&
+                storage::ConfigurationSchema::defaultValue(promptsKey).toBool(),
+            "recording status prompts must default to enabled");
+    require(backend.applySwitchValue(promptsBinding, false) &&
+                !backend.switchValue(promptsBinding) && !recording.showStatusPrompts(),
+            "recording status prompts must be disabled through the shared settings backend");
+    require(!applicationStorage.configuration().setValue(promptsKey, QStringLiteral("false")) &&
+                !recording.showStatusPrompts(),
+            "recording status prompts must reject non-boolean preferences");
     constexpr auto autoHideBinding =
         settings::SettingsSwitchBinding::ScreenRecordingAutoHideToolbar;
     const QString autoHideKey = QStringLiteral("screen_recording/auto_hide_toolbar");
@@ -101,6 +114,8 @@ int main(int argc, char** argv) {
     require(reloaded.value(key).toBool(), "recording auto-exit must survive configuration reload");
     require(reloaded.value(autoHideKey).toBool(),
             "recording toolbar auto-hide must survive configuration reload");
+    require(!reloaded.value(promptsKey).toBool(),
+            "disabled recording status prompts must survive configuration reload");
     require(reloaded.value(notifyKey).toBool(),
             "export notifications must survive configuration reload");
     require(reloaded.value(deleteKey).toBool(),
@@ -113,7 +128,7 @@ int main(int argc, char** argv) {
                 backend.switchValue(deleteBinding) && backend.switchValue(autoHideBinding),
             "Action Toolbar reset must preserve the Interaction preference");
     require(backend.resetSection(settings::SettingsSectionReset::ScreenRecordingCapture) &&
-                backend.switchValue(autoHideBinding),
+                backend.switchValue(autoHideBinding) && !backend.switchValue(promptsBinding),
             "recording capture reset must preserve toolbar auto-hide");
     require(storage::RecordingSettings().setCaptureToolbarInRecording(false) &&
                 backend.resetSection(settings::SettingsSectionReset::ScreenRecordingInteraction) &&
@@ -125,6 +140,7 @@ int main(int argc, char** argv) {
                 !storage::RecordingSettings().deleteFilesOnRecordingClose() &&
                 !backend.switchValue(autoHideBinding) &&
                 !storage::RecordingSettings().autoHideToolbar() &&
+                backend.switchValue(promptsBinding) && recording.showStatusPrompts() &&
                 storage::RecordingSettings().mouseHighlightRadius() == 96 &&
                 !storage::RecordingSettings().captureToolbarInRecording(),
             "Interaction reset must restore its behavior defaults and preserve capture settings");

@@ -602,9 +602,9 @@ void builtInCatalogIsCompleteAndValid() {
                 itemIds.contains(QStringLiteral("screenshot-shortcut.upload_to_cloud")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.upload_to_cloud")),
             "cloud upload must expose its configuration and shortcuts in both local scopes");
-    require(itemIds.size() == 291,
+    require(itemIds.size() == 292,
             qPrintable(QStringLiteral(
-                           "catalog must contain 291 shared settings on every platform; found %1")
+                           "catalog must contain 292 shared settings on every platform; found %1")
                            .arg(itemIds.size())));
     require(itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-closing-window")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-destroying-window")),
@@ -1920,7 +1920,7 @@ void builtInCatalogIsCompleteAndValid() {
     require(recordingInteraction != nullptr && recordingAutoExit != nullptr &&
                 recordingPage->sections.constLast().id == recordingInteraction->id &&
                 recordingInteraction->title.translated() == QStringLiteral("Interaction") &&
-                recordingInteraction->items.size() == 4 &&
+                recordingInteraction->items.size() == 5 &&
                 recordingInteraction->reset ==
                     settings::SettingsSectionReset::ScreenRecordingInteraction &&
                 recordingAutoExit->title.translated() ==
@@ -1931,7 +1931,7 @@ void builtInCatalogIsCompleteAndValid() {
                     settings::SettingsSwitchBinding::ScreenRecordingAutoExitAfterRecordingEnds &&
                 settings::builtInSettingsRegistry()
                         .fieldsForReset(settings::SettingsSectionReset::ScreenRecordingInteraction)
-                        .size() == 4,
+                        .size() == 5,
             "recording Interaction must follow Action Toolbar with its own auto-exit reset scope");
     require(recordingAutoHide != nullptr &&
                 recordingInteraction->items.constFirst().id == recordingAutoHide->id &&
@@ -1973,6 +1973,18 @@ void builtInCatalogIsCompleteAndValid() {
                 recordingInteraction->items.at(2).id == recordingNotify->id &&
                 recordingInteraction->items.at(3).id == recordingDelete->id,
             "delete files on close must follow export notifications in Interaction");
+    const auto* recordingPrompts = settings::builtInSettingsRegistry().field(
+        QStringLiteral("screen-recording.show-status-prompts"));
+    require(
+        recordingPrompts != nullptr &&
+            recordingPrompts->kind == settings::SettingsFieldKind::Switch &&
+            recordingPrompts->reset == settings::SettingsSectionReset::ScreenRecordingInteraction &&
+            recordingPrompts->defaultValue.toBool() &&
+            recordingPrompts->definition->configurationKey ==
+                QStringLiteral("screen_recording/show_status_prompts") &&
+            std::get<settings::SettingsSwitchDefinition>(recordingPrompts->definition->payload)
+                    .binding == settings::SettingsSwitchBinding::ScreenRecordingShowStatusPrompts,
+        "recording status prompts must be a default-on Interaction switch");
 
     const auto* selectionBorderColor =
         catalog.item({QStringLiteral("screenshots"), QStringLiteral("interface-screenshot"),

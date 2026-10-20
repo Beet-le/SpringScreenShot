@@ -167,6 +167,7 @@ enum class SettingsSwitchBinding {
     LoopAnimatedImages,
     ScreenRecordingCaptureToolbar,
     ScreenRecordingAutoHideToolbar,
+    ScreenRecordingShowStatusPrompts,
     ScreenRecordingAutoExitAfterRecordingEnds,
     ScreenRecordingNotifyAfterExportCompletes,
     ScreenRecordingDeleteFilesOnRecordingClose,

@@ -982,6 +982,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::RecordingSettings().captureToolbarInRecording();
     case SettingsSwitchBinding::ScreenRecordingAutoHideToolbar:
         return storage::RecordingSettings().autoHideToolbar();
+    case SettingsSwitchBinding::ScreenRecordingShowStatusPrompts:
+        return storage::RecordingSettings().showStatusPrompts();
     case SettingsSwitchBinding::ScreenRecordingAutoExitAfterRecordingEnds:
         return storage::RecordingSettings().autoExitAfterRecordingEnds();
     case SettingsSwitchBinding::ScreenRecordingNotifyAfterExportCompletes:
@@ -1292,6 +1294,9 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::ScreenRecordingAutoHideToolbar) {
         return storage::RecordingSettings().setAutoHideToolbar(value);
     }
+    if (binding == SettingsSwitchBinding::ScreenRecordingShowStatusPrompts) {
+        return storage::RecordingSettings().setShowStatusPrompts(value);
+    }
     if (binding == SettingsSwitchBinding::ScreenRecordingAutoExitAfterRecordingEnds) {
         return storage::RecordingSettings().setAutoExitAfterRecordingEnds(value);
     }
@@ -1385,6 +1390,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::LoopAnimatedImages:
     case SettingsSwitchBinding::ScreenRecordingCaptureToolbar:
     case SettingsSwitchBinding::ScreenRecordingAutoHideToolbar:
+    case SettingsSwitchBinding::ScreenRecordingShowStatusPrompts:
     case SettingsSwitchBinding::ScreenRecordingAutoExitAfterRecordingEnds:
     case SettingsSwitchBinding::ScreenRecordingNotifyAfterExportCompletes:
     case SettingsSwitchBinding::ScreenRecordingDeleteFilesOnRecordingClose:

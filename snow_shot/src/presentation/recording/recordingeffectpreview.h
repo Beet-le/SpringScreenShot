@@ -14,6 +14,7 @@
 #include <vector>
 
 class CanvasStatusReadout;
+class RecordingStatusPrompt;
 class ScreenRecordingAreaWindow;
 
 struct RecordingEffectsFrame {
@@ -56,6 +57,7 @@ class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRend
                    const QColor& progressBarColor = QColor(22, 119, 255),
                    SnowWebcam* webcam = nullptr, int webcamSize = 150, uint32_t webcamShape = 0);
     void setEligible(bool eligible);
+    void setStatusPrompts(bool enabled, const QString& format, bool microphone, bool speaker);
     void stopAndClear(bool present = false);
     void prepareForSessionEnd();
     [[nodiscard]] bool active() const;
@@ -79,6 +81,9 @@ class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRend
     ScreenRecordingAreaWindow& m_area;
     std::unique_ptr<RecordingEffectsSource> m_source;
     CanvasStatusReadout* m_readout;
+    RecordingStatusPrompt* m_statusPrompt;
+    bool m_showStatusPrompts = true;
+    bool m_previewVisible = false;
     QTimer m_configurationTimer;
     QRect m_capture;
     QSize m_output;

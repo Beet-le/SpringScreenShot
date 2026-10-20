@@ -1873,6 +1873,185 @@ void recordingKeyboardColorsFollowBackground() {
     }
 }
 
+void recordingStatusPrompts() {
+    using snow_shot::storage::RecordingSettings;
+    const RecordingSettings settings;
+    const QString previousFormat = settings.outputFormat();
+    const bool previousMicrophone = settings.microphoneEnabled();
+    const bool previousSpeaker = settings.systemAudioEnabled();
+    const int previousDelay = settings.startDelaySeconds();
+    require(settings.showStatusPrompts(), "status prompts are enabled by default");
+    require(settings.setOutputFormat(QStringLiteral("mp4")) &&
+                settings.setMicrophoneEnabled(false) && settings.setSystemAudioEnabled(false) &&
+                settings.setStartDelaySeconds(0),
+            "initialize recording prompt fixture");
+    ScreenRecordingController controller(testEffectsSource);
+    controller.open({40, 40, 640, 480});
+    auto* area = recordingAreaWindow();
+    auto* prompt =
+        area ? area->findChild<QWidget*>(QStringLiteral("screenRecordingStatusPrompt")) : nullptr;
+    require(prompt != nullptr, "recording area must own the status prompt");
+    QElapsedTimer ready;
+    ready.start();
+    while (!prompt->isVisible() && ready.elapsed() < 3000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    require(prompt->isVisible() && !effectSources.back().lock()->active,
+            "status prompts must appear even when all motion effects are disabled");
+    const auto checkCentered = [&] {
+        require(area->selectionRect().contains(prompt->geometry()) &&
+                    QLineF(QRectF(prompt->geometry()).center(), area->selectionRect().center())
+                            .length() <= 1,
+                "status prompts must remain centered inside the recording selection");
+    };
+    checkCentered();
+    require(prompt->testAttribute(Qt::WA_TransparentForMouseEvents) &&
+                prompt->focusPolicy() == Qt::NoFocus,
+            "status prompts must not intercept drawing, region edits or keyboard input");
+    const auto renderPrompt = [&] {
+        QImage image(prompt->size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        prompt->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+        return image;
+    };
+    const QImage disabled = renderPrompt();
+    require(disabled.pixelColor(8, disabled.height() / 2) == QColor(0, 0, 0, 150),
+            "status prompt background must be semi-transparent black");
+    int whitePixels = 0;
+    for (int y = 0; y < disabled.height(); ++y)
+        for (int x = 0; x < disabled.width(); ++x) {
+            const QColor color = disabled.pixelColor(x, y);
+            whitePixels += color.red() > 240 && color.green() > 240 && color.blue() > 240;
+        }
+    require(whitePixels > 20, "format text must remain white beside colored status icons");
+    const auto checkStatusColors = [&](bool success, bool danger) {
+        const auto colors =
+            snow_shot::presentation::styles::ThemeManager::instance().themeColorScheme().map;
+        const QImage image = renderPrompt();
+        const auto countColor = [&](const QColor& expected) {
+            int pixels = 0;
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x) {
+                    const QColor actual = image.pixelColor(x, y);
+                    pixels += qAbs(actual.red() - expected.red()) < 8 &&
+                              qAbs(actual.green() - expected.green()) < 8 &&
+                              qAbs(actual.blue() - expected.blue()) < 8;
+                }
+            return pixels;
+        };
+        require((countColor(colors.colorSuccess) > 5) == success &&
+                    (countColor(colors.colorError) > 5) == danger,
+                "audio icons must use success for enabled and danger for disabled status");
+    };
+    checkStatusColors(false, true);
+    palette()->recordingMicrophoneToggled(true);
+    pumpPreview();
+    const QImage microphone = renderPrompt();
+    require(prompt->accessibleName() ==
+                    QStringLiteral("Format: MP4; Microphone enabled; Speaker disabled") &&
+                microphone != disabled,
+            "microphone toggles must immediately update the prompt text alternative and icon");
+    checkStatusColors(true, true);
+    palette()->recordingSystemAudioToggled(true);
+    pumpPreview();
+    require(prompt->accessibleName() ==
+                    QStringLiteral("Format: MP4; Microphone enabled; Speaker enabled") &&
+                renderPrompt() != microphone,
+            "speaker toggles must immediately update the prompt text alternative and icon");
+    checkStatusColors(true, false);
+    palette()->recordingMicrophoneToggled(false);
+    pumpPreview();
+    checkStatusColors(true, true);
+    using namespace snow_shot::presentation::styles;
+    const auto previousTheme = ThemeManager::instance().themeMode();
+    for (auto theme : {ThemeMode::Light, ThemeMode::Dark}) {
+        ThemeManager::instance().setThemeMode(theme);
+        pumpPreview();
+        checkStatusColors(true, true);
+    }
+    ThemeManager::instance().setThemeMode(previousTheme);
+    palette()->recordingMicrophoneToggled(true);
+    for (const auto& format : {QStringLiteral("gif"), QStringLiteral("webp")}) {
+        palette()->recordingOutputFormatChanged(format);
+        pumpPreview();
+        require(prompt->accessibleName() ==
+                    QStringLiteral("Format: %1; Microphone disabled; Speaker disabled")
+                        .arg(format == QStringLiteral("gif") ? QStringLiteral("GIF")
+                                                             : QStringLiteral("WebP")),
+                "animated formats must show concise names and disabled audio icons");
+        checkStatusColors(false, true);
+        checkCentered();
+    }
+    palette()->recordingOutputFormatChanged(QStringLiteral("mp4"));
+    pumpPreview();
+    require(prompt->accessibleName() ==
+                QStringLiteral("Format: MP4; Microphone enabled; Speaker enabled"),
+            "switching back to video must restore the selected audio status");
+    require(settings.setShowStatusPrompts(false), "disable status prompts in storage");
+    pumpPreview();
+    require(!prompt->isVisible(), "disabling prompts must hide an existing idle prompt");
+    require(settings.setShowStatusPrompts(true), "restore status prompts");
+    pumpPreview();
+    require(prompt->isVisible(), "enabling prompts must restore an existing idle prompt");
+    area->setRecordingRegion({70, 70, 480, 320});
+    pumpPreview();
+    checkCentered();
+    QFont larger = prompt->font();
+    larger.setPixelSize(24);
+    prompt->setFont(larger);
+    checkCentered();
+    class PromptTranslator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            return QByteArray(context) == "RecordingStatusPrompt"
+                       ? QStringLiteral("Translated: ") + QString::fromUtf8(source)
+                       : QString();
+        }
+    } translator;
+    require(qApp->installTranslator(&translator), "install prompt translation fixture");
+    pumpPreview();
+    require(prompt->accessibleName().startsWith(QStringLiteral("Translated: Format:")),
+            "visible prompts must retranslate on language change");
+    checkCentered();
+    qApp->removeTranslator(&translator);
+    prompt->setFont(area->font());
+    pumpPreview();
+    if (const QString path = qEnvironmentVariable("SNOW_TEST_RECORDING_STATUS_PREVIEW");
+        !path.isEmpty()) {
+        QImage snapshot(area->size(), QImage::Format_ARGB32_Premultiplied);
+        snapshot.fill(QColor(233, 237, 242));
+        {
+            QPainter painter(&snapshot);
+            painter.drawImage(QPoint(), previewImage(*area));
+        }
+        require(snapshot.save(path), "save recording status prompt preview");
+    }
+    controller.startRecording();
+    require(!prompt->isVisible(), "prompts must clear synchronously before recording begins");
+    waitForRecording(controller);
+    palette()->recordingPauseRequested();
+    pumpPreview();
+    require(!prompt->isVisible(), "paused recordings must keep prompts hidden");
+    palette()->recordingResumeRequested();
+    pumpPreview();
+    require(!prompt->isVisible(), "resumed recordings must keep prompts hidden");
+    palette()->recordingStopRequested();
+    waitForIdle(controller);
+    pumpPreview();
+    require(prompt->isVisible(), "returning to idle must restore status prompts");
+    palette()->recordingCloseRequested();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(settings.setOutputFormat(previousFormat) &&
+                settings.setMicrophoneEnabled(previousMicrophone) &&
+                settings.setSystemAudioEnabled(previousSpeaker) &&
+                settings.setStartDelaySeconds(previousDelay),
+            "restore recording prompt fixture preferences");
+}
+
 void controllerPreviewTransitions() {
     using snow_shot::storage::RecordingSettings;
     RecordingSettings().setMouseTrailColor(Qt::red);
@@ -3640,8 +3819,8 @@ void recordingSettingsDialog() {
                 "recording preferences must keep descriptions out of the compact form rows");
     }
     const int apiModeCount = form->field(QStringLiteral("screen-recording.api-mode")) ? 1 : 0;
-    // Video/audio (4), animation (3), encoding (2), capture (1), interaction (4).
-    require(form->items().size() == expectedCount && expectedCount == 14 + apiModeCount,
+    // Video/audio (4), animation (3), encoding (2), capture (1), interaction (5).
+    require(form->items().size() == expectedCount && expectedCount == 15 + apiModeCount,
             "recording popup must contain exactly the requested settings categories");
     auto* autoHide =
         form->findChild<AdSwitch*>(QStringLiteral("screen-recording.auto-hide-toolbar"));
@@ -3672,6 +3851,10 @@ void recordingSettingsDialog() {
         QStringLiteral("screen-recording.delete-files-on-recording-close"));
     require(deleteOnClose && !deleteOnClose->isChecked(),
             "recording settings include deleting files on close disabled by default");
+    auto* statusPrompts =
+        form->findChild<AdSwitch*>(QStringLiteral("screen-recording.show-status-prompts"));
+    require(statusPrompts && statusPrompts->isChecked(),
+            "recording settings include status prompts enabled by default");
     class SettingsTranslator final : public QTranslator {
       public:
         bool isEmpty() const override {
@@ -3712,6 +3895,10 @@ void recordingSettingsDialog() {
             "open recording preferences must retranslate their title, labels and options");
     QCoreApplication::removeTranslator(&translator);
     QCoreApplication::processEvents();
+    statusPrompts->setChecked(false);
+    require(!snow_shot::storage::RecordingSettings().showStatusPrompts(),
+            "recording settings prompt switch persists immediately");
+    statusPrompts->setChecked(true);
     autoHide->setChecked(true);
     require(snow_shot::storage::RecordingSettings().autoHideToolbar(),
             "recording settings auto-hide switch persists immediately");
@@ -7094,6 +7281,7 @@ int main(int argc, char** argv) {
         areaWindowPaintsInputSurfaceOnlyWhenItIsVisible();
         previewIgnoresEventsOtherThanDialogVisibility();
         recordingKeyboardColorsFollowBackground();
+        recordingStatusPrompts();
         controllerPreviewTransitions();
         ApplicationStorage::instance().shutdown();
         return 0;
