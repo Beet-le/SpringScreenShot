@@ -32,13 +32,19 @@ impl CoalescedPointer {
         self.path_broken = true;
     }
 
-    pub fn observe(&mut self, position: Option<(i32, i32)>, at_ms: u64) {
+    /// Returns whether the latest admitted position changed. Stationary samples
+    /// still update admission time, but do not renew the trail or its pixels.
+    pub fn observe(&mut self, position: Option<(i32, i32)>, at_ms: u64) -> bool {
+        let changed = self.pending.map_or(self.position, |(pending, _)| pending) != position;
         self.path_broken |= position.is_none();
         self.pending = Some((position, at_ms));
+        changed
     }
 
     pub(crate) fn has_due_observation(&self, now: u64) -> bool {
-        self.pending.is_some_and(|(_, at_ms)| at_ms <= now)
+        self.pending.is_some_and(|(position, at_ms)| {
+            at_ms <= now && (position != self.position || (self.path_broken && position.is_some()))
+        })
     }
 
     pub fn advance(

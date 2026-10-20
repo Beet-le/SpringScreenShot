@@ -830,7 +830,7 @@ impl VideoReader {
     }
 }
 
-mod audio;
+pub(crate) mod audio;
 pub use audio::AudioReader;
 
 #[cfg(test)]

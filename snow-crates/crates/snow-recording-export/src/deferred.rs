@@ -4,7 +4,7 @@ use snow_memory::RasterBuffer;
 #[cfg(test)]
 mod tests;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
@@ -594,11 +594,9 @@ pub fn render_bundle_range_with_speed(
         // source plus unchanged observations and settled effects proves pixel identity
         // before copying the canvas. Check both sides of animation expiry: the first
         // settled frame must still erase the final visible animation pixels.
-        // MP4 already represents holds by the next PTS (or the exact final endpoint).
-        // Other formats retain their bounded delay/frame-grid policies in the encoder.
+        // The encoder retains each format's bounded delay/frame-grid policy when
+        // repeating the pending image, including fixed-rate retimed output.
         let hold_composition = !source_changed
-            && config.format == crate::ExportFormat::Mp4
-            && !fixed_rate_retime
             && previous_effects_idle
             && previous_effect_identity == Some(effect_identity)
             && reusable_effect_frame(&effects, frame.timestamp_ms);
@@ -607,6 +605,13 @@ pub fn render_bundle_range_with_speed(
             {
                 skipped_compositions += 1;
                 stage_times[2] += stage_started.elapsed();
+            }
+            #[cfg(feature = "bench-timing")]
+            let stage_started = Instant::now();
+            encoder.repeat_video_frame_at_pts(frame.pts, fixed_rate_retime)?;
+            #[cfg(feature = "bench-timing")]
+            {
+                stage_times[3] += stage_started.elapsed();
             }
         } else if let Some(conversion) = &mut hdr_conversion {
             let rgb = hdr_rgb.as_mut().expect("HDR composition frame");
@@ -871,6 +876,8 @@ pub(crate) struct SequentialVideoSource {
     next: Option<(u64, ffmpeg::frame::Video)>,
     current: Option<ffmpeg::frame::Video>,
     converted: ffmpeg::frame::Video,
+    tone_mapped: RasterBuffer,
+    tone_mapped_valid: bool,
     conversion: ffmpeg::software::scaling::Context,
     output: (u32, u32),
     hdr: bool,
@@ -968,6 +975,8 @@ impl SequentialVideoSource {
             next: None,
             current: None,
             converted: ffmpeg::frame::Video::empty(),
+            tone_mapped: RasterBuffer::default(),
+            tone_mapped_valid: false,
             conversion,
             output,
             hdr,
@@ -1082,6 +1091,7 @@ impl SequentialVideoSource {
             self.next = self.decode_next(cancellation)?;
         }
         if changed {
+            self.tone_mapped_valid = false;
             self.conversion
                 .run(
                     self.current.as_ref().expect("decoded source"),
@@ -1094,7 +1104,11 @@ impl SequentialVideoSource {
         }
         Ok(changed)
     }
-    pub(crate) fn copy_rgba(&self, output: &mut [u8]) -> Result<()> {
+    pub(crate) fn copy_rgba(&mut self, output: &mut [u8]) -> Result<()> {
+        if self.hdr && self.tone_mapped_valid {
+            output.copy_from_slice(&self.tone_mapped);
+            return Ok(());
+        }
         let stride = self.converted.stride(0);
         for y in 0..self.output.1 as usize {
             let row = &self.converted.data(0)
@@ -1106,6 +1120,14 @@ impl SequentialVideoSource {
             } else {
                 dest.copy_from_slice(row);
             }
+        }
+        if self.hdr {
+            // Tone mapping is source work. Repeated composition (e.g. a moving
+            // playback bar over a held HDR picture) must not redo it per slot.
+            // Allocate lazily so HDR-preserving exports need no SDR canvas.
+            self.tone_mapped.resize(output.len(), 0);
+            self.tone_mapped.copy_from_slice(output);
+            self.tone_mapped_valid = true;
         }
         Ok(())
     }
@@ -1127,7 +1149,7 @@ impl SequentialVideoSource {
 }
 
 struct PcmTrack {
-    file: File,
+    file: BufReader<File>,
     remaining: u64,
     id: String,
     channels: usize,
@@ -1228,7 +1250,7 @@ impl AudioReplay {
                 let mut file = File::open(path)?;
                 file.seek(SeekFrom::Start(asset.offset))?;
                 sources.push(PcmTrack {
-                    file,
+                    file: BufReader::with_capacity(crate::clip::audio::PCM_READ_BUFFER_BYTES, file),
                     remaining: asset.len,
                     id: track.track_id.clone(),
                     channels: usize::from(track.channels),

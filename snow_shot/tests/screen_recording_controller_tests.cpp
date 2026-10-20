@@ -4362,10 +4362,14 @@ void recordingPostProcessingLifecycle() {
         const QImage withoutPlayback = previewImage(*area->canvas());
         const QPoint trackPoint(withoutPlayback.width() / 2, withoutPlayback.height() - 2);
         controls->recordingPostProcessingEnabledChanged(true);
-        pumpPreview();
-        require(previewImage(*area->canvas()).pixelColor(trackPoint) !=
-                    withoutPlayback.pixelColor(trackPoint),
-                "enabling progress bar must immediately display its zero-second track");
+        // macOS resolves the initial native output dimensions asynchronously.
+        // Four zero-duration event pumps need not reach that completion timer.
+        wait(
+            [&] {
+                return previewImage(*area->canvas()).pixelColor(trackPoint) !=
+                       withoutPlayback.pixelColor(trackPoint);
+            },
+            "enabling progress bar must display its zero-second track after preview sizing");
         controls->recordingPostProcessingEffectChanged(QStringLiteral("playback_time"));
         pumpPreview();
         const QImage withTime = previewImage(*area->canvas());
@@ -4759,6 +4763,56 @@ void recordingPostProcessingLifecycle() {
         require(controller.controlAutomation(QStringLiteral("stop"), {}, &error),
                 "the next recording stops through the real-time path");
         waitForIdle(controller);
+    }
+    {
+        std::promise<void> releaseStart;
+        renderStartGate = releaseStart.get_future().share();
+        renderStartEntered = false;
+        const int oldTasks = taskDestroys.load();
+        const int oldSources = sourceDestroys.load();
+        RecordingRenderJob job(new SnowRecordingSource, false, nullptr, nullptr);
+        int finished = 0;
+        job.finished = [&](RecordingRenderJob::Outcome outcome) {
+            require(outcome == RecordingRenderJob::Outcome::Succeeded,
+                    "completion notification preserves successful publication");
+            ++finished;
+        };
+        job.start();
+        auto* timer = job.findChild<QTimer*>(QStringLiteral("recordingRenderProgressPollTimer"));
+        require(timer, "render progress owns its polling timer");
+        timer->setInterval(60000);
+        wait([] { return renderStartEntered.load(); }, "render start reaches its barrier");
+        releaseStart.set_value();
+        renderStartGate = {};
+        wait([&] { return job.state().value(QStringLiteral("render_duration_ms")) == 2300; },
+             "completed render creation is adopted without waiting for a progress timer");
+        renderState = SNOW_RECORDING_RENDER_STATE_SUCCEEDED;
+        require(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection),
+                "one progress observation sees completed publication");
+        wait([&] { return finished == 1; },
+             "task disposal and source release finish without additional progress timer ticks");
+        require(taskDestroys == oldTasks + 1 && sourceDestroys == oldSources + 1,
+                "completion notifications release native ownership exactly once");
+    }
+    {
+        std::promise<void> releaseStart;
+        renderStartGate = releaseStart.get_future().share();
+        renderStartEntered = false;
+        const int oldSources = sourceDestroys.load();
+        const int oldPolls = renderPolls.load();
+        auto* job = new RecordingRenderJob(new SnowRecordingSource, false, nullptr, nullptr);
+        job->start();
+        wait([] { return renderStartEntered.load(); }, "shutdown test holds render creation");
+        job->prepareForSessionEnd();
+        releaseStart.set_value();
+        renderStartGate = {};
+        wait([] { return activeRenderTasks > 0; }, "native creation completes during shutdown");
+        QCoreApplication::processEvents();
+        require(renderPolls == oldPolls && sourceDestroys == oldSources,
+                "late completion notifications cannot resume UI work during session shutdown");
+        delete job;
+        wait([&] { return sourceDestroys > oldSources; },
+             "explicit teardown still retires native work after notifications are disabled");
     }
     for (const int mode : {0, 1, 2, 3}) {
         wait(

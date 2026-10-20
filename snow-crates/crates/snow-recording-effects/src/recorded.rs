@@ -185,7 +185,19 @@ impl RecordedEffects {
                             != (next.x, next.y, next.visible, next.shape_id)
                     })
             }
-            RecordedInput::Pointer { .. } => effects.mouse_trail_rgba[3] != 0,
+            RecordedInput::Pointer {
+                position,
+                continuity,
+                at_ms,
+            } => {
+                let broken = self.continuity != *continuity;
+                if broken {
+                    self.pointer.break_path();
+                }
+                self.continuity = *continuity;
+                let moved = self.pointer.observe(*position, *at_ms);
+                effects.mouse_trail_rgba[3] != 0 && (moved || broken)
+            }
             RecordedInput::Click(_) => {
                 effects.record_mouse_clicks || effects.mouse_click_rgba[3] != 0
             }
@@ -202,17 +214,7 @@ impl RecordedEffects {
             RecordedInput::Cursor(cursor) => {
                 self.cursor = Some(cursor.clone());
             }
-            RecordedInput::Pointer {
-                position,
-                continuity,
-                at_ms,
-            } => {
-                if self.continuity != *continuity {
-                    self.pointer.break_path();
-                }
-                self.continuity = *continuity;
-                self.pointer.observe(*position, *at_ms);
-            }
+            RecordedInput::Pointer { .. } => {}
             RecordedInput::Click(click) => {
                 let button = observed_button(click.button);
                 if click.down && button.has_ring() && self.config.effects.mouse_click_rgba[3] != 0 {
@@ -548,6 +550,125 @@ mod tests {
             assert_ne!(effects.observation_revision(), revision);
         }
     }
+    #[test]
+    fn stationary_pointer_observations_keep_settled_frames_reusable() {
+        let mut policy = config(PlaybackOverlay::None);
+        policy.effects.show_cursor = false;
+        policy.effects.mouse_trail_rgba = [255; 4];
+        let mut effects = RecordedEffects::new(policy, (120, 100), None).unwrap();
+        let mut sequence = 0;
+        for position in [Some((30, 40)), None] {
+            effects
+                .observe(&input(
+                    sequence,
+                    sequence * 10,
+                    RecordedInput::Pointer {
+                        position,
+                        continuity: 0,
+                        at_ms: sequence * 10,
+                    },
+                ))
+                .unwrap();
+            effects
+                .apply_rgba(&mut pixels(), frame(sequence, sequence * 10, 0.0))
+                .unwrap();
+            let revision = effects.observation_revision();
+            for _ in 0..100 {
+                sequence += 1;
+                let at = sequence * 10;
+                effects
+                    .observe(&input(
+                        sequence,
+                        at,
+                        RecordedInput::Pointer {
+                            position,
+                            continuity: 0,
+                            at_ms: at,
+                        },
+                    ))
+                    .unwrap();
+                assert_eq!(effects.observation_revision(), revision);
+                assert!(
+                    !effects.needs_frame(at),
+                    "stationary input cannot animate a settled trail"
+                );
+            }
+            sequence += 1;
+        }
+    }
+
+    #[test]
+    fn held_pointer_composition_matches_redraw_across_breaks_future_input_and_expiry() {
+        let mut policy = config(PlaybackOverlay::None);
+        policy.effects.show_cursor = false;
+        policy.effects.mouse_trail_rgba = [255, 40, 60, 180];
+        let mut held = RecordedEffects::new(policy.clone(), (120, 100), None).unwrap();
+        let mut reference = RecordedEffects::new(policy, (120, 100), None).unwrap();
+        let mut previous = None;
+        let mut previous_idle = false;
+        let mut retained = pixels();
+        let mut skipped = 0;
+        let mut sequence = 0;
+        for index in 0..400 {
+            let at = index * 10;
+            let position = match index {
+                0..20 => Some((20, 40)),
+                20..40 => Some((20 + index as i32, 40)),
+                40..100 => Some((60, 40)),
+                100..110 => None,
+                110..120 => Some((70, 40)),
+                120..140 => Some((70, 40 + (index - 120) as i32)),
+                _ => Some((70, 60)),
+            };
+            // An exit followed by re-entry in the same output slot must break the path.
+            if index == 125 {
+                let event = input(
+                    sequence,
+                    at,
+                    RecordedInput::Pointer {
+                        position: None,
+                        continuity: 0,
+                        at_ms: at,
+                    },
+                );
+                held.observe(&event).unwrap();
+                reference.observe(&event).unwrap();
+                sequence += 1;
+            }
+            let event = input(
+                sequence,
+                at,
+                RecordedInput::Pointer {
+                    position,
+                    continuity: u64::from(index >= 130),
+                    at_ms: if index == 20 { at + 30 } else { at },
+                },
+            );
+            held.observe(&event).unwrap();
+            reference.observe(&event).unwrap();
+            sequence += 1;
+            let revision = held.observation_revision();
+            if previous == Some(revision) && previous_idle && !held.needs_frame(at) {
+                skipped += 1;
+            } else {
+                retained = pixels();
+                held.apply_rgba(&mut retained, frame(index, at, 0.0))
+                    .unwrap();
+            }
+            let mut expected = pixels();
+            reference
+                .apply_rgba(&mut expected, frame(index, at, 0.0))
+                .unwrap();
+            assert_eq!(retained, expected, "pointer output at {at} ms");
+            previous = Some(revision);
+            previous_idle = !held.needs_frame(at);
+        }
+        assert!(
+            skipped > 200,
+            "settled observations should retain their composition"
+        );
+    }
+
     #[test]
     fn future_pointer_observation_wakes_idle_replay_on_its_source_clock() {
         let mut policy = config(PlaybackOverlay::None);

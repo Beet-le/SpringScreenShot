@@ -1,7 +1,7 @@
 //! Portable deterministic deferred-export benchmark. Release with `bench-timing` only.
-//! Prepare outside measurement: `prepare DIR WIDTH HEIGHT static|moving|cursor`.
-//! Measure in a fresh process: `render DIR OUTPUT none|bar|time|combined 0|1 THREADS`.
-//! Three seconds at 60 FPS; no capture, audio, webcam, HDR, or desktop permissions.
+//! Prepare outside measurement: `prepare DIR WIDTH HEIGHT static|moving|cursor|stationary|hdr`.
+//! Measure in a fresh process: `render DIR OUTPUT none|bar|time|trail|combined 0|1 THREADS [SPEED]`.
+//! Three seconds at 60 FPS; no capture, audio, webcam, or desktop permissions.
 use std::{fs, path::Path, time::Instant};
 
 use anyhow::{Context, Result, bail};
@@ -9,15 +9,15 @@ use snow_core::cancellation::CancellationToken;
 use snow_recording_effects::keyboard_overlay::KeyEvent;
 use snow_recording_export::{
     ExportExecutionMode, ExportFormat, SoftwareH264Priority, StreamingEncoder,
-    StreamingEncoderConfig, VideoCodec, deferred::render_bundle_range,
+    StreamingEncoderConfig, VideoCodec, deferred::render_bundle_range_with_speed,
     read_deferred_output_settings, write_deferred_output_settings,
 };
 use snow_recording_model::{
     BundleAssetKind, EffectsConfig, FinalizedTimeline, InputMouseButton, InputStoreWriter,
     IntermediateRecordingProfile, KeyboardOverlayConfig, MouseStore, PlaybackOverlay,
-    RecordedInput, RecordedInputEvent, RecordedMouseClick, RecordingBundleAsset, RenderConfig,
-    RenderMetadata, SessionManifest, TrimRange, VideoEncodeConfig, VideoEncodingSpeed,
-    read_bundle_render_metadata, write_mouse_records, write_recording_bundle,
+    PlaybackSpeed, RecordedInput, RecordedInputEvent, RecordedMouseClick, RecordingBundleAsset,
+    RenderConfig, RenderMetadata, SessionManifest, TrimRange, VideoEncodeConfig,
+    VideoEncodingSpeed, read_bundle_render_metadata, write_mouse_records, write_recording_bundle,
     write_render_metadata,
 };
 
@@ -36,7 +36,16 @@ fn style() -> KeyboardOverlayConfig {
     }
 }
 
-fn prepare(root: &Path, width: u32, height: u32, moving: bool, cursor: bool) -> Result<()> {
+fn prepare(root: &Path, width: u32, height: u32, scene: &str) -> Result<()> {
+    let hdr = scene == "hdr";
+    let (moving, cursor, stationary) = match scene {
+        "static" => (false, false, false),
+        "moving" => (true, false, false),
+        "cursor" => (false, true, false),
+        "stationary" => (false, false, true),
+        "hdr" => (false, false, true),
+        _ => bail!("source must be static, moving, cursor, stationary, or hdr"),
+    };
     if width < 256 || height < 256 || width > 4096 || height > 4096 {
         bail!("fixture dimensions must be in 256..=4096");
     }
@@ -65,9 +74,14 @@ fn prepare(root: &Path, width: u32, height: u32, moving: bool, cursor: bool) -> 
     };
     let mut source_config = config.clone();
     source_config.output_path = video.clone();
-    let mut encoder = StreamingEncoder::builder(source_config)
-        .recording_source()
-        .create()?;
+    if hdr {
+        source_config.codec = VideoCodec::H265;
+    }
+    let mut builder = StreamingEncoder::builder(source_config).recording_source();
+    if hdr {
+        builder = builder.hdr10_cpu_input();
+    }
+    let mut encoder = builder.create()?;
     let mut pixels = vec![0; width as usize * height as usize * 4];
     let mut index_bytes = snow_recording_model::video_index::VIDEO_INDEX_MAGIC.to_vec();
     let count = if moving { FRAMES } else { 1 };
@@ -86,7 +100,24 @@ fn prepare(root: &Path, width: u32, height: u32, moving: bool, cursor: bool) -> 
                 pixel.copy_from_slice(&color);
             }
         }
-        pixels = encoder.push_owned_rgba_frame_at_pts(index, pixels)?;
+        if hdr {
+            let format = encoder.input_pixel_format();
+            let mut frame = ffmpeg_next::frame::Video::new(format, width, height);
+            for plane in 0..frame.planes() {
+                let value = if plane == 0 { 600u16 } else { 512u16 };
+                let value = if format == ffmpeg_next::format::Pixel::P010LE {
+                    value << 6
+                } else {
+                    value
+                };
+                for sample in frame.data_mut(plane).chunks_exact_mut(2) {
+                    sample.copy_from_slice(&value.to_le_bytes());
+                }
+            }
+            encoder.push_prepared_video_frame_at_pts(index, frame)?;
+        } else {
+            pixels = encoder.push_owned_rgba_frame_at_pts(index, pixels)?;
+        }
         pixels.resize(width as usize * height as usize * 4, 0);
         let at = index * 1000 / u64::from(FPS);
         let next = if index + 1 == count {
@@ -120,10 +151,14 @@ fn prepare(root: &Path, width: u32, height: u32, moving: bool, cursor: bool) -> 
     }
     for index in 0..FRAMES {
         let at = index * 1000 / u64::from(FPS);
-        let position = (
-            (100 + index * 9 % u64::from(width - 200)) as i32,
-            (100 + index * 7 % u64::from(height - 200)) as i32,
-        );
+        let position = if stationary {
+            (100, 100)
+        } else {
+            (
+                (100 + index * 9 % u64::from(width - 200)) as i32,
+                (100 + index * 7 % u64::from(height - 200)) as i32,
+            )
+        };
         let mut events = vec![RecordedInput::Pointer {
             position: Some(position),
             continuity: 0,
@@ -197,11 +232,19 @@ fn prepare(root: &Path, width: u32, height: u32, moving: bool, cursor: bool) -> 
     fs::write(&index, index_bytes)?;
     let manifest = SessionManifest {
         media: snow_recording_model::media::RecordedMedia::new(
-            snow_media::ColorDescription::SRGB,
+            if hdr {
+                snow_media::ColorDescription::HDR10
+            } else {
+                snow_media::ColorDescription::SRGB
+            },
             snow_media::CursorMode::Separate,
             Vec::new(),
         ),
-        video_codec: VideoCodec::H264,
+        video_codec: if hdr {
+            VideoCodec::H265
+        } else {
+            VideoCodec::H264
+        },
         session_id: "postprocessing-benchmark".into(),
         output_dir: root.to_path_buf(),
         keep_temp_files: false,
@@ -234,7 +277,14 @@ fn prepare(root: &Path, width: u32, height: u32, moving: bool, cursor: bool) -> 
     Ok(())
 }
 
-fn render(root: &Path, output: &Path, case: &str, hardware: bool, threads: u8) -> Result<()> {
+fn render(
+    root: &Path,
+    output: &Path,
+    case: &str,
+    hardware: bool,
+    threads: u8,
+    speed: PlaybackSpeed,
+) -> Result<()> {
     let bundle = root.join("source.snowrec");
     let mut config = read_deferred_output_settings(&bundle)?;
     config.output_path = output.to_path_buf();
@@ -247,13 +297,16 @@ fn render(root: &Path, output: &Path, case: &str, hardware: bool, threads: u8) -
     config.encode_threads = threads;
     let mut metadata = read_bundle_render_metadata(&bundle)?.context("missing render metadata")?;
     metadata.render.playback_overlay = match case {
-        "none" => PlaybackOverlay::None,
+        "none" | "trail" => PlaybackOverlay::None,
         "bar" | "combined" => PlaybackOverlay::ProgressBar {
             rgba: [22, 119, 255, 255],
         },
         "time" => PlaybackOverlay::PlaybackTime { rgba: [255; 4] },
-        _ => bail!("case must be none, bar, time, or combined"),
+        _ => bail!("case must be none, bar, time, trail, or combined"),
     };
+    if case == "trail" {
+        metadata.render.effects.mouse_trail_rgba = [255, 40, 60, 180];
+    }
     if case == "combined" {
         metadata.render.effects.show_keyboard = true;
         metadata.render.effects.keyboard = Some(style());
@@ -261,11 +314,12 @@ fn render(root: &Path, output: &Path, case: &str, hardware: bool, threads: u8) -
         metadata.render.effects.mouse_click_rgba = [40, 180, 255, 160];
     }
     let started = Instant::now();
-    let result = render_bundle_range(
+    let result = render_bundle_range_with_speed(
         &bundle,
         config.clone(),
         metadata,
         TrimRange::new(0, DURATION_MS * 1000, DURATION_MS * 1000).map_err(anyhow::Error::msg)?,
+        speed,
         &CancellationToken::default(),
         |_, _, _, _| {},
     )?;
@@ -277,7 +331,7 @@ fn render(root: &Path, output: &Path, case: &str, hardware: bool, threads: u8) -
         .context("missing output video")?;
     let duration_ms = stream.duration() as f64 * f64::from(stream.time_base()) * 1000.0;
     anyhow::ensure!(
-        (duration_ms - DURATION_MS as f64).abs() <= 1.0,
+        (duration_ms - DURATION_MS as f64 * 100.0 / f64::from(speed.percent())).abs() <= 1.0,
         "output duration changed: {duration_ms}"
     );
     let decoder = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?
@@ -289,21 +343,26 @@ fn render(root: &Path, output: &Path, case: &str, hardware: bool, threads: u8) -
     );
     let stages = result.runtime_report.stage_durations_ms;
     println!(
-        "width,height,case,hardware_requested,hardware_used,threads,encoder,elapsed_ms,slots_per_second,plan_ms,decode_ms,compose_ms,encode_ms,finalize_ms,output_bytes,duration_ms"
+        "width,height,case,hardware_requested,hardware_used,threads,encoder,elapsed_ms,slots_per_second,plan_ms,decode_ms,compose_ms,encode_ms,finalize_ms,output_bytes,duration_ms,speed_percent"
     );
     println!(
-        "{},{},{case},{hardware},{},{threads},{},{elapsed_ms:.3},{:.3},{},{},{},{},{},{},{duration_ms:.3}",
+        "{},{},{case},{hardware},{},{threads},{},{elapsed_ms:.3},{:.3},{},{},{},{},{},{},{duration_ms:.3},{}",
         config.width,
         config.height,
         result.runtime_report.used_hardware_encode,
         result.runtime_report.video_encoder.unwrap_or_default(),
-        FRAMES as f64 * 1000.0 / elapsed_ms,
+        speed
+            .output_frame_count(DURATION_MS * 1000, FPS)
+            .map_err(anyhow::Error::msg)? as f64
+            * 1000.0
+            / elapsed_ms,
         stages.plan,
         stages.decode,
         stages.compose,
         stages.video_encode,
         stages.finalize,
-        fs::metadata(output)?.len()
+        fs::metadata(output)?.len(),
+        speed.percent()
     );
     Ok(())
 }
@@ -314,22 +373,13 @@ fn main() -> Result<()> {
     }
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("prepare") if args.len() == 5 => {
-            let (moving, cursor) = match args[4].as_str() {
-                "static" => (false, false),
-                "moving" => (true, false),
-                "cursor" => (false, true),
-                _ => bail!("source must be static, moving, or cursor"),
-            };
-            prepare(
-                Path::new(&args[1]),
-                args[2].parse()?,
-                args[3].parse()?,
-                moving,
-                cursor,
-            )
-        }
-        Some("render") if args.len() == 6 => {
+        Some("prepare") if args.len() == 5 => prepare(
+            Path::new(&args[1]),
+            args[2].parse()?,
+            args[3].parse()?,
+            &args[4],
+        ),
+        Some("render") if matches!(args.len(), 6 | 7) => {
             let hardware = match args[4].as_str() {
                 "0" => false,
                 "1" => true,
@@ -341,10 +391,12 @@ fn main() -> Result<()> {
                 &args[3],
                 hardware,
                 args[5].parse()?,
+                PlaybackSpeed::from_percent(args.get(6).map_or(Ok(100), |value| value.parse())?)
+                    .map_err(anyhow::Error::msg)?,
             )
         }
         _ => bail!(
-            "usage: prepare DIR WIDTH HEIGHT static|moving|cursor; render DIR OUTPUT none|bar|time|combined 0|1 THREADS"
+            "usage: prepare DIR WIDTH HEIGHT static|moving|cursor|stationary|hdr; render DIR OUTPUT none|bar|time|trail|combined 0|1 THREADS [SPEED_PERCENT]"
         ),
     }
 }

@@ -332,8 +332,9 @@ cargo build -p snow-recording-export --locked --release --features bench-timing 
   render build/export-fixture-4k-moving build/export-moving.mp4 combined 0 0
 ```
 
-The last two render arguments select hardware preference (0/1) and encoder
-threads (0 means automatic). Use `static` when preparing the static fixture,
+The next two render arguments select hardware preference (0/1) and encoder
+threads (0 means automatic); the optional final argument is playback speed in
+percent (default 100). Use `static` when preparing the static fixture,
 and `none`, `bar`, or `time` for the corresponding effect case. Preserve both
 executables before comparing changes, alternate their order, and keep builds
 and other benchmarks separate from measurement.
@@ -375,3 +376,73 @@ test, or benchmark detected. Separate offscreen tests passed for effect
 expiration/reappearance, webcam/cursor/keyboard ordering, and decoded H.264
 thin-stroke preservation. Raw results and executable identity are retained under
 `build/recording-pipeline-optimization/gpu-confirm-20261019-222010/`.
+
+### Deferred replay reuse and tone mapping (macOS, 2026-10-20)
+
+The replay loop now distinguishes source changes, visible input changes and
+animation time. Repeated stationary pointer observations preserve settled trail
+pixels, while exits, re-entry, continuity changes, future observations and expiry
+still invalidate composition. Proven identical output repeats the encoder's
+pending image without a canvas copy or equality scan. This also applies to
+retimed video and animated exports: fixed video slots and the GIF/WebP hold
+limits remain authoritative. HDR-to-SDR replay caches the tone-mapped source
+until its decoded picture changes. This costs one RGBA canvas (31.6 MiB at 4K)
+only when tone mapping is requested; HDR-preserving replay allocates no SDR cache.
+
+On an Apple M4 (10 cores), using `snow-shot-macos-arm64-performance`, software
+H.264 with four threads, unchanged quality/preset, and three-second 3840×2160
+60 FPS sources, the median of three fresh-process runs was:
+
+| Source / effects / speed | Baseline | Updated | Reduction |
+| --- | ---: | ---: | ---: |
+| Stationary / trail / 100% | 343.2 ms | 49.7 ms | 85.5% |
+| Moving / none / 50% | 3249.1 ms | 2919.9 ms | 10.1% |
+| Held HDR → SDR / progress bar / 100% | 19512.4 ms | 3191.2 ms | 83.6% |
+| Stationary / none / 50% | 2025.9 ms | 1966.8 ms | 2.9% |
+| Moving / combined / 100% | 2523.5 ms | 2513.3 ms | 0.4% |
+| Stationary / progress bar / 100% | 1967.8 ms | 1930.5 ms | 1.9% |
+
+Small differences in the last three rows should be treated as noise, not a
+general encoder speedup. All 18 output pairs were byte-identical, with matching
+dimensions and exact duration. The HDR pairs alternated baseline/updated;
+the SDR runs collected three baseline runs followed by three updated runs.
+No builds or tests overlapped measurement. These fixtures exclude capture,
+audio, webcam, UI completion and source packing; they establish no Windows,
+hardware-encoder or live-capture throughput claim.
+
+The baseline is `ddbd22d6c28297bd722e4cae470176251490c083` plus the benchmark's
+stationary/trail/speed inputs. Raw timings, executable hashes, outputs and
+`summary.json` are under `build/deferred-optimization/`. Prepare `stationary`
+for the no-op pointer case and `hdr` for held HDR-to-SDR tone mapping, then use
+`trail` or `bar` when rendering. For example, from the repository root after
+building the performance benchmark target:
+
+```sh
+export DYLD_LIBRARY_PATH="$PWD/.tools/macos/installed/dynamic/arm64-osx-snow-shot/lib"
+bench=build/snow-shot-macos-arm64-performance/cargo/aarch64-apple-darwin/release/examples/postprocessing_export_benchmark
+"$bench" prepare build/export-hdr-4k 3840 2160 hdr
+"$bench" render build/export-hdr-4k build/export-hdr-bar.mp4 bar 0 4 100
+```
+
+Four final-build confirmation pairs (stationary trail, moving at 50%, moving
+combined, and held HDR with a bar) also matched byte for byte and retained the
+large improvements. Their alternating order, timings and final executable hash
+are recorded in `build/deferred-optimization/final-confirmation.json`.
+
+PCM replay separately uses a bounded 64 KiB reader per recorded track, and
+retimed/preview PCM reads avoid seeking when the next request is contiguous.
+Tests compare samples across buffer boundaries, rewinds, track routing and
+zero-padded endpoints. Render-job start and cleanup completion now wake the GUI
+through future notifications; only native progress remains on its 100 ms timer.
+A regression disables normal polling to verify that start adoption, task disposal
+and source release still complete, alongside cancellation and shutdown checks.
+Validation passed 85 effects tests, 42 focused export tests, the post-processing
+and render-layout CTests, Clippy with warnings denied, and Rust/C++ formatting.
+The post-processing test waits for macOS's asynchronous initial preview sizing
+before asserting the unchanged progress-bar pixel condition.
+
+Encoder quality/preset defaults and the source format are unchanged. GPU decode,
+decode/encode worker overlap, input checkpoints and direct packet copying need
+separate evidence: device-dependent memory/transfer costs, bounded cancellation,
+persisted replay state/integrity, and source-versus-output quality semantics
+respectively. They are not prerequisites for these pixel-identical improvements.

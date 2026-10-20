@@ -2478,6 +2478,73 @@ fn replay_preserves_separate_track_titles_defaults_and_bounded_audio_extent() {
 }
 
 #[test]
+fn deferred_pcm_reads_preserve_seeks_routes_and_zero_padding_across_buffer_boundaries() {
+    let fixture = fixture(
+        crate::ExportFormat::Mp4,
+        crate::VideoCodec::H264,
+        false,
+        true,
+        false,
+    );
+    let footer = read_recording_bundle_footer(&fixture.bundle).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&fixture.bundle)
+        .unwrap();
+    let sample = |track: usize, index: usize| (index % 20000) as i16 - 10000 + track as i16 * 3000;
+    for (track, manifest) in footer.manifest.audio_tracks.iter().enumerate() {
+        let asset = footer
+            .asset(BundleAssetKind::AudioTrack, Some(&manifest.asset_id))
+            .unwrap();
+        file.seek(SeekFrom::Start(asset.offset)).unwrap();
+        let bytes: Vec<_> = (0..asset.len as usize / 2)
+            .flat_map(|i| sample(track, i).to_le_bytes())
+            .collect();
+        file.write_all(&bytes).unwrap();
+    }
+    drop(file);
+    let token = CancellationToken::default();
+    for mixed in [false, true] {
+        let mut source = crate::clip::ClipSource::open(&fixture.bundle, None).unwrap();
+        if mixed {
+            source.config.audio.truncate(1);
+            source.config.audio[0].track_id = "mixed".into();
+        }
+        let mut reader = crate::clip::AudioReader::open(&source).unwrap();
+        for (start, count) in [
+            (0, 480),
+            (480, 480),
+            (960, 20000),
+            (47000, 2000),
+            (100, 9),
+            (16000, 8000),
+            (100000, 480),
+            (0, 0),
+        ] {
+            let tracks = reader.read(start, count, &token).unwrap();
+            for (track, samples) in tracks.iter().enumerate() {
+                let expected: Vec<_> = (0..count * 2)
+                    .map(|i| {
+                        let index = start as usize * 2 + i;
+                        if index >= 1001 * 48 * 2 {
+                            0
+                        } else if mixed {
+                            sample(0, index).saturating_add(sample(1, index))
+                        } else {
+                            sample(track, index)
+                        }
+                    })
+                    .collect();
+                assert_eq!(
+                    *samples, expected,
+                    "mixed={mixed}, start={start}, count={count}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn replay_mixed_and_disabled_audio_route_the_same_raw_source_tracks() {
     let fixture = fixture(
         crate::ExportFormat::Mp4,
@@ -2528,6 +2595,56 @@ fn replay_mixed_and_disabled_audio_route_the_same_raw_source_tracks() {
             .count(),
         0
     );
+}
+
+#[test]
+fn hdr_tone_map_cache_tracks_source_images_and_keeps_composition_out_of_the_cache() {
+    let fixture = fixture(
+        crate::ExportFormat::Mp4,
+        crate::VideoCodec::H264,
+        false,
+        false,
+        true,
+    );
+    let token = CancellationToken::default();
+    let mut video = SequentialVideoSource::open(
+        &fixture.bundle,
+        fixture.metadata.timeline,
+        true,
+        (32, 24),
+        (32, 24),
+        &token,
+    )
+    .unwrap();
+    assert!(video.tone_mapped.is_empty());
+    let mut previous = Vec::new();
+    for pts in [0, 1, 14, 15, 16, 30] {
+        let changed = video.advance(pts, &token).unwrap();
+        if changed {
+            assert!(!video.tone_mapped_valid);
+        }
+        let mut reference = vec![0; 32 * 24 * 4];
+        let stride = video.converted.stride(0);
+        for (y, row) in reference.chunks_exact_mut(32 * 4).enumerate() {
+            snow_media::color::tone_map_rgb48_row(
+                &video.converted.data(0)[y * stride..y * stride + 32 * 6],
+                row,
+            )
+            .unwrap();
+        }
+        if changed && !previous.is_empty() {
+            assert_ne!(reference, previous);
+        }
+        for _ in 0..2 {
+            let mut output = vec![255; reference.len()];
+            video.copy_rgba(&mut output).unwrap();
+            assert_eq!(output, reference);
+            // Composition is free to overwrite its destination.
+            output.fill(0);
+        }
+        assert!(video.tone_mapped_valid);
+        previous = reference;
+    }
 }
 
 #[test]

@@ -1279,13 +1279,7 @@ impl StreamingEncoder {
                 .admissions
                 .push((pts, std::time::Instant::now()));
         }
-        // Leave room for the exclusive next tick in bounded animation delays.
-        // libwebp also rejects input timestamp gaps beyond its 24-bit duration.
-        let max_hold_ticks = match self.format {
-            ExportFormat::Gif => u128::from(u16::MAX) * u128::from(self.fps) / 100,
-            ExportFormat::Webp => 0xff_ffff * u128::from(self.fps) / 1000,
-            _ => u128::MAX,
-        };
+        let max_hold_ticks = self.max_hold_ticks();
         let mut reuse_cpu_pixels = false;
         if let Some(pending) = self.pending.as_mut() {
             // A coalesced image already covers later observations. Replacing
@@ -1342,6 +1336,75 @@ impl StreamingEncoder {
 
     pub fn set_frame_reuse(&mut self, policy: VideoFrameReuse) {
         self.frame_reuse = policy;
+    }
+
+    fn max_hold_ticks(&self) -> u128 {
+        // Reserve the exclusive next tick in bounded animation delays. libwebp
+        // also rejects input timestamp gaps beyond its 24-bit duration.
+        match self.format {
+            ExportFormat::Gif => u128::from(u16::MAX) * u128::from(self.fps) / 100,
+            ExportFormat::Webp => 0xff_ffff * u128::from(self.fps) / 1000,
+            _ => u128::MAX,
+        }
+    }
+
+    /// Repeat the pending image when replay has already proved pixel identity.
+    /// Retain the existing delay limits and, when requested, every output PTS,
+    /// without copying or comparing the canvas again.
+    pub(crate) fn repeat_video_frame_at_pts(&mut self, pts: u64, keep_pts: bool) -> Result<()> {
+        let pts = i64::try_from(pts)
+            .map_err(|_| RecordingExportError::InvalidConfig("video PTS overflow".into()))?;
+        let max_hold_ticks = self.max_hold_ticks();
+        let pending = self.pending.as_mut().ok_or_else(|| {
+            RecordingExportError::InvalidConfig("no pending video frame to repeat".into())
+        })?;
+        if pts <= pending.last_observed_pts {
+            return Err(RecordingExportError::InvalidConfig(
+                "repeated video PTS must advance".into(),
+            ));
+        }
+        #[cfg(feature = "bench-timing")]
+        {
+            self.report.timings.submitted_pts.push(pts);
+            self.report
+                .timings
+                .admissions
+                .push((pts, std::time::Instant::now()));
+        }
+        if !keep_pts && ((pts - pending.pts) as u128) < max_hold_ticks {
+            pending.last_observed_pts = pts;
+            self.report.coalesced_frames = self.report.coalesced_frames.saturating_add(1);
+            return Ok(());
+        }
+        let gpu = if let Some(frame) = &pending.gpu {
+            let mut retained = ffmpeg::frame::Video::empty();
+            // Pending prepared/native frames already own reference-counted storage.
+            let status =
+                unsafe { ffmpeg::ffi::av_frame_ref(retained.as_mut_ptr(), frame.as_ptr()) };
+            if status < 0 {
+                return Err(RecordingExportError::Encode(
+                    ffmpeg::Error::from(status).to_string(),
+                ));
+            }
+            Some(retained)
+        } else {
+            None
+        };
+        let duration = pts - pending.pts;
+        self.encode_pending(duration)?;
+        self.admitted_frames += 1;
+        self.pending = Some(PendingFrame {
+            pts,
+            last_observed_pts: pts,
+            rgba: if gpu.is_none() {
+                std::mem::take(&mut self.spare_rgba)
+            } else {
+                RasterBuffer::default()
+            },
+            gpu,
+            reuse_cpu_pixels: true,
+        });
+        Ok(())
     }
 
     /// Submit PCM to a single-track output. Multi-track outputs require explicit routing.
@@ -4114,6 +4177,94 @@ mod tests {
     }
 
     #[test]
+    fn proven_repeats_match_explicit_images_and_keep_the_requested_timestamps() {
+        let directory = tempfile::tempdir().unwrap();
+        for format in [
+            ExportFormat::Mp4,
+            ExportFormat::Avi,
+            ExportFormat::Gif,
+            ExportFormat::Apng,
+            ExportFormat::Webp,
+        ] {
+            if format == ExportFormat::Avi && !crate::has_avi_compatibility() {
+                continue;
+            }
+            for keep_pts in [false, true] {
+                for prepared in [false, true] {
+                    let mut outputs = Vec::new();
+                    for repeat in [false, true] {
+                        let path = directory.path().join(format!(
+                            "{format:?}-{keep_pts}-{prepared}-{repeat}.{}",
+                            format.file_extension()
+                        ));
+                        let mut encoder =
+                            StreamingEncoder::create(encoder_config(path.clone(), format)).unwrap();
+                        encoder.set_frame_reuse(if keep_pts {
+                            VideoFrameReuse::ReuseConversion
+                        } else {
+                            VideoFrameReuse::Coalesce
+                        });
+                        let mut rgba =
+                            ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, 16, 16);
+                        for pts in 0..12 {
+                            let changed = [0, 3, 7].contains(&pts);
+                            if repeat && !changed {
+                                encoder.repeat_video_frame_at_pts(pts, keep_pts).unwrap();
+                            } else {
+                                let color = if pts < 3 {
+                                    [80, 20, 40, 255]
+                                } else if pts < 7 {
+                                    [20, 120, 40, 255]
+                                } else {
+                                    [20, 40, 160, 255]
+                                };
+                                let pixels = color.repeat(16 * 16);
+                                if prepared {
+                                    if changed || keep_pts {
+                                        copy_rgba_into_frame(&mut rgba, &pixels).unwrap();
+                                        let frame =
+                                            encoder.prepare_rgba_video_frame(&rgba).unwrap();
+                                        encoder
+                                            .push_prepared_video_frame_at_pts(pts, frame)
+                                            .unwrap();
+                                    }
+                                } else {
+                                    encoder.push_rgba_frame_at_pts(pts, &pixels).unwrap();
+                                }
+                            }
+                        }
+                        let report = encoder.finish_at_pts(12).unwrap();
+                        assert_eq!(report.encoded_frames, if keep_pts { 12 } else { 3 });
+                        outputs.push(fs::read(path).unwrap());
+                    }
+                    assert_eq!(
+                        outputs[0], outputs[1],
+                        "{format:?}, keep_pts={keep_pts}, prepared={prepared}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn proven_repeats_validate_order_and_exclusive_endpoint() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("invalid-repeat.mp4");
+        let mut encoder =
+            StreamingEncoder::create(encoder_config(path.clone(), ExportFormat::Mp4)).unwrap();
+        assert!(encoder.repeat_video_frame_at_pts(0, false).is_err());
+        encoder
+            .push_rgba_frame_at_pts(0, &[80; 16 * 16 * 4])
+            .unwrap();
+        encoder.repeat_video_frame_at_pts(7, false).unwrap();
+        for pts in [0, 5, 7, u64::MAX] {
+            assert!(encoder.repeat_video_frame_at_pts(pts, false).is_err());
+        }
+        assert!(encoder.finish_at_pts(7).is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn coalesced_gif_holds_split_before_the_delay_limit() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("long-hold.gif");
@@ -4121,9 +4272,13 @@ mod tests {
             StreamingEncoder::create(encoder_config(path.clone(), ExportFormat::Gif)).unwrap();
         encoder.set_frame_reuse(VideoFrameReuse::Coalesce);
         for pts in 0..6601 {
-            encoder
-                .push_rgba_frame_at_pts(pts, &[80; 16 * 16 * 4])
-                .unwrap();
+            if pts % 2 == 0 {
+                encoder
+                    .push_rgba_frame_at_pts(pts, &[80; 16 * 16 * 4])
+                    .unwrap();
+            } else {
+                encoder.repeat_video_frame_at_pts(pts, false).unwrap();
+            }
         }
         let report = encoder.finish().unwrap();
         assert_eq!(report.encoded_frames, 2);
@@ -4152,9 +4307,13 @@ mod tests {
         let mut encoder = StreamingEncoder::create(config).unwrap();
         encoder.set_frame_reuse(VideoFrameReuse::Coalesce);
         for pts in 0..16_781 {
-            encoder
-                .push_rgba_frame_at_pts(pts, &[80; 16 * 16 * 4])
-                .unwrap();
+            if pts % 2 == 0 {
+                encoder
+                    .push_rgba_frame_at_pts(pts, &[80; 16 * 16 * 4])
+                    .unwrap();
+            } else {
+                encoder.repeat_video_frame_at_pts(pts, false).unwrap();
+            }
         }
         let report = encoder.finish().unwrap();
         assert_eq!(report.encoded_frames, 2);
