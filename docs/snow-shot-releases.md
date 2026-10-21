@@ -779,6 +779,21 @@ All workflow versions share one concurrency group, and pushes are never forced.
 If a push fails, rerun after resolving the tap's branch policy or concurrent edits.
 An archive may remain published after a failed tap push; retry safely reuses it.
 
+To remove the deprecated Ruby `preflight` from existing published casks, migrate
+the local tap checkout without repackaging or uploading release assets:
+
+```sh
+python3 scripts/snow-shot-homebrew.py migrate-casks --tap /path/to/homebrew-tap
+git -C /path/to/homebrew-tap diff -- Casks
+```
+
+This explicit compatibility migration changes only the recognized preparation
+artifact block in Full/Mini stable/beta casks. Versions, URLs, checksums and archive
+bytes remain unchanged. Unknown or conflicting hooks abort validation before any
+cask is changed. Review and commit the tap diff through the normal review process.
+Repeating the migration is harmless; the release publisher's same-version and
+immutable-asset guards remain in effect.
+
 Missing macOS assets fail without updating the tap. After uploading the missing
 pair, retry with Actions → Publish Snow Shot Homebrew cask → Run workflow, supplying
 the stable tag. With GitHub CLI:
@@ -807,22 +822,25 @@ A nonexistent `--current-cask` means first publication. The output includes the
 archives and `Casks/snow-shot.rb`; it performs no network or Git writes. Run
 `python3 scripts/test-snow-shot-homebrew.py` for the release helper's focused tests.
 With Homebrew installed and the generated cask in the tap, run
-`brew style --cask --except Cask/InstallSteps mg-chao/tap/snow-shot` and
+`brew style --cask mg-chao/tap/snow-shot` and
 `brew audit --cask mg-chao/tap/snow-shot`. Native installation/upgrade qualification
 is described in `docs-macos-build.md` and is required separately from these tests.
 
 The pull-request workflow `snow-shot-homebrew-checks.yml` runs the two focused
 Python suites plus Homebrew style and offline metadata auditing on macOS. Its
-generated fixture is never published or installed. The third-party cask uses the
-supported (but deprecated) third-party Ruby preflight API: Homebrew 7's declarative sandbox substitutes HOME
-and blocks account lookup, so it cannot preserve this installer's persistent
-Keychain identity as-is. The workflow excludes only `Cask/InstallSteps`, the
-rule requiring official taps to use declarative hooks. All other style checks
-and offline audits run normally; no runtime security settings are changed.
+generated fixture is never published or installed as a real application. The cask
+uses Homebrew's supported `installer script:` artifact to prepare a locally signed
+app before Homebrew moves it into the configured app directory. Vendor installer
+scripts preserve the installing account's HOME and Keychain access; declarative
+flight steps substitute a temporary HOME and cannot reuse this installer's signing
+identity. Full style checks run without a `Cask/InstallSteps` exception.
 
-Use `brew style --cask --except Cask/InstallSteps mg-chao/tap/snow-shot` for this
-third-party cask. The release's `prepare-snow-shot-homebrew.sh` wrapper handles
-rollback without requiring the unavailable signing key again.
+`scripts/test-snow-shot-homebrew-installer.rb` exercises the native Homebrew
+artifacts with harmless installer probes and disposable ad-hoc-signed app bundles,
+preserving the real HOME without creating or changing Keychain identities. The release's
+`prepare-snow-shot-homebrew.sh` wrapper handles rollback without requiring the
+unavailable signing key again. Uninstall removes prepared and installed copies
+while retaining signing state and user data.
 
 After saving or rotating the tap token, run **Check Snow Shot Homebrew support**
 manually. In addition to the focused tests, its manual-only job checks out the
