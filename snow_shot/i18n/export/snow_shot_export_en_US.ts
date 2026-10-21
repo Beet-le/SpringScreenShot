@@ -70,6 +70,10 @@
             <translation>The image save directory is not configured</translation>
         </message>
         <message>
+            <source>The screenshot clipboard payload is invalid</source>
+            <translation>The screenshot clipboard payload is invalid</translation>
+        </message>
+        <message>
             <source>The screenshot export queue is full</source>
             <translation>The screenshot export queue is full</translation>
         </message>

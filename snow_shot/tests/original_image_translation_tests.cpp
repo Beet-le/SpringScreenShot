@@ -375,7 +375,7 @@ void translationImageCopyHonorsSelectionAndSnapshots() {
                   "stream image-copy result");
         require(session.controller->recognitionClipboardMimeData()->text() == result,
                 "disabled image copying preserves translation text");
-        const int requests = server.streams.size();
+        const qsizetype requests = server.streams.size();
         require(settings.setCopyTranslationResultsAsImage(true),
                 "enable translation image copying");
         auto* editor = window.findChild<QTextEdit*>();

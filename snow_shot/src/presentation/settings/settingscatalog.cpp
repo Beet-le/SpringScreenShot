@@ -1462,7 +1462,7 @@ SettingsItemDefinition screenshotCopyFileItem() {
         QStringLiteral("screenshot.copy-image-file-to-clipboard"),
         QT_TRANSLATE_NOOP("SettingsCatalog", "Copy image file to clipboard"),
         QT_TRANSLATE_NOOP("SettingsCatalog",
-                          "Write the image to a file and copy that file to the clipboard"),
+                          "Copy both the image and its exported file to the clipboard"),
         QStringLiteral("screenshot/copy_image_file_to_clipboard"),
         SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard);
 }

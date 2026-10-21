@@ -1908,6 +1908,10 @@
             <translation>将应用设置以 zip 归档形式复制到剪贴板</translation>
         </message>
         <message>
+            <source>Copy both the image and its exported file to the clipboard</source>
+            <translation>将图像及其导出的文件同时复制到剪贴板</translation>
+        </message>
+        <message>
             <source>Copy color</source>
             <translation>复制颜色</translation>
         </message>
@@ -4658,10 +4662,6 @@
         <message>
             <source>Windows context menu</source>
             <translation>Windows 右键菜单</translation>
-        </message>
-        <message>
-            <source>Write the image to a file and copy that file to the clipboard</source>
-            <translation>将图像写入文件并将该文件复制到剪贴板</translation>
         </message>
         <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>

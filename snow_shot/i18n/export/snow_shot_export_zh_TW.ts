@@ -70,6 +70,10 @@
             <translation>尚未設定圖片儲存目錄</translation>
         </message>
         <message>
+            <source>The screenshot clipboard payload is invalid</source>
+            <translation>螢幕擷取剪貼簿資料無效</translation>
+        </message>
+        <message>
             <source>The screenshot export queue is full</source>
             <translation>擷取畫面匯出佇列已滿</translation>
         </message>

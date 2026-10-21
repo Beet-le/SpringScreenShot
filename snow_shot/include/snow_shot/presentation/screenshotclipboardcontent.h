@@ -136,7 +136,11 @@ class ScreenshotClipboardContentReader final {
     [[nodiscard]] static QStringList supportedImageFileExtensions();
     [[nodiscard]] static QStringList supportedFileExtensions();
     [[nodiscard]] static QStringList localFilePaths(const QMimeData* mimeData);
+    // Match decode() precedence without fetching image bytes: inline images take priority
+    // over accompanying file URLs. File-only publications keep their batch import path.
+    [[nodiscard]] static QStringList filePathsForImport(const QMimeData* mimeData);
     // Preserves clipboard order and duplicates; file validation belongs to the import worker.
+    // Inline images take priority over file URLs, as in filePathsForImport().
     [[nodiscard]] static QStringList localImageFilePaths(const QMimeData* mimeData);
     // File metadata is independent of GUI state and may be captured on a worker.
     [[nodiscard]] static QList<ScreenshotClipboardLocalImage>

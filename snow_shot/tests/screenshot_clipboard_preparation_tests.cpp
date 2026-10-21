@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QColorSpace>
 #include <QImage>
+#include <QDir>
 
 #include <array>
 #include <cstdlib>
@@ -19,6 +20,22 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <ShlObj.h>
+
+struct ScreenshotClipboardPayloadTestAccess {
+    static QByteArray fileBytes(const ScreenshotClipboardPayload& payload) {
+        const auto handle = static_cast<HGLOBAL>(payload.m_fileHandle);
+        const auto* memory = static_cast<const char*>(GlobalLock(handle));
+        const QByteArray bytes = memory ? QByteArray(memory, GlobalSize(handle)) : QByteArray{};
+        if (memory)
+            GlobalUnlock(handle);
+        return bytes;
+    }
+    static bool independentFiles(const ScreenshotClipboardPayload& first,
+                                 const ScreenshotClipboardPayload& second) {
+        return first.m_fileHandle != second.m_fileHandle;
+    }
+};
 #endif
 
 namespace {
@@ -191,6 +208,47 @@ void unknownOpacityPreservesSinglePassRows() {
                                 size_t(image.width()) * 4) == 0,
                 "RGB and RGBA encodings preserve identical opaque pixels");
 }
+
+void combinedPayloadOwnsImageAndFile() {
+    QImage image(3, 2, QImage::Format_RGBA8888);
+    image.fill(QColor(23, 117, 209, 127));
+    const QString path = QDir::temp().filePath(QStringLiteral("Snow Shot \u56fe\u50cf.png"));
+    auto original = ScreenshotClipboardService::prepareImage(image);
+    require(original.isValid() && original.filePath().isEmpty(),
+            "image-only copies must not acquire a file reference");
+    const QByteArray png = original.pngBytes();
+    auto combined = ScreenshotClipboardService::withFile(std::move(original), path);
+    require(combined.isValid() && !original.isValid() && combined.filePath() == path &&
+                combined.pngBytes() == png,
+            "adding a file must preserve image bytes and transfer ownership");
+    auto clone = ScreenshotClipboardService::clonePrepared(combined);
+    require(clone.isValid() && clone.filePath() == path && clone.pngBytes() == png,
+            "cloned publications must retain both representations");
+#ifdef Q_OS_WIN
+    require(ScreenshotClipboardPayloadTestAccess::independentFiles(combined, clone),
+            "cloned publications need independent native file ownership");
+    const QByteArray bytes = ScreenshotClipboardPayloadTestAccess::fileBytes(clone);
+    const QString native = QDir::toNativeSeparators(path);
+    const auto pathBytes = static_cast<qsizetype>(native.size() * sizeof(wchar_t));
+    require(bytes.size() >= qsizetype(sizeof(DROPFILES)) + pathBytes + 4,
+            "file publication must allocate a header and terminated UTF-16 path");
+    DROPFILES header{};
+    std::memcpy(&header, bytes.constData(), sizeof(header));
+    require(header.pFiles == sizeof(DROPFILES) && header.fWide && !header.fNC && header.pt.x == 0 &&
+                header.pt.y == 0 &&
+                std::memcmp(bytes.constData() + header.pFiles, native.utf16(),
+                            static_cast<size_t>(pathBytes)) == 0,
+            "CF_HDROP must preserve spaces and Unicode in the native file path");
+    for (qsizetype i = sizeof(DROPFILES) + pathBytes; i < bytes.size(); ++i)
+        require(bytes[i] == 0, "file terminators and allocator padding must be initialized");
+#endif
+    combined = {};
+    require(clone.isValid(), "destroying one payload must leave its clone usable");
+    require(!ScreenshotClipboardService::withFile(std::move(clone), QStringLiteral("relative.png"))
+                    .isValid() &&
+                !ScreenshotClipboardService::withFile({}, path).isValid(),
+            "combined publication requires a valid image and an absolute file path");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -199,6 +257,7 @@ int main(int argc, char** argv) {
         bitmapPixelsAndBounds();
         opacitySurvivesSnapshotsAndEncoding();
         unknownOpacityPreservesSinglePassRows();
+        combinedPayloadOwnsImageAndFile();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return EXIT_FAILURE;

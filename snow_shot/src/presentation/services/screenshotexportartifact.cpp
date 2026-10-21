@@ -16,11 +16,9 @@
 #include <QPointer>
 #include <QFileInfo>
 #include <QFile>
-#include <QMimeData>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QUuid>
-#include <QUrl>
 
 #include <snow/image/codec.h>
 #include <snow/image/format.h>
@@ -629,7 +627,9 @@ void ScreenshotExportArtifact::startImage() {
             }
         });
     if (!job.isValid()) {
-        completeImage({{}, QStringLiteral("The screenshot export queue is full")});
+        completeImage({{},
+                       QCoreApplication::translate("ScreenshotExportArtifact",
+                                                   "The screenshot export queue is full")});
         return;
     }
     bool retained = false;
@@ -839,7 +839,10 @@ void ScreenshotExportArtifact::startPngFromRows(int compressionLevel,
             }
         });
     if (!job.isValid()) {
-        completePng(compressionLevel, {{}, QStringLiteral("The screenshot export queue is full")});
+        completePng(compressionLevel,
+                    {{},
+                     QCoreApplication::translate("ScreenshotExportArtifact",
+                                                 "The screenshot export queue is full")});
         return;
     }
     bool retained = false;
@@ -891,9 +894,11 @@ void ScreenshotExportArtifact::completePng(int compressionLevel,
     }
     if (!clipboardSubscribers.empty()) {
         if (!result.succeeded() || !clipboard || !clipboard->isValid()) {
-            const auto error = result.error.isEmpty()
-                                   ? QStringLiteral("The screenshot clipboard payload is invalid")
-                                   : result.error;
+            const auto error =
+                result.error.isEmpty()
+                    ? QCoreApplication::translate("ScreenshotExportArtifact",
+                                                  "The screenshot clipboard payload is invalid")
+                    : result.error;
             for (auto& subscriber : clipboardSubscribers)
                 dispatchResult(cancelled, subscriber.receiver, std::move(subscriber.callback),
                                ScreenshotExportClipboardResult{{}, error});
@@ -950,15 +955,18 @@ void ScreenshotExportArtifact::completePng(int compressionLevel,
                                                  ? ScreenshotExportTaskResult{}
                                                  : ScreenshotExportTaskResult::failure(
                                                        ScreenshotExportFailureStage::Clipboard,
-                                                       QStringLiteral("The screenshot clipboard "
-                                                                      "payload is invalid"));
+                                                       QCoreApplication::translate(
+                                                           "ScreenshotExportArtifact",
+                                                           "The screenshot clipboard payload is "
+                                                           "invalid"));
                                   },
                                   complete)
                             : ScreenshotExportJobHandle{};
                     if (!job.isValid()) {
                         complete(ScreenshotExportTaskResult::failure(
                             ScreenshotExportFailureStage::Queue,
-                            QStringLiteral("The screenshot export queue is full")));
+                            QCoreApplication::translate("ScreenshotExportArtifact",
+                                                        "The screenshot export queue is full")));
                         continue;
                     }
                     bool retained = false;
@@ -1002,24 +1010,6 @@ std::optional<ScreenshotClipboardAppearance> ScreenshotExportArtifact::clipboard
     else if (appearance && !m_impl->image.isNull())
         appearance->rasterSize = m_impl->image.size();
     return appearance;
-}
-
-void ScreenshotExportArtifact::setClipboardFileMetadata(QMimeData& mime,
-                                                        const QString& path) const {
-    const QFileInfo info(path);
-    const auto bindFile = [&info](auto& metadata) {
-        metadata.filePath = screenshotClipboardFilePath(info.absoluteFilePath());
-        metadata.fileSize = info.size();
-        metadata.fileModifiedMs = info.lastModified().toUTC().toMSecsSinceEpoch();
-    };
-    if (auto placement = clipboardPlacement()) {
-        bindFile(*placement);
-        setScreenshotClipboardPlacement(mime, *placement);
-    }
-    if (auto appearance = clipboardAppearance()) {
-        bindFile(*appearance);
-        setScreenshotClipboardAppearance(mime, *appearance);
-    }
 }
 
 bool ScreenshotExportArtifact::requestClipboard(QObject* receiver, ClipboardCallback callback) {
@@ -1085,7 +1075,9 @@ bool ScreenshotExportArtifact::requestClipboard(QObject* receiver, ClipboardCall
         if (!scheduled && *completion) {
             dispatchResult(cancelled, target, std::move(*completion),
                            ScreenshotExportClipboardResult{
-                               {}, QStringLiteral("The screenshot export queue is full")});
+                               {},
+                               QCoreApplication::translate("ScreenshotExportArtifact",
+                                                           "The screenshot export queue is full")});
         }
     });
 }
@@ -1123,13 +1115,14 @@ bool ScreenshotExportArtifact::prepareClipboard(QObject* receiver, QByteArray ca
                     source, [&cancellation] { return cancellation.isCancellationRequested(); });
                 *payload = ScreenshotClipboardService::prepareEncoded(rows, canonicalPng, placement,
                                                                       appearance);
-                return payload->isValid()
-                           ? ScreenshotExportTaskResult{}
-                           : ScreenshotExportTaskResult::failure(
-                                 cancellation.isCancellationRequested()
-                                     ? ScreenshotExportFailureStage::Cancelled
-                                     : ScreenshotExportFailureStage::Clipboard,
-                                 QStringLiteral("The screenshot clipboard payload is invalid"));
+                return payload->isValid() ? ScreenshotExportTaskResult{}
+                                          : ScreenshotExportTaskResult::failure(
+                                                cancellation.isCancellationRequested()
+                                                    ? ScreenshotExportFailureStage::Cancelled
+                                                    : ScreenshotExportFailureStage::Clipboard,
+                                                QCoreApplication::translate(
+                                                    "ScreenshotExportArtifact",
+                                                    "The screenshot clipboard payload is invalid"));
             },
             [cancelled, guardedReceiver, payload,
              completion](ScreenshotExportTaskResult result) mutable {
@@ -1142,7 +1135,9 @@ bool ScreenshotExportArtifact::prepareClipboard(QObject* receiver, QByteArray ca
         if (!job.isValid()) {
             dispatchResult(cancelled, guardedReceiver, std::move(*completion),
                            ScreenshotExportClipboardResult{
-                               {}, QStringLiteral("The screenshot export queue is full")});
+                               {},
+                               QCoreApplication::translate("ScreenshotExportArtifact",
+                                                           "The screenshot export queue is full")});
             return;
         }
         bool retained = false;
@@ -1263,7 +1258,8 @@ bool ScreenshotExportArtifact::requestSaveToPath(QObject* receiver, QString path
             dispatchResult(deliveryCancelled, target, std::move(*completion),
                            ScreenshotExportTaskResult::failure(
                                ScreenshotExportFailureStage::Queue,
-                               QStringLiteral("The screenshot export queue is full")));
+                               QCoreApplication::translate("ScreenshotExportArtifact",
+                                                           "The screenshot export queue is full")));
             return;
         }
         bool retained = false;
@@ -1321,7 +1317,9 @@ bool ScreenshotExportArtifact::requestFileSource(ScreenshotImageFileFormat forma
                                          source->png = std::move(result.image);
                                          (*completion)(std::move(source), std::move(result.error));
                                      }))
-                (*completion)({}, QStringLiteral("The screenshot export queue is full"));
+                (*completion)({},
+                              QCoreApplication::translate("ScreenshotExportArtifact",
+                                                          "The screenshot export queue is full"));
             return;
         }
         guarded->requestPreparedFile(std::move(rows), format, encoding, std::move(callback));
@@ -1462,7 +1460,8 @@ void ScreenshotExportArtifact::requestPreparedFile(ScreenshotImageRowSource rows
     if (!job.isValid()) {
         complete(ScreenshotExportTaskResult::failure(
             ScreenshotExportFailureStage::Queue,
-            QStringLiteral("The screenshot export queue is full")));
+            QCoreApplication::translate("ScreenshotExportArtifact",
+                                        "The screenshot export queue is full")));
         return;
     }
     QMutexLocker lock(&m_impl->mutex);
@@ -1474,28 +1473,107 @@ void ScreenshotExportArtifact::requestPreparedFile(ScreenshotImageRowSource rows
 
 bool ScreenshotExportArtifact::requestClipboardFile(
     QObject* receiver, ScreenshotImageFileFormat format, QString filenameFormat,
-    ScreenshotImageEncodingOptions encoding, ClipboardFileCallback callback,
-    ScreenshotPdfOptions pdf, QDateTime requestedAt) {
+    ScreenshotImageEncodingOptions encoding, ClipboardCallback callback, ScreenshotPdfOptions pdf,
+    QDateTime requestedAt) {
     if (receiver == nullptr || !callback || isCancelled())
         return false;
+    const QPointer<ScreenshotExportArtifact> guarded(this);
     const QPointer<QObject> target(receiver);
     const auto cancelled = m_impl->cancelled;
-    return requestFileSave(
-        this, ClipboardFileDestination{}, format, std::move(filenameFormat), encoding,
-        [this, cancelled, target,
+    const bool sharesPng =
+        format == ScreenshotImageFileFormat::Png &&
+        pngCompression(encoding.compressionLevel) == pngCompression(m_impl->compressionLevel);
+    const auto payload = std::make_shared<ScreenshotClipboardPayload>();
+    auto save = makeFileSaveCallback(
+        this, ClipboardFileDestination{}, format, std::move(filenameFormat),
+        [cancelled, target, payload,
          callback = std::move(callback)](ScreenshotExportTaskResult result) mutable {
-            if (!result.succeeded()) {
-                dispatchResult(cancelled, target, std::move(callback), std::unique_ptr<QMimeData>{},
-                               std::move(result.error));
-                return;
-            }
-            // Read artifact metadata on its owning thread before transferring the result.
-            auto mime = std::make_unique<QMimeData>();
-            mime->setUrls({QUrl::fromLocalFile(result.savedPath)});
-            setClipboardFileMetadata(*mime, result.savedPath);
-            dispatchResult(cancelled, target, std::move(callback), std::move(mime), QString{});
+            ScreenshotExportClipboardResult prepared;
+            if (result.succeeded()) {
+                // Metadata stays bound to the lossless image, even for a JPEG/PDF file.
+                prepared.payload =
+                    ScreenshotClipboardService::withFile(std::move(*payload), result.savedPath);
+                if (!prepared.payload.isValid())
+                    prepared.error = QCoreApplication::translate(
+                        "ScreenshotExportArtifact", "The screenshot clipboard payload is invalid");
+            } else
+                prepared.error = std::move(result.error);
+            dispatchResult(cancelled, target, std::move(callback), std::move(prepared));
         },
         pdf, requestedAt, ScreenshotExportCoordinator::Priority::Foreground);
+
+    if (sharesPng) {
+        // Matching PNG output has only one dependency. Pass its shared bytes straight to
+        // the writer, even when persistent caching is disabled; no join or second encoder.
+        return requestClipboard(this, [target, payload, save = std::move(save)](
+                                          ScreenshotExportClipboardResult prepared) mutable {
+            if (!target)
+                return;
+            if (!prepared.succeeded()) {
+                save({}, std::move(prepared.error));
+                return;
+            }
+            *payload = std::move(prepared.payload);
+            auto source = std::make_shared<FileSource>();
+            source->bytes = payload->pngBytes();
+            save(std::move(source), {});
+        });
+    }
+
+    // Different encodings prepare independently. Join them before creating a file so
+    // failed image preparation cannot leave an unused export. The writer captures only
+    // the payload, never this join state, and is consumed exactly once.
+    struct PendingFile final {
+        QPointer<QObject> receiver;
+        std::shared_ptr<ScreenshotClipboardPayload> payload;
+        std::shared_ptr<FileSource> source;
+        FileSourceCallback save;
+
+        void complete(QString error = {}) {
+            if (receiver.isNull()) {
+                save = {};
+                source.reset();
+                *payload = {};
+                return;
+            }
+            if (!save || (error.isEmpty() && (!payload->isValid() || !source)))
+                return;
+            if (!error.isEmpty()) {
+                // The other encoder may still be running. Do not retain a native bitmap
+                // or a prepared file through its outstanding subscription after failure.
+                source.reset();
+                *payload = {};
+            }
+            auto writer = std::exchange(save, {});
+            writer(std::move(source), std::move(error));
+        }
+    };
+    const auto pending =
+        std::make_shared<PendingFile>(PendingFile{target, payload, {}, std::move(save)});
+    if (!requestClipboard(this, [pending](ScreenshotExportClipboardResult prepared) {
+            if (!pending->save)
+                return;
+            if (!prepared.succeeded()) {
+                pending->complete(std::move(prepared.error));
+                return;
+            }
+            *pending->payload = std::move(prepared.payload);
+            pending->complete();
+        }))
+        return false;
+    if (guarded && !cancelled->load() && pending->save && target) {
+        if (!requestFileSource(format, encoding,
+                               [pending](std::shared_ptr<FileSource> source, QString error) {
+                                   if (!pending->save)
+                                       return;
+                                   pending->source = std::move(source);
+                                   pending->complete(std::move(error));
+                               })) {
+            pending->complete(QCoreApplication::translate("ScreenshotExportArtifact",
+                                                          "The screenshot export queue is full"));
+        }
+    }
+    return true;
 }
 
 bool ScreenshotExportArtifact::requestAutomaticSave(
@@ -1527,16 +1605,27 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, FileSaveDestin
                                                ScreenshotExportCoordinator::Priority priority) {
     if (receiver == nullptr || !callback || isCancelled())
         return false;
+    return requestFileSource(format, encoding,
+                             makeFileSaveCallback(receiver, std::move(destination), format,
+                                                  std::move(filenameFormat), std::move(callback),
+                                                  pdf, requestedAt, priority));
+}
+
+ScreenshotExportArtifact::FileSourceCallback ScreenshotExportArtifact::makeFileSaveCallback(
+    QObject* receiver, FileSaveDestination destination, ScreenshotImageFileFormat format,
+    QString filenameFormat, ScreenshotExportCoordinator::Completion callback,
+    ScreenshotPdfOptions pdf, QDateTime requestedAt,
+    ScreenshotExportCoordinator::Priority priority) {
     const QPointer<ScreenshotExportArtifact> guarded(this);
     const auto deliveryCancelled = m_impl->cancelled;
     const QPointer<QObject> target(receiver);
     if (!requestedAt.isValid())
         requestedAt = QDateTime::currentDateTime();
     const auto names = windowNames();
-    auto schedule = [guarded, deliveryCancelled, target, destination = std::move(destination),
-                     format, pdf, priority, requestedAt, names,
-                     filenameFormat = std::move(filenameFormat), callback = std::move(callback)](
-                        std::shared_ptr<FileSource> source, QString error) mutable {
+    return [guarded, deliveryCancelled, target, destination = std::move(destination), format, pdf,
+            priority, requestedAt, names, filenameFormat = std::move(filenameFormat),
+            callback = std::move(callback)](std::shared_ptr<FileSource> source,
+                                            QString error) mutable {
         if (guarded.isNull() || guarded->isCancelled() || target.isNull())
             return;
         if (!error.isEmpty()) {
@@ -1623,7 +1712,8 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, FileSaveDestin
             dispatchResult(deliveryCancelled, target, std::move(*completion),
                            ScreenshotExportTaskResult::failure(
                                ScreenshotExportFailureStage::Queue,
-                               QStringLiteral("The screenshot export queue is full")));
+                               QCoreApplication::translate("ScreenshotExportArtifact",
+                                                           "The screenshot export queue is full")));
             return;
         }
         bool retained = false;
@@ -1637,7 +1727,6 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, FileSaveDestin
         if (!retained)
             job.cancel();
     };
-    return requestFileSource(format, encoding, std::move(schedule));
 }
 
 void ScreenshotExportArtifact::cancel() {

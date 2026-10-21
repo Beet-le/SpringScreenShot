@@ -18491,12 +18491,23 @@ void pinnedContentReplacement() {
     require(samePixels(Access::originalImage(window), original),
             "failed file URL must not become text content");
     require(memoryClipboard.snapshots == 0,
-            "file URLs must take priority over clipboard text and image snapshots");
+            "file-only clipboard imports must not fetch text or image snapshots");
     const QMimeData emptyClipboard;
     paste(emptyClipboard);
     waitForReplacement();
     require(samePixels(Access::originalImage(window), original),
             "empty clipboard must preserve content");
+    QMimeData combined;
+    combined.setUrls({QUrl::fromLocalFile(firstPath)});
+    QImage clipboardImage = replacement;
+    clipboardImage.setColorSpace(QColorSpace::SRgb);
+    combined.setData(QStringLiteral("image/png"),
+                     snow_shot::image_codec::encodePng(clipboardImage));
+    paste(combined);
+    require(memoryClipboard.snapshots == 2,
+            "combined clipboard imports must capture the inline image");
+    require(samePixels(Access::originalImage(window), clipboardImage),
+            "combined clipboard imports must use the canonical image instead of its exported file");
     QMimeData textMime;
     textMime.setText(QStringLiteral("Replacement text"));
     paste(textMime);

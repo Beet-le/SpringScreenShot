@@ -2058,6 +2058,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     target_compile_definitions(snow_shot PRIVATE SNOW_SHOT_MCP_TEST_FIXTURE=1)
     target_compile_definitions(snow_shot PRIVATE SNOW_SHOT_CONTROLLER_LIFETIME_TESTS=1)
     target_sources(snow_shot PRIVATE tests/screenshot_controller_lifetime_tests.cpp
+        tests/screenshot_controller_clipboard_tests.cpp
         tests/mcp_application_lifecycle_tests.cpp)
     snow_shot_import_offscreen_platform(snow_shot)
 endif()
@@ -5658,6 +5659,13 @@ if(SNOW_SHOT_BUILD_TESTS)
     snow_shot_import_offscreen_platform(snow-shot-clipboard-content-tests)
     add_test(NAME snow-shot-clipboard-mime-data-tests
              COMMAND snow-shot-clipboard-content-tests --mime-data-only)
+    add_test(NAME snow-shot-clipboard-import-routing-tests
+             COMMAND snow-shot-clipboard-content-tests --import-routing-only)
+    set_tests_properties(snow-shot-clipboard-import-routing-tests PROPERTIES
+        LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-clipboard-embedded-images-tests
              COMMAND snow-shot-clipboard-content-tests --embedded-images-only)
     set_tests_properties(snow-shot-clipboard-embedded-images-tests PROPERTIES
@@ -11011,6 +11019,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-screenshot-controller-lifetime-tests
         COMMAND snow_shot --controller-lifetime-tests)
     set_tests_properties(snow-shot-screenshot-controller-lifetime-tests PROPERTIES
+        LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 30
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    add_test(NAME snow-shot-screenshot-controller-clipboard-tests
+        COMMAND snow_shot --clipboard-pin-tests)
+    set_tests_properties(snow-shot-screenshot-controller-clipboard-tests PROPERTIES
         LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 30
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
     add_test(NAME snow-shot-pinned-controlled-interaction-tests

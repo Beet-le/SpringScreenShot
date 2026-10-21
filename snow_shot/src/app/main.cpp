@@ -78,6 +78,7 @@ extern "C" void snow_diagnostics_install_panic_hook(void (*callback)(const unsig
 
 #ifdef SNOW_SHOT_CONTROLLER_LIFETIME_TESTS
 int runScreenshotControllerLifetimeTests(int argc, char** argv);
+int runScreenshotControllerClipboardTests(int argc, char** argv);
 #endif
 
 namespace {
@@ -187,6 +188,9 @@ int main(int argc, char* argv[]) {
 #ifdef SNOW_SHOT_CONTROLLER_LIFETIME_TESTS
     if (argc == 2 && QString::fromLocal8Bit(argv[1]) == u"--controller-lifetime-tests") {
         return runScreenshotControllerLifetimeTests(argc, argv);
+    }
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == u"--clipboard-pin-tests") {
+        return runScreenshotControllerClipboardTests(argc, argv);
     }
 #endif
 #ifdef SNOW_SHOT_MCP_TEST_FIXTURE

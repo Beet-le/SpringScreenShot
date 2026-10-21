@@ -62,6 +62,56 @@ void imageFileExtensionsMatchShellRegistration() {
             "existing file pinning retains its additional formatted-text formats");
 }
 
+void clipboardImagesTakePriorityOverAccompanyingFiles() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "mixed clipboard fixtures need temporary storage");
+    QImage pixels(3, 2, QImage::Format_RGBA8888);
+    pixels.fill(QColor(23, 117, 209, 127));
+    pixels.setColorSpace(QColorSpace::SRgb);
+    QImage filePixels(pixels.size(), pixels.format());
+    filePixels.fill(Qt::red);
+    const QString imagePath = directory.filePath(QStringLiteral("export.png"));
+    const QString textPath = directory.filePath(QStringLiteral("document.txt"));
+    require(filePixels.save(imagePath, "PNG"), "mixed clipboard file must be saved");
+    const QStringList paths{imagePath, textPath, imagePath};
+    QMimeData mime;
+    mime.setUrls({QUrl::fromLocalFile(imagePath), QUrl::fromLocalFile(textPath),
+                  QUrl::fromLocalFile(imagePath)});
+    mime.setText(imagePath);
+    require(ScreenshotClipboardContentReader::filePathsForImport(&mime) == paths &&
+                ScreenshotClipboardContentReader::localImageFilePaths(&mime) ==
+                    QStringList{imagePath, imagePath},
+            "file-only imports preserve order and duplicates independently of accompanying text");
+
+    ScreenshotClipboardAppearance appearance;
+    appearance.rasterSize = pixels.size();
+    appearance.checkerboardEnabled = true;
+    appearance.showBorder = false;
+    setScreenshotClipboardAppearance(mime, appearance);
+    for (bool encoded : {false, true}) {
+        if (encoded) {
+            mime.removeFormat(QStringLiteral("application/x-qt-image"));
+            mime.setData(QStringLiteral("image/png"), snow_shot::image_codec::encodePng(pixels));
+        } else {
+            mime.setImageData(pixels);
+        }
+        require(ScreenshotClipboardContentReader::filePathsForImport(&mime).isEmpty() &&
+                    ScreenshotClipboardContentReader::localImageFilePaths(&mime).isEmpty() &&
+                    ScreenshotClipboardContentReader::localFilePaths(&mime) == paths,
+                "clipboard imports must prefer inline images while retaining the exported URLs");
+        const auto decoded = ScreenshotClipboardContentReader::readMimeData(&mime, 1.0);
+        require(decoded &&
+                    decoded->image.convertToFormat(QImage::Format_ARGB32_Premultiplied) ==
+                        pixels.convertToFormat(QImage::Format_ARGB32_Premultiplied) &&
+                    decoded->appearance && decoded->appearance->checkerboardEnabled &&
+                    decoded->appearance->showBorder == false &&
+                    decoded->originalContent.localFilePath.isEmpty(),
+                "mixed clipboard imports retain canonical image pixels and image-bound appearance");
+    }
+    require(ScreenshotClipboardContentReader::filePathsForImport(nullptr).isEmpty(),
+            "missing clipboard MIME data must not offer file imports");
+}
+
 void bmpFilesPreservePixelsAndIdentity() {
     QTemporaryDir directory;
     require(directory.isValid(), "BMP import fixture directory must exist");
@@ -1695,7 +1745,12 @@ int main(int argc, char** argv) {
         bmpFilesPreservePixelsAndIdentity();
         return EXIT_SUCCESS;
     }
+    if (application.arguments().contains(QStringLiteral("--import-routing-only"))) {
+        clipboardImagesTakePriorityOverAccompanyingFiles();
+        return EXIT_SUCCESS;
+    }
     imageFileExtensionsMatchShellRegistration();
+    clipboardImagesTakePriorityOverAccompanyingFiles();
     embeddedImagesUseManagedCachedPixels();
     if (application.arguments().contains(QStringLiteral("--embedded-images-only"))) {
         return EXIT_SUCCESS;

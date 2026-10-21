@@ -1908,6 +1908,10 @@
             <translation>Copy application settings as a zip archive to the clipboard</translation>
         </message>
         <message>
+            <source>Copy both the image and its exported file to the clipboard</source>
+            <translation>Copy both the image and its exported file to the clipboard</translation>
+        </message>
+        <message>
             <source>Copy color</source>
             <translation>Copy color</translation>
         </message>
@@ -4658,10 +4662,6 @@
         <message>
             <source>Windows context menu</source>
             <translation>Windows context menu</translation>
-        </message>
-        <message>
-            <source>Write the image to a file and copy that file to the clipboard</source>
-            <translation>Write the image to a file and copy that file to the clipboard</translation>
         </message>
         <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>

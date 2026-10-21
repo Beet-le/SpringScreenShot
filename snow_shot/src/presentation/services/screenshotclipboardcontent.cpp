@@ -1089,6 +1089,16 @@ QStringList ScreenshotClipboardContentReader::localFilePaths(const QMimeData* mi
     return paths;
 }
 
+QStringList ScreenshotClipboardContentReader::filePathsForImport(const QMimeData* mimeData) {
+    if (mimeData && (mimeData->hasImage() ||
+                     std::any_of(std::begin(kEncodedImageFormats), std::end(kEncodedImageFormats),
+                                 [mimeData](const EncodedImageFormat& format) {
+                                     return mimeData->hasFormat(QLatin1String(format.mimeType));
+                                 })))
+        return {};
+    return localFilePaths(mimeData);
+}
+
 QList<ScreenshotClipboardLocalImage>
 ScreenshotClipboardContentReader::snapshotLocalFiles(const QStringList& paths,
                                                      CancellationCheck cancelled) {
@@ -1134,7 +1144,7 @@ ScreenshotClipboardContentReader::snapshotLocalFiles(const QStringList& paths,
 QStringList ScreenshotClipboardContentReader::localImageFilePaths(const QMimeData* mimeData) {
     QStringList paths;
     const auto extensions = supportedImageFileExtensions();
-    for (const auto& path : localFilePaths(mimeData)) {
+    for (const auto& path : filePathsForImport(mimeData)) {
         if (extensions.contains(QFileInfo(path).suffix().toLower()))
             paths.append(path);
     }
