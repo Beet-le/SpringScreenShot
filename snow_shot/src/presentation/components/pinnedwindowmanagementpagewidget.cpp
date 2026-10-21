@@ -5,6 +5,7 @@
 
 #include "snow_shot/presentation/components/historyselectionbar.h"
 #include "snow_shot/presentation/components/actionpopupmenu.h"
+#include "snow_shot/platform/filemanager.h"
 #include "snow_shot/presentation/components/historypagecommon.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/components/thumbnailcache.h"
@@ -88,7 +89,8 @@ void applyPinnedRowBackground(QFrame* row, const QString& cardStyle,
                  scheme.map.colorPrimaryBorder.name()));
 }
 
-QImage loadPinnedImage(storage::PinnedWindowRepository* repository, const QString& id) {
+QImage loadPinnedImage(storage::PinnedWindowRepository* repository, const QString& id,
+                       const PinnedColorSwatchStyle& swatchStyle) {
     const auto record = repository->loadRecord(id);
     if (!record) {
         return {};
@@ -98,8 +100,9 @@ QImage loadPinnedImage(storage::PinnedWindowRepository* repository, const QStrin
         content.html = record->originalHtml;
         content.text = record->originalText;
         content.textStyle = record->textStyle;
+        content.textFormat = record->textFormat;
         const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
-            content, record->firstCreationTextDpi);
+            content, record->firstCreationTextDpi, {}, {}, swatchStyle);
         if (rendered) {
             return rendered->image;
         }
@@ -107,7 +110,8 @@ QImage loadPinnedImage(storage::PinnedWindowRepository* repository, const QStrin
     return record->image;
 }
 
-QImage loadPinnedPreview(storage::PinnedWindowRepository* repository, const QString& id) {
+QImage loadPinnedPreview(storage::PinnedWindowRepository* repository, const QString& id,
+                         const PinnedColorSwatchStyle& swatchStyle) {
     const auto source = repository->loadPreviewSource(id);
     if (!source) {
         return {};
@@ -117,8 +121,9 @@ QImage loadPinnedPreview(storage::PinnedWindowRepository* repository, const QStr
         content.html = source->originalHtml;
         content.text = source->originalText;
         content.textStyle = source->textStyle;
+        content.textFormat = source->textFormat;
         const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
-            content, source->firstCreationTextDpi);
+            content, source->firstCreationTextDpi, {}, {}, swatchStyle);
         return rendered ? rendered->image : QImage{};
     }
     return source->image;
@@ -129,11 +134,41 @@ struct PinnedPreviewCacheEntry {
     QSize naturalSize;
 };
 
+QString swatchAppearanceKey(const PinnedColorSwatchStyle& style) {
+    return QStringList{QStringLiteral("swatch-v2"),
+                       style.font.toString(),
+                       style.background.name(QColor::HexArgb),
+                       style.foreground.name(QColor::HexArgb),
+                       style.secondary.name(QColor::HexArgb),
+                       style.link.name(QColor::HexArgb),
+                       style.colorLabel,
+                       style.labels[0],
+                       style.labels[1],
+                       style.labels[2],
+                       style.rgbaLabel,
+                       style.hslaLabel}
+        .join(u'|');
+}
+
 class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSource {
   public:
+    bool revealRecord(const QString& id) override {
+        auto& applicationStorage = storage::ApplicationStorage::instance();
+        if (!applicationStorage.isInitialized())
+            return false;
+        const auto path = applicationStorage.pinnedWindows().revealPath(id);
+        return path && platform::revealInFileManager(*path);
+    }
+
     explicit ApplicationPinnedDataSource(QObject* parent)
         : PinnedWindowManagementDataSource(parent) {
         m_previewCache.setMaxCost(32 * 1024);
+        connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged,
+                this, [this] {
+                    cancelPreviews();
+                    m_previewCache.clear();
+                    emit changed();
+                });
         connect(&storage::ApplicationStorage::instance(),
                 &storage::ApplicationStorage::pinnedWindowsChanged, this,
                 &PinnedWindowManagementDataSource::changed);
@@ -169,7 +204,14 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
     }
 
     std::optional<quint64> previewRevision(const QString& id) const override {
-        return storage::ApplicationStorage::instance().pinnedWindows().previewSourceRevision(id);
+        bool colorSwatch = false;
+        const auto revision =
+            storage::ApplicationStorage::instance().pinnedWindows().previewSourceRevision(
+                id, &colorSwatch);
+        return revision && colorSwatch
+                   ? std::optional<quint64>(qHashMulti(
+                         *revision, swatchAppearanceKey(capturePinnedColorSwatchStyle())))
+                   : revision;
     }
 
     void cancelPreviews() override {
@@ -188,7 +230,8 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
             return;
         }
         auto* repository = &applicationStorage.pinnedWindows();
-        const auto revision = repository->previewSourceRevision(id);
+        bool colorSwatch = false;
+        const auto revision = repository->previewSourceRevision(id, &colorSwatch);
         if (!revision) {
             emit previewReady(id, requestId, {}, {});
             return;
@@ -196,9 +239,12 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
         const QSize boundedSize = targetSize.isValid() && !targetSize.isEmpty()
                                       ? targetSize
                                       : QSize(kPinnedPreviewWidth, kPinnedPreviewHeight);
-        const QString cacheKey = id + u':' + QString::number(*revision) + u':' +
-                                 QString::number(boundedSize.width()) + u'x' +
-                                 QString::number(boundedSize.height());
+        const auto swatchStyle = capturePinnedColorSwatchStyle();
+        QString cacheKey = id + u':' + QString::number(*revision) + u':' +
+                           QString::number(boundedSize.width()) + u'x' +
+                           QString::number(boundedSize.height());
+        if (colorSwatch)
+            cacheKey += u':' + swatchAppearanceKey(swatchStyle);
         if (const PinnedPreviewCacheEntry* cached = m_previewCache.object(cacheKey)) {
             emit previewReady(id, requestId, cached->image, cached->naturalSize);
             return;
@@ -211,7 +257,7 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
         auto* receiver = this;
         applicationStorage.pinnedPreviewPool().start(snow_shot::runtime::trackRuntimeWork(
             [alive, previewEpoch, requestedEpoch, receiver, repository, id, requestId, boundedSize,
-             cacheKey, cachePath, storageGeneration, retryAllowed]() {
+             cacheKey, cachePath, storageGeneration, retryAllowed, swatchStyle]() {
                 snow_shot::platform::applyApplicationQoSToCurrentThread();
                 if (!alive->load() || previewEpoch->load() != requestedEpoch) {
                     return;
@@ -220,7 +266,7 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
                 QImage image = std::move(thumbnail.image);
                 QSize naturalSize = thumbnail.naturalSize;
                 if (image.isNull()) {
-                    image = loadPinnedPreview(repository, id);
+                    image = loadPinnedPreview(repository, id, swatchStyle);
                     naturalSize = image.size();
                     if (!image.isNull() && (image.width() > boundedSize.width() ||
                                             image.height() > boundedSize.height())) {
@@ -272,12 +318,13 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
         const auto alive = m_alive;
         auto* receiver = this;
         applicationStorage.pinnedFullImagePool().start(
-            snow_shot::runtime::trackRuntimeWork([alive, receiver, repository, id, requestId]() {
+            snow_shot::runtime::trackRuntimeWork([alive, receiver, repository, id, requestId,
+                                                  swatchStyle = capturePinnedColorSwatchStyle()]() {
                 snow_shot::platform::applyApplicationQoSToCurrentThread();
                 if (!alive->load()) {
                     return;
                 }
-                const QImage image = loadPinnedImage(repository, id);
+                const QImage image = loadPinnedImage(repository, id, swatchStyle);
                 if (!alive->load()) {
                     return;
                 }
@@ -894,6 +941,23 @@ void PinnedWindowManagementPageWidget::rebuildEntries() {
                         splitLabel, presentation::icons::custom::outlined::ImageSplitting());
                     split->setObjectName(QStringLiteral("pinnedManagementEntrySplit"));
                     split->setToolTip(splitLabel);
+                    auto* imageEditing = menu->addItem(
+                        tr("Image Editing"), presentation::icons::custom::outlined::ImageEditing());
+                    imageEditing->setObjectName(
+                        QStringLiteral("pinnedManagementEntryImageEditing"));
+                    imageEditing->setToolTip(imageEditing->text());
+                    connect(imageEditing, &QAction::triggered, row,
+                            [this, id] { emit imageEditingRequested(id); });
+                    const QString revealLabel = history_page::revealActionText();
+                    auto* reveal = menu->addItem(
+                        revealLabel, presentation::icons::custom::outlined::RevealInFolder());
+                    reveal->setObjectName(QStringLiteral("pinnedManagementEntryReveal"));
+                    reveal->setToolTip(revealLabel);
+                    reveal->setEnabled(!row->property("pending").toBool());
+                    connect(reveal, &QAction::triggered, row, [this, id] {
+                        if (!m_source || !m_source->revealRecord(id))
+                            history_page::showRevealFailure(this);
+                    });
                     connect(stitch, &QAction::triggered, row,
                             [this, id] { emit collageRequested({id}); });
                     connect(split, &QAction::triggered, row,
@@ -970,10 +1034,22 @@ void PinnedWindowManagementPageWidget::rebuildEntries() {
         more->setText(tr("More"));
         more->setToolTip(tr("More actions"));
         more->setAccessibleName(tr("More actions"));
+        row->setProperty("pending", record.pending);
+        for (auto* reveal :
+             row->findChildren<QAction*>(QStringLiteral("pinnedManagementEntryReveal"))) {
+            reveal->setText(history_page::revealActionText());
+            reveal->setToolTip(reveal->text());
+            reveal->setEnabled(!record.pending);
+        }
         for (auto* stitch :
              row->findChildren<QAction*>(QStringLiteral("pinnedManagementEntryStitch"))) {
             stitch->setText(tr("Stitch Image"));
             stitch->setToolTip(tr("Stitch Image"));
+        }
+        for (auto* action :
+             row->findChildren<QAction*>(QStringLiteral("pinnedManagementEntryImageEditing"))) {
+            action->setText(tr("Image Editing"));
+            action->setToolTip(action->text());
         }
         for (auto* split :
              row->findChildren<QAction*>(QStringLiteral("pinnedManagementEntrySplit"))) {
@@ -1161,8 +1237,14 @@ void PinnedWindowManagementPageWidget::applyTheme(const styles::ThemeColorScheme
         dateFont.setWeight(QFont::DemiBold);
         checkbox->setFont(dateFont);
         checkbox->setPalette(titlePalette);
-        row->findChild<QLabel*>(QStringLiteral("pinnedManagementGroup"))->setPalette(muted);
-        row->findChild<QLabel*>(QStringLiteral("pinnedManagementStatus"))->setPalette(muted);
+        auto* source = row->findChild<QLabel*>(QStringLiteral("pinnedManagementSourceBadge"));
+        auto* group = row->findChild<QLabel*>(QStringLiteral("pinnedManagementGroup"));
+        auto* status = row->findChild<QLabel*>(QStringLiteral("pinnedManagementStatus"));
+        for (QLabel* label : {source, group, status}) {
+            history_page::applyEntryDescriptionFont(label, scheme);
+        }
+        group->setPalette(muted);
+        status->setPalette(muted);
     }
     updateSelectionBar();
 }

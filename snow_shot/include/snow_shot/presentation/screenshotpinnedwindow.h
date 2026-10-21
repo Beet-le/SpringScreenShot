@@ -47,6 +47,7 @@ class AdModal;
 class AdSlider;
 } // namespace adqt::widgets
 namespace snow_shot::presentation {
+struct ImageEditingSource;
 class WindowShortcutManager;
 class PinnedWindowGroupManager;
 class PinnedWindowSelectionController;
@@ -97,6 +98,7 @@ class ScreenshotPinnedHideToTopController;
 class ScreenshotPinnedControlsPresence;
 class ScreenshotPinnedNativeGeometryController;
 class QTextDocument;
+class QAbstractButton;
 
 // GUI-thread MIME access. Native snapshots retain platform-specific image formats.
 class ScreenshotPinnedClipboard {
@@ -222,6 +224,8 @@ class ScreenshotPinnedWindow final : public QWidget {
     bool prewarm(QScreen* screen = nullptr);
     QRect currentNativeGeometry() const;
     [[nodiscard]] snow_shot::storage::PinnedWindowRecord persistenceSnapshot() const;
+    [[nodiscard]] snow_shot::presentation::ImageEditingSource imageEditingSnapshot() const;
+    void checkpointStorage();
     [[nodiscard]] ScreenshotPinnedImageSnapshot stitchingSnapshot();
     [[nodiscard]] ScreenshotPinnedImageSnapshot splittingSnapshot();
     void suspendStorageWrites();
@@ -252,6 +256,7 @@ class ScreenshotPinnedWindow final : public QWidget {
                                    const QSize& transformedPixels, const QRectF& contentRect);
     [[nodiscard]] ScreenshotClipboardOriginalContent automationOriginalContent() const;
     void cancelAutomationRecognition();
+    [[nodiscard]] bool automationWorkflowBusy() const;
 
   public slots:
     void setGroupId(const QString& id);
@@ -271,8 +276,10 @@ class ScreenshotPinnedWindow final : public QWidget {
     static void setRuntimeTrayEnabled(bool enabled);
 
   signals:
+    void automationWorkflowStateChanged() const;
     void showMainWindowRequested();
     void splitRequested(const ScreenshotPinnedImageSnapshot& snapshot);
+    void imageEditingRequested(const QString& recordId);
     void closingForPersistence(const snow_shot::storage::PinnedWindowRecord& snapshot,
                                snow_shot::storage::PinnedWindowCloseIntent intent);
 
@@ -377,6 +384,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     void beginAuxiliaryWindowInteraction();
     void endAuxiliaryWindowInteraction();
     void activateRecognitionMode(int mode, bool showToolbar = true);
+    void toggleTextRecognitionResults();
     void ensureRecognitionProviders();
     void deactivateRecognition();
     void updateRecognitionToolbarState();
@@ -485,6 +493,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     bool finishNativeGeometryInteraction();
     bool reconcilePassiveNativeGeometry();
     bool restoreCommittedNativeGeometry(bool closeOnFailure = true);
+    void hideAllPinnedWindowsToTop();
     void showAllPinnedWindows();
     void hideOtherPinnedWindows();
     void closeOtherPinnedWindows();
@@ -517,6 +526,10 @@ class ScreenshotPinnedWindow final : public QWidget {
     QPointF nativePositionForWindowPosition(const QPointF& position) const;
     QPoint globalPositionForNativePosition(const QPoint& position) const;
     bool isControlsPanelPosition(const QPoint& position) const;
+    void refreshColorSwatch();
+    void updateColorSwatchControls();
+    std::array<QAbstractButton*, 3> m_colorSwatchButtons{};
+    std::array<QRectF, 3> m_colorSwatchCopyRects{};
 
     void reconcilePlatformEnvironment(bool layoutChanged = false);
     bool handleControlledPointer(QObject* watched, QEvent* event);
@@ -627,6 +640,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     QPointer<QAction> m_closeAction;
     QPointer<QAction> m_loadContentAction;
     QPointer<QAction> m_splitImageAction;
+    QPointer<QAction> m_imageEditingAction;
     QPointer<QActionGroup> m_opacityActions;
     QPointer<QActionGroup> m_scaleActions;
     QPointer<QAction> m_scaleMenuAction;

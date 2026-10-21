@@ -54,15 +54,19 @@ class ScreenshotExportJobHandle final {
     ScreenshotExportJobHandle() = default;
 
     void cancel() const;
+    // Raise queued work without submitting a second job or interrupting a running worker.
+    void promoteToForeground() const;
     [[nodiscard]] bool isValid() const;
     [[nodiscard]] bool isCancellationRequested() const;
 
   private:
     friend class ScreenshotExportCoordinator;
     ScreenshotExportJobHandle(std::shared_ptr<std::atomic_bool> cancelled,
-                              std::function<void()> cancelQueued);
+                              std::function<void()> cancelQueued,
+                              std::function<void()> promoteQueued);
     std::shared_ptr<std::atomic_bool> m_cancelled;
     std::function<void()> m_cancelQueued;
+    std::function<void()> m_promoteQueued;
 };
 
 class ScreenshotExportCoordinator final : public QObject {

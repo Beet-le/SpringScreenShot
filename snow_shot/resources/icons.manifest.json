@@ -47,6 +47,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ActualSize",
+      "name": "actual-size",
+      "source": "../src/presentation/components/icons/resources/actual-size.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "AlignBottom",
       "name": "align-bottom",
       "source": "../src/presentation/components/icons/resources/align-bottom.svg",
@@ -463,6 +471,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "CropHorizontal",
+      "name": "crop-horizontal",
+      "source": "../src/presentation/components/icons/resources/crop-horizontal.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "CropVertical",
+      "name": "crop-vertical",
+      "source": "../src/presentation/components/icons/resources/crop-vertical.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "Delete",
       "name": "delete",
       "source": "../src/presentation/components/icons/resources/delete.svg",
@@ -687,6 +711,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ImageEditing",
+      "name": "image-editing",
+      "source": "../src/presentation/components/icons/resources/image-editing.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "ImageSplitting",
       "name": "image-splitting",
       "source": "../src/presentation/components/icons/resources/image-splitting.svg",
@@ -730,6 +762,22 @@
       "symbol": "LaserPointer",
       "name": "laser-pointer",
       "source": "../src/presentation/components/icons/resources/laser-pointer.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "LayoutCompaction",
+      "name": "layout-compaction",
+      "source": "../src/presentation/components/icons/resources/layout-compaction.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "LayoutSpacing",
+      "name": "layout-spacing",
+      "source": "../src/presentation/components/icons/resources/layout-spacing.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -911,6 +959,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "RecordingCamera",
+      "name": "recording-camera",
+      "source": "../src/presentation/components/icons/resources/recording-camera.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "RecordingClick",
       "name": "recording-click",
       "source": "../src/presentation/components/icons/resources/recording-click.svg",
@@ -946,6 +1002,14 @@
       "symbol": "RecordingMicrophone",
       "name": "recording-microphone",
       "source": "../src/presentation/components/icons/resources/recording-microphone.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "RecordingMicrophoneOff",
+      "name": "recording-microphone-off",
+      "source": "../src/presentation/components/icons/resources/recording-microphone-off.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -991,6 +1055,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "RecordingSpeakerOff",
+      "name": "recording-speaker-off",
+      "source": "../src/presentation/components/icons/resources/recording-speaker-off.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "RecordingStart",
       "name": "recording-start",
       "source": "../src/presentation/components/icons/resources/recording-start.svg",
@@ -1026,6 +1098,14 @@
       "symbol": "Restart",
       "name": "restart",
       "source": "../src/presentation/components/icons/resources/restart.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "RevealInFolder",
+      "name": "reveal-in-folder",
+      "source": "../src/presentation/components/icons/resources/reveal-in-folder.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -1154,6 +1234,14 @@
       "symbol": "Select",
       "name": "select",
       "source": "../src/presentation/components/icons/resources/select.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SelectionBackgroundOpacity",
+      "name": "selection-background-opacity",
+      "source": "../src/presentation/components/icons/resources/selection-background-opacity.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

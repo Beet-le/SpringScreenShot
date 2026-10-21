@@ -955,6 +955,17 @@ pub fn apply_transaction(
     Ok(())
 }
 
+fn matches_work_file(name: &str, prefix: &str, suffix: &str) -> bool {
+    name.strip_prefix(prefix)
+        .and_then(|name| name.strip_suffix(suffix))
+        .is_some_and(|id| {
+            id.len() == 32
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        })
+}
+
 pub fn prune_update_work(root: &Path) -> Result<()> {
     validate_root(root)?;
     let work = root.join(UPDATE_WORK);
@@ -965,19 +976,23 @@ pub fn prune_update_work(root: &Path) -> Result<()> {
         return Ok(());
     };
     let now = std::time::SystemTime::now();
-    let pattern = regex::Regex::new(r"^(worker-[a-f0-9]{32}\.exe|input-[a-f0-9]{32}\.zip)$")
-        .expect("valid regex");
-    let retired_pattern = regex::Regex::new(r"^retired-[a-f0-9]{32}\.file$").expect("valid regex");
     for entry in fs::read_dir(&work).into_iter().flatten().flatten() {
         let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
         let old = entry
             .metadata()
             .and_then(|metadata| metadata.modified())
             .ok()
             .and_then(|modified| now.duration_since(modified).ok())
             .is_some_and(|age| age > Duration::from_secs(86_400));
-        if (old && pattern.is_match(&name)) || retired_pattern.is_match(&name) {
+        if (old
+            && (matches_work_file(name, "worker-", ".exe")
+                || matches_work_file(name, "input-", ".zip")))
+            || matches_work_file(name, "retired-", ".file")
+        {
             no_links(&path)?;
             let _ = fs::remove_file(path);
         }
@@ -1438,6 +1453,64 @@ mod tests {
         assert!(!transaction_pending(&root));
     }
 
+    #[test]
+    fn prune_update_work_preserves_unrelated_names_and_recent_inputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(directory.path()).unwrap().join("SnowShot");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::create_dir_all(root.join(UPDATE_WORK)).unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        let old = std::time::SystemTime::now() - Duration::from_secs(172_800);
+        let retained = [
+            format!("worker-{}.exe", "A".repeat(32)),
+            format!("worker-{}.exe", "g".repeat(32)),
+            format!("worker-{}.exe", "a".repeat(31)),
+            format!("worker-{}.exe", "a".repeat(33)),
+            format!("input-{}.zip", "é".repeat(16)),
+            format!("input-{id}.zip.extra"),
+            format!("retired-{id}.file.backup"),
+            format!("retired-{}.FILE", "e".repeat(32)),
+            format!("other-worker-{id}.exe"),
+            "user-note.txt".to_owned(),
+        ];
+        let expired = [format!("worker-{id}.exe"), format!("input-{id}.zip")];
+        assert!(!matches_work_file(
+            &format!("retired-{id}.file\n"),
+            "retired-",
+            ".file"
+        ));
+        for name in retained.iter().chain(expired.iter()) {
+            let file = File::create(work_path(&root, name)).unwrap();
+            file.set_times(fs::FileTimes::new().set_modified(old))
+                .unwrap();
+        }
+        let recent = format!("worker-{}.exe", "f".repeat(32));
+        let recent_input = format!("input-{}.zip", "f".repeat(32));
+        let retired = format!("retired-{id}.file");
+        for name in [&recent, &recent_input, &retired] {
+            fs::write(work_path(&root, name), b"recent").unwrap();
+        }
+
+        prune_update_work(&root).unwrap();
+
+        for name in &expired {
+            assert!(
+                !work_path(&root, name).exists(),
+                "expired {name} must be removed"
+            );
+        }
+        assert!(
+            !work_path(&root, &retired).exists(),
+            "retired files need no age grace"
+        );
+        for name in retained.iter().chain([&recent, &recent_input]) {
+            assert!(
+                work_path(&root, name).is_file(),
+                "unrelated/recent {name} must survive"
+            );
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn retired_files_are_pruned_after_their_handles_close() {
@@ -1711,6 +1784,14 @@ mod tests {
             let old_helper = b"old helper";
             fs::write(root.join(crate::edition::APP_PATH), old_app).unwrap();
             fs::write(root.join(crate::edition::UPDATER_PATH), old_helper).unwrap();
+            let legacy_notice = format!(
+                "{}licenses/third-party/example/LICENSE",
+                crate::edition::SHARE_PREFIX
+            );
+            let license_bundle = format!("{}licenses/LICENSES.txt", crate::edition::SHARE_PREFIX);
+            let notice = b"original dependency notice";
+            fs::create_dir_all(root.join(&legacy_notice).parent().unwrap()).unwrap();
+            fs::write(root.join(&legacy_notice), notice).unwrap();
             let old_record = InstallationRecord {
                 platform: Some(crate::edition::PLATFORM.to_owned()),
                 product: crate::edition::PRODUCT.to_owned(),
@@ -1720,6 +1801,7 @@ mod tests {
                 files: vec![
                     descriptor(crate::edition::APP_PATH, old_app),
                     descriptor(crate::edition::UPDATER_PATH, old_helper),
+                    descriptor(&legacy_notice, notice),
                 ],
             };
             fs::write(
@@ -1739,6 +1821,7 @@ mod tests {
                 files: vec![
                     descriptor(crate::edition::APP_PATH, new_app),
                     descriptor(crate::edition::UPDATER_PATH, new_helper),
+                    descriptor(&license_bundle, notice),
                 ],
             };
             let new_record_bytes = serde_json::to_vec(&new_record).unwrap();
@@ -1748,12 +1831,14 @@ mod tests {
                 &[
                     (crate::edition::APP_PATH, new_app, None),
                     (crate::edition::UPDATER_PATH, new_helper, None),
+                    (&license_bundle, notice, None),
                     (INSTALLATION_RECORD, &new_record_bytes, None),
                 ],
             );
             let mut update_package = package(vec![
                 descriptor(crate::edition::APP_PATH, new_app),
                 descriptor(crate::edition::UPDATER_PATH, new_helper),
+                descriptor(&license_bundle, notice),
                 descriptor(INSTALLATION_RECORD, &new_record_bytes),
             ]);
             update_package.size = fs::metadata(&archive).unwrap().len();
@@ -1833,6 +1918,8 @@ mod tests {
                 );
                 assert!(!transaction_pending(&root));
                 assert!(work_path(&root, format!("backup/{}", crate::edition::APP_PATH)).is_file());
+                assert!(!root.join(&legacy_notice).exists());
+                assert_eq!(fs::read(root.join(&license_bundle)).unwrap(), notice);
             } else {
                 assert_eq!(result.unwrap_err().code, "startup_probe_failed");
                 assert_eq!(
@@ -1844,6 +1931,8 @@ mod tests {
                     "2.0.0"
                 );
                 assert!(!transaction_pending(&root));
+                assert_eq!(fs::read(root.join(&legacy_notice)).unwrap(), notice);
+                assert!(!root.join(&license_bundle).exists());
             }
         }
     }

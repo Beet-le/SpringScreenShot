@@ -158,10 +158,9 @@ pub(crate) fn compose_overlay_items(
     }
 
     for guide in &presentation.snap_guides {
-        items.push(OverlayDisplayItem::SnapGuide(snap_guide_display_item(
-            guide,
-            snap_config,
-        )));
+        items.push(OverlayDisplayItem::SnapGuide(
+            SnapGuideDisplayItem::from_guide(guide, snap_config),
+        ));
     }
 
     if let Some(highlight) = presentation.binding_highlight.as_ref() {
@@ -206,6 +205,11 @@ pub(crate) fn compose_overlay_items(
         )));
     }
     for (kind, center) in &presentation.speech_bubble_handles {
+        let size = if *kind == 0 {
+            arrow_point_handle_size(zoom)
+        } else {
+            selection_handle_size(zoom)
+        };
         let kind = match kind {
             0 => UiShapeKind::SpeechBubbleAddTailHandle,
             1 => UiShapeKind::SpeechBubbleTailBaseHandle,
@@ -213,13 +217,13 @@ pub(crate) fn compose_overlay_items(
         };
         items.push(OverlayDisplayItem::Rectangle(ui_rect_item(
             kind,
-            selection_handle_rect(
-                *center,
-                selection_handle_size(frame_view.camera.zoom),
-                0.0,
-                true,
-                frame_view.camera.zoom,
-            ),
+            selection_handle_rect(*center, size, 0.0, true, zoom),
+        )));
+    }
+    if let Some(center) = presentation.shape_text_handle {
+        items.push(OverlayDisplayItem::Rectangle(ui_rect_item(
+            UiShapeKind::ShapeTextHandle,
+            selection_handle_rect(center, arrow_point_handle_size(zoom), 0.0, true, zoom),
         )));
     }
     items.retain(|item| overlay_item_visible(item, frame_view));
@@ -515,6 +519,9 @@ mod tests {
 
     fn rect(width: f64, height: f64) -> RectangleData {
         RectangleData {
+            text_element_id: None,
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(0.0, 0.0),
@@ -771,6 +778,9 @@ mod tests {
     #[test]
     fn marquee_rectangle_preserves_the_selection_visual_style() {
         let marquee = RectangleData {
+            text_element_id: None,
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: Point::new(20.0, 30.0),

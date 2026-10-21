@@ -8,6 +8,7 @@
 #include "snow_draw_engine_qt/snow_canvas_style_edit.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/image/screenshotregiongeometry.h"
+#include "snow_shot/image/screenshotlayoutcompaction.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotscrollingtypes.h"
 #include "snow_shot/presentation/screenshotwheelinput.h"
@@ -107,6 +108,7 @@ class ScreenshotToolPalette final : public QWidget,
     enum class MoveToolPresentation {
         EditSelection,
         ResizeWindow,
+        Pan,
     };
 
     enum class RecordingState {
@@ -226,12 +228,15 @@ class ScreenshotToolPalette final : public QWidget,
     Q_DECLARE_FLAGS(Actions, Action)
 
     struct Options {
+        // Keep the parent surface behind the margins when embedded in an opaque window.
+        bool preserveParentBackground = false;
         bool showDragHandle = false;
         bool showHistoryActions = false;
         bool showMoveTool = false;
         bool enableMoveOptionsToolbar = false;
         MoveToolPresentation moveToolPresentation = MoveToolPresentation::EditSelection;
         bool showSelectTool = true;
+        bool showCropTools = false;
         bool showShapeTool = true;
         bool showSpeechBubbleTool = true;
         bool showArrowTool = true;
@@ -345,6 +350,12 @@ class ScreenshotToolPalette final : public QWidget,
     void setCursorVisible(bool enabled);
     void setCursorAvailable(bool available);
     void setScreenshotRegionType(ScreenshotRegionType type);
+    void setSelectionBackgroundOpacityState(int percent, bool available);
+    void setLayoutCompactionState(ScreenshotLayoutCompaction options, bool available,
+                                  bool canvasUsesPoints);
+    [[nodiscard]] ScreenshotLayoutCompaction layoutCompaction() const {
+        return m_layoutCompaction;
+    }
     [[nodiscard]] bool cursorVisible() const;
     void setSelectionDisplayUnit(ScreenshotSelectionDisplayUnit unit);
     void setSelectionToolbarHidden(bool hidden);
@@ -356,6 +367,7 @@ class ScreenshotToolPalette final : public QWidget,
     void clearActiveTool();
     [[nodiscard]] std::optional<Tool> activeTool() const;
     void setHistoryState(const SnowCanvasHistoryState& state);
+    void setCropToolsState(bool rowsActive, bool columnsActive);
     void setScrollingScreenshotMode(bool enabled);
     [[nodiscard]] bool scrollingScreenshotMode() const;
     void setScrollingRecognitionMode(ScreenshotScrollingRecognitionMode mode);
@@ -403,6 +415,12 @@ class ScreenshotToolPalette final : public QWidget,
     void setRecordingSettingsOwnerWindow(QWidget* owner);
     void setRecordingKeyboardSize(int value);
     [[nodiscard]] int recordingKeyboardSize() const;
+    void setRecordingWebcamEnabled(bool enabled);
+    [[nodiscard]] bool recordingWebcamEnabled() const;
+    void setRecordingWebcamSize(int size);
+    [[nodiscard]] int recordingWebcamSize() const;
+    void setRecordingWebcamShape(const QString& shape);
+    [[nodiscard]] QString recordingWebcamShape() const;
     void setRecordingKeyboardBackgroundColor(const QColor& value);
     [[nodiscard]] QColor recordingKeyboardBackgroundColor() const;
     void setRecordingKeyboardForegroundColor(const QColor& value);
@@ -437,6 +455,7 @@ class ScreenshotToolPalette final : public QWidget,
     void setTableEditingState(bool available, bool canUndo, bool canRedo, bool canMerge,
                               bool canSplit, bool canReset);
     void setShowOriginalImage(bool show);
+    void setOriginalImageToggleEnabled(bool enabled);
     void setTextEditingState(bool available, bool editing, bool canUndo = false,
                              bool canRedo = false);
     void setTextTranslationState(bool available, bool translating, bool streaming,
@@ -475,10 +494,16 @@ class ScreenshotToolPalette final : public QWidget,
     void undoRequested();
     void redoRequested();
     void moveRequested();
+    void cropRowsRequested();
+    void cropColumnsRequested();
     void cursorVisibilityToggled(bool enabled);
     void recaptureRequested();
     void qrCodeVisibilityRequested(bool visible);
     void screenshotRegionTypeRequested(int type);
+    void layoutCompactionChanged(bool enabled, int spacing);
+    void selectionBackgroundOpacityChanged(int percent);
+    void selectionBackgroundOpacityWheelAdjusted(int delta);
+    void selectionBackgroundPreviewVisibleChanged(bool visible);
     void addScreenshotRegionRequested();
     void subtractScreenshotRegionRequested();
     void selectionDisplayUnitChanged(ScreenshotSelectionDisplayUnit unit);
@@ -532,6 +557,7 @@ class ScreenshotToolPalette final : public QWidget,
     void textTargetLanguageRequested(const QString& language);
     void scrollingScreenshotRequested();
     void scrollingImageSplittingRequested();
+    void scrollingImageEditingRequested();
     void printRequested();
     void saveRequested();
     void cloudUploadRequested();
@@ -552,17 +578,10 @@ class ScreenshotToolPalette final : public QWidget,
     void cancelRequested();
     void copyRequested();
     void confirmRequested();
-    void shapeStyleChanged(const SnowCanvasShapeStyle& style, quint32 properties,
-                           SnowCanvasShapeKind kind);
-    void filterStyleChanged(const SnowCanvasFilterStyle& style, quint32 properties);
-    void watermarkConfigChanged(const SnowCanvasWatermarkConfig& config);
     void watermarkPreviewChanged(const SnowCanvasWatermarkConfig& config);
-    void spotlightConfigChanged(const SnowCanvasSpotlightConfig& config);
     void spotlightPreviewChanged(const SnowCanvasSpotlightConfig& config);
-    void textStyleChanged(const SnowCanvasTextStyle& style, quint32 properties);
     void textStylePopupInteractionBegan();
     void textStylePopupInteractionEnded();
-    void serialNumberStyleChanged(const SnowCanvasSerialNumberStyle& style);
     void canvasColorSamplingRequested(adqt::widgets::AdColorPicker* picker);
     void sendSelectionToBackRequested();
     void sendSelectionBackwardRequested();
@@ -602,6 +621,9 @@ class ScreenshotToolPalette final : public QWidget,
     void recordingStartDelaySecondsChanged(int seconds);
     void recordingMouseTrailDurationMsChanged(int value);
     void recordingKeyboardSizeChanged(int value);
+    void recordingWebcamEnabledChanged(bool enabled);
+    void recordingWebcamSizeChanged(int size);
+    void recordingWebcamShapeChanged(const QString& shape);
     void recordingKeyboardBackgroundColorChanged(const QColor& value);
     void recordingKeyboardForegroundColorChanged(const QColor& value);
     void recordingMouseTrailColorChanged(const QColor& color);
@@ -903,6 +925,8 @@ class ScreenshotToolPalette final : public QWidget,
     QSpacerItem* m_shapeStyleGroupSeparatorLeadingSpacing = nullptr;
     QSpacerItem* m_shapeStyleGroupSeparatorTrailingSpacing = nullptr;
     adqt::widgets::AdButton* m_moveButton = nullptr;
+    adqt::widgets::AdButton* m_cropRowsButton = nullptr;
+    adqt::widgets::AdButton* m_cropColumnsButton = nullptr;
     adqt::widgets::AdButton* m_cursorButton = nullptr;
     adqt::widgets::AdButton* m_hideSelectionToolbarButton = nullptr;
     adqt::widgets::AdButton* m_recaptureButton = nullptr;
@@ -943,6 +967,7 @@ class ScreenshotToolPalette final : public QWidget,
     QVector<int> m_tableQrOptionValues;
     Tool m_tableQrEntryTool = Tool::Table;
     bool m_showOriginalImage = false;
+    bool m_originalImageToggleEnabled = true;
     adqt::widgets::AdButton* m_showOriginalImageButton = nullptr;
     QSpacerItem* m_showOriginalImageSpacing = nullptr;
     adqt::widgets::AdButton* m_textEditButton = nullptr;
@@ -1002,6 +1027,12 @@ class ScreenshotToolPalette final : public QWidget,
     std::unique_ptr<snow_shot::presentation::ScreenshotToolPaletteColorPresets>
         m_recordMouseClickColorPresets;
     adqt::widgets::AdButton* m_recordKeyboardButton = nullptr;
+    adqt::widgets::AdButton* m_recordWebcamButton = nullptr;
+    adqt::widgets::AdInputNumber* m_recordWebcamSizeInput = nullptr;
+    adqt::widgets::AdSelect* m_recordWebcamShapeSelect = nullptr;
+    bool m_recordingWebcamEnabled = false;
+    int m_recordingWebcamSize = 150;
+    QString m_recordingWebcamShape = QStringLiteral("square");
     adqt::widgets::AdButton* m_recordPostProcessingButton = nullptr;
     adqt::widgets::AdPopover* m_recordPostProcessingPopover = nullptr;
     QPointer<adqt::widgets::AdRadio> m_recordProgressBarRadio;
@@ -1119,6 +1150,14 @@ class ScreenshotToolPalette final : public QWidget,
     bool m_recordingCursorVisible = true;
     bool m_cursorVisible = false;
     bool m_cursorAvailable = true;
+    int m_backgroundOpacityPercent = 0;
+    bool m_backgroundOpacityAvailable = false;
+    IconNumericValuePreviewButton* m_backgroundOpacityEditor = nullptr;
+    ScreenshotLayoutCompaction m_layoutCompaction;
+    bool m_layoutCompactionAvailable = false;
+    bool m_layoutCompactionCanvasUsesPoints = false;
+    adqt::widgets::AdButton* m_layoutCompactionButton = nullptr;
+    IconNumericValuePreviewButton* m_layoutSpacingEditor = nullptr;
     ScreenshotRegionType m_screenshotRegionType = ScreenshotRegionType::Rectangle;
     ScreenshotSelectionDisplayUnit m_selectionDisplayUnit = kDefaultScreenshotSelectionDisplayUnit;
     bool m_selectionToolbarHidden = false;

@@ -49,6 +49,7 @@ class ScreenshotController : public QObject {
         RecognizeFormula,
         ConvertMarkdown,
         ConvertHtml,
+        RecognizeTextAndCopy,
     };
     Q_ENUM(CaptureAction)
     [[nodiscard]] bool captureForAction(CaptureAction action);
@@ -56,7 +57,7 @@ class ScreenshotController : public QObject {
     [[nodiscard]] bool
     handleActiveScreenshotShortcut(snow_shot::presentation::GlobalShortcutAction action);
     void pinDroppedContent(ScreenshotClipboardContentSnapshot snapshot, QStringList paths);
-    void pinImageFilesToScreen(QStringList paths);
+    void pinFilesToScreen(QStringList paths);
     explicit ScreenshotController(
         QObject* parent = nullptr,
         snow_shot::presentation::PinnedWindowGroupManager* groupManager = nullptr,
@@ -80,6 +81,8 @@ class ScreenshotController : public QObject {
 
     void setPrintService(ScreenshotPrintService* service);
     void setRecordingPermissionCheck(std::function<bool(bool, bool, bool)> check);
+    void prepareForSessionEnd(int timeoutMs);
+    void offerRecordingRecovery();
 
     [[nodiscard]] QJsonObject mcpState() const;
     using McpCompletion = std::function<void(QJsonObject, QString)>;
@@ -136,6 +139,8 @@ class ScreenshotController : public QObject {
   signals:
     void imageStitchingRequested(const QVector<ScreenshotPinnedImageSnapshot>& snapshots);
     void imageSplittingRequested(const ScreenshotPinnedImageSnapshot& snapshot);
+    void scrollingImageEditingRequested(const ScreenshotExportSource& source);
+    void pinnedImageEditingRequested(const QString& recordId);
     void recordingExportNotificationRequested(const QString& path);
     void captureActivityChanged(const QString& source, bool active);
     void selectedFilePinFailed(const QString& message);

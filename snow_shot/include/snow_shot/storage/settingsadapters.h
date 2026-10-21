@@ -8,6 +8,7 @@
 #include "snow_shot/texttranslationconfiguration.h"
 #endif
 #include "snow_shot/shortcuts/shortcutbinding.h"
+#include "snow_shot/selectiontransitionanimation.h"
 #include "snow_shot/storage/persistedwindowgeometry.h"
 
 #include <QColor>
@@ -112,8 +113,8 @@ class InterfaceSettings final {
     bool setThemePrimaryColor(const QColor& color) const;
     [[nodiscard]] QString appFontFamily() const;
     bool setAppFontFamily(const QString& family) const;
-    [[nodiscard]] int appFontSizePercentage() const;
-    bool setAppFontSizePercentage(int percentage) const;
+    [[nodiscard]] int appFontSize() const;
+    bool setAppFontSize(int pixelSize) const;
     [[nodiscard]] QString themeMode() const;
     bool setThemeMode(const QString& mode) const;
     [[nodiscard]] QString language() const;
@@ -162,6 +163,8 @@ class ShortcutSettings final {
     bool setScreenshotFixed(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList screenshotOcr() const;
     bool setScreenshotOcr(const shortcuts::ShortcutBindingList& bindings) const;
+    [[nodiscard]] shortcuts::ShortcutBindingList screenshotOcrCopy() const;
+    bool setScreenshotOcrCopy(const shortcuts::ShortcutBindingList& bindings) const;
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     [[nodiscard]] shortcuts::ShortcutBindingList screenshotTranslation() const;
     bool setScreenshotTranslation(const shortcuts::ShortcutBindingList& bindings) const;
@@ -191,6 +194,8 @@ class ShortcutSettings final {
     bool setGlobalCanvas(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList stitchSelectedImages() const;
     bool setStitchSelectedImages(const shortcuts::ShortcutBindingList& bindings) const;
+    [[nodiscard]] shortcuts::ShortcutBindingList splitSelectedImages() const;
+    bool setSplitSelectedImages(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList openPinToScreenManagement() const;
     bool setOpenPinToScreenManagement(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList openSettings() const;
@@ -429,8 +434,8 @@ class ScreenshotUiSettings final {
   public:
     [[nodiscard]] QString toolbarSize() const;
     bool setToolbarSize(const QString& size) const;
-    [[nodiscard]] bool selectionTransitionAnimationEnabled() const;
-    bool setSelectionTransitionAnimationEnabled(bool enabled) const;
+    [[nodiscard]] SelectionTransitionAnimation selectionTransitionAnimation() const;
+    bool setSelectionTransitionAnimation(SelectionTransitionAnimation animation) const;
     [[nodiscard]] QString selectionDisplayUnit() const;
     bool setSelectionDisplayUnit(const QString& unit) const;
     [[nodiscard]] bool selectionToolbarHidden() const;
@@ -507,6 +512,12 @@ class RecordingSettings final {
     bool setMouseTrailColor(const QColor& color) const;
     [[nodiscard]] QColor mouseClickColor() const;
     bool setMouseClickColor(const QColor& color) const;
+    [[nodiscard]] bool webcamEnabled() const;
+    bool setWebcamEnabled(bool enabled) const;
+    [[nodiscard]] int webcamSize() const;
+    bool setWebcamSize(int size) const;
+    [[nodiscard]] QString webcamShape() const;
+    bool setWebcamShape(const QString& shape) const;
     [[nodiscard]] bool showKeyboard() const;
     bool setShowKeyboard(bool show) const;
     [[nodiscard]] bool mouseHighlightEnabled() const;
@@ -529,6 +540,8 @@ class RecordingSettings final {
     bool setCaptureToolbarInRecording(bool capture) const;
     [[nodiscard]] bool autoHideToolbar() const;
     bool setAutoHideToolbar(bool enabled) const;
+    [[nodiscard]] bool showStatusPrompts() const;
+    bool setShowStatusPrompts(bool enabled) const;
     [[nodiscard]] bool autoExitAfterRecordingEnds() const;
     bool setAutoExitAfterRecordingEnds(bool enabled) const;
     [[nodiscard]] bool notifyAfterExportCompletes() const;
@@ -619,6 +632,8 @@ class PinToScreenSettings final {
     bool setShowShadowByDefault(bool enabled) const;
     [[nodiscard]] bool showWindowButtons() const;
     bool setShowWindowButtons(bool enabled) const;
+    [[nodiscard]] bool exitAnnotationModeBeforeClosing() const;
+    bool setExitAnnotationModeBeforeClosing(bool enabled) const;
     [[nodiscard]] bool confirmBeforeClosingWindow() const;
     bool setConfirmBeforeClosingWindow(bool enabled) const;
     [[nodiscard]] bool confirmBeforeDestroyingWindow() const;
@@ -641,6 +656,10 @@ class PinToScreenSettings final {
     bool setLockedShadowColor(const QColor& color) const;
     [[nodiscard]] QString mouseWheelZoomMode() const;
     bool setMouseWheelZoomMode(const QString& mode) const;
+    [[nodiscard]] int mouseWheelOpacityStep() const;
+    bool setMouseWheelOpacityStep(int value) const;
+    [[nodiscard]] int mouseWheelZoomStep() const;
+    bool setMouseWheelZoomStep(int value) const;
     [[nodiscard]] QString duplicateContentAction() const;
     bool setDuplicateContentAction(const QString& value) const;
     [[nodiscard]] QString textSelectionOnRecognitionResults() const;

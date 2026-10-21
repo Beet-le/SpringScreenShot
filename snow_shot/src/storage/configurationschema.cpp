@@ -1,6 +1,7 @@
 #include "snow_shot/globalmouseactivationkeys.h"
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/ocrtextoptions.h"
+#include "snow_shot/selectiontransitionanimation.h"
 #include "snow_shot/storage/floatingtoolbarsettings.h"
 #include "snow_shot/app/edition.h"
 #include "snow_shot/clouduploadconfiguration.h"
@@ -15,7 +16,9 @@
 #include "snow_shot/storage/capturehistorytypes.h"
 #include "snow_shot/storage/persistedselectioncodec.h"
 #include "snow_shot/shortcuts/shortcutbinding.h"
+#include "snow_shot/shortcuts/menuaccesskey.h"
 #include "snow_shot/presentation/screenshotregiontypeshortcut.h"
+#include "snow_draw_engine.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -273,8 +276,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("interface/theme_primary_color"), QStringLiteral("#1677FFFF"),
      ConfigurationValueKind::String},
     {QStringLiteral("interface/app_font"), QStringLiteral(""), ConfigurationValueKind::String},
-    {QStringLiteral("interface/app_font_size_percentage"), 100, ConfigurationValueKind::Integer,
-     ConfigurationIntegerRange{100, 200, 1}},
+    {QStringLiteral("interface/app_font_size"), 14, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{12, 32, 1}},
     {QStringLiteral("interface/language"), QStringLiteral("system"),
      ConfigurationValueKind::String},
     {QStringLiteral("interface/skin_path"), QString(), ConfigurationValueKind::String},
@@ -341,17 +344,13 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("none"), QStringLiteral("system")}},
-    {QStringLiteral("text_recognition/direct_ml_acceleration"), false,
-     ConfigurationValueKind::Boolean},
     {QStringLiteral("text_recognition/resident_process"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("text_recognition/model_hot_start"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("text_recognition/model_type"),
      QStringLiteral("small"),
      ConfigurationValueKind::String,
      std::nullopt,
-     {QStringLiteral("extra_small"), QStringLiteral("small"), QStringLiteral("medium"),
-      QStringLiteral("small_v5"), QStringLiteral("medium_v5"), QStringLiteral("small_v4"),
-      QStringLiteral("medium_v4")}},
+     {QStringLiteral("extra_small"), QStringLiteral("small"), QStringLiteral("medium")}},
     {QStringLiteral("text_recognition/detector_resize_policy"),
      QStringLiteral("max"),
      ConfigurationValueKind::String,
@@ -476,6 +475,12 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      2},
+    {QStringLiteral("global_shortcuts/screenshot_ocr_copy"),
+     QJsonArray(),
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     {QStringLiteral("global_shortcuts/screenshot_translation"),
      QJsonArray(),
@@ -562,6 +567,12 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      2},
+    {QStringLiteral("global_shortcuts/split_selected_images"),
+     QJsonArray(),
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
     {QStringLiteral("global_shortcuts/open_settings"),
      QJsonArray(),
      ConfigurationValueKind::StringList,
@@ -642,6 +653,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("global_mouse/screenshot_translation"), QJsonObject(),
      ConfigurationValueKind::Structured},
 #endif
+    {QStringLiteral("global_mouse/screenshot_ocr_copy"), QJsonObject(),
+     ConfigurationValueKind::Structured},
     {QStringLiteral("global_mouse/screenshot_quick_save"), QJsonObject(),
      ConfigurationValueKind::Structured},
     {QStringLiteral("global_mouse/screenshot_save"), QJsonObject(),
@@ -691,6 +704,14 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("screen_recording/keyboard_foreground_color"), QStringLiteral("#FFFFFFFF"),
      ConfigurationValueKind::String},
     {QStringLiteral("screen_recording/show_keyboard"), false, ConfigurationValueKind::Boolean},
+    {QStringLiteral("screen_recording/enable_webcam"), false, ConfigurationValueKind::Boolean},
+    {QStringLiteral("screen_recording/webcam_size"), 150, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{50, 500, 1}},
+    {QStringLiteral("screen_recording/webcam_shape"),
+     QStringLiteral("square"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("square"), QStringLiteral("circle")}},
     {QStringLiteral("screen_recording/post_processing_enabled"), false,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/post_processing_effect"),
@@ -713,7 +734,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      QStringLiteral("h264"),
      ConfigurationValueKind::String,
      std::nullopt,
-     {QStringLiteral("h264_hw"), QStringLiteral("h264"), QStringLiteral("h265")}},
+     {QStringLiteral("h264_hw"), QStringLiteral("h265_hw"), QStringLiteral("h264"),
+      QStringLiteral("h265")}},
     {QStringLiteral("screen_recording/video_quality"), 80, ConfigurationValueKind::Integer,
      ConfigurationIntegerRange{0, 100, 1}},
     {QStringLiteral("screen_recording/encoding_preset"),
@@ -730,6 +752,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("screen_recording/capture_toolbar_in_recording"), true,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/auto_hide_toolbar"), false, ConfigurationValueKind::Boolean},
+    {QStringLiteral("screen_recording/show_status_prompts"), true, ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/auto_exit_after_recording_ends"), false,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/notify_after_export_completes"), false,
@@ -979,6 +1002,12 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      2},
+    {QStringLiteral("screenshot_shortcuts/duplicate_latest_region"),
+     QJsonArray{QStringLiteral("R")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
     {QStringLiteral("screenshot_shortcuts/toggle_cursor_visibility"),
      QJsonArray{QStringLiteral("`")},
      ConfigurationValueKind::StringList,
@@ -1099,6 +1128,12 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      2},
+    {QStringLiteral("context_menu_shortcuts/edit_with_snow_shot"),
+     QJsonArray{},
+     ConfigurationValueKind::ShortcutList,
+     std::nullopt,
+     {},
+     1},
     {QStringLiteral("screen_recording_shortcuts/export"),
      QJsonArray{QStringLiteral("Ctrl+E")},
      ConfigurationValueKind::StringList,
@@ -1385,8 +1420,9 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("small"), QStringLiteral("normal")}},
-    {QStringLiteral("screenshot_ui/selection_transition_animation"), true,
-     ConfigurationValueKind::Boolean},
+    {QStringLiteral("screenshot_ui/selection_transition_animation"),
+     static_cast<int>(SelectionTransitionAnimation::Soft), ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{0, 72, 1}},
     {QStringLiteral("screenshot_ui/selection_display_unit"),
 #ifdef Q_OS_MACOS
      QStringLiteral("logical_pixels"),
@@ -1464,19 +1500,27 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {QStringLiteral("mouse_position"), QStringLiteral("top_left"), QStringLiteral("top_right"),
       QStringLiteral("bottom_left"), QStringLiteral("bottom_right"), QStringLiteral("center")}},
+    {QStringLiteral("pin_to_screen/mouse_wheel_opacity_step"), 5, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{1, 20, 1}},
+    {QStringLiteral("pin_to_screen/mouse_wheel_zoom_step"), 10, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{1, 20, 1}},
     {QStringLiteral("pin_to_screen/double_click_action"),
      QStringLiteral("thumbnail_mode"),
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("none"), QStringLiteral("reset_zoom"), QStringLiteral("thumbnail_mode"),
-      QStringLiteral("hide_to_top"), QStringLiteral("close"), QStringLiteral("destroy")}},
+      QStringLiteral("hide_to_top"), QStringLiteral("show_text_recognition_results"),
+      QStringLiteral("close"), QStringLiteral("destroy")}},
     {QStringLiteral("pin_to_screen/middle_mouse_button_action"),
      QStringLiteral("reset_zoom"),
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("none"), QStringLiteral("reset_zoom"), QStringLiteral("thumbnail_mode"),
-      QStringLiteral("hide_to_top"), QStringLiteral("close"), QStringLiteral("destroy")}},
+      QStringLiteral("hide_to_top"), QStringLiteral("show_text_recognition_results"),
+      QStringLiteral("close"), QStringLiteral("destroy")}},
     {QStringLiteral("pin_to_screen/show_window_buttons"), true, ConfigurationValueKind::Boolean},
+    {QStringLiteral("pin_to_screen/exit_annotation_mode_before_closing"), false,
+     ConfigurationValueKind::Boolean},
     {QStringLiteral("pin_to_screen/confirm_before_closing_window"), false,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("pin_to_screen/confirm_before_destroying_window"), true,
@@ -1539,6 +1583,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("quick.screenshot-delay"),
       QStringLiteral("quick.screenshot-fixed"),
       QStringLiteral("quick.screenshot-ocr"),
+      QStringLiteral("quick.screenshot-ocr-copy"),
       QStringLiteral("quick.screenshot-translation"),
       QStringLiteral("quick.screenshot-copy"),
       QStringLiteral("quick.screenshot-save"),
@@ -1556,6 +1601,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("quick.open-capture-history"),
       QStringLiteral("quick.global-canvas"),
       QStringLiteral("quick.stitch-selected-images"),
+      QStringLiteral("quick.split-selected-images"),
       QStringLiteral("quick.translate-selected-text"),
       QStringLiteral("quick.toggle-global-hotkeys"),
       QStringLiteral("quick.toggle-disable-on-focused-fullscreen-window"),
@@ -1575,6 +1621,13 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("window"), QStringLiteral("window_sub_element")}},
+    {QStringLiteral("screenshot_selection/background_opacity_percent"), 0,
+     ConfigurationValueKind::Integer, ConfigurationIntegerRange{0, 100, 1}},
+    {QStringLiteral("screenshot_selection/layout_compaction_enabled"), false,
+     ConfigurationValueKind::Boolean},
+    {QStringLiteral("screenshot_selection/layout_compaction_spacing"), 0,
+     ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{0, ScreenshotLayoutCompaction::maximumSpacing, 1}},
     {QStringLiteral("screenshot_selection/corner_radius"), 0, ConfigurationValueKind::Integer,
      ConfigurationIntegerRange{0, 256, 1}},
     {QStringLiteral("screenshot_selection/shadow_width"), 0, ConfigurationValueKind::Integer,
@@ -2074,6 +2127,8 @@ ConfigurationNormalization normalizeWatermarkTemplates(const QJsonValue& value) 
 }
 
 ConfigurationNormalization normalizeDrawTemplates(const QJsonValue& value) {
+    // Use the linked engine's format contract for both explicit edits and loading repairs.
+    const auto maximumSupportedTemplateVersion = snow_draw_template_schema_version();
     if (!value.isArray()) {
         return {};
     }
@@ -2087,10 +2142,13 @@ ConfigurationNormalization normalizeDrawTemplates(const QJsonValue& value) {
         QJsonParseError error;
         const QJsonDocument document = QJsonDocument::fromJson(bytes, &error);
         const QJsonObject payload = document.object();
+        int version = 0;
         if (!item.isObject() || name.isEmpty() || bytes.isEmpty() ||
             bytes.size() > 16 * 1024 * 1024 || QString::fromLatin1(bytes.toBase64()) != encoded ||
             error.error != QJsonParseError::NoError ||
-            payload.value(QStringLiteral("schemaVersion")).toInt(-1) != 1 ||
+            !ConfigurationSchema::parseIntegerVersion(
+                payload.value(QStringLiteral("schemaVersion")), &version) ||
+            static_cast<quint32>(version) > maximumSupportedTemplateVersion ||
             payload.value(QStringLiteral("elements")).toArray().isEmpty() ||
             payload.value(QStringLiteral("selectedIds")).toArray().isEmpty()) {
             changed = true;
@@ -2629,6 +2687,21 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     if (schemaEntry == nullptr) {
         return {};
     }
+    if (key == QStringLiteral("context_menu_shortcuts/edit_with_snow_shot")) {
+        if (!value.isArray() || value.toArray().size() > 1)
+            return {};
+        QJsonArray normalized;
+        if (!value.toArray().isEmpty()) {
+            bool valid = false;
+            const auto binding =
+                shortcuts::shortcutBindingFromJson(value.toArray().first(), false, &valid);
+            const QString accessKey = shortcuts::canonicalMenuAccessKey(binding.portableText);
+            if (!valid || accessKey.isEmpty())
+                return {};
+            normalized = shortcuts::shortcutBindingsToJson({shortcuts::ShortcutBinding{accessKey}});
+        }
+        return {normalized, true, normalized != value};
+    }
     if (key.startsWith(QStringLiteral("collage/pdf_custom_")) ||
         key.startsWith(QStringLiteral("collage/pdf_margin_"))) {
         if (!value.isDouble() || !std::isfinite(value.toDouble()))
@@ -2678,6 +2751,16 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     }
     if (key == QStringLiteral("screenshot_selection/selection_rect_presets")) {
         return normalizePresets(value);
+    }
+    if (key == QStringLiteral("screenshot_selection/layout_compaction_spacing")) {
+        // Migrate the previous spacing range without resetting an existing preference to zero.
+        const auto legacy = normalizeIntegerRange(value, 0, 1000);
+        if (!legacy.valid) {
+            return {};
+        }
+        const int spacing =
+            std::min(legacy.value.toInt(), ScreenshotLayoutCompaction::maximumSpacing);
+        return {spacing, true, spacing != legacy.value.toInt()};
     }
     if (key == QStringLiteral("drawing/watermark_content")) {
         return normalizeWatermarkContent(value);
@@ -2805,6 +2888,14 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     if (key == QStringLiteral("screen_recording/frame_rate")) {
         return normalizeAllowedInteger(value, {5, 10, 15, 24, 30, 60, 120, 83});
     }
+    if (key == QStringLiteral("screenshot_ui/selection_transition_animation")) {
+        if (value.isBool()) {
+            return {static_cast<int>(value.toBool() ? SelectionTransitionAnimation::Soft
+                                                    : SelectionTransitionAnimation::Disabled),
+                    true, true};
+        }
+        return normalizeAllowedInteger(value, {0, 32, 72});
+    }
     if (key == QStringLiteral("screen_recording/animated_image_frame_rate")) {
         return normalizeAllowedInteger(value, {5, 10, 15, 24});
     }
@@ -2855,6 +2946,17 @@ bool ConfigurationSchema::parseIntegerVersion(const QJsonValue& value, int* vers
 
 QMap<QString, QJsonValue>
 ConfigurationSchema::migrateLegacyValues(QMap<QString, QJsonValue> values) {
+    const QJsonValue fontPercentage =
+        values.take(QStringLiteral("interface/app_font_size_percentage"));
+    const QString fontSizeKey = QStringLiteral("interface/app_font_size");
+    if (!values.contains(fontSizeKey) && fontPercentage.isDouble()) {
+        const double percentage = fontPercentage.toDouble();
+        if (std::isfinite(percentage) && std::floor(percentage) == percentage &&
+            percentage >= 100 && percentage <= 200) {
+            // The percentage setting scaled a 14 px base font size.
+            values.insert(fontSizeKey, qRound(14 * percentage / 100.0));
+        }
+    }
     const QJsonValue legacy = values.take(QStringLiteral("screenshot/auto_save_after_copy"));
     const QString actionsKey = QStringLiteral("screenshot/auto_save_after_execution_actions");
     if (!values.contains(actionsKey) && legacy.isBool()) {

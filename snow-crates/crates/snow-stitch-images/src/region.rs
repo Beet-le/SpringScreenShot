@@ -1,7 +1,7 @@
 use rayon::prelude::*;
 use snow_memory::RasterArray;
 
-use crate::{Frame, PixelFormat, RegionDiagnostics, StitchAxis, StitchError};
+use crate::{Frame, PixelFormat, StitchAxis, StitchError};
 
 #[cfg(target_arch = "x86")]
 use std::arch::x86::{
@@ -17,6 +17,10 @@ use std::arch::x86_64::{
     _mm256_setr_epi32, _mm256_setzero_ps, _mm256_sqrt_ps, _mm256_srli_epi32, _mm256_storeu_ps,
     _mm256_sub_ps,
 };
+
+#[cfg(target_arch = "aarch64")]
+#[path = "region_neon.rs"]
+mod neon;
 
 const DOWNSAMPLE: u32 = 4;
 
@@ -92,7 +96,9 @@ impl GrayImage {
         } else {
             downsample_pixels_scalar(frame, width, height)
         };
-        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        #[cfg(target_arch = "aarch64")]
+        let mut pixels = unsafe { neon::downsample(frame, width, height) };
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
         let mut pixels = downsample_pixels_scalar(frame, width, height);
 
         pixels = blur_3x3(&pixels, width, height);
@@ -139,6 +145,7 @@ fn downsample_row_scalar(frame: &Frame, scaled_y: usize, output: &mut [f32], fir
     }
 }
 
+#[cfg(any(test, not(target_arch = "aarch64")))]
 fn downsample_pixels_scalar(frame: &Frame, width: usize, height: usize) -> RasterArray<f32> {
     let mut pixels = RasterArray::<f32>::zeroed(width.saturating_mul(height));
     pixels
@@ -331,6 +338,10 @@ fn blur_3x3(source: &[f32], width: usize, height: usize) -> RasterArray<f32> {
     if std::arch::is_x86_feature_detected!("avx2") {
         return unsafe { blur_3x3_avx2(source, width, height) };
     }
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        return unsafe { neon::blur(source, width, height) };
+    }
     blur_3x3_scalar(source, width, height)
 }
 
@@ -437,6 +448,10 @@ fn sobel_magnitude(source: &[f32], width: usize, height: usize) -> RasterArray<f
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if std::arch::is_x86_feature_detected!("avx2") {
         return unsafe { sobel_magnitude_avx2(source, width, height) };
+    }
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        return unsafe { neon::sobel(source, width, height) };
     }
     sobel_magnitude_scalar(source, width, height)
 }
@@ -743,124 +758,6 @@ impl SimilarityMap {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RegionState {
-    fixed: f32,
-    scrolling: f32,
-    dynamic: f32,
-    observations: u16,
-}
-
-impl Default for RegionState {
-    fn default() -> Self {
-        Self {
-            fixed: 1.0 / 3.0,
-            scrolling: 1.0 / 3.0,
-            dynamic: 1.0 / 3.0,
-            observations: 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct TemporalRegionModel {
-    layout: TileLayout,
-    states: Vec<RegionState>,
-}
-
-impl TemporalRegionModel {
-    pub(crate) fn new(layout: TileLayout) -> Self {
-        Self {
-            layout,
-            states: vec![RegionState::default(); layout.len()],
-        }
-    }
-
-    pub(crate) fn weight_at_tile(&self, index: usize) -> f32 {
-        let Some(state) = self.states.get(index) else {
-            return 1.0;
-        };
-        let learned = 1.0 + 1.5 * (state.scrolling - 1.0 / 3.0)
-            - (state.fixed - 1.0 / 3.0)
-            - (state.dynamic - 1.0 / 3.0);
-        let influence = (state.observations as f32 / 3.0).clamp(0.0, 1.0);
-        (1.0 + influence * (learned - 1.0)).clamp(0.1, 2.0)
-    }
-
-    pub(crate) fn weight_at_point(&self, x: f32, y: f32) -> f32 {
-        self.layout
-            .index(x, y)
-            .map(|index| self.weight_at_tile(index))
-            .unwrap_or(1.0)
-    }
-
-    pub(crate) fn update(
-        &mut self,
-        direct: &SimilarityMap,
-        compensated: &SimilarityMap,
-        learning_rate: f32,
-    ) {
-        debug_assert_eq!(direct.layout(), self.layout);
-        debug_assert_eq!(compensated.layout(), self.layout);
-        for index in 0..self.states.len() {
-            let (Some(direct_similarity), Some(compensated_similarity)) =
-                (direct.at_tile(index), compensated.at_tile(index))
-            else {
-                continue;
-            };
-            if direct.texture_at(index).max(compensated.texture_at(index)) < 0.05 {
-                continue;
-            }
-            let ambiguous = direct_similarity * compensated_similarity;
-            if ambiguous >= 0.5 {
-                continue;
-            }
-            let fixed = direct_similarity * (1.0 - compensated_similarity);
-            let scrolling = compensated_similarity * (1.0 - direct_similarity);
-            let dynamic = (1.0 - direct_similarity) * (1.0 - compensated_similarity);
-            let total = fixed + scrolling + dynamic;
-            if total < 0.05 {
-                continue;
-            }
-            let observation = [fixed / total, scrolling / total, dynamic / total];
-            let state = &mut self.states[index];
-            state.fixed = (1.0 - learning_rate) * state.fixed + learning_rate * observation[0];
-            state.scrolling =
-                (1.0 - learning_rate) * state.scrolling + learning_rate * observation[1];
-            state.dynamic = (1.0 - learning_rate) * state.dynamic + learning_rate * observation[2];
-            state.observations = state.observations.saturating_add(1);
-        }
-    }
-
-    pub(crate) fn decay_toward_neutral(&mut self, rate: f32) {
-        for state in &mut self.states {
-            state.fixed = (1.0 - rate) * state.fixed + rate / 3.0;
-            state.scrolling = (1.0 - rate) * state.scrolling + rate / 3.0;
-            state.dynamic = (1.0 - rate) * state.dynamic + rate / 3.0;
-        }
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.states.fill(RegionState::default());
-    }
-
-    pub(crate) fn summary(&self) -> RegionDiagnostics {
-        let mut summary = RegionDiagnostics::default();
-        for state in &self.states {
-            if state.observations < 3 {
-                summary.neutral_tiles += 1;
-            } else if state.fixed >= state.scrolling && state.fixed >= state.dynamic {
-                summary.fixed_tiles += 1;
-            } else if state.scrolling >= state.dynamic {
-                summary.scrolling_tiles += 1;
-            } else {
-                summary.dynamic_tiles += 1;
-            }
-        }
-        summary
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1027,39 +924,6 @@ mod tests {
         let compensated =
             SimilarityMap::between(&reference, &incoming, layout, StitchAxis::Vertical, -12);
         assert!(compensated.mean() > direct.mean() + 0.25);
-    }
-
-    #[test]
-    fn temporal_model_learns_all_three_region_classes() {
-        let layout = TileLayout::new(96, 32, 32);
-        let mut direct = SimilarityMap {
-            layout,
-            values: vec![0.95, 0.1, 0.1],
-            texture: vec![1.0; 3],
-            valid: vec![true; 3],
-        };
-        let mut compensated = SimilarityMap {
-            layout,
-            values: vec![0.1, 0.95, 0.1],
-            texture: vec![1.0; 3],
-            valid: vec![true; 3],
-        };
-        let mut model = TemporalRegionModel::new(layout);
-        for _ in 0..4 {
-            model.update(&direct, &compensated, 0.2);
-        }
-        let summary = model.summary();
-        assert_eq!(summary.fixed_tiles, 1);
-        assert_eq!(summary.scrolling_tiles, 1);
-        assert_eq!(summary.dynamic_tiles, 1);
-        assert!(model.weight_at_tile(1) > model.weight_at_tile(0));
-        assert!(model.weight_at_tile(1) > model.weight_at_tile(2));
-
-        direct.values.fill(1.0);
-        compensated.values.fill(1.0);
-        let before = model.summary();
-        model.update(&direct, &compensated, 0.2);
-        assert_eq!(model.summary(), before);
     }
 
     #[test]

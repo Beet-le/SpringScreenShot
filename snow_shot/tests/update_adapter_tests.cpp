@@ -352,8 +352,40 @@ int main(int argc, char** argv) {
         value.cacheDirectory = directory.filePath(QStringLiteral("cache-%1").arg(++cacheIndex));
         value.githubApiUrl = QUrl(QStringLiteral("https://updates.example.test/") + scenario);
         value.giteeApiUrl = QUrl(QStringLiteral("https://updates.example.test/") + scenario);
+        value.storeManaged = false;
         return value;
     };
+
+    {
+        auto storeOptions = options(QStringLiteral("store-managed"));
+        const QString cache = storeOptions.cacheDirectory;
+        storeOptions.storeManaged = true;
+        storeOptions.startupCheckDelay = std::chrono::milliseconds(1);
+        UpdateService service(std::move(storeOptions));
+        int completions = 0;
+        bool restart = false;
+        bool handoff = false;
+        QObject::connect(&service, &UpdateService::operationFinished, &app,
+                         [&](const QString&, const QString& outcome) {
+                             require(outcome == u"unsupported", "Store rejects native operations");
+                             ++completions;
+                         });
+        QObject::connect(&service, &UpdateService::restartRequested, &app, [&] { restart = true; });
+        QObject::connect(&service, &UpdateService::handoffReady, &app, [&] { handoff = true; });
+        service.setMode(QStringLiteral("next_launch"));
+        service.start();
+        service.check();
+        service.download();
+        service.beginApply();
+        service.applyAtStartup();
+        service.requestRestart();
+        service.cancel();
+        QCoreApplication::processEvents();
+        require(service.managedByStore() && !service.busy() && !service.handoffPending() &&
+                    service.status().state == UpdateState::Unavailable && completions == 4 &&
+                    !restart && !handoff && !QFileInfo::exists(cache),
+                "Store policy never starts the available helper or its background schedule");
+    }
 
     {
         UpdateService service(options(QStringLiteral("default")));

@@ -20,6 +20,9 @@ struct RecordingEffectTestState {
     uint32_t keyboardBackground = 0;
     uint32_t keyboardForeground = 0;
     uint32_t keyboardBorder = 0;
+    const SnowWebcam* webcam = nullptr;
+    uint32_t webcamSize = 0;
+    uint32_t webcamShape = 0;
     bool fail = false;
     std::function<void()> notify;
     std::shared_ptr<RecordingEffectsFrame> frame;
@@ -68,6 +71,9 @@ class RecordingEffectTestSource final : public RecordingEffectsSource {
         state->keyboardBackground = config.keyboard_background_rgba;
         state->keyboardForeground = config.keyboard_text_rgba;
         state->keyboardBorder = config.keyboard_border_rgba;
+        state->webcam = config.webcam_source;
+        state->webcamSize = config.webcam_size;
+        state->webcamShape = config.webcam_shape;
         state->output = QSize(qRound(config.width * config.canvas_scale),
                               qRound(config.height * config.canvas_scale));
         state->publish();

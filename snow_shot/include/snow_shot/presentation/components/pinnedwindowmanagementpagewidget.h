@@ -42,6 +42,9 @@ class PinnedWindowManagementDataSource : public QObject {
     virtual void requestFullImage(const QString& id, quint64 requestId) = 0;
     virtual void cancelPreviews() {}
     virtual void showRecord(const QString& id) = 0;
+    [[nodiscard]] virtual bool revealRecord(const QString&) {
+        return false;
+    }
     virtual void removeRecords(const QVector<QString>& ids) = 0;
 
   signals:
@@ -66,6 +69,7 @@ class PinnedWindowManagementPageWidget final : public QWidget {
   signals:
     void collageRequested(const QStringList& recordIds);
     void splitRequested(const QString& recordId);
+    void imageEditingRequested(const QString& recordId);
 
   protected:
     void changeEvent(QEvent* event) override;

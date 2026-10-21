@@ -39,10 +39,12 @@ void copyRecording(const QString& path) {
     data->setUrls({QUrl::fromLocalFile(path)});
     QApplication::clipboard()->setMimeData(data);
 }
-QString nextOutput(const QString& original) {
+QString nextOutput(const QString& original,
+                   const snow_shot::storage::ScreenshotWindowNames& windowNames) {
     const QFileInfo file(original);
-    const QString baseName = ScreenshotImageFileService::suggestedBaseName(
-        snow_shot::storage::RecordingSettings().videoFilenameFormat());
+    const QString baseName = snow_shot::storage::expandScreenshotExportVariables(
+        snow_shot::storage::RecordingSettings().videoFilenameFormat(), QDateTime::currentDateTime(),
+        windowNames);
     return snow_shot::presentation::recording::screenRecordingOutputPath({file.absolutePath()},
                                                                          baseName, file.suffix());
 }
@@ -56,6 +58,7 @@ RecordingTrimSession::RecordingTrimSession(ScreenRecordingAreaWindow* area,
     m_panel->commitControlScale(adqt::widgets::controlScaleContextFor(m_toolbar->palette()));
     m_area->setTrimming(true);
     m_panel->replayRequested = [this] { seek(static_cast<int>(m_first), true); };
+    m_panel->playbackToggleRequested = [this] { togglePlayback(); };
     m_panel->seekRequested = [this](int frame) { seek(frame, false); };
     m_panel->rangeChanged = [this](int first, int end, int preview) {
         m_first = static_cast<quint64>(first);
@@ -94,10 +97,12 @@ RecordingTrimSession::~RecordingTrimSession() {
 
 void RecordingTrimSession::open(const QString& sourcePath, const QString& outputPath,
                                 const SnowRecordingClipOptions& options, bool deferred,
-                                bool saveWhenReady) {
+                                bool saveWhenReady,
+                                snow_shot::storage::ScreenshotWindowNames windowNames) {
     m_mediaActivity = snow_shot::runtime::RuntimeActivityTracker::shared().acquire();
     m_sourcePath = sourcePath;
     m_outputPath = outputPath;
+    m_windowNames = std::move(windowNames);
     m_saveWhenReady = saveWhenReady;
     m_deferred = deferred;
     m_openFuture = std::async(
@@ -133,10 +138,35 @@ void RecordingTrimSession::setBusy(bool busy) {
         m_toolbar->palette()->setRecordingTrimPanel(m_panel, busy);
 }
 void RecordingTrimSession::seek(int frame, bool play) {
-    if (!m_clip || m_busy || m_detached)
+    if (!ready() || m_detached || m_previewFailed)
         return;
+    const auto revision =
+        snow_recording_clip_seek(m_clip, static_cast<quint64>(frame), m_end, play ? 1 : 0);
+    if (!revision)
+        return;
+    m_revision = revision;
+    m_position = snow_recording_clip_boundary(m_clip, static_cast<quint64>(frame));
+    m_playing = play;
+    m_panel->setPlaying(m_playing);
     m_timer.setInterval(16);
-    m_revision = snow_recording_clip_seek(m_clip, static_cast<quint64>(frame), m_end, play ? 1 : 0);
+}
+void RecordingTrimSession::togglePlayback() {
+    if (!ready() || m_detached || m_previewFailed)
+        return;
+    quint64 frame = m_first;
+    if (m_playing || m_position < snow_recording_clip_boundary(m_clip, m_end)) {
+        // Find the frame containing the displayed position, including variable-duration frames.
+        quint64 low = m_first, high = m_end;
+        while (low + 1 < high) {
+            const quint64 middle = low + (high - low) / 2;
+            if (snow_recording_clip_boundary(m_clip, middle) <= m_position)
+                low = middle;
+            else
+                high = middle;
+        }
+        frame = low;
+    }
+    seek(static_cast<int>(frame), !m_playing);
 }
 void RecordingTrimSession::setSpeed(quint32 percent) {
     if (!ready() || m_detached || percent == m_speedPercent)
@@ -236,7 +266,10 @@ void RecordingTrimSession::poll() {
             },
             lease);
         m_area->setPreviewFrame(frame);
+        m_position = preview.position_us;
+        m_playing = preview.playing != 0;
         m_panel->setPosition(preview.position_us);
+        m_panel->setPlaying(m_playing);
         m_timer.setInterval(preview.playing ? 16 : 100);
     } else if (lease)
         snow_recording_clip_frame_destroy(lease);
@@ -245,6 +278,9 @@ void RecordingTrimSession::poll() {
     });
     if (!error.isEmpty()) {
         m_previewFailed = true;
+        m_playing = false;
+        m_panel->setPlaying(false);
+        m_panel->setPlaybackAvailable(false);
         if (reportError)
             reportError(trimText(QT_TRANSLATE_NOOP("RecordingTrimSession",
                                                    "Unable to preview recording: %1"))
@@ -263,7 +299,7 @@ void RecordingTrimSession::exportClip(bool save) {
         const QString filter = QStringLiteral("%1 (*.%2)").arg(suffix.toUpper(), suffix);
         QFileDialog dialog(m_area,
                            trimText(QT_TRANSLATE_NOOP("RecordingTrimSession", "Save to File")),
-                           nextOutput(m_outputPath), filter);
+                           nextOutput(m_outputPath, m_windowNames), filter);
         dialog.setAcceptMode(QFileDialog::AcceptSave);
         dialog.setDefaultSuffix(suffix);
         // The dialog resolves the default suffix before confirming replacement.
@@ -294,7 +330,7 @@ void RecordingTrimSession::exportClip(bool save) {
         publish();
         return;
     }
-    m_pendingPath = nextOutput(m_outputPath);
+    m_pendingPath = nextOutput(m_outputPath, m_windowNames);
     m_export = snow_recording_clip_export_start_with_speed(
         m_clip, m_pendingSelection.first, m_pendingSelection.end,
         m_pendingPath.toUtf8().constData(), m_pendingSelection.speedPercent);
@@ -404,6 +440,8 @@ void RecordingTrimSession::showProgress() {
 }
 void RecordingTrimSession::detach() {
     m_detached = true;
+    if (m_panel)
+        m_panel->setPlaybackAvailable(false);
     if (m_toolbar)
         m_toolbar->palette()->setRecordingTrimPanel(nullptr, false);
     if (m_panel)
@@ -419,6 +457,23 @@ void RecordingTrimSession::detach() {
     // Export completion still reports its durable file after the windows close.
     if (!m_export && !m_publishFuture.valid() && !m_openFuture.valid())
         releaseMedia();
+}
+void RecordingTrimSession::prepareForSessionEnd() {
+    m_timer.stop();
+    reportError = {};
+    exported = {};
+    m_detached = true;
+    if (m_dialog)
+        m_dialog->cancel = {};
+    // Keep pending native open/export/publication owners alive until process exit. Their
+    // destructors may cancel work or join, which is unsuitable during session termination.
+    setParent(nullptr);
+}
+QString RecordingTrimSession::sourcePath() const {
+    return m_sourcePath;
+}
+QString RecordingTrimSession::outputPath() const {
+    return m_destination.isEmpty() ? m_outputPath : m_destination;
 }
 void RecordingTrimSession::releaseMedia() {
     m_timer.stop();

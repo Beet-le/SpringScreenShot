@@ -9,7 +9,9 @@ pub use engine::{
     Engine, EngineConfig as RuntimeConfig, InputUpdate, MutationResult, StyleDefaults,
     TextElementInfo, ViewportConfig, ViewportId,
 };
-pub use snow_draw_engine_core::arrow::{ArrowPathCommand, ArrowType, Arrowhead, StrokeStyle};
+pub use snow_draw_engine_core::arrow::{
+    ArrowPathCommand, ArrowType, Arrowhead, StrokeRenderingStyle, StrokeStyle,
+};
 pub use snow_draw_engine_core::*;
 pub use snow_draw_engine_display::*;
 pub use snow_draw_engine_document::{
@@ -47,6 +49,6 @@ pub use snow_draw_engine_interaction::*;
 pub type Runtime = Engine;
 
 pub use snow_draw_engine_editor::{
-    SpeechBubbleTextConstraints, SpeechBubbleTextLayoutRequest, SpeechBubbleTextMeasurement,
-    speech_bubble_text_constraints,
+    DRAW_TEMPLATE_SCHEMA_VERSION, SpeechBubbleTextConstraints, SpeechBubbleTextLayoutRequest,
+    SpeechBubbleTextMeasurement, speech_bubble_text_constraints,
 };

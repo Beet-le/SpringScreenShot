@@ -53,6 +53,29 @@ struct SnowShotChatModel {
     [[nodiscard]] bool operator==(const SnowShotChatModel&) const = default;
 };
 
+[[nodiscard]] inline bool snowShotLegacyAiModelId(const QString& id) {
+    return id == QStringLiteral("qwen3.8-flash") || id == QStringLiteral("qwen-mt-flash");
+}
+
+// Historical selections and results can recognize an alias without a catalog. New
+// requests must still resolve the selection against a successful server catalog.
+[[nodiscard]] inline bool snowShotBuiltInModelAlias(const QString& legacyId,
+                                                    const QString& canonicalId) {
+    return snowShotLegacyAiModelId(legacyId) && canonicalId == QStringLiteral("ai-model");
+}
+
+// Resolve only against a successful server catalog. Custom IDs and historical
+// result identities are never rewritten by this selection helper.
+[[nodiscard]] inline QString
+snowShotResolvedBuiltInModelId(const QVector<SnowShotChatModel>& models, const QString& id) {
+    if (snowShotLegacyAiModelId(id)) {
+        for (const auto& model : models)
+            if (snowShotBuiltInModelAlias(id, model.id))
+                return model.id;
+    }
+    return id;
+}
+
 struct SnowShotChatModelsResult {
     QVector<SnowShotChatModel> models;
     QString error;
@@ -175,9 +198,13 @@ class SnowShotApiClient final : public QObject {
     int m_tableTimeoutMs = 35000;
     int m_visionTimeoutMs = 120000;
     struct Request;
-    void startLatexUpload(RequestToken token, const QByteArray& webp);
+    enum class ImageExtractionKind { Table, Latex };
+    struct ImageExtractionResult;
+    RequestToken extractImage(ImageExtractionKind kind, const QImage& image, QObject* receiver,
+                              Completion completion, LatexCompletion latexCompletion);
+    void startImageUpload(RequestToken token, const QByteArray& webp);
+    void finishImageExtraction(RequestToken token, ImageExtractionResult result);
     void finishLatex(RequestToken token, SnowShotLatexResult result);
-    void startTableUpload(RequestToken token, const QByteArray& webp);
     void cleanupRequest(Request* request);
     [[nodiscard]] QNetworkAccessManager* networkAccessManager();
     void finish(RequestToken token, SnowShotTableResult result);

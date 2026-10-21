@@ -20,6 +20,10 @@
             <translation>Administrator launch is only supported on Windows.</translation>
         </message>
         <message>
+            <source>Administrator launch is unavailable in the Microsoft Store version.</source>
+            <translation>Administrator launch is unavailable in the Microsoft Store version.</translation>
+        </message>
+        <message>
             <source>An interrupted startup change needs administrator authorization. Reapply your startup setting.</source>
             <translation>An interrupted startup change needs administrator authorization. Reapply your startup setting.</translation>
         </message>
@@ -129,6 +133,21 @@
         <message>
             <source>Screen &amp; System Audio Recording</source>
             <translation>Screen &amp; System Audio Recording</translation>
+        </message>
+    </context>
+    <context>
+        <name>AutoStartRegistration</name>
+        <message>
+            <source>Enable Snow Shot in Windows Settings &gt; Apps &gt; Startup.</source>
+            <translation>Enable Snow Shot in Windows Settings &gt; Apps &gt; Startup.</translation>
+        </message>
+        <message>
+            <source>Startup is managed by your organization.</source>
+            <translation>Startup is managed by your organization.</translation>
+        </message>
+        <message>
+            <source>Windows startup settings are unavailable.</source>
+            <translation>Windows startup settings are unavailable.</translation>
         </message>
     </context>
     <context>
@@ -1169,8 +1188,8 @@
             <translation>Active window</translation>
         </message>
         <message>
-            <source>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</source>
-            <translation>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</translation>
+            <source>Add Edit with Snow Shot to the Windows context menu to pin a supported image or document file to the screen.</source>
+            <translation>Add Edit with Snow Shot to the Windows context menu to pin a supported image or document file to the screen.</translation>
         </message>
         <message>
             <source>Add a mask to highlight text recognition results</source>
@@ -1589,6 +1608,10 @@
             <translation>Choose how updates are downloaded and installed</translation>
         </message>
         <message>
+            <source>Choose the MP4 video encoder. Hardware encoding falls back to software with the same codec if unavailable. H.265 can produce smaller files but requires a compatible player.</source>
+            <translation>Choose the MP4 video encoder. Hardware encoding falls back to software with the same codec if unavailable. H.265 can produce smaller files but requires a compatible player.</translation>
+        </message>
+        <message>
             <source>Choose the OCR model version and size to balance recognition speed and accuracy</source>
             <translation>Choose the OCR model version and size to balance recognition speed and accuracy</translation>
         </message>
@@ -1699,10 +1722,6 @@
         <message>
             <source>Choose the translation service or AI model</source>
             <translation>Choose the translation service or AI model</translation>
-        </message>
-        <message>
-            <source>Choose the video encoder</source>
-            <translation>Choose the video encoder</translation>
         </message>
         <message>
             <source>Choose what happens automatically when text recognition completes</source>
@@ -1821,12 +1840,12 @@
             <translation>Compression level</translation>
         </message>
         <message>
-            <source>Configuration exported to the clipboard.</source>
-            <translation>Configuration exported to the clipboard.</translation>
+            <source>Configuration exported to the clipboard</source>
+            <translation>Configuration exported to the clipboard</translation>
         </message>
         <message>
-            <source>Configuration imported.</source>
-            <translation>Configuration imported.</translation>
+            <source>Configuration imported</source>
+            <translation>Configuration imported</translation>
         </message>
         <message>
             <source>Configure S3-compatible upload destinations</source>
@@ -1845,8 +1864,8 @@
             <translation>Configure proxy use for network requests</translation>
         </message>
         <message>
-            <source>Configure text recognition models and acceleration</source>
-            <translation>Configure text recognition models and acceleration</translation>
+            <source>Configure text recognition models and processing</source>
+            <translation>Configure text recognition models and processing</translation>
         </message>
         <message>
             <source>Configure the screenshot, pinned, and recording toolbars</source>
@@ -1875,6 +1894,10 @@
         <message>
             <source>Control when the screenshot color picker is visible</source>
             <translation>Control when the screenshot color picker is visible</translation>
+        </message>
+        <message>
+            <source>Copy after text recognition</source>
+            <translation>Copy after text recognition</translation>
         </message>
         <message>
             <source>Copy application settings as a zip archive to the clipboard</source>
@@ -2141,14 +2164,6 @@
             <translation>Destroy</translation>
         </message>
         <message>
-            <source>DirectML</source>
-            <translation>DirectML</translation>
-        </message>
-        <message>
-            <source>DirectML acceleration</source>
-            <translation>DirectML acceleration</translation>
-        </message>
-        <message>
             <source>Disable global hotkeys</source>
             <translation>Disable global hotkeys</translation>
         </message>
@@ -2233,8 +2248,20 @@
             <translation>Draw four guide segments around the sampled center pixel</translation>
         </message>
         <message>
+            <source>Duplicate latest region</source>
+            <translation>Duplicate latest region</translation>
+        </message>
+        <message>
             <source>Edit selection</source>
             <translation>Edit selection</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot</source>
+            <translation>Edit with Snow Shot</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot Mini</source>
+            <translation>Edit with Snow Shot Mini</translation>
         </message>
         <message>
             <source>Enable MCP integration</source>
@@ -2301,6 +2328,14 @@
             <translation>Exit</translation>
         </message>
         <message>
+            <source>Exit annotation mode and keep the pinned window open when closing.</source>
+            <translation>Exit annotation mode and keep the pinned window open when closing.</translation>
+        </message>
+        <message>
+            <source>Exit annotation mode before closing</source>
+            <translation>Exit annotation mode before closing</translation>
+        </message>
+        <message>
             <source>Export</source>
             <translation>Export</translation>
         </message>
@@ -2323,6 +2358,10 @@
         <message>
             <source>Extended Features Settings</source>
             <translation>Extended Features Settings</translation>
+        </message>
+        <message>
+            <source>Fast</source>
+            <translation>Fast</translation>
         </message>
         <message>
             <source>Fill Style</source>
@@ -2437,10 +2476,6 @@
             <translation>GIF, APNG and WebP resolution, frame rate and looping</translation>
         </message>
         <message>
-            <source>GPU acceleration</source>
-            <translation>GPU acceleration</translation>
-        </message>
-        <message>
             <source>General</source>
             <translation>General</translation>
         </message>
@@ -2487,6 +2522,10 @@
         <message>
             <source>H.265</source>
             <translation>H.265</translation>
+        </message>
+        <message>
+            <source>H.265 (Hardware)</source>
+            <translation>H.265 (Hardware)</translation>
         </message>
         <message>
             <source>Hidden tools</source>
@@ -2537,12 +2576,12 @@
             <translation>Image Recognition</translation>
         </message>
         <message>
-            <source>Image export</source>
-            <translation>Image export</translation>
+            <source>Image and document files</source>
+            <translation>Image and document files</translation>
         </message>
         <message>
-            <source>Image files</source>
-            <translation>Image files</translation>
+            <source>Image export</source>
+            <translation>Image export</translation>
         </message>
         <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
@@ -2837,14 +2876,6 @@
             <translation>Medium</translation>
         </message>
         <message>
-            <source>Medium V4</source>
-            <translation>Medium V4</translation>
-        </message>
-        <message>
-            <source>Medium V5</source>
-            <translation>Medium V5</translation>
-        </message>
-        <message>
             <source>Medium V6</source>
             <translation>Medium V6</translation>
         </message>
@@ -2897,8 +2928,16 @@
             <translation>Mouse pointer</translation>
         </message>
         <message>
+            <source>Mouse wheel opacity step</source>
+            <translation>Mouse wheel opacity step</translation>
+        </message>
+        <message>
             <source>Mouse wheel zoom mode</source>
             <translation>Mouse wheel zoom mode</translation>
+        </message>
+        <message>
+            <source>Mouse wheel zoom step</source>
+            <translation>Mouse wheel zoom step</translation>
         </message>
         <message>
             <source>Move cursor down</source>
@@ -2989,12 +3028,20 @@
             <translation>OCR models &amp; performance</translation>
         </message>
         <message>
+            <source>Off</source>
+            <translation>Off</translation>
+        </message>
+        <message>
             <source>Only when displayed</source>
             <translation>Only when displayed</translation>
         </message>
         <message>
             <source>Open</source>
             <translation>Open</translation>
+        </message>
+        <message>
+            <source>Open Image Splitting for each selected image file, or an empty window if no images are selected</source>
+            <translation>Open Image Splitting for each selected image file, or an empty window if no images are selected</translation>
         </message>
         <message>
             <source>Open Image Stitching with selected image files, or an empty window if no images are selected</source>
@@ -3113,20 +3160,20 @@
             <translation>Pin clipboard content to screen</translation>
         </message>
         <message>
-            <source>Pin images, image files, formatted text, or HTML from the clipboard to the screen</source>
-            <translation>Pin images, image files, formatted text, or HTML from the clipboard to the screen</translation>
+            <source>Pin images, supported files, formatted text, or HTML from the clipboard to the screen</source>
+            <translation>Pin images, supported files, formatted text, or HTML from the clipboard to the screen</translation>
         </message>
         <message>
             <source>Pin screenshot to screen</source>
             <translation>Pin screenshot to screen</translation>
         </message>
         <message>
-            <source>Pin selected image files from File Explorer or the desktop to the screen</source>
-            <translation>Pin selected image files from File Explorer or the desktop to the screen</translation>
+            <source>Pin selected image or document files from File Explorer or the desktop to the screen</source>
+            <translation>Pin selected image or document files from File Explorer or the desktop to the screen</translation>
         </message>
         <message>
-            <source>Pin selected image files from Finder or the desktop to the screen</source>
-            <translation>Pin selected image files from Finder or the desktop to the screen</translation>
+            <source>Pin selected image or document files from Finder or the desktop to the screen</source>
+            <translation>Pin selected image or document files from Finder or the desktop to the screen</translation>
         </message>
         <message>
             <source>Pin selection</source>
@@ -3323,6 +3370,10 @@
         <message>
             <source>Recognize text in the confirmed screenshot selection</source>
             <translation>Recognize text in the confirmed screenshot selection</translation>
+        </message>
+        <message>
+            <source>Recognize text, copy it to the clipboard, and end the screenshot session</source>
+            <translation>Recognize text, copy it to the clipboard, and end the screenshot session</translation>
         </message>
         <message>
             <source>Recognized text and language tools</source>
@@ -3769,6 +3820,10 @@
             <translation>Server address</translation>
         </message>
         <message>
+            <source>Set how much Ctrl+mouse wheel changes pinned window opacity</source>
+            <translation>Set how much Ctrl+mouse wheel changes pinned window opacity</translation>
+        </message>
+        <message>
             <source>Set quality for image files saved outside the Spring ScreenShot dialog</source>
             <translation>Set quality for image files saved outside the Spring ScreenShot dialog</translation>
         </message>
@@ -3835,6 +3890,10 @@
         <message>
             <source>Set the shadow color of pinned screenshots while they have focus</source>
             <translation>Set the shadow color of pinned screenshots while they have focus</translation>
+        </message>
+        <message>
+            <source>Set the zoom percentage levels used by the mouse wheel</source>
+            <translation>Set the zoom percentage levels used by the mouse wheel</translation>
         </message>
         <message>
             <source>Set up to two keys for this pinned window action</source>
@@ -3945,6 +4004,10 @@
             <translation>Show original image preview</translation>
         </message>
         <message>
+            <source>Show recording status prompts</source>
+            <translation>Show recording status prompts</translation>
+        </message>
+        <message>
             <source>Show screenshot guides when a capture starts</source>
             <translation>Show screenshot guides when a capture starts</translation>
         </message>
@@ -3993,6 +4056,10 @@
             <translation>Show the sub-toolbar for the Edit Selection tool</translation>
         </message>
         <message>
+            <source>Show the video format and microphone and speaker status in the center of the motion preview area.</source>
+            <translation>Show the video format and microphone and speaker status in the center of the motion preview area.</translation>
+        </message>
+        <message>
             <source>Show toolbar</source>
             <translation>Show toolbar</translation>
         </message>
@@ -4023,14 +4090,6 @@
         <message>
             <source>Small</source>
             <translation>Small</translation>
-        </message>
-        <message>
-            <source>Small V4</source>
-            <translation>Small V4</translation>
-        </message>
-        <message>
-            <source>Small V5</source>
-            <translation>Small V5</translation>
         </message>
         <message>
             <source>Small V6</source>
@@ -4077,6 +4136,10 @@
             <translation>Snowflake light</translation>
         </message>
         <message>
+            <source>Soft</source>
+            <translation>Soft</translation>
+        </message>
+        <message>
             <source>Soften all three skin images with blur.</source>
             <translation>Soften all three skin images with blur.</translation>
         </message>
@@ -4103,6 +4166,10 @@
         <message>
             <source>Speed First reduces computation on short text and may change recognition results.</source>
             <translation>Speed First reduces computation on short text and may change recognition results.</translation>
+        </message>
+        <message>
+            <source>Split Selected Images</source>
+            <translation>Split Selected Images</translation>
         </message>
         <message>
             <source>Spotlight</source>
@@ -4457,12 +4524,12 @@
             <translation>Upload to Cloud</translation>
         </message>
         <message>
-            <source>Use DirectML for GPU-accelerated text recognition when available</source>
-            <translation>Use DirectML for GPU-accelerated text recognition when available</translation>
-        </message>
-        <message>
             <source>Use global mouse gestures, select individual window elements, and translate selected text.</source>
             <translation>Use global mouse gestures, select individual window elements, and translate selected text.</translation>
+        </message>
+        <message>
+            <source>Use one letter (A–Z) or digit (0–9) when the classic Windows context menu is open</source>
+            <translation>Use one letter (A–Z) or digit (0–9) when the classic Windows context menu is open</translation>
         </message>
         <message>
             <source>Use regular icon settings</source>
@@ -4645,6 +4712,29 @@
         </message>
     </context>
     <context>
+        <name>SettingsVariableHelp</name>
+        <message>
+            <source>%1: Application Name</source>
+            <translation>%1: Application Name</translation>
+        </message>
+        <message>
+            <source>%1: Current time</source>
+            <translation>%1: Current time</translation>
+        </message>
+        <message>
+            <source>%1: Window Name</source>
+            <translation>%1: Window Name</translation>
+        </message>
+        <message>
+            <source>OK</source>
+            <translation>OK</translation>
+        </message>
+        <message>
+            <source>Variable Description</source>
+            <translation>Variable Description</translation>
+        </message>
+    </context>
+    <context>
         <name>ShellContextMenuRegistration</name>
         <message>
             <source>Could not access the Windows context menu registry. Windows error %1.</source>
@@ -4677,6 +4767,10 @@
         <message>
             <source>The Windows context menu is only supported on Windows.</source>
             <translation>The Windows context menu is only supported on Windows.</translation>
+        </message>
+        <message>
+            <source>The context menu access key must be one letter (A–Z) or digit (0–9).</source>
+            <translation>The context menu access key must be one letter (A–Z) or digit (0–9).</translation>
         </message>
     </context>
     <context>
@@ -4841,6 +4935,10 @@ Unavailable: %2</translation>
             <translation>The storage directory is not writable.</translation>
         </message>
         <message>
+            <source>The storage directory path is empty</source>
+            <translation>The storage directory path is empty</translation>
+        </message>
+        <message>
             <source>Verification failed for %1.</source>
             <translation>Verification failed for %1.</translation>
         </message>
@@ -4936,8 +5034,8 @@ Unavailable: %2</translation>
             <translation>Latest storage error</translation>
         </message>
         <message>
-            <source>Log file copied.</source>
-            <translation>Log file copied.</translation>
+            <source>Log file copied</source>
+            <translation>Log file copied</translation>
         </message>
         <message>
             <source>Log location</source>
@@ -5068,8 +5166,8 @@ Unavailable: %2</translation>
             <translation>Storage location</translation>
         </message>
         <message>
-            <source>Storage migration complete.</source>
-            <translation>Storage migration complete.</translation>
+            <source>Storage migration complete</source>
+            <translation>Storage migration complete</translation>
         </message>
         <message>
             <source>Storage mode</source>
@@ -5316,3 +5414,4 @@ Unavailable: %2</translation>
         </message>
     </context>
 </TS>
+

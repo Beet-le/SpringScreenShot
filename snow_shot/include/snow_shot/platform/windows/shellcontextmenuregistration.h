@@ -53,8 +53,9 @@ class ShellContextMenuRegistration final {
         QString executablePath;
         QString productId;
         QString verbName;
-        QStringList imageExtensions;
+        QStringList fileExtensions;
         ShellContextMenuRegistryAccess registry;
+        QString packagedPreferencePath;
     };
 
     ShellContextMenuRegistration();
@@ -66,16 +67,26 @@ class ShellContextMenuRegistration final {
     [[nodiscard]] bool restore(const ShellContextMenuRegistrationSnapshot& previous,
                                QString* error = nullptr) const;
     [[nodiscard]] bool setEnabled(bool enabled, QString* error = nullptr) const;
+    [[nodiscard]] bool setEnabled(bool enabled, const QString& accessKey,
+                                  QString* error = nullptr) const;
     [[nodiscard]] bool refreshLabels(QString* error = nullptr) const;
+    [[nodiscard]] bool refreshLabels(const QString& accessKey, QString* error = nullptr) const;
     // Native changes and the preference commit form one transaction.
     [[nodiscard]] ShellContextMenuResult
     changeEnabled(bool enabled, const std::function<bool()>& commitPreference) const;
+    [[nodiscard]] ShellContextMenuResult
+    changeEnabled(bool enabled, const QString& accessKey,
+                  const std::function<bool()>& commitPreference) const;
 
   private:
+    [[nodiscard]] ShellContextMenuResult
+    changePackagedEnabled(bool enabled, const QString& accessKey,
+                          const std::function<bool()>& commitPreference) const;
     [[nodiscard]] bool ownedByProduct(const ShellContextMenuRegistryKey& key) const;
-    [[nodiscard]] ShellContextMenuRegistryKey
-    enabledKey(ShellContextMenuRegistryKey previous) const;
-    [[nodiscard]] bool apply(bool enabled, const ShellContextMenuRegistrationSnapshot& previous,
+    [[nodiscard]] ShellContextMenuRegistryKey enabledKey(ShellContextMenuRegistryKey previous,
+                                                         const QString& accessKey) const;
+    [[nodiscard]] bool apply(bool enabled, const QString& accessKey,
+                             const ShellContextMenuRegistrationSnapshot& previous,
                              QString* error) const;
     QString m_associationsRoot;
     QString m_executable;
@@ -83,6 +94,7 @@ class ShellContextMenuRegistration final {
     QString m_verbName;
     QStringList m_extensions;
     ShellContextMenuRegistryAccess m_registry;
+    QString m_packagedPreferencePath;
 };
 
 } // namespace snow_shot::platform::windows

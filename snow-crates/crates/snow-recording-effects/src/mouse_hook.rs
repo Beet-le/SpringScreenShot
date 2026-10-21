@@ -1,3 +1,4 @@
+use crate::keyboard_hook::{MODIFIER_KEYS, modifier_label};
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,7 +17,8 @@ pub struct MouseClickObservation {
     pub y: i32,
     pub button: ObservedMouseButton,
     pub down: bool,
-    pub modifiers: [bool; 4],
+    /// Physical modifier states in MODIFIER_KEYS order.
+    pub modifiers: [bool; 8],
 }
 
 impl ObservedMouseButton {
@@ -44,26 +46,11 @@ impl MouseClickObservation {
         include_modifiers: bool,
     ) -> crate::keyboard_overlay::KeyEvent {
         let key = self.button.key();
-        let names = if cfg!(target_os = "macos") {
-            ["Control", "Option", "Shift", "Command"]
-        } else {
-            ["Ctrl", "Alt", "Shift", "Win"]
-        };
-        let modifiers = [0x11u16, 0x12, 0x10, 0x5b]
+        let modifiers = MODIFIER_KEYS
             .into_iter()
             .zip(self.modifiers)
-            .zip(names)
-            .filter(|((_, held), _)| include_modifiers && *held)
-            .map(|((key, _), name)| {
-                (
-                    key,
-                    style
-                        .labels
-                        .get(&key)
-                        .cloned()
-                        .unwrap_or_else(|| name.into()),
-                )
-            })
+            .filter(|(_, held)| include_modifiers && *held)
+            .map(|(key, _)| (key, modifier_label(key, style).expect("physical modifier")))
             .collect();
         crate::keyboard_overlay::KeyEvent {
             at_ms,
@@ -175,9 +162,9 @@ mod platform {
                                 y: hook.pt.y.saturating_sub(y),
                                 button,
                                 down,
-                                modifiers: [0x11, 0x12, 0x10, 0x5b].map(|key| unsafe {
+                                modifiers: crate::keyboard_hook::MODIFIER_KEYS.map(|key| unsafe {
                                     windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(
-                                        key,
+                                        i32::from(key),
                                     ) < 0
                                 }),
                             })
@@ -458,7 +445,7 @@ mod platform {
                             let down = matches!(event.kind,1|3|25);
                             if let Some(button) = button.filter(|button| if down { inside } else { held[*button as usize] }) {
                                 held[button as usize] = down;
-                                if sender.try_send(MouseClickObservation { at,x,y,button,down,modifiers:[18,19,17,20].map(|bit| event.modifiers & (1 << bit) != 0) }).is_err() {
+                                if sender.try_send(MouseClickObservation { at,x,y,button,down,modifiers:crate::keyboard_hook::macos_modifier_sides(event.modifiers) }).is_err() {
                                     shared.fetch_add(1,Ordering::AcqRel); held = [false;5];
                                 }
                             }

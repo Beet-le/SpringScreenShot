@@ -1,10 +1,15 @@
 #include "snow_shot/platform/windows/shellcontextmenuregistration.h"
 
 #include "snow_shot/app/edition.h"
-#include "snow_shot/image/supportedimagefiles.h"
+#include "snow_shot/app/distribution.h"
+#include "snow_shot/app/supportedpinfiles.h"
+#include "snow_shot/shortcuts/menuaccesskey.h"
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QSaveFile>
 #include <QSet>
 
 #include <algorithm>
@@ -19,6 +24,7 @@
 #endif
 #include <qt_windows.h>
 #include <shlobj.h>
+#include "snow_shot/platform/windows/packagedcontextmenupreference.h"
 #endif
 
 namespace snow_shot::platform::windows {
@@ -27,6 +33,24 @@ constexpr quint32 kRegistryString = 1;
 
 QString contextMenuText(const char* source) {
     return QCoreApplication::translate("ShellContextMenuRegistration", source);
+}
+
+QString menuLabel(const QString& accessKey) {
+    QString label = app::edition::isMini
+                        ? contextMenuText(QT_TRANSLATE_NOOP("ShellContextMenuRegistration",
+                                                            "Edit with Snow Shot Mini"))
+                        : contextMenuText(QT_TRANSLATE_NOOP("ShellContextMenuRegistration",
+                                                            "Edit with Snow Shot"));
+    label.replace(QLatin1Char('&'), QStringLiteral("&&"));
+    if (!accessKey.isEmpty())
+        label += QStringLiteral(" (&%1)").arg(accessKey);
+    return label;
+}
+
+QString invalidAccessKeyError() {
+    return contextMenuText(
+        QT_TRANSLATE_NOOP("ShellContextMenuRegistration",
+                          "The context menu access key must be one letter (A–Z) or digit (0–9)."));
 }
 
 ShellContextMenuRegistryValue stringValue(const QString& value) {
@@ -244,10 +268,14 @@ ShellContextMenuRegistration::ShellContextMenuRegistration(Options options)
       m_productId(options.productId.isEmpty() ? app::edition::productId() : options.productId),
       m_verbName(options.verbName.isEmpty() ? app::edition::registryName() + QStringLiteral(".Edit")
                                             : options.verbName),
-      m_registry(options.registry.read ? std::move(options.registry) : nativeRegistryAccess()) {
-    const auto extensions = options.imageExtensions.isEmpty()
-                                ? image::supportedImageFileExtensions()
-                                : std::move(options.imageExtensions);
+      m_registry(options.registry.read ? std::move(options.registry) : nativeRegistryAccess()),
+      m_packagedPreferencePath(std::move(options.packagedPreferencePath)) {
+#ifdef Q_OS_WIN
+    if (m_packagedPreferencePath.isEmpty() && app::distribution::isStoreManaged())
+        m_packagedPreferencePath = QString::fromStdWString(packaged_context_menu::preferencePath());
+#endif
+    const auto extensions = options.fileExtensions.isEmpty() ? app::supportedPinFileExtensions()
+                                                             : std::move(options.fileExtensions);
     for (auto extension : extensions) {
         extension = extension.toLower();
         if (!extension.startsWith(QLatin1Char('.')))
@@ -263,7 +291,7 @@ ShellContextMenuRegistration::ShellContextMenuRegistration(Options options)
 
 bool ShellContextMenuRegistration::isSupported() {
 #ifdef Q_OS_WIN
-    return true;
+    return !app::distribution::isStoreManaged();
 #else
     return false;
 #endif
@@ -280,6 +308,10 @@ bool ShellContextMenuRegistration::ownedByProduct(const ShellContextMenuRegistry
 
 ShellContextMenuRegistrationSnapshot ShellContextMenuRegistration::snapshot() const {
     ShellContextMenuRegistrationSnapshot result;
+    if (app::distribution::isStoreManaged()) {
+        result.valid = true;
+        return result;
+    }
     if (!m_registry.childKeys || !m_registry.read || !m_registry.replace) {
         result.error = contextMenuText(
             QT_TRANSLATE_NOOP("ShellContextMenuRegistration",
@@ -308,15 +340,10 @@ ShellContextMenuRegistrationSnapshot ShellContextMenuRegistration::snapshot() co
 }
 
 ShellContextMenuRegistryKey
-ShellContextMenuRegistration::enabledKey(ShellContextMenuRegistryKey previous) const {
+ShellContextMenuRegistration::enabledKey(ShellContextMenuRegistryKey previous,
+                                         const QString& accessKey) const {
     previous.exists = true;
-    previous.values.insert(
-        QString(),
-        stringValue(app::edition::isMini
-                        ? contextMenuText(QT_TRANSLATE_NOOP("ShellContextMenuRegistration",
-                                                            "Edit with Snow Shot Mini"))
-                        : contextMenuText(QT_TRANSLATE_NOOP("ShellContextMenuRegistration",
-                                                            "Edit with Snow Shot"))));
+    previous.values.insert(QString(), stringValue(menuLabel(accessKey)));
     previous.values.insert(QStringLiteral("Icon"),
                            stringValue(QStringLiteral("\"%1\",0").arg(m_executable)));
     previous.values.insert(QStringLiteral("MultiSelectModel"),
@@ -329,7 +356,7 @@ ShellContextMenuRegistration::enabledKey(ShellContextMenuRegistryKey previous) c
     return previous;
 }
 
-bool ShellContextMenuRegistration::apply(bool enabled,
+bool ShellContextMenuRegistration::apply(bool enabled, const QString& accessKey,
                                          const ShellContextMenuRegistrationSnapshot& previous,
                                          QString* error) const {
     QSet<QString> enabledPaths;
@@ -347,7 +374,7 @@ bool ShellContextMenuRegistration::apply(bool enabled,
                         "The Windows context menu entry is owned by another application."));
                 return false;
             }
-            requested = enabledKey(std::move(requested));
+            requested = enabledKey(std::move(requested), accessKey);
         } else if (ownedByProduct(requested)) {
             requested = {};
         }
@@ -364,6 +391,8 @@ bool ShellContextMenuRegistration::apply(bool enabled,
 
 bool ShellContextMenuRegistration::restore(const ShellContextMenuRegistrationSnapshot& previous,
                                            QString* error) const {
+    if (app::distribution::isStoreManaged())
+        return true;
     if (!previous.valid || !m_registry.read || !m_registry.replace) {
         if (error)
             *error = contextMenuText(
@@ -394,11 +423,68 @@ bool ShellContextMenuRegistration::restore(const ShellContextMenuRegistrationSna
 ShellContextMenuResult
 ShellContextMenuRegistration::changeEnabled(bool enabled,
                                             const std::function<bool()>& commitPreference) const {
+    return changeEnabled(enabled, QString(), commitPreference);
+}
+
+ShellContextMenuResult ShellContextMenuRegistration::changePackagedEnabled(
+    bool enabled, const QString& accessKey, const std::function<bool()>& commitPreference) const {
+    const auto failure = [] {
+        return ShellContextMenuResult{
+            false, contextMenuText(
+                       QT_TRANSLATE_NOOP("ShellContextMenuRegistration",
+                                         "Could not save the Windows context menu preference."))};
+    };
+    if (m_packagedPreferencePath.isEmpty())
+        return failure();
+    QFile previous(m_packagedPreferencePath);
+    const bool existed = previous.exists();
+    QByteArray previousBytes;
+    if (existed) {
+        if (!previous.open(QIODevice::ReadOnly))
+            return failure();
+        previousBytes = previous.readAll();
+        if (previous.error() != QFileDevice::NoError)
+            return failure();
+        previous.close();
+    }
+    const auto write = [&](const QByteArray& bytes) {
+        if (!QDir().mkpath(QFileInfo(m_packagedPreferencePath).absolutePath()))
+            return false;
+        QSaveFile file(m_packagedPreferencePath);
+        return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size() &&
+               file.commit();
+    };
+    if (!write((enabled ? QByteArray("1") : QByteArray("0")) + accessKey.toLatin1()))
+        return failure();
+    if (commitPreference && !commitPreference()) {
+        auto result = failure();
+        if (!(existed ? write(previousBytes) : QFile::remove(m_packagedPreferencePath)))
+            result.error +=
+                QLatin1Char(' ') +
+                contextMenuText(QT_TRANSLATE_NOOP(
+                                    "ShellContextMenuRegistration",
+                                    "Could not restore the Windows context menu registration. %1"))
+                    .arg(m_packagedPreferencePath);
+        return result;
+    }
+    if (m_registry.notifyChanged)
+        m_registry.notifyChanged();
+    return {true, {}};
+}
+
+ShellContextMenuResult
+ShellContextMenuRegistration::changeEnabled(bool enabled, const QString& accessKey,
+                                            const std::function<bool()>& commitPreference) const {
+    const QString canonicalKey = shortcuts::canonicalMenuAccessKey(accessKey);
+    if (!accessKey.isEmpty() && canonicalKey.isEmpty())
+        return {false, invalidAccessKeyError()};
+    if (app::distribution::isStoreManaged())
+        return changePackagedEnabled(enabled, canonicalKey, commitPreference);
     const auto previous = snapshot();
     if (!previous.valid)
         return {false, previous.error};
     QString error;
-    if (apply(enabled, previous, &error)) {
+    if (apply(enabled, canonicalKey, previous, &error)) {
         if (!commitPreference || commitPreference())
             return {true, {}};
         error = contextMenuText(QT_TRANSLATE_NOOP(
@@ -415,13 +501,28 @@ ShellContextMenuRegistration::changeEnabled(bool enabled,
 }
 
 bool ShellContextMenuRegistration::setEnabled(bool enabled, QString* error) const {
-    const auto result = changeEnabled(enabled, {});
+    return setEnabled(enabled, QString(), error);
+}
+
+bool ShellContextMenuRegistration::setEnabled(bool enabled, const QString& accessKey,
+                                              QString* error) const {
+    const auto result = changeEnabled(enabled, accessKey, {});
     if (error)
         *error = result.error;
     return result.success;
 }
 
 bool ShellContextMenuRegistration::refreshLabels(QString* error) const {
+    return refreshLabels(QString(), error);
+}
+
+bool ShellContextMenuRegistration::refreshLabels(const QString& accessKey, QString* error) const {
+    const QString canonicalKey = shortcuts::canonicalMenuAccessKey(accessKey);
+    if (!accessKey.isEmpty() && canonicalKey.isEmpty()) {
+        if (error)
+            *error = invalidAccessKeyError();
+        return false;
+    }
     const auto previous = snapshot();
     if (!previous.valid) {
         if (error)
@@ -435,13 +536,7 @@ bool ShellContextMenuRegistration::refreshLabels(QString* error) const {
                     .compare(m_executable, Qt::CaseInsensitive) != 0)
             continue;
         auto requested = item.value();
-        requested.values.insert(
-            QString(),
-            stringValue(app::edition::isMini
-                            ? contextMenuText(QT_TRANSLATE_NOOP("ShellContextMenuRegistration",
-                                                                "Edit with Snow Shot Mini"))
-                            : contextMenuText(QT_TRANSLATE_NOOP("ShellContextMenuRegistration",
-                                                                "Edit with Snow Shot"))));
+        requested.values.insert(QString(), stringValue(menuLabel(canonicalKey)));
         if (requested == item.value())
             continue;
         if (!m_registry.replace(item.key(), requested, error)) {

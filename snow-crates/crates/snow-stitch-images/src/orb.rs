@@ -28,6 +28,12 @@ use std::arch::x86_64::{
     _mm256_sub_epi16, _mm256_sub_ps,
 };
 
+#[cfg(target_arch = "aarch64")]
+#[path = "orb_neon.rs"]
+mod neon;
+#[cfg(target_arch = "aarch64")]
+use neon::{fast_polarity_masks, strongest_fast_arc};
+
 const SCALE_FACTOR: f32 = 1.2;
 const LEVELS: usize = 8;
 const EDGE_THRESHOLD: usize = 31;
@@ -242,6 +248,10 @@ pub(crate) fn grayscale(frame: &Frame) -> Image {
     if std::arch::is_x86_feature_detected!("avx2") {
         return unsafe { grayscale_avx2(frame) };
     }
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        return unsafe { neon::grayscale(frame) };
+    }
     grayscale_scalar(frame)
 }
 
@@ -255,6 +265,11 @@ pub(crate) fn grayscale_chunk(source: &[u8], output: &mut [u8], channels: usize)
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if std::arch::is_x86_feature_detected!("avx2") {
         unsafe { grayscale_chunk_avx2(source, output, channels) };
+        return;
+    }
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        unsafe { neon::grayscale_chunk(source, output, channels) };
         return;
     }
     for (target, pixel) in output.iter_mut().zip(source.chunks_exact(channels)) {
@@ -362,7 +377,7 @@ fn strongest_fast_arc(differences: &[i16; 16]) -> i16 {
     }
 }
 
-#[cfg(any(test, not(target_arch = "x86_64")))]
+#[cfg(any(test, not(any(target_arch = "x86_64", target_arch = "aarch64"))))]
 fn strongest_fast_arc_scalar(differences: &[i16; 16]) -> i16 {
     let mut strongest = i16::MIN;
     for start in 0..16 {
@@ -379,13 +394,13 @@ fn strongest_fast_arc_scalar(differences: &[i16; 16]) -> i16 {
 }
 
 fn score(differences: [i16; 16], threshold: i16) -> Option<u8> {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     let (dark, bright) = fast_polarity_masks(&differences, threshold);
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     let mut dark = 0_u32;
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     let mut bright = 0_u32;
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     for (index, difference) in differences.into_iter().enumerate() {
         dark |= u32::from(difference > threshold) << index;
         bright |= u32::from(-difference > threshold) << index;
@@ -402,9 +417,9 @@ fn score(differences: [i16; 16], threshold: i16) -> Option<u8> {
         return None;
     }
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     let strongest = strongest_fast_arc(&differences);
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     let strongest = strongest_fast_arc_scalar(&differences);
     (strongest > threshold).then(|| (strongest - 1).min(i16::from(u8::MAX)) as u8)
 }
@@ -426,6 +441,7 @@ fn may_pass_fast_9_16(width: u32, pixels: &[u8], x: u32, y: u32, threshold: i16)
     dark >= 2 || bright >= 2
 }
 
+#[cfg(any(test, not(target_arch = "aarch64")))]
 fn score_fast_row_scalar(
     width: u32,
     pixels: &[u8],
@@ -441,6 +457,7 @@ fn score_fast_row_scalar(
     }
 }
 
+#[cfg(any(test, not(target_arch = "aarch64")))]
 fn fast_scores_scalar(
     width: u32,
     height: u32,
@@ -583,7 +600,10 @@ fn fast_9_16_with_border(
     } else {
         fast_scores_scalar(width, height, pixels, i16::from(threshold), score_border)
     };
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    #[cfg(target_arch = "aarch64")]
+    let scores =
+        unsafe { neon::fast_scores(width, height, pixels, i16::from(threshold), score_border) };
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
     let scores = fast_scores_scalar(width, height, pixels, i16::from(threshold), score_border);
     let scores = scores.as_slice();
     const ROWS_PER_TASK: u32 = 16;
@@ -594,24 +614,20 @@ fn fast_9_16_with_border(
             let last_y = (first_y + ROWS_PER_TASK).min(height - border);
             let mut keypoints = Vec::new();
             for y in first_y..last_y {
-                for x in border..width - border {
-                    let response = scores[(y * width + x) as usize];
-                    if response == 0 {
-                        continue;
-                    }
-                    let is_best = [-1_i32, 0, 1].into_iter().all(|offset_y| {
-                        [-1_i32, 0, 1].into_iter().all(|offset_x| {
-                            (offset_x == 0 && offset_y == 0)
-                                || response
-                                    > scores[((y as i32 + offset_y) as u32 * width
-                                        + (x as i32 + offset_x) as u32)
-                                        as usize]
-                        })
-                    });
-                    if is_best {
-                        keypoints.push(FastKeypoint { x, y, response });
-                    }
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: Scores cover the image, and border >= 3 leaves a complete
+                // suppression neighborhood around every candidate pixel.
+                unsafe {
+                    neon::suppress_nonmax_row(width, scores, y, border, &mut keypoints);
                 }
+                #[cfg(not(target_arch = "aarch64"))]
+                suppress_nonmax_row_scalar(
+                    width,
+                    scores,
+                    y,
+                    border..width - border,
+                    &mut keypoints,
+                );
             }
             keypoints
         })
@@ -619,6 +635,33 @@ fn fast_9_16_with_border(
         .into_iter()
         .flatten()
         .collect()
+}
+
+fn suppress_nonmax_row_scalar(
+    width: u32,
+    scores: &[u8],
+    y: u32,
+    columns: std::ops::Range<u32>,
+    keypoints: &mut Vec<FastKeypoint>,
+) {
+    for x in columns {
+        let response = scores[(y * width + x) as usize];
+        if response == 0 {
+            continue;
+        }
+        let is_best = [-1_i32, 0, 1].into_iter().all(|offset_y| {
+            [-1_i32, 0, 1].into_iter().all(|offset_x| {
+                (offset_x == 0 && offset_y == 0)
+                    || response
+                        > scores[((y as i32 + offset_y) as u32 * width
+                            + (x as i32 + offset_x) as u32)
+                            as usize]
+            })
+        });
+        if is_best {
+            keypoints.push(FastKeypoint { x, y, response });
+        }
+    }
 }
 
 fn cv_round(value: f32) -> i32 {
@@ -1183,6 +1226,10 @@ pub(crate) fn blur(image: &Image) -> Image {
     if std::arch::is_x86_feature_detected!("avx2") {
         return unsafe { blur_avx2(image) };
     }
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        return unsafe { neon::blur(image) };
+    }
     blur_scalar(image)
 }
 
@@ -1224,7 +1271,7 @@ fn orb_pattern() -> &'static [(i8, i8)] {
         .as_slice()
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
 fn orb_pattern_xy() -> &'static ([i32; 512], [i32; 512]) {
     static PATTERN: OnceLock<([i32; 512], [i32; 512])> = OnceLock::new();
     PATTERN.get_or_init(|| {
@@ -1236,6 +1283,7 @@ fn orb_pattern_xy() -> &'static ([i32; 512], [i32; 512]) {
     })
 }
 
+#[cfg(any(test, not(target_arch = "aarch64")))]
 fn descriptor_scalar(image: &Image, keypoint: Keypoint) -> [u8; 32] {
     const RADIANS_PER_DEGREE: f32 = (std::f64::consts::PI / 180.0) as f32;
     let scale = 1.0_f32 / scale_for_level(keypoint.octave);
@@ -1420,7 +1468,15 @@ impl OrbDetection {
                         } else {
                             descriptor_scalar(image, keypoint)
                         }
-                        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+                        #[cfg(target_arch = "aarch64")]
+                        unsafe {
+                            neon::descriptor(image, keypoint)
+                        }
+                        #[cfg(not(any(
+                            target_arch = "x86",
+                            target_arch = "x86_64",
+                            target_arch = "aarch64"
+                        )))]
                         descriptor_scalar(image, keypoint)
                     },
                     keypoint,

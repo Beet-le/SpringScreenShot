@@ -47,8 +47,15 @@ bool ScreenshotExportCancellation::isCancellationRequested() const {
 }
 
 ScreenshotExportJobHandle::ScreenshotExportJobHandle(std::shared_ptr<std::atomic_bool> cancelled,
-                                                     std::function<void()> cancelQueued)
-    : m_cancelled(std::move(cancelled)), m_cancelQueued(std::move(cancelQueued)) {}
+                                                     std::function<void()> cancelQueued,
+                                                     std::function<void()> promoteQueued)
+    : m_cancelled(std::move(cancelled)), m_cancelQueued(std::move(cancelQueued)),
+      m_promoteQueued(std::move(promoteQueued)) {}
+
+void ScreenshotExportJobHandle::promoteToForeground() const {
+    if (m_promoteQueued)
+        m_promoteQueued();
+}
 
 void ScreenshotExportJobHandle::cancel() const {
     if (m_cancelled != nullptr) {
@@ -72,6 +79,7 @@ struct ScreenshotExportCoordinator::Impl final {
         std::shared_ptr<std::atomic_bool> cancelled = std::make_shared<std::atomic_bool>(false);
         // Protected by mutex until the worker claims it or cancellation removes it.
         QRunnable* queuedRunnable = nullptr;
+        bool foreground = false;
         Completion complete;
     };
 
@@ -107,6 +115,17 @@ struct ScreenshotExportCoordinator::Impl final {
         else
             pending.fetch_sub(1, std::memory_order_acq_rel);
         delete removed;
+    }
+
+    void promoteQueued(const std::shared_ptr<Job>& job) {
+        QMutexLocker lock(&mutex);
+        if (!pool || shuttingDown.load() || job->cancelled->load() || job->foreground ||
+            !job->queuedRunnable || !pool->tryTake(job->queuedRunnable))
+            return;
+        // The same mutex protects the worker's claim and queued cancellation. Requeueing keeps
+        // the job's admission, resource leases, cancellation token and exactly-once completion.
+        job->foreground = true;
+        pool->start(job->queuedRunnable, 1);
     }
 
     const int shutdownTimeoutMs;
@@ -203,15 +222,23 @@ ScreenshotExportJobHandle ScreenshotExportCoordinator::submit(QObject* receiver,
                           state->jobs.end());
         state->jobs.push_back(job);
         job->queuedRunnable = runnable;
+        job->foreground = priority == Priority::Foreground;
         state->pool->start(runnable, priority == Priority::Foreground ? 1 : -1);
     }
-    return ScreenshotExportJobHandle(job->cancelled, [weakState = std::weak_ptr<Impl>(state),
-                                                      weakJob = std::weak_ptr<Impl::Job>(job)] {
-        const auto activeState = weakState.lock();
-        const auto activeJob = weakJob.lock();
-        if (activeState && activeJob)
-            activeState->cancelQueued(activeJob);
-    });
+    const std::weak_ptr<Impl> weakState = state;
+    const std::weak_ptr<Impl::Job> weakJob = job;
+    return ScreenshotExportJobHandle(
+        job->cancelled,
+        [weakState, weakJob] {
+            if (const auto activeState = weakState.lock())
+                if (const auto activeJob = weakJob.lock())
+                    activeState->cancelQueued(activeJob);
+        },
+        [weakState, weakJob] {
+            if (const auto activeState = weakState.lock())
+                if (const auto activeJob = weakJob.lock())
+                    activeState->promoteQueued(activeJob);
+        });
 }
 
 int ScreenshotExportCoordinator::pendingJobCount() const {

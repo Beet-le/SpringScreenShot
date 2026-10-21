@@ -551,6 +551,10 @@
             <translation>Clear all images?</translation>
         </message>
         <message>
+            <source>Clipboard image</source>
+            <translation>Clipboard image</translation>
+        </message>
+        <message>
             <source>Collage</source>
             <translation>Collage</translation>
         </message>
@@ -754,6 +758,10 @@ Files:
             <translation>Focused window</translation>
         </message>
         <message>
+            <source>Image Editing</source>
+            <translation>Image Editing</translation>
+        </message>
+        <message>
             <source>Loading preview…</source>
             <translation>Loading preview…</translation>
         </message>
@@ -804,6 +812,48 @@ Files:
         <message>
             <source>This screenshot cannot be pinned</source>
             <translation>This screenshot cannot be pinned</translation>
+        </message>
+    </context>
+    <context>
+        <name>HistoryFileLocation</name>
+        <message>
+            <source>Open Containing Folder</source>
+            <translation>Open Containing Folder</translation>
+        </message>
+        <message>
+            <source>Open in Explorer</source>
+            <translation>Open in Explorer</translation>
+        </message>
+        <message>
+            <source>Reveal in Finder</source>
+            <translation>Reveal in Finder</translation>
+        </message>
+        <message>
+            <source>Unable to open this entry's file location.</source>
+            <translation>Unable to open this entry's file location.</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageEditingWindow</name>
+        <message>
+            <source>%1 px</source>
+            <translation>%1 px</translation>
+        </message>
+        <message>
+            <source>No available output filename was found.</source>
+            <translation>No available output filename was found.</translation>
+        </message>
+        <message>
+            <source>The editing content could not be prepared for export.</source>
+            <translation>The editing content could not be prepared for export.</translation>
+        </message>
+        <message>
+            <source>The image could not be loaded.</source>
+            <translation>The image could not be loaded.</translation>
+        </message>
+        <message>
+            <source>The save directory is not available.</source>
+            <translation>The save directory is not available.</translation>
         </message>
     </context>
     <context>
@@ -860,12 +910,20 @@ Files:
             <translation>Columns</translation>
         </message>
         <message>
+            <source>Drag an image file here, or choose Select Image</source>
+            <translation>Drag an image file here, or choose Select Image</translation>
+        </message>
+        <message>
             <source>Drop one image file at a time.</source>
             <translation>Drop one image file at a time.</translation>
         </message>
         <message>
             <source>Drop one image to replace the current image</source>
             <translation>Drop one image to replace the current image</translation>
+        </message>
+        <message>
+            <source>Drop one image to split</source>
+            <translation>Drop one image to split</translation>
         </message>
         <message>
             <source>Enter a positive integer.</source>
@@ -922,6 +980,14 @@ Files:
         <message>
             <source>Rows</source>
             <translation>Rows</translation>
+        </message>
+        <message>
+            <source>Select Image</source>
+            <translation>Select Image</translation>
+        </message>
+        <message>
+            <source>Select an image to split</source>
+            <translation>Select an image to split</translation>
         </message>
         <message>
             <source>Split direction</source>
@@ -1001,8 +1067,16 @@ Files:
     <context>
         <name>ImageSplitWindow</name>
         <message>
+            <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</source>
+            <translation>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</translation>
+        </message>
+        <message>
             <source>Cancel</source>
             <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Could not read the selected image files. Please try again.</source>
+            <translation>Could not read the selected image files. Please try again.</translation>
         </message>
         <message>
             <source>Discard</source>
@@ -1073,6 +1147,14 @@ Files:
             <translation>Select Image</translation>
         </message>
         <message>
+            <source>The file manager is unavailable. Open it and try again.</source>
+            <translation>The file manager is unavailable. Open it and try again.</translation>
+        </message>
+        <message>
+            <source>The file manager took too long to return the selected files. Please try again.</source>
+            <translation>The file manager took too long to return the selected files. Please try again.</translation>
+        </message>
+        <message>
             <source>The image and current split edits will be discarded.</source>
             <translation>The image and current split edits will be discarded.</translation>
         </message>
@@ -1087,6 +1169,45 @@ Files:
         <message>
             <source>The images could not be exported. Try again.</source>
             <translation>The images could not be exported. Try again.</translation>
+        </message>
+    </context>
+    <context>
+        <name>PinnedColorSwatch</name>
+        <message>
+            <source>Color:</source>
+            <translation>Color:</translation>
+        </message>
+        <message>
+            <source>Copy HEX color</source>
+            <translation>Copy HEX color</translation>
+        </message>
+        <message>
+            <source>Copy HSL color</source>
+            <translation>Copy HSL color</translation>
+        </message>
+        <message>
+            <source>Copy RGB color</source>
+            <translation>Copy RGB color</translation>
+        </message>
+        <message>
+            <source>HEX:</source>
+            <translation>HEX:</translation>
+        </message>
+        <message>
+            <source>HSL:</source>
+            <translation>HSL:</translation>
+        </message>
+        <message>
+            <source>HSLA:</source>
+            <translation>HSLA:</translation>
+        </message>
+        <message>
+            <source>RGB:</source>
+            <translation>RGB:</translation>
+        </message>
+        <message>
+            <source>RGBA:</source>
+            <translation>RGBA:</translation>
         </message>
     </context>
     <context>
@@ -1188,6 +1309,10 @@ Files:
         <message>
             <source>Hidden</source>
             <translation>Hidden</translation>
+        </message>
+        <message>
+            <source>Image Editing</source>
+            <translation>Image Editing</translation>
         </message>
         <message>
             <source>Image Splitting</source>
@@ -1572,12 +1697,20 @@ Files:
             <translation>Group: Default</translation>
         </message>
         <message>
+            <source>Hide All Windows to Top</source>
+            <translation>Hide All Windows to Top</translation>
+        </message>
+        <message>
             <source>Hide other windows</source>
             <translation>Hide other windows</translation>
         </message>
         <message>
             <source>Hide to Top</source>
             <translation>Hide to Top</translation>
+        </message>
+        <message>
+            <source>Image Editing</source>
+            <translation>Image Editing</translation>
         </message>
         <message>
             <source>Image file</source>
@@ -1761,6 +1894,77 @@ Files:
         <message>
             <source>Windows · not closed / total</source>
             <translation>Windows · not closed / total</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::ImageEditingWindow</name>
+        <message>
+            <source>Configure cloud upload before uploading an image.</source>
+            <translation>Configure cloud upload before uploading an image.</translation>
+        </message>
+        <message>
+            <source>Continue Editing</source>
+            <translation>Continue Editing</translation>
+        </message>
+        <message>
+            <source>Discard Changes</source>
+            <translation>Discard Changes</translation>
+        </message>
+        <message>
+            <source>Discard Changes?</source>
+            <translation>Discard Changes?</translation>
+        </message>
+        <message>
+            <source>Export completed</source>
+            <translation>Export completed</translation>
+        </message>
+        <message>
+            <source>Export could not be started.</source>
+            <translation>Export could not be started.</translation>
+        </message>
+        <message>
+            <source>Exporting…</source>
+            <translation>Exporting…</translation>
+        </message>
+        <message>
+            <source>Fit image to window</source>
+            <translation>Fit image to window</translation>
+        </message>
+        <message>
+            <source>Image Editing</source>
+            <translation>Image Editing</translation>
+        </message>
+        <message>
+            <source>Loading image…</source>
+            <translation>Loading image…</translation>
+        </message>
+        <message>
+            <source>No recognition result is available to export.</source>
+            <translation>No recognition result is available to export.</translation>
+        </message>
+        <message>
+            <source>Printing is unavailable.</source>
+            <translation>Printing is unavailable.</translation>
+        </message>
+        <message>
+            <source>Save as file</source>
+            <translation>Save as file</translation>
+        </message>
+        <message>
+            <source>Text files (*.txt)</source>
+            <translation>Text files (*.txt)</translation>
+        </message>
+        <message>
+            <source>The image could not be loaded.</source>
+            <translation>The image could not be loaded.</translation>
+        </message>
+        <message>
+            <source>This editing window has unsaved changes.</source>
+            <translation>This editing window has unsaved changes.</translation>
+        </message>
+        <message>
+            <source>View at actual size (100%)</source>
+            <translation>View at actual size (100%)</translation>
         </message>
     </context>
     <context>

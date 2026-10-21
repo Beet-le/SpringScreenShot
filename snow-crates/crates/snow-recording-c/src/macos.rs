@@ -270,6 +270,7 @@ pub unsafe extern "C" fn snow_recording_macos_create(
             None
         };
         let native_config = NativeRecordingConfig {
+            webcam: None,
             audio_mode: Default::default(),
             format: snow_recording_export::ExportFormat::Mp4,
             loop_animated_images: false,

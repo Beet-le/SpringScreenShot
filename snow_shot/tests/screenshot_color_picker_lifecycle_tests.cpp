@@ -28,6 +28,7 @@
 #include "widgets/select.h"
 #include "widgets/tooltip.h"
 #include "widgets/button.h"
+#include "widgets/color_picker.h"
 #include "widgets/popup_interaction_host.h"
 #include "widgets/detail/overlay_popup_surface.h"
 
@@ -65,6 +66,49 @@ void require(bool condition, const char* message) {
         std::cerr << message << '\n';
         std::exit(1);
     }
+}
+
+void canvasSamplingSessionReleasesTargetsAndCommitsAfterCleanup() {
+    QWidget owner;
+    ScreenshotCanvasColorSamplingSession session(owner);
+    auto first = std::make_unique<adqt::widgets::AdColorPicker>();
+    auto second = std::make_unique<adqt::widgets::AdColorPicker>();
+    int cancellations = 0;
+    const auto cancel = [&]() {
+        ++cancellations;
+        session.end();
+    };
+    session.begin(first.get(), cancel);
+    require(session.active(), "sampling begins with a live picker");
+    session.begin(second.get(), cancel);
+    first.reset();
+    require(cancellations == 0 && session.active(),
+            "replacing the picker disconnects its old destruction callback");
+    second.reset();
+    require(cancellations == 1 && !session.active(),
+            "picker destruction cancels exactly the current sampling session");
+
+    auto picker = std::make_unique<adqt::widgets::AdColorPicker>();
+    session.begin(picker.get(), cancel);
+    QImage preview(3, 3, QImage::Format_ARGB32_Premultiplied);
+    preview.fill(Qt::black);
+    const QColor color(12, 34, 56, 128);
+    preview.setPixelColor(1, 1, color);
+    bool cleaned = false;
+    require(session.commit(preview,
+                           [&]() {
+                               require(!session.active(),
+                                       "picker ownership is released before host cleanup");
+                               cleaned = true;
+                           }) &&
+                cleaned && picker->value().solidColor == preview.pixelColor(1, 1),
+            "commit applies the center pixel including alpha after host cleanup");
+    session.begin(picker.get(), cancel);
+    require(!session.commit({}, []() {}) && !session.active(),
+            "invalid samples end the session without committing a value");
+    session.begin(picker.get(), cancel);
+    require(!session.commit(preview, [&]() { picker.reset(); }) && cancellations == 1,
+            "cleanup may destroy the picker without committing or firing a stale cancellation");
 }
 
 const uchar* backingPixels(ScreenshotColorPickerWindow& picker) {
@@ -675,6 +719,7 @@ class StyleToolbarCommands final : public ScreenshotToolbarCommandSink,
     void setSelectionAspectRatioPresetFromToolbar(ScreenshotSelectionAspectRatioPreset) override {}
     void openSelectionResizeModalFromToolbar() override {}
     void adjustSelectionFromToolbar(int, int, int, int) override {}
+    void adjustSelectionEffectsFromWheel(int, int) override {}
     void setSelectionCornerRadiusFromToolbar(int) override {}
     void setSelectionShadowWidthFromToolbar(int) override {}
     void setSelectionToolbarHovered(bool) override {}
@@ -1500,7 +1545,7 @@ void pickerLifetimeFollowsExplicitSessionOperations() {
         host.setColorPickerCenterGuideLineColor(Qt::green);
         host.prepareColorPickerSurface(&first);
         host.updateColorPicker(
-            &first, image, image.rect(), QPoint(8, 8), QPointF(8, 8), 1.0,
+            &first, image, image.rect(), QPoint(8, 8), QPointF(8, 8),
             {QPointF(8, 8), ScreenshotSelectionDisplayUnit::PhysicalPixels, false});
         require(host.colorPicker() == nullptr,
                 "preparation and updates must never create a picker");
@@ -1530,7 +1575,7 @@ void pickerLifetimeFollowsExplicitSessionOperations() {
                     backingPixels(*tracked) == preparedPixels && !tracked->hasCurrentColor(),
                 "repeated preparation must retain hidden native pixels without requiring an image");
         host.updateColorPicker(
-            &first, image, image.rect(), QPoint(8, 8), QPointF(8, 8), 1.0,
+            &first, image, image.rect(), QPoint(8, 8), QPointF(8, 8),
             {QPointF(8, 8), ScreenshotSelectionDisplayUnit::PhysicalPixels, false});
         QApplication::processEvents();
         require(tracked->hasCurrentColor() && tracked->isVisible(),
@@ -1541,7 +1586,7 @@ void pickerLifetimeFollowsExplicitSessionOperations() {
         tracked->cycleColorFormat();
         const QString format = tracked->currentColorText();
         host.updateColorPicker(
-            &second, image, image.rect(), QPoint(8, 8), QPointF(8, 8), 1.0,
+            &second, image, image.rect(), QPoint(8, 8), QPointF(8, 8),
             {QPointF(8, 8), ScreenshotSelectionDisplayUnit::PhysicalPixels, false});
         require(tracked == host.colorPicker() && tracked->parentWidget() == &second &&
                     tracked->windowHandle()->transientParent() == second.windowHandle(),
@@ -1577,7 +1622,7 @@ void pickerLifetimeFollowsExplicitSessionOperations() {
         host.releaseColorPicker();
         host.resetColorPickerForNewCapture();
         host.updateColorPicker(
-            &second, image, image.rect(), QPoint(8, 8), QPointF(8, 8), 1.0,
+            &second, image, image.rect(), QPoint(8, 8), QPointF(8, 8),
             {QPointF(8, 8), ScreenshotSelectionDisplayUnit::PhysicalPixels, false});
         require(host.colorPicker() == nullptr,
                 "late updates and cleanup must leave the picker absent");
@@ -1587,7 +1632,7 @@ void pickerLifetimeFollowsExplicitSessionOperations() {
         require(!tracked->hasCurrentColor() && tracked->currentColorText().isEmpty(),
                 "a replacement picker must not retain the old sample");
         host.updateColorPicker(
-            &first, image, image.rect(), QPoint(8, 8), QPointF(8, 8), 0.0,
+            &first, image, image.rect(), QPoint(8, 8), QPointF(8, 8),
             {QPointF(8, 8), ScreenshotSelectionDisplayUnit::PhysicalPixels, false});
         require(tracked->currentColorText() == format,
                 "a replacement picker must restore the selected format");
@@ -1636,7 +1681,7 @@ void visibleRecaptureWindowsIncludePicker() {
     QImage image(16, 16, QImage::Format_RGBA8888);
     image.fill(Qt::red);
     coordinator.updateColorPicker(
-        &overlay, image, image.rect(), QPoint(8, 8), QPointF(50, 50), 1.0,
+        &overlay, image, image.rect(), QPoint(8, 8), QPointF(50, 50),
         {QPointF(8, 8), ScreenshotSelectionDisplayUnit::PhysicalPixels, false});
     QApplication::processEvents();
     require(picker->isVisible() && picker->isWindow() &&
@@ -1691,7 +1736,7 @@ void invocationMonitorOwnsThePreparedSurface() {
         QImage image(16, 16, QImage::Format_RGBA8888);
         image.fill(Qt::blue);
         coordinator.updateColorPicker(
-            &secondary, image, image.rect(), QPoint(8, 8), secondary.rect().center(), 1.0,
+            &secondary, image, image.rect(), QPoint(8, 8), secondary.rect().center(),
             {QPointF(8, 8), ScreenshotSelectionDisplayUnit::PhysicalPixels, false});
         QApplication::processEvents();
         require(picker->internalWinId() == nativeId && backingPixels(*picker) == pixels,
@@ -1770,12 +1815,12 @@ void hiddenPickerSamplesWithoutPreparingPresentation() {
     context.intelligentSelecting = true;
     controller.setDisplayMode(ScreenshotColorPickerDisplayMode::AlwaysHide);
     const auto* sampledDisplay = &displays.displayAt(1);
-    controller.updateAtPhysicalPoint(QPoint(100, 20), context, 1.0, sampledDisplay);
+    controller.updateAtPhysicalPoint(QPoint(100, 20), context, sampledDisplay);
     require(controller.copyColorToClipboard(context) &&
                 QApplication::clipboard()->text() == QStringLiteral("#00FF00"),
             "hidden sampling must copy the visible captured cursor pixel");
     for (int offset = 0; offset < 16; ++offset)
-        controller.updateAtPhysicalPoint(QPoint(104 + offset, 20), context, 1.0, sampledDisplay);
+        controller.updateAtPhysicalPoint(QPoint(104 + offset, 20), context, sampledDisplay);
     require(controller.copyColorToClipboard(context) &&
                 QApplication::clipboard()->text() == QStringLiteral("#0000FF"),
             "hidden motion must keep the copied sample current on another display");
@@ -1789,17 +1834,17 @@ void hiddenPickerSamplesWithoutPreparingPresentation() {
                 QApplication::clipboard()->text() == QStringLiteral("0000FF"),
             "hidden color format changes must preserve the current sample");
     displays.cursorVisible = false;
-    controller.updateAtPhysicalPoint(QPoint(100, 20), context, 1.0, sampledDisplay);
+    controller.updateAtPhysicalPoint(QPoint(100, 20), context, sampledDisplay);
     require(controller.copyColorToClipboard(context) &&
                 QApplication::clipboard()->text() == QStringLiteral("0000FF"),
             "hidden cursor suppression must immediately use the clean capture");
     picker->resetWorkCounters();
-    controller.updateAtPhysicalPoint(QPoint(100, 20), context, 1.0, sampledDisplay);
+    controller.updateAtPhysicalPoint(QPoint(100, 20), context, sampledDisplay);
     require(picker->workCounters().samples == 0,
             "an unchanged hidden sample must reuse the clean capture when the cursor is disabled");
     controller.setDisplayMode(ScreenshotColorPickerDisplayMode::AlwaysShow);
     picker->resetWorkCounters();
-    controller.updateAtPhysicalPoint(QPoint(100, 20), context, 1.0, sampledDisplay);
+    controller.updateAtPhysicalPoint(QPoint(100, 20), context, sampledDisplay);
     counters = picker->workCounters();
     require(counters.samples == 0 && counters.previews == 1,
             "revealing a hidden sample must rebuild the preview once without resampling its color");
@@ -1811,7 +1856,7 @@ void hiddenPickerSamplesWithoutPreparingPresentation() {
     context.manualSelecting = true;
     context.selectionPixels = QRect(80, 0, 10, 10);
     picker->resetWorkCounters();
-    controller.updateAtPhysicalPoint(QPoint(110, 20), context, 1.0, sampledDisplay);
+    controller.updateAtPhysicalPoint(QPoint(110, 20), context, sampledDisplay);
     counters = picker->workCounters();
     require(counters.samples == 1 && counters.previews == 0 && counters.moves == 0 &&
                 counters.ownerChanges == 0 && picker->isHidden() &&
@@ -2113,10 +2158,10 @@ void auxiliaryWindowsPreserveOwnerStacking() {
         "magnifier",
         [&]() {
             picker.setOwnerWindow(&owner);
-            picker.updatePicker(QPoint(8, 8), QPointF(8, 8), 1.0);
+            picker.updatePicker(QPoint(8, 8), QPointF(8, 8), true);
             return &picker;
         },
-        [&] { picker.updatePicker(QPoint(9, 9), QPointF(20, 20), 1.0); },
+        [&] { picker.updatePicker(QPoint(9, 9), QPointF(20, 20), true); },
         [&] { picker.hidePicker(); });
 
     ScreenshotCanvasColorSamplerWindow sampler;
@@ -2244,6 +2289,7 @@ int main(int argc, char** argv) {
         auxiliaryWindowsPreserveOwnerStacking();
         return 0;
     }
+    canvasSamplingSessionReleasesTargetsAndCommitsAfterCleanup();
     canvasSamplerFollowsSessionOwner();
     if (application.arguments().contains(QStringLiteral("--canvas-sampler-only")))
         return 0;

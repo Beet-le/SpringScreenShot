@@ -610,7 +610,7 @@ else()
 endif()
 
 if ("qsv" IN_LIST FEATURES)
-    set(OPTIONS "${OPTIONS} --enable-libvpl --enable-encoder=h264_qsv")
+    set(OPTIONS "${OPTIONS} --enable-libvpl --enable-encoder=h264_qsv,hevc_qsv")
     if(NOT "snow-shot-minimal" IN_LIST FEATURES)
         string(APPEND OPTIONS " --enable-decoder=h264_qsv")
     endif()
@@ -648,24 +648,35 @@ if("snow-shot-minimal" IN_LIST FEATURES)
     if(NOT VCPKG_TARGET_IS_WINDOWS OR VCPKG_TARGET_IS_UWP)
         message(FATAL_ERROR "ffmpeg[snow-shot-minimal] currently supports desktop Windows only")
     endif()
-    set(SNOW_SHOT_ENCODERS "libx264,libx265,h264_mf,mpeg4,gif,apng,libwebp_anim,aac,mp3_mf")
+    set(SNOW_SHOT_ENCODERS "libx264,libx265,h264_mf,hevc_mf,gif,apng,libwebp_anim,aac")
+    set(SNOW_SHOT_COMPAT_COMPONENTS)
+    if("snow-recording-compat" IN_LIST FEATURES)
+        # Standalone compatibility capture/export can write Matroska and AVI.
+        # The application only reads old Matroska bundles and produces four formats.
+        string(APPEND SNOW_SHOT_ENCODERS ",mpeg4,mp3_mf")
+        string(APPEND SNOW_SHOT_COMPAT_COMPONENTS
+            " --enable-muxer=matroska,avi"
+            " --enable-decoder=mp3"
+            " --enable-parser=mpegaudio")
+    endif()
     foreach(SNOW_HARDWARE_FEATURE IN ITEMS nvcodec amf qsv)
         if(SNOW_HARDWARE_FEATURE IN_LIST FEATURES)
             if(SNOW_HARDWARE_FEATURE STREQUAL "nvcodec")
-                string(APPEND SNOW_SHOT_ENCODERS ",h264_nvenc")
+                string(APPEND SNOW_SHOT_ENCODERS ",h264_nvenc,hevc_nvenc")
             else()
-                string(APPEND SNOW_SHOT_ENCODERS ",h264_${SNOW_HARDWARE_FEATURE}")
+                string(APPEND SNOW_SHOT_ENCODERS ",h264_${SNOW_HARDWARE_FEATURE},hevc_${SNOW_HARDWARE_FEATURE}")
             endif()
         endif()
     endforeach()
     string(APPEND OPTIONS
         " --disable-network"
-        " --enable-decoder=h264,hevc,gif,png,apng,webp,webp_anim,aac,mp3,pcm_s16le,pcm_f32le"
+        " --enable-decoder=h264,hevc,gif,png,apng,webp,webp_anim,aac,pcm_s16le,pcm_f32le"
         " --enable-encoder=${SNOW_SHOT_ENCODERS}"
-        " --enable-muxer=matroska,mp4,avi,gif,apng,webp"
+        "${SNOW_SHOT_COMPAT_COMPONENTS}"
+        " --enable-muxer=mp4,gif,apng,webp"
         " --enable-demuxer=matroska,mov,gif,apng,webp,webp_anim"
-        " --enable-parser=h264,hevc,aac,mpegaudio,gif"
-        " --enable-bsf=h264_mp4toannexb,aac_adtstoasc"
+        " --enable-parser=h264,hevc,aac,gif"
+        " --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc"
         " --enable-protocol=file"
         " --enable-filter=abuffer,abuffersink,atempo"
         " --enable-hwaccel=h264_d3d11va,h264_d3d11va2,h264_dxva2,hevc_d3d11va,hevc_d3d11va2,hevc_dxva2"

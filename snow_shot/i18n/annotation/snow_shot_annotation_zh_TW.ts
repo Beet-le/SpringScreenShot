@@ -120,6 +120,10 @@
             <translation>阿拉伯數字</translation>
         </message>
         <message>
+            <source>Architect</source>
+            <translation>建築師</translation>
+        </message>
+        <message>
             <source>Arrow</source>
             <translation>箭頭</translation>
         </message>
@@ -144,6 +148,10 @@
             <translation>箭頭筆畫寬度 %1</translation>
         </message>
         <message>
+            <source>Artist</source>
+            <translation>藝術家</translation>
+        </message>
+        <message>
             <source>Auto Filter</source>
             <translation>自動濾鏡</translation>
         </message>
@@ -154,6 +162,10 @@
         <message>
             <source>Auto-scroll interval (scroll to adjust; click to reset to 200 ms)</source>
             <translation>自動捲動間隔（滾輪調整；按一下重設為 200 ms）</translation>
+        </message>
+        <message>
+            <source>Available for multi-region selections</source>
+            <translation>僅適用於多區域選取範圍</translation>
         </message>
         <message>
             <source>Avatar</source>
@@ -208,6 +220,10 @@
             <translation>捲動截圖時擷取介面</translation>
         </message>
         <message>
+            <source>Cartoonist</source>
+            <translation>漫畫家</translation>
+        </message>
+        <message>
             <source>Center horizontally</source>
             <translation>水平置中</translation>
         </message>
@@ -230,6 +246,10 @@
         <message>
             <source>Close recording</source>
             <translation>關閉錄製</translation>
+        </message>
+        <message>
+            <source>Compact layout</source>
+            <translation>緊湊配置</translation>
         </message>
         <message>
             <source>Confirm edit</source>
@@ -636,6 +656,10 @@
             <translation>醒目提示筆畫寬度 %1 像素</translation>
         </message>
         <message>
+            <source>Horizontal Crop</source>
+            <translation>水平裁切</translation>
+        </message>
+        <message>
             <source>Horizontal scrolling</source>
             <translation>水平捲動</translation>
         </message>
@@ -646,6 +670,10 @@
         <message>
             <source>Image</source>
             <translation>影像</translation>
+        </message>
+        <message>
+            <source>Image Editing</source>
+            <translation>圖片編輯</translation>
         </message>
         <message>
             <source>Image Splitting</source>
@@ -686,6 +714,18 @@
         <message>
             <source>LaTeX-Specific Model</source>
             <translation>LaTeX 專用模型</translation>
+        </message>
+        <message>
+            <source>Layout compaction disabled</source>
+            <translation>已停用緊湊配置</translation>
+        </message>
+        <message>
+            <source>Layout compaction enabled</source>
+            <translation>已啟用緊湊配置</translation>
+        </message>
+        <message>
+            <source>Layout spacing (scroll to adjust; click to reset to 0)</source>
+            <translation>配置間距（捲動調整；點擊重設為 0）</translation>
         </message>
         <message>
             <source>Leader line</source>
@@ -848,6 +888,10 @@
             <translation>輪廓方形</translation>
         </message>
         <message>
+            <source>Pan</source>
+            <translation>平移</translation>
+        </message>
+        <message>
             <source>Pause recording</source>
             <translation>暫停錄製</translation>
         </message>
@@ -960,6 +1004,10 @@
             <translation>錄製系統音效</translation>
         </message>
         <message>
+            <source>Record webcam</source>
+            <translation>錄製攝影機</translation>
+        </message>
+        <message>
             <source>Recording duration</source>
             <translation>錄製時間</translation>
         </message>
@@ -1042,6 +1090,14 @@
         <message>
             <source>Selected model (%1)</source>
             <translation>已選模型（%1）</translation>
+        </message>
+        <message>
+            <source>Selection background opacity</source>
+            <translation>選取範圍背景不透明度</translation>
+        </message>
+        <message>
+            <source>Selection background opacity (scroll to adjust; click to reset to 0%)</source>
+            <translation>選取範圍背景不透明度（捲動調整；點擊重設為 0%）</translation>
         </message>
         <message>
             <source>Send backward</source>
@@ -1182,6 +1238,10 @@
         <message>
             <source>Spotlight</source>
             <translation>聚光燈</translation>
+        </message>
+        <message>
+            <source>Square</source>
+            <translation>方形</translation>
         </message>
         <message>
             <source>Start arrowhead</source>
@@ -1412,6 +1472,10 @@
             <translation>大寫字母</translation>
         </message>
         <message>
+            <source>Vertical Crop</source>
+            <translation>垂直裁切</translation>
+        </message>
+        <message>
             <source>Vertical scrolling</source>
             <translation>垂直捲動</translation>
         </message>
@@ -1450,6 +1514,14 @@
         <message>
             <source>Watermark text</source>
             <translation>浮水印文字</translation>
+        </message>
+        <message>
+            <source>Webcam Shape</source>
+            <translation>攝影機形狀</translation>
+        </message>
+        <message>
+            <source>Webcam Size</source>
+            <translation>攝影機大小</translation>
         </message>
         <message>
             <source>Yellow</source>

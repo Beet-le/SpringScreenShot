@@ -4,6 +4,7 @@
 #include "snow_canvas_changed_viewports.h"
 #include "snow_canvas_ffi_handles.h"
 #include "snow_canvas_fill_render.h"
+#include "snow_canvas_pressure_mask_atlas.h"
 #include "snow_canvas_text_render.h"
 #include "snow_canvas_type_conversions.h"
 #include "snow_canvas_watermark_renderer.h"
@@ -24,6 +25,27 @@ void clearDrawingCachesForCurrentThread() {
     snow_canvas_fill_render::resetHatchTextureCacheForCurrentThread();
     snow_canvas_renderer::resetWatermarkRenderCacheForCurrentThread();
     snow_canvas_text_render::clearRenderCacheForCurrentThread();
+    snow_canvas_pressure_mask::clearCacheForCurrentThread();
+}
+
+QByteArray serializedRuntimeBytes(SnowRuntime runtime,
+                                  SnowError (*serialize)(SnowRuntime, SnowSerializedBytes*)) {
+    if (runtime == nullptr) {
+        return {};
+    }
+    SnowSerializedBytes bytes = nullptr;
+    if (serialize(runtime, &bytes) != SNOW_OK) {
+        return {};
+    }
+    const std::unique_ptr<SnowSerializedBytesImpl, decltype(&snow_serialized_bytes_destroy)>
+        snapshot(bytes, &snow_serialized_bytes_destroy);
+    const std::uint8_t* data = nullptr;
+    std::size_t size = 0;
+    if (snow_serialized_bytes_data(snapshot.get(), &data, &size) != SNOW_OK || size == 0 ||
+        size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return {};
+    }
+    return QByteArray(reinterpret_cast<const char*>(data), static_cast<int>(size));
 }
 
 bool toEngineRuntimeConfig(const SnowCanvasRuntimeConfig& config, SnowStyleDefaults& styleDefaults,
@@ -261,22 +283,29 @@ bool RuntimeSession::cloneDocumentSessionFrom(const RuntimeSession& source) {
 }
 
 QByteArray RuntimeSession::serializeDocumentSession() const {
-    if (m_runtime.get() == nullptr) {
+    return serializedRuntimeBytes(m_runtime.get(), &snow_runtime_serialize_document_session_bytes);
+}
+
+QByteArray RuntimeSession::serializeDocumentSnapshot() const {
+    return serializedRuntimeBytes(m_runtime.get(), &snow_runtime_serialize_document_snapshot_bytes);
+}
+
+QByteArray RuntimeSession::documentCheckpoint() const {
+    if (m_runtime.get() == nullptr)
         return {};
+    const auto revision = snow_runtime_document_revision(m_runtime.get());
+    if (m_checkpointRevision == revision)
+        return m_checkpoint;
+    auto bytes = serializedRuntimeBytes(m_runtime.get(), &snow_runtime_document_checkpoint_bytes);
+    // Bound retained canonical bytes without limiting checkpoints for large documents.
+    constexpr qsizetype maximumRetainedBytes = 16 * 1024 * 1024;
+    m_checkpointRevision.reset();
+    m_checkpoint = {};
+    if (!bytes.isEmpty() && bytes.size() <= maximumRetainedBytes) {
+        m_checkpoint = bytes;
+        m_checkpointRevision = revision;
     }
-    SnowSerializedBytes bytes = nullptr;
-    if (snow_runtime_serialize_document_session_bytes(m_runtime.get(), &bytes) != SNOW_OK) {
-        return {};
-    }
-    const std::unique_ptr<SnowSerializedBytesImpl, decltype(&snow_serialized_bytes_destroy)>
-        snapshot(bytes, &snow_serialized_bytes_destroy);
-    const std::uint8_t* data = nullptr;
-    std::size_t size = 0;
-    if (snow_serialized_bytes_data(snapshot.get(), &data, &size) != SNOW_OK || size == 0 ||
-        size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        return {};
-    }
-    return QByteArray(reinterpret_cast<const char*>(data), static_cast<int>(size));
+    return bytes;
 }
 
 QByteArray RuntimeSession::serializeSelectedDrawTemplate() const {
@@ -338,6 +367,8 @@ bool RuntimeSession::restoreDocumentHistoryPreservingEditorStyles(const QByteArr
             static_cast<std::size_t>(payload.size()), changedViewports.outParam()) != SNOW_OK) {
         return false;
     }
+    m_checkpointRevision.reset();
+    m_checkpoint = {};
     m_smartErase.reset();
     syncChangedViewports(changedViewports.get());
     return true;
@@ -358,6 +389,8 @@ bool RuntimeSession::clearDocumentPreservingViewports() {
         return false;
     }
 
+    m_checkpointRevision.reset();
+    m_checkpoint = {};
     m_smartErase.reset();
     if (lifetime.expired()) {
         return false;
@@ -475,6 +508,9 @@ bool RuntimeSession::replaceRuntime(ScopedRuntimeHandle replacement) {
         return false;
     }
     m_runtime = leaseRuntime(std::move(replacement));
+    // Imported runtimes can reuse a revision number with entirely different content.
+    m_checkpointRevision.reset();
+    m_checkpoint = {};
     const auto replacementLease = m_runtime;
     m_clients.attachAfterRuntimeReplacement(detachedClients, runtime, isCurrent);
     if (!isCurrent()) {
@@ -490,6 +526,8 @@ bool RuntimeSession::replaceRuntime(ScopedRuntimeHandle replacement) {
 void RuntimeSession::destroyRuntimeAsync() {
     // Active presentation scopes keep the retired engine alive until they unwind.
     m_runtime.reset();
+    m_checkpointRevision.reset();
+    m_checkpoint = {};
     clearDrawingCachesForCurrentThread();
 }
 

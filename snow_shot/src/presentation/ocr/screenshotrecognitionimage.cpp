@@ -1,12 +1,21 @@
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_shot/presentation/screenshotrecognitionimage.h"
+#include "snow_shot/presentation/screenshotselectionbackground.h"
 #include "snow_shot/presentation/screenshotocrtextlayout.h"
+#include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
 #include <QPainter>
+#include <QScopeGuard>
 #include <cmath>
 #include <utility>
 
 QImage renderScreenshotRecognitionImage(const ScreenshotRecognitionImageSnapshot& snapshot,
                                         const std::function<bool()>& cancelled) {
+    const auto releaseCaches = qScopeGuard([&] {
+        ScreenshotSelectionShadowRenderer::resetCacheForCurrentThread();
+        resetScreenshotLayoutCompactionCache();
+        if (snapshot.resultStyle.region)
+            snapshot.resultStyle.region->clearDerivedCache();
+    });
     const auto stopped = [&]() { return cancelled && cancelled(); };
     const QRectF rect = snapshot.canvasRect;
     if (snapshot.image.isNull() || !rect.isValid() || rect.isEmpty() || !std::isfinite(rect.x()) ||
@@ -52,7 +61,38 @@ QImage renderScreenshotRecognitionImage(const ScreenshotRecognitionImageSnapshot
         style.cornerRadius = qRound(style.cornerRadius * scale);
         style.shadowWidth = qRound(style.shadowWidth * scale);
     }
-    return stopped()
-               ? QImage{}
-               : ScreenshotResultCompositor::compose(image, style, 1.0, snapshot.outputOpacity);
+    std::shared_ptr<const ScreenshotLayoutCompactionPlan> backgroundPlan;
+    const QSize sourcePixelSize = image.size();
+    if (snapshot.layoutCompaction.enabled && style.region) {
+        const auto plan = screenshotLayoutCompactionPlan(
+            *style.region, image.size(), style.regionScale, snapshot.layoutCompaction,
+            ScreenshotResultCompositor::normalizedStyle(style).shadowWidth);
+        backgroundPlan = plan;
+        if (!plan->isValid())
+            return {};
+        if (plan->changed) {
+            QImage compacted = snowCanvasAllocateZeroedImage(plan->outputSize, image.format());
+            if (compacted.isNull())
+                return {};
+            compacted.setColorSpace(image.colorSpace());
+            QPainter compactPainter(&compacted);
+            for (const auto& tile : plan->tiles)
+                compactPainter.drawImage(tile.destination, image, tile.source);
+            compactPainter.end();
+            image = std::move(compacted);
+            style = compactedScreenshotResultStyle(style, *plan);
+        }
+    }
+    const auto background = style.backgroundOpacityPercent > 0
+                                ? renderScreenshotSelectionBackground(
+                                      snapshot.backgroundSources.isEmpty()
+                                          ? QList<CanvasExportSource>{{snapshot.image, rect}}
+                                          : snapshot.backgroundSources,
+                                      rect, sourcePixelSize, style, backgroundPlan.get(), cancelled)
+                                : QImage{};
+    if (style.backgroundOpacityPercent > 0 && background.isNull())
+        return {};
+    return stopped() ? QImage{}
+                     : ScreenshotResultCompositor::compose(image, style, 1.0,
+                                                           snapshot.outputOpacity, background);
 }

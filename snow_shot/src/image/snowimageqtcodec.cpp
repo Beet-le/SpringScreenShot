@@ -1,6 +1,7 @@
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snowimageqtcodec.h"
 #include "snowimageqtsrgbrowreader.h"
+#include "snowimageopacity.h"
 
 #include "snowimagecodecbridge.h"
 
@@ -465,7 +466,7 @@ bool encodeToDevice(const ScreenshotImageRowSource& source, QIODevice* device,
     bridgeSink.seekable = device->isSequential() ? 0 : 1;
 
     auto verifiedOptions = options;
-    if (!verifiedOptions.verified_alpha_content && source.isKnownOpaque)
+    if (!verifiedOptions.verified_alpha_content && source.hasVerifiedOpaquePixels())
         verifiedOptions.verified_alpha_content = snow::image::AlphaContent::opaque;
     const SnowShotImageCodecEncodeOptions encodedOptions = bridgeOptions(format, verifiedOptions);
     std::array<char, kBackendErrorCapacity> backendError{};
@@ -756,6 +757,7 @@ ScreenshotImageRowSource resizedRowSource(ScreenshotImageRowSource source, QSize
     result.cancellationRequested = source.cancellationRequested;
     result.reserveResources = source.reserveResources;
     result.isKnownOpaque = source.isKnownOpaque;
+    result.verifyOpaque = source.verifyOpaque;
     result.previewImage = source.previewImage;
     auto reader = std::make_shared<ResizeRowReader>(std::move(source), output);
     if (!reader->prepare(error))
@@ -785,6 +787,18 @@ ScreenshotImageRowSource srgbRowSource(const QImage& image) {
     ScreenshotImageRowSource source;
     source.size = image.size();
     source.isKnownOpaque = !image.hasAlphaChannel();
+    if (!source.isKnownOpaque) {
+        struct Opacity final {
+            std::once_flag once;
+            bool opaque = false;
+        };
+        auto opacity = std::make_shared<Opacity>();
+        source.verifyOpaque = [image, opacity] {
+            std::call_once(opacity->once,
+                           [&] { opacity->opaque = detail::imageHasOnlyOpaquePixels(image); });
+            return opacity->opaque;
+        };
+    }
     // Untagged images retain the existing assumption that their pixels are
     // sRGB. Retagging a shared image here would detach its complete raster.
     if (!convertColor && image.format() == QImage::Format_RGBA8888) {

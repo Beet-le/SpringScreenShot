@@ -10,8 +10,8 @@ use crate::{Engine, history::HistoryStore};
 
 // Persisted counters became authoritative for badge creation in version 9.
 const SERIAL_NUMBER_COUNTERS_SESSION_SCHEMA_VERSION: u32 = 9;
-pub const DOCUMENT_SESSION_SCHEMA_VERSION: u32 = 14;
-pub const DOCUMENT_HISTORY_SCHEMA_VERSION: u32 = 10;
+pub const DOCUMENT_SESSION_SCHEMA_VERSION: u32 = 16;
+pub const DOCUMENT_HISTORY_SCHEMA_VERSION: u32 = 12;
 pub const MAX_DOCUMENT_SESSION_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -109,6 +109,27 @@ impl Engine {
             session_config_seeded: self.session_config_seeded,
         };
         serialize_bounded(&session)
+    }
+
+    /// A restorable session of committed content without undo/redo or transient editor state.
+    /// Its cost and size depend on the current document, never on accumulated history.
+    /// The current session still must fit the persisted-session limit of 16 MiB.
+    pub fn serialize_document_snapshot(&self) -> Result<Vec<u8>, ErrorCode> {
+        let session = DocumentSessionRef {
+            schema_version: DOCUMENT_SESSION_SCHEMA_VERSION,
+            document: self.model.document(),
+            history: &HistoryStore::default(),
+            editor: self.editor.persisted(),
+            session_config_seeded: self.session_config_seeded,
+        };
+        serialize_bounded(&session)
+    }
+
+    /// Canonical current-document JSON bytes, not a hash or a restorable session.
+    /// Excludes history, editor defaults, revisions, and unused trailing element slots.
+    pub fn document_checkpoint(&self) -> Result<Vec<u8>, ErrorCode> {
+        serde_json::to_vec(&self.model.document().content_checkpoint())
+            .map_err(|_| ErrorCode::Internal)
     }
 
     #[cfg(test)]
@@ -213,6 +234,153 @@ mod tests {
     use snow_draw_engine_editor::ActiveTool;
 
     #[test]
+    fn current_snapshot_and_checkpoint_ignore_oversized_history() {
+        let mut engine = Engine::default();
+        let initial_snapshot = engine.serialize_document_snapshot().unwrap();
+        let initial_checkpoint = engine.document_checkpoint().unwrap();
+        let selection = engine.editor.capture_document_sync_snapshot(&engine.model);
+        // Legal history labels alone exceed the persisted-session budget, while the
+        // committed document stays empty. Snapshots and dirty checks must still work.
+        for _ in 0..1024 {
+            engine.history.push_committed(
+                "h".repeat(16_384),
+                Transaction::new("edit"),
+                Transaction::new("edit"),
+                selection.clone(),
+                selection.clone(),
+            );
+        }
+        assert_eq!(
+            engine.serialize_document_session().unwrap_err(),
+            ErrorCode::InvalidState
+        );
+        assert_eq!(
+            engine.serialize_document_snapshot().unwrap(),
+            initial_snapshot
+        );
+        assert_eq!(engine.document_checkpoint().unwrap(), initial_checkpoint);
+        let restored = Engine::from_serialized_document_session(&initial_snapshot).unwrap();
+        assert!(!restored.history.can_undo());
+        assert!(!restored.history.can_redo());
+        assert_eq!(restored.document_checkpoint().unwrap(), initial_checkpoint);
+    }
+
+    #[test]
+    fn current_snapshot_preserves_render_configuration_and_excludes_editor_drafts() {
+        use snow_draw_engine_editor::{ActiveTextDraftPresentation, ActiveTextDraftTarget};
+
+        let mut config = RuntimeEngineConfig::default();
+        config.style_defaults.watermark.text = "watermark".into();
+        config.style_defaults.watermark.opacity = 0.7;
+        config.style_defaults.spotlight.opacity = 0.3;
+        let mut engine = Engine::new(config);
+        let viewport = engine.create_viewport(Default::default()).unwrap();
+        let mut render_config = engine.editor.config();
+        render_config.clear_color = ColorRgba8 {
+            r: 8,
+            g: 16,
+            b: 32,
+            a: 64,
+        };
+        render_config.grid.enabled = true;
+        render_config.grid.size = 17.0;
+        engine.editor.set_config(render_config).unwrap();
+        let id = engine.model.peek_next_element_id();
+        engine
+            .create_text_with_viewport_changes(
+                viewport,
+                Point::new(20.0, 30.0),
+                "committed label",
+                snow_draw_engine_document::TextLayoutSize::new(140.0, 30.0),
+            )
+            .unwrap();
+        engine.editor.select_element(&engine.model, id).unwrap();
+        let mut text = engine.model.text(id).unwrap().clone();
+        text.text = "uncommitted label".into();
+        engine
+            .set_active_text_draft_presentation_with_viewport_changes(
+                viewport,
+                ActiveTextDraftPresentation {
+                    target: ActiveTextDraftTarget::Existing(id),
+                    revision: 1,
+                    text,
+                },
+            )
+            .unwrap();
+        engine.session_config_seeded = true;
+        let restored = Engine::from_serialized_document_session(
+            &engine.serialize_document_snapshot().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(restored.model.document(), engine.model.document());
+        assert_eq!(restored.editor.config(), render_config);
+        assert_eq!(restored.watermark_config(), engine.watermark_config());
+        assert_eq!(restored.spotlight_config(), engine.spotlight_config());
+        assert_eq!(restored.model.text(id).unwrap().text, "committed label");
+        assert!(restored.editor.active_text_draft_presentation().is_none());
+        assert!(restored.editor.selected_ids().is_empty());
+        assert_eq!(restored.editor.active_tool(), ActiveTool::Select);
+        assert!(!restored.history.can_undo());
+        assert!(restored.session_config_seeded);
+    }
+
+    #[test]
+    fn current_checkpoint_canonicalizes_allocation_and_tracks_committed_decorations() {
+        let mut engine = Engine::default();
+        let baseline = engine.document_checkpoint().unwrap();
+        let mut transaction = Transaction::new("rectangle");
+        let id = engine.model.peek_next_element_id();
+        transaction.insert_text(
+            id,
+            ElementMeta::default(),
+            snow_draw_engine_document::TextData::default(),
+        );
+        let undo = engine.model.apply_transaction(transaction).unwrap().inverse;
+        assert_ne!(engine.document_checkpoint().unwrap(), baseline);
+        engine.model.apply_history_transaction(&undo).unwrap();
+        assert_eq!(engine.document_checkpoint().unwrap(), baseline);
+
+        engine.editor.set_active_tool(ActiveTool::Shape).unwrap();
+        engine
+            .editor
+            .set_grid_config(snow_draw_engine_core::GridConfig {
+                enabled: true,
+                size: 12.0,
+            })
+            .unwrap();
+        engine.commit_host_history_state(42).unwrap();
+        assert_eq!(engine.document_checkpoint().unwrap(), baseline);
+
+        let mut decorations = Transaction::new("decorations");
+        let mut watermark = engine.watermark_config().clone();
+        watermark.text = "changed".into();
+        decorations.update_watermark(watermark);
+        let inverse = engine.model.apply_transaction(decorations).unwrap().inverse;
+        assert_ne!(engine.document_checkpoint().unwrap(), baseline);
+        engine.model.apply_history_transaction(&inverse).unwrap();
+        assert_eq!(engine.document_checkpoint().unwrap(), baseline);
+        let json: serde_json::Value = serde_json::from_slice(&baseline).unwrap();
+        assert!(json.get("revision").is_none());
+        assert!(json.get("next_index").is_none());
+        assert_eq!(json["slots"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn current_checkpoint_is_not_limited_by_session_capacity() {
+        let mut engine = Engine::default();
+        let mut transaction = Transaction::new("large watermark");
+        let mut watermark = engine.watermark_config().clone();
+        watermark.text = "x".repeat(MAX_DOCUMENT_SESSION_BYTES + 1);
+        transaction.update_watermark(watermark);
+        engine.model.apply_transaction(transaction).unwrap();
+        assert!(engine.document_checkpoint().unwrap().len() > MAX_DOCUMENT_SESSION_BYTES);
+        assert_eq!(
+            engine.serialize_document_snapshot().unwrap_err(),
+            ErrorCode::InvalidState
+        );
+    }
+
+    #[test]
     fn serialization_rejects_growth_before_exceeding_capacity() {
         use std::io::Write;
         let mut writer = BoundedSessionWriter::default();
@@ -243,6 +411,9 @@ mod tests {
         let id = engine.model.peek_next_element_id();
         let mut transaction = Transaction::new("rectangle");
         let rectangle = RectangleData {
+            text_element_id: None,
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
             highlight_shape: HighlightShape::Rectangle,
             center: Point::new(24.0, 32.0),
@@ -426,6 +597,9 @@ mod tests {
         let id = engine.model.peek_next_element_id();
         let mut transaction = Transaction::new("rectangle");
         let rectangle = RectangleData {
+            text_element_id: None,
+            stroke_rendering_style: Default::default(),
+            stroke_rendering_seed: 0,
             rectangle_kind: RectangleElementKind::Rectangle,
             highlight_shape: HighlightShape::Rectangle,
             center: Point::new(24.0, 32.0),
@@ -702,15 +876,18 @@ mod tests {
             serde_json::from_slice(&source.serialize_document_session().unwrap()).unwrap();
         let history: serde_json::Value =
             serde_json::from_slice(&source.serialize_document_history().unwrap()).unwrap();
-        assert_eq!(session["schemaVersion"], 13);
-        assert_eq!(history["schemaVersion"], 9);
+        assert_eq!(session["schemaVersion"], DOCUMENT_SESSION_SCHEMA_VERSION);
+        assert_eq!(history["schemaVersion"], DOCUMENT_HISTORY_SCHEMA_VERSION);
 
         let restored =
             Engine::from_serialized_document_session(&serde_json::to_vec(&session).unwrap())
                 .unwrap();
         let restored_session: serde_json::Value =
             serde_json::from_slice(&restored.serialize_document_session().unwrap()).unwrap();
-        assert_eq!(restored_session["schemaVersion"], 13);
+        assert_eq!(
+            restored_session["schemaVersion"],
+            DOCUMENT_SESSION_SCHEMA_VERSION
+        );
         assert_eq!(
             restored_session["editor"]["speechBubble"],
             session["editor"]["speechBubble"]
@@ -733,7 +910,10 @@ mod tests {
                 .unwrap();
         let restored_history: serde_json::Value =
             serde_json::from_slice(&restored.serialize_document_history().unwrap()).unwrap();
-        assert_eq!(restored_history["schemaVersion"], 9);
+        assert_eq!(
+            restored_history["schemaVersion"],
+            DOCUMENT_HISTORY_SCHEMA_VERSION
+        );
         assert!(restored.model.paint_order().is_empty());
     }
 

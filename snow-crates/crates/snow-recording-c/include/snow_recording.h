@@ -4,6 +4,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+typedef struct SnowWebcam SnowWebcam;
 typedef struct SnowRecordingSessionImpl SnowRecordingSession;
 typedef struct SnowRecordingSourceImpl SnowRecordingSource;
 typedef struct SnowRecordingRenderTaskImpl SnowRecordingRenderTask;
@@ -121,7 +122,10 @@ typedef enum SnowCaptureVideoEncodingPreset {
 
 typedef enum SnowCaptureEncoderPreference {
     SNOW_CAPTURE_ENCODER_PREFERENCE_SOFTWARE = 0,
-    SNOW_CAPTURE_ENCODER_PREFERENCE_H264_HARDWARE = 1,
+    /* Applies to the selected video codec (H.264 or H.265). */
+    SNOW_CAPTURE_ENCODER_PREFERENCE_HARDWARE = 1,
+    /* Source/ABI compatibility with existing clients. */
+    SNOW_CAPTURE_ENCODER_PREFERENCE_H264_HARDWARE = SNOW_CAPTURE_ENCODER_PREFERENCE_HARDWARE,
 } SnowCaptureEncoderPreference;
 
 #define SNOW_RECORDING_EXPORT_CONFIG_VERSION 1u
@@ -152,7 +156,7 @@ typedef struct SnowCaptureExclusions {
 } SnowCaptureExclusions;
 #endif
 
-#define SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION 12u
+#define SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION 13u
 
 /* Strings are bounded UTF-8 key names, copied during session creation. */
 typedef struct SnowCaptureKeyboardLabel {
@@ -226,6 +230,10 @@ typedef struct SnowCaptureDirectRecordingConfig {
     int32_t microphone_gain_db;
     /* v12: highlight radius in output pixels (8..128); older callers use 41. */
     uint32_t mouse_highlight_radius;
+    /* v13: retained camera source; null disables webcam. Shape: 0 square, 1 circle. */
+    const SnowWebcam* webcam_source;
+    uint32_t webcam_size;
+    uint32_t webcam_shape;
 } SnowCaptureDirectRecordingConfig;
 
 #define SNOW_RECORDING_DEFERRED_OPTIONS_VERSION 1u
@@ -311,6 +319,8 @@ int32_t snow_recording_region_output_dimensions(int32_t x, int32_t y, uint32_t w
                                                 uint32_t maximum_height, uint32_t format,
                                                 uint32_t* output_width, uint32_t* output_height);
 
+// Compatibility constructor: available when Cargo feature legacy-capture is enabled.
+// Snow Shot disables it; direct/deferred capture and old-bundle readers remain available.
 SnowRecordingSession* snow_recording_session_create(const SnowRecordingConfig* config);
 /* Pure output sizing shared by recording and effects preview. Zero maximums mean uncapped. */
 int32_t snow_recording_output_dimensions(uint32_t width, uint32_t height, uint32_t maximum_width,

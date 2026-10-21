@@ -384,8 +384,8 @@ void tailGesturesAndLifecycle() {
     require(QJsonDocument::fromJson(templateBytes)
                     .object()
                     .value(QStringLiteral("schemaVersion"))
-                    .toInt() == 4,
-            "bubble draw templates use schema four");
+                    .toInt() == 7,
+            "bubble draw templates use the current binding schema");
     SnowCanvasRuntime templated;
     SnowCanvasWidget templateCanvas(templated);
     prepare(templateCanvas);

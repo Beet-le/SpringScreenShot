@@ -11,6 +11,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/update/updateservice.h"
+#include "snow_shot/app/distribution.h"
 
 #include "widgets/button.h"
 #include "widgets/button_style.h"
@@ -56,6 +57,15 @@ void require(bool condition, const char* message) {
         std::cerr << message << '\n';
         std::exit(EXIT_FAILURE);
     }
+}
+
+QString expectedTranslation(const QTranslator& catalog, const QString& locale, const char* context,
+                            const char* source) {
+    // English identity entries are intentionally omitted from the compact source catalog.
+    // Keep requiring real localized entries while exercising Qt's normal source fallback.
+    require(locale == QStringLiteral("en_US") || !catalog.translate(context, source).isEmpty(),
+            "localized About UI text must exist in the compiled catalog");
+    return QCoreApplication::translate(context, source);
 }
 
 void flushEvents() {
@@ -270,6 +280,39 @@ void projectLinkSurfacesMatchStandardButtons() {
     manager.setThemeAppearance(styles::ThemeAppearance::Light);
 }
 
+void storeUpdatesOpenMicrosoftStore() {
+#ifdef Q_OS_WIN
+    snow_shot::update::UpdateService::Options options;
+    options.storeManaged = true;
+    snow_shot::update::UpdateService updates(std::move(options));
+    QList<QUrl> opened;
+    bool nativeOperation = false;
+    QObject::connect(&updates, &snow_shot::update::UpdateService::operationFinished, &updates,
+                     [&](const QString&, const QString&) { nativeOperation = true; });
+    AboutPageWidget page(
+        nullptr,
+        [&](const QUrl& url) {
+            opened.append(url);
+            return true;
+        },
+        &updates);
+    page.resize(700, 540);
+    page.show();
+    flushEvents();
+    auto* action = child<adqt::widgets::AdButton>(page, "aboutUpdateAction");
+    require(action->isEnabled() && action->text() == QStringLiteral("Open Microsoft Store") &&
+                child<QLabel>(page, "aboutUpdateStatus")->text() ==
+                    QStringLiteral("Updates are managed by Microsoft Store.") &&
+                !child<QProgressBar>(page, "aboutUpdateProgress")->isVisible() &&
+                !child<adqt::widgets::AdButton>(page, "aboutUpdateCancel")->isVisible(),
+            "Store About exposes only the external update manager");
+    action->click();
+    require(opened == QList<QUrl>{QUrl(QStringLiteral("ms-windows-store://downloadsandupdates"))} &&
+                !nativeOperation && !updates.busy(),
+            "Store update action opens its documented URI without native updater work");
+#endif
+}
+
 void projectLinksAreExplicitAccessibleAndRecoverable() {
     QList<QUrl> opened;
     bool canOpen = true;
@@ -291,12 +334,13 @@ void projectLinksAreExplicitAccessibleAndRecoverable() {
             "the remaining QQ group spans the full project link row width");
     snapshot(page, QStringLiteral("about-actions"));
     const QString project = QStringLiteral(SNOW_SHOT_TEST_PROJECT_URL);
-    const std::array<std::pair<const char*, QUrl>, 5> links{{
+    const std::array<std::pair<const char*, QUrl>, 6> links{{
         {"aboutWebsite", QUrl(QStringLiteral(SNOW_SHOT_TEST_WEBSITE_URL))},
         {"aboutSourceCode", QUrl(project)},
         {"aboutFeedback", QUrl(project + QStringLiteral("/issues"))},
         {"aboutReleaseNotes", QUrl(project + QStringLiteral("/releases"))},
         {"aboutQqGroup3", QUrl(QStringLiteral(SNOW_SHOT_TEST_QQ_GROUP_3_URL))},
+        {"aboutPrivacyPolicy", QUrl(snow_shot::app::distribution::privacyPolicyUrl())},
     }};
     for (const auto& [name, url] : links) {
         auto* button = child<QAbstractButton>(page, name);
@@ -336,10 +380,10 @@ void projectLinksAreExplicitAccessibleAndRecoverable() {
                 "load link failure translation");
         QCoreApplication::installTranslator(&translator);
         flushEvents();
-        require(error->text() == translator
-                                     .translate("AboutPageWidget",
-                                                "Could not open the link. Open %1 in your browser.")
-                                     .arg(links.front().second.toDisplayString()),
+        require(error->text() ==
+                    expectedTranslation(translator, locale, "AboutPageWidget",
+                                        "Could not open the link. Open %1 in your browser.")
+                        .arg(links.front().second.toDisplayString()),
                 "an existing link error retranslates and preserves its destination");
         QCoreApplication::removeTranslator(&translator);
         flushEvents();
@@ -373,8 +417,9 @@ void largerTypeKeepsEveryActionReachable() {
     auto* artwork = child<QWidget>(page, "aboutArtwork");
     require(artwork->width() <= scroll->viewport()->width() && artwork->height() > 0,
             "artwork scales down to the available width with larger fonts");
-    for (const char* name : {"aboutCopyVersion", "aboutReleaseNotes", "aboutUpdateAction",
-                             "aboutWebsite", "aboutSourceCode", "aboutFeedback", "aboutQqGroup3"}) {
+    for (const char* name :
+         {"aboutCopyVersion", "aboutReleaseNotes", "aboutUpdateAction", "aboutWebsite",
+          "aboutSourceCode", "aboutFeedback", "aboutQqGroup3", "aboutPrivacyPolicy"}) {
         auto* button = child<QAbstractButton>(page, name);
         scroll->ensureWidgetVisible(button);
         flushEvents();
@@ -809,6 +854,7 @@ int main(int argc, char** argv) {
     stableVersionsDoNotClaimToBePreviews();
     projectLinkSurfacesMatchStandardButtons();
     projectLinksAreExplicitAccessibleAndRecoverable();
+    storeUpdatesOpenMicrosoftStore();
     updatePolicyAndUnavailableCopy();
     updateStatesFitTheVersionPanel();
     dividersFollowTheComponentLibraryAndUpdatesBreathe();
@@ -818,4 +864,5 @@ int main(int argc, char** argv) {
     storage.shutdown();
     return 0;
 }
+
 

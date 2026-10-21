@@ -2,6 +2,7 @@
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTUIPREFERENCES_H
 
 #include "snow_shot/presentation/screenshotselectiondisplayunit.h"
+#include "snow_shot/selectiontransitionanimation.h"
 
 #include <QColor>
 #include <QString>
@@ -17,7 +18,8 @@ enum class ScreenshotColorPickerDisplayMode {
 
 struct ScreenshotUiPreferences {
     ScreenshotSelectionDisplayUnit selectionDisplayUnit = kDefaultScreenshotSelectionDisplayUnit;
-    bool selectionTransitionAnimationEnabled = true;
+    snow_shot::SelectionTransitionAnimation selectionTransitionAnimation =
+        snow_shot::SelectionTransitionAnimation::Soft;
     ScreenshotColorPickerDisplayMode colorPickerDisplayMode =
         ScreenshotColorPickerDisplayMode::HideOutsideSelection;
     QColor selectionBorderColor = QColor(0x40, 0x96, 0xff);
@@ -33,6 +35,8 @@ struct ScreenshotUiPreferences {
 
     [[nodiscard]] ScreenshotUiPreferences normalized() const {
         ScreenshotUiPreferences result = *this;
+        result.selectionTransitionAnimation =
+            snow_shot::normalizedSelectionTransitionAnimation(result.selectionTransitionAnimation);
         if (!result.selectionBorderColor.isValid()) {
             result.selectionBorderColor = QColor(0x40, 0x96, 0xff);
         }
@@ -88,36 +92,28 @@ screenshotColorPickerDisplayModeFromString(const QString& value) {
 struct ScreenshotColorPickerVisibilityState {
     bool intelligentSelecting = false;
     bool manualSelecting = false;
-    bool movingSelection = false;
     bool dragging = false;
-    bool selectionDrag = false;
     bool hasSelection = false;
     bool pointInsideSelection = false;
 };
 
-[[nodiscard]] inline qreal
-screenshotColorPickerOpacity(ScreenshotColorPickerDisplayMode mode,
+[[nodiscard]] inline bool
+screenshotColorPickerVisible(ScreenshotColorPickerDisplayMode mode,
                              const ScreenshotColorPickerVisibilityState& state) {
     if (mode == ScreenshotColorPickerDisplayMode::AlwaysHide) {
-        return 0.0;
-    }
-    if (state.selectionDrag) {
-        return 0.83;
+        return false;
     }
     if (state.manualSelecting && state.dragging) {
-        return 0.5;
+        return true;
     }
     if (!state.hasSelection) {
-        return state.intelligentSelecting || state.manualSelecting ? 1.0 : 0.0;
+        return state.intelligentSelecting || state.manualSelecting;
     }
     if (mode == ScreenshotColorPickerDisplayMode::HideOutsideSelection &&
         !state.intelligentSelecting && !state.pointInsideSelection) {
-        return 0.0;
+        return false;
     }
-    if (state.manualSelecting || state.movingSelection) {
-        return state.dragging ? 0.5 : 1.0;
-    }
-    return 1.0;
+    return true;
 }
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENSHOTUIPREFERENCES_H

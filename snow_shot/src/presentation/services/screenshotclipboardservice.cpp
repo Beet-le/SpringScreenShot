@@ -4,6 +4,7 @@
 #include <QUuid>
 
 #include "screenshotclipboardperfinstrumentation.h"
+#include "screenshotclipboarddibwriter.h"
 #include "snowimageqtcodec.h"
 #ifdef Q_OS_MACOS
 #include "../../platform/macos/imageclipboard.h"
@@ -281,7 +282,7 @@ HGLOBAL cloneGlobal(HGLOBAL source) {
 
 class DibWriter final {
   public:
-    explicit DibWriter(QSize size) : m_size(size) {
+    explicit DibWriter(QSize size, bool opaque) : m_size(size), m_opaque(opaque) {
         if (size.isEmpty())
             return;
         m_stride = (quint64(size.width()) * 3 + 3) & ~quint64{3};
@@ -330,19 +331,8 @@ class DibWriter final {
         for (int row = 0; row < count; ++row) {
             const auto* source = input + qsizetype(row) * stride;
             auto* output = m_pixels + quint64(m_size.height() - 1 - first - row) * m_stride;
-            for (int x = 0; x < m_size.width(); ++x) {
-                const auto* rgba = source + qsizetype(x) * 4;
-                const unsigned alpha = rgba[3];
-                if (alpha == 255) {
-                    output[qsizetype(x) * 3] = rgba[2];
-                    output[qsizetype(x) * 3 + 1] = rgba[1];
-                    output[qsizetype(x) * 3 + 2] = rgba[0];
-                } else {
-                    for (int channel = 0; channel < 3; ++channel)
-                        output[qsizetype(x) * 3 + channel] = static_cast<uchar>(
-                            (rgba[2 - channel] * alpha + 255U * (255U - alpha) + 127U) / 255U);
-                }
-            }
+            snow_shot::presentation::clipboard_detail::writeBgr(source, output, m_size.width(),
+                                                                m_opaque);
             std::memset(output + qsizetype(m_size.width()) * 3, 0,
                         size_t(m_stride - quint64(m_size.width()) * 3));
         }
@@ -364,6 +354,7 @@ class DibWriter final {
 
   private:
     QSize m_size;
+    bool m_opaque = false;
     quint64 m_stride = 0;
     HGLOBAL m_handle = nullptr;
     uchar* m_pixels = nullptr;
@@ -373,7 +364,7 @@ HGLOBAL prepareDib(const ScreenshotImageRowSource& source) {
     SNOW_SHOT_CLIPBOARD_PERF_SCOPE("clipboard.prepare_dib");
     if (!source.isValid())
         return nullptr;
-    DibWriter dib(source.size);
+    DibWriter dib(source.size, source.hasVerifiedOpaquePixels());
     if (!dib.isValid())
         return nullptr;
     constexpr int batchRows = 64;
@@ -632,8 +623,9 @@ ScreenshotClipboardService::prepare(const ScreenshotImageRowSource& source,
     if (!source.isValid() || (source.cancellationRequested && source.cancellationRequested()))
         return {};
     ScreenshotImageRowSource input = source;
+    input.isKnownOpaque = source.hasVerifiedOpaquePixels();
 #if defined(Q_OS_WIN) || defined(_WIN32)
-    DibWriter dib(source.size);
+    DibWriter dib(source.size, input.isKnownOpaque);
     if (dib.isValid()) {
         input.readRows = [&source, &dib](int first, int count, qsizetype stride, uchar* destination,
                                          qsizetype capacity) {

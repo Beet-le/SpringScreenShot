@@ -3,6 +3,7 @@
 
 #include "snow_recording.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
+#include "snow_shot/storage/screenshotexportvariables.h"
 #include <QObject>
 #include <QPointer>
 #include <QTimer>
@@ -23,9 +24,13 @@ class RecordingTrimSession final : public QObject {
                          QObject* parent);
     ~RecordingTrimSession() override;
     void open(const QString& sourcePath, const QString& outputPath,
-              const SnowRecordingClipOptions& options, bool deferred, bool saveWhenReady);
+              const SnowRecordingClipOptions& options, bool deferred, bool saveWhenReady,
+              snow_shot::storage::ScreenshotWindowNames windowNames);
     void exportClip(bool save);
     void detach();
+    void prepareForSessionEnd();
+    [[nodiscard]] QString sourcePath() const;
+    [[nodiscard]] QString outputPath() const;
     [[nodiscard]] bool ready() const;
     [[nodiscard]] QString phase() const;
     std::function<void(const QString&)> reportError;
@@ -57,6 +62,7 @@ class RecordingTrimSession final : public QObject {
     std::shared_ptr<Publication> m_publication;
     void poll();
     void seek(int frame, bool play);
+    void togglePlayback();
     void setSpeed(quint32 percent);
     void setBusy(bool busy);
     void finishExport(bool ok, const QString& error);
@@ -75,6 +81,7 @@ class RecordingTrimSession final : public QObject {
     SnowRecordingClipExport* m_export = nullptr;
     SnowRecordingClipInfo m_info{};
     quint64 m_revision = 0;
+    quint64 m_position = 0;
     quint64 m_first = 0;
     quint64 m_end = 0;
     quint32 m_speedPercent = 100;
@@ -82,6 +89,7 @@ class RecordingTrimSession final : public QObject {
     Selection m_pendingSelection;
     QString m_sourcePath;
     QString m_outputPath;
+    snow_shot::storage::ScreenshotWindowNames m_windowNames;
     QString m_cachePath;
     QString m_pendingPath;
     QString m_destination;
@@ -91,6 +99,7 @@ class RecordingTrimSession final : public QObject {
     bool m_detached = false;
     bool m_saveWhenReady = false;
     bool m_previewFailed = false;
+    bool m_playing = false;
     QPointer<RecordingRenderDialog> m_dialog;
     double m_percent = 0;
 };

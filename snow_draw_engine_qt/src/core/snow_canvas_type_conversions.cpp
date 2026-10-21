@@ -46,6 +46,8 @@ bool validShapeStyleEnums(const SnowCanvasShapeStyle& style) {
                        SnowCanvasArrowhead::IndentedTriangle) &&
            enumInRange(style.strokeStyle, SnowCanvasStrokeStyle::Solid,
                        SnowCanvasStrokeStyle::Dotted) &&
+           enumInRange(style.strokeRenderingStyle, SnowCanvasStrokeRenderingStyle::Architect,
+                       SnowCanvasStrokeRenderingStyle::Cartoonist) &&
            enumInRange(style.arrowShaftType, SnowCanvasArrowShaftType::Plain,
                        SnowCanvasArrowShaftType::Tapered) &&
            enumInRange(style.arrowType, SnowCanvasArrowType::Straight,
@@ -460,6 +462,30 @@ SnowStrokeStyle toEngineStrokeStyle(SnowCanvasStrokeStyle strokeStyle) {
     return SNOW_STROKE_STYLE_SOLID;
 }
 
+SnowCanvasStrokeRenderingStyle toCanvasStrokeRenderingStyle(SnowStrokeRenderingStyle style) {
+    switch (style) {
+    case SNOW_STROKE_RENDERING_STYLE_ARTIST:
+        return SnowCanvasStrokeRenderingStyle::Artist;
+    case SNOW_STROKE_RENDERING_STYLE_CARTOONIST:
+        return SnowCanvasStrokeRenderingStyle::Cartoonist;
+    case SNOW_STROKE_RENDERING_STYLE_ARCHITECT:
+        return SnowCanvasStrokeRenderingStyle::Architect;
+    }
+    return SnowCanvasStrokeRenderingStyle::Architect;
+}
+
+SnowStrokeRenderingStyle toEngineStrokeRenderingStyle(SnowCanvasStrokeRenderingStyle style) {
+    switch (style) {
+    case SnowCanvasStrokeRenderingStyle::Artist:
+        return SNOW_STROKE_RENDERING_STYLE_ARTIST;
+    case SnowCanvasStrokeRenderingStyle::Cartoonist:
+        return SNOW_STROKE_RENDERING_STYLE_CARTOONIST;
+    case SnowCanvasStrokeRenderingStyle::Architect:
+        return SNOW_STROKE_RENDERING_STYLE_ARCHITECT;
+    }
+    return SNOW_STROKE_RENDERING_STYLE_ARCHITECT;
+}
+
 SnowCanvasCornerRadii toCanvasCornerRadii(const SnowCornerRadii& cornerRadii) {
     return SnowCanvasCornerRadii{
         cornerRadii.top_left,
@@ -500,6 +526,7 @@ SnowCanvasShapeStyle toCanvasShapeStyle(const SnowShapeStyle& style) {
         style.brush_mode == SNOW_BRUSH_MODE_PRESSURE_SENSITIVE
             ? SnowCanvasBrushMode::PressureSensitive
             : SnowCanvasBrushMode::Regular,
+        toCanvasStrokeRenderingStyle(style.stroke_rendering_style),
     };
 }
 
@@ -513,6 +540,7 @@ SnowShapeStyle toEngineShapeStyle(const SnowCanvasShapeStyle& style) {
     engineStyle.start_arrowhead = toEngineArrowhead(style.startArrowhead);
     engineStyle.end_arrowhead = toEngineArrowhead(style.endArrowhead);
     engineStyle.stroke_style = toEngineStrokeStyle(style.strokeStyle);
+    engineStyle.stroke_rendering_style = toEngineStrokeRenderingStyle(style.strokeRenderingStyle);
     engineStyle.arrow_type = toEngineArrowType(style.arrowType);
     engineStyle.arrow_shaft_type = static_cast<SnowArrowShaftType>(style.arrowShaftType);
     engineStyle.arrow_ratio = snowCanvasNormalizeArrowRatio(style.arrowRatio);
@@ -686,6 +714,7 @@ SnowCanvasSerialNumberStyle toCanvasSerialNumberStyle(const SnowSerialNumberStyl
         style.stroke_width,
         toCanvasStrokeStyle(style.stroke_style),
         style.opacity,
+        toCanvasStrokeRenderingStyle(style.stroke_rendering_style),
     };
 }
 
@@ -703,6 +732,7 @@ SnowSerialNumberStyle toEngineSerialNumberStyle(const SnowCanvasSerialNumberStyl
                            SNOW_FONT_FAMILY_UTF8_CAPACITY);
     engineStyle.stroke_width = style.strokeWidth;
     engineStyle.stroke_style = toEngineStrokeStyle(style.strokeStyle);
+    engineStyle.stroke_rendering_style = toEngineStrokeRenderingStyle(style.strokeRenderingStyle);
     engineStyle.opacity = style.opacity;
     return engineStyle;
 }
@@ -882,6 +912,9 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
         !enumInRange(defaults.text.verticalAlign, SnowCanvasTextVerticalAlign::Top,
                      SnowCanvasTextVerticalAlign::Bottom) ||
         !validFillStyle(defaults.serialNumber.fillStyle) ||
+        !enumInRange(defaults.serialNumber.strokeRenderingStyle,
+                     SnowCanvasStrokeRenderingStyle::Architect,
+                     SnowCanvasStrokeRenderingStyle::Cartoonist) ||
         !enumInRange(defaults.serialNumber.strokeStyle, SnowCanvasStrokeStyle::Solid,
                      SnowCanvasStrokeStyle::Dotted) ||
         !enumInRange(defaults.serialNumber.type, SnowCanvasSerialNumberType::OutlinedCircle,

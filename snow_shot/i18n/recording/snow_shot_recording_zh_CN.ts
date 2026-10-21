@@ -116,6 +116,41 @@
         </message>
     </context>
     <context>
+        <name>RecordingStatusPrompt</name>
+        <message>
+            <source>Format: %1; %2; %3</source>
+            <translation>格式：%1；%2；%3</translation>
+        </message>
+        <message>
+            <source>GIF</source>
+            <translation>GIF</translation>
+        </message>
+        <message>
+            <source>MP4</source>
+            <translation>MP4</translation>
+        </message>
+        <message>
+            <source>Microphone disabled</source>
+            <translation>麦克风已关闭</translation>
+        </message>
+        <message>
+            <source>Microphone enabled</source>
+            <translation>麦克风已开启</translation>
+        </message>
+        <message>
+            <source>Speaker disabled</source>
+            <translation>扬声器已关闭</translation>
+        </message>
+        <message>
+            <source>Speaker enabled</source>
+            <translation>扬声器已开启</translation>
+        </message>
+        <message>
+            <source>WebP</source>
+            <translation>WebP</translation>
+        </message>
+    </context>
+    <context>
         <name>RecordingTrimSession</name>
         <message>
             <source>Choose a different file to preserve the original recording.</source>
@@ -141,6 +176,14 @@
             <translation>%1x</translation>
         </message>
         <message>
+            <source>Pause</source>
+            <translation>暂停</translation>
+        </message>
+        <message>
+            <source>Play</source>
+            <translation>播放</translation>
+        </message>
+        <message>
             <source>Playback and export speed</source>
             <translation>播放和导出速度</translation>
         </message>
@@ -164,12 +207,28 @@
     <context>
         <name>ScreenRecordingController</name>
         <message>
+            <source>A recording was interrupted when Windows ended the session. Recover the saved recording or open its folder.</source>
+            <translation>Windows 结束会话时中断了录屏。您可以恢复已保存的录屏或打开其文件夹。</translation>
+        </message>
+        <message>
             <source>Keyboard recording failed: %1</source>
             <translation>键盘录制失败：%1</translation>
         </message>
         <message>
             <source>Motion preview unavailable: %1</source>
             <translation>无法预览动效：%1</translation>
+        </message>
+        <message>
+            <source>Open folder</source>
+            <translation>打开文件夹</translation>
+        </message>
+        <message>
+            <source>Recording recovery</source>
+            <translation>录屏恢复</translation>
+        </message>
+        <message>
+            <source>Recover</source>
+            <translation>恢复</translation>
         </message>
         <message>
             <source>Screen recording</source>
@@ -190,6 +249,10 @@ Keep this folder to recover the recording.</source>
             <translation>录制操作失败</translation>
         </message>
         <message>
+            <source>The webcam could not be initialized.</source>
+            <translation>无法初始化摄像头。</translation>
+        </message>
+        <message>
             <source>Unable to create the recording directory</source>
             <translation>无法创建录制目录</translation>
         </message>
@@ -200,6 +263,10 @@ Keep this folder to recover the recording.</source>
         <message>
             <source>Unknown recording error</source>
             <translation>未知录制错误</translation>
+        </message>
+        <message>
+            <source>Webcam unavailable: %1</source>
+            <translation>摄像头不可用：%1</translation>
         </message>
     </context>
     <context>

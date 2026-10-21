@@ -3,6 +3,8 @@
 #include "snow_shot/presentation/screenshotrecognitionwindow.h"
 #include "snow_shot/presentation/screenshottabledocument.h"
 #include "snow_shot/presentation/screenshottableeditor.h"
+#include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/configurationstore.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "widgets/button.h"
 
@@ -1276,6 +1278,257 @@ void providerDestructionDuringDiscoveryPublishesRetryableFailure() {
             "instead of silently leaving an empty result");
 }
 
+void aiModelMigrationResolvesPendingDiscovery() {
+    ModelSettingsGuard guard;
+    for (const auto& legacy : {QStringLiteral("qwen3.8-flash"), QStringLiteral("qwen-mt-flash")}) {
+        for (const auto mode : {Mode::Table, Mode::Latex}) {
+            require(Settings().setTableModel(legacy) && Settings().setLatexModel(legacy),
+                    "save legacy recognition preferences before discovery");
+            RecognitionServer server;
+            server.catalogOrder = {QStringLiteral("ai-model")};
+            server.holdCatalog = true;
+            server.visionSource =
+                mode == Mode::Table ? QStringLiteral("<table><tr><td>Discovered</td></tr></table>")
+                                    : QStringLiteral("x^2");
+            SnowShotApiClient api(server.url());
+            ScreenshotRecognitionModelState modelState;
+            auto actions = headlessActions();
+            actions.setRecognitionModelState =
+                [mode, &modelState](int publishedMode,
+                                    const ScreenshotRecognitionModelState& state) {
+                    if (publishedMode == static_cast<int>(mode))
+                        modelState = state;
+                };
+            ScreenshotRecognitionSessionController session(nullptr, nullptr, &api, actions);
+            session.setTarget(
+                target(QStringLiteral("pending-ai-%1-%2").arg(legacy).arg(int(mode))));
+            session.activate(mode);
+            until([&] { return server.heldCatalog != nullptr; }, "recognition awaits discovery");
+            require(session.busy(mode) && server.visionRequests.isEmpty(),
+                    "legacy selections wait for the catalog without starting extraction");
+            const QString pendingModel = modelState.effectiveModel;
+            server.respondCatalog(server.heldCatalog);
+            until([&] { return !session.busy() && !session.workflowResult().isEmpty(); },
+                  "recognition completes after discovering AI Model");
+            require(server.visionRequests.size() == 1 &&
+                        server.visionRequests.first().value(QStringLiteral("model")) ==
+                            QStringLiteral("ai-model") &&
+                        Settings().tableModel() == QStringLiteral("ai-model") &&
+                        Settings().latexModel() == QStringLiteral("ai-model") &&
+                        pendingModel.isEmpty() &&
+                        modelState.effectiveModel == QStringLiteral("ai-model"),
+                    "pending discovery binds only the discovered model, never a provisional "
+                    "legacy identity");
+            const auto snapshot = session.recognitionResultsSnapshot();
+            require(mode == Mode::Table
+                        ? snapshot.tableEntries.first().model == QStringLiteral("ai-model")
+                        : snapshot.latexEntries.first().model == QStringLiteral("ai-model"),
+                    "cold-start results retain the model actually used by extraction");
+        }
+    }
+}
+
+void aiModelMigrationStopsDiscoveryAfterProviderDestruction() {
+    ModelSettingsGuard guard;
+    const QString legacy = QStringLiteral("qwen3.8-flash");
+    require(Settings().setTableModel(legacy), "save a legacy model before cached discovery");
+    RecognitionServer server;
+    server.catalogOrder = {QStringLiteral("ai-model")};
+    auto api = std::make_unique<SnowShotApiClient>(server.url());
+    loadCatalog(*api);
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, api.get(), headlessActions());
+    QObject::connect(&snow_shot::storage::ApplicationStorage::instance().configuration(),
+                     &snow_shot::storage::ConfigurationStore::valueChanged, &session,
+                     [&](const QString& key, const QJsonValue&) {
+                         if (key == QStringLiteral("screenshot_table/model") &&
+                             Settings().tableModel() == QStringLiteral("ai-model"))
+                             api.reset();
+                     });
+    session.setTarget(target(QStringLiteral("migration-provider-destruction")));
+    session.activate(Mode::Table);
+    until([&] { return !api && !session.busy(); },
+          "cached discovery settles when migration destroys its provider");
+    require(!session.workflowState().value(QStringLiteral("error")).toString().isEmpty() &&
+                session.workflowResult().isEmpty(),
+            "retired discovery keeps the provider failure instead of continuing the callback");
+}
+
+void aiModelMigrationPreservesInactiveDrafts() {
+    ModelSettingsGuard guard;
+    for (const auto& legacy : {QStringLiteral("qwen3.8-flash"), QStringLiteral("qwen-mt-flash")}) {
+        for (const bool active : {true, false}) {
+            require(Settings().setTableModel(legacy) && Settings().setLatexModel(legacy),
+                    "save legacy preferences for cached recognition drafts");
+            RecognitionServer server;
+            server.catalogOrder = {legacy};
+            SnowShotApiClient api(server.url());
+            loadCatalog(api);
+            ScreenshotRecognitionSessionController session(nullptr, nullptr, &api,
+                                                           headlessActions());
+            ScreenshotRecognitionResults seed;
+            seed.key = QStringLiteral("inactive-ai-%1-%2").arg(legacy).arg(active);
+            seed.tableModelSelection = legacy;
+            seed.latexModelSelection = legacy;
+            seed.tableEntries = {tableEntry(
+                legacy, QStringLiteral("<table><tr><td>Original</td></tr></table>"), &api)};
+            seed.latexEntries = {latexEntry(legacy, QStringLiteral("x^2"), &api)};
+            session.setTarget(target(seed.key));
+            session.seedRecognitionResults(seed);
+            session.activate(Mode::Table);
+            require(session.editWorkflow({{QStringLiteral("action"), QStringLiteral("set_cell")},
+                                          {QStringLiteral("row"), 0},
+                                          {QStringLiteral("column"), 0},
+                                          {QStringLiteral("text"), QStringLiteral("Edited")}}),
+                    "edit a cached legacy table before migration");
+            session.activate(Mode::Latex);
+            require(session.editWorkflow({{QStringLiteral("action"), QStringLiteral("set_text")},
+                                          {QStringLiteral("text"), QStringLiteral("x^3")}}),
+                    "edit a cached legacy formula before migration");
+            SnowShotApiClient staleApi(server.url());
+            loadCatalog(staleApi);
+            ScreenshotRecognitionSessionController stale(nullptr, nullptr, &staleApi,
+                                                         headlessActions());
+            ScreenshotRecognitionSessionController offline(nullptr, nullptr, nullptr,
+                                                           headlessActions());
+            auto snapshot = session.recognitionResultsSnapshot();
+            stale.setTarget(target(seed.key));
+            stale.seedRecognitionResults(snapshot);
+            for (auto& entry : snapshot.tableEntries)
+                entry.modelFingerprint.clear();
+            for (auto& entry : snapshot.latexEntries)
+                entry.modelFingerprint.clear();
+            offline.setTarget(target(seed.key));
+            offline.seedRecognitionResults(snapshot);
+            if (!active)
+                session.deactivate();
+            server.catalogOrder = {QStringLiteral("ai-model")};
+            refreshCatalog(api);
+            require(Settings().tableModel() == QStringLiteral("ai-model") &&
+                        Settings().latexModel() == QStringLiteral("ai-model") &&
+                        session.recognitionModelSelection(Mode::Table) == legacy &&
+                        session.recognitionModelSelection(Mode::Latex) == legacy &&
+                        stale.recognitionModelSelection(Mode::Table) == legacy &&
+                        stale.recognitionModelSelection(Mode::Latex) == legacy &&
+                        offline.recognitionModelSelection(Mode::Table) == legacy &&
+                        offline.recognitionModelSelection(Mode::Latex) == legacy,
+                    "catalog migration updates future preferences without replacing inactive "
+                    "sessions' historical selections, including offline and older catalogs");
+            for (const auto mode : {Mode::Table, Mode::Latex}) {
+                session.activate(mode);
+                require(
+                    session.workflowResult().value(QStringLiteral("text")) ==
+                            (mode == Mode::Table ? QStringLiteral("Edited")
+                                                 : QStringLiteral("x^3")) &&
+                        session.editWorkflow(
+                            {{QStringLiteral("action"), QStringLiteral("undo")}}) &&
+                        session.workflowResult().value(QStringLiteral("text")) ==
+                            (mode == Mode::Table ? QStringLiteral("Original")
+                                                 : QStringLiteral("x^2")) &&
+                        session.editWorkflow({{QStringLiteral("action"), QStringLiteral("redo")}}),
+                    "reopening either tool retains its legacy draft and undo history");
+                for (auto* peer : {&stale, &offline}) {
+                    peer->activate(mode);
+                    require(peer->workflowResult().value(QStringLiteral("text")) ==
+                                (mode == Mode::Table ? QStringLiteral("Edited")
+                                                     : QStringLiteral("x^3")),
+                            "draft restoration does not depend on a peer's catalog or provider");
+                }
+            }
+            snapshot = session.recognitionResultsSnapshot();
+            require(snapshot.tableEntries.size() == 1 && snapshot.latexEntries.size() == 1 &&
+                        snapshot.tableEntries.first().model == legacy &&
+                        snapshot.tableEntries.first().draftHtml.has_value() &&
+                        snapshot.latexEntries.first().model == legacy &&
+                        snapshot.latexEntries.first().draft.has_value() &&
+                        server.visionRequests.isEmpty() && server.dedicatedRequests == 0,
+                    "inactive drafts remain under their original identities without regeneration");
+        }
+    }
+}
+
+void aiModelMigrationPreservesInFlightResultsAndDrafts() {
+    ModelSettingsGuard guard;
+    for (const auto mode : {Mode::Table, Mode::Latex}) {
+        const QString legacy = QStringLiteral("qwen3.8-flash");
+        require(Settings().setTableModel(legacy) && Settings().setLatexModel(legacy),
+                "save legacy recognition preferences");
+        RecognitionServer server;
+        server.catalogOrder = {legacy};
+        server.holdVisionModel = legacy;
+        SnowShotApiClient api(server.url());
+        loadCatalog(api);
+        ScreenshotRecognitionSessionController session(nullptr, nullptr, &api, headlessActions());
+        const auto imageTarget = target(QStringLiteral("ai-migration-%1").arg(int(mode)));
+        session.setTarget(imageTarget);
+        session.activate(mode);
+        until([&] { return server.heldVision != nullptr; }, "legacy extraction is in flight");
+        server.catalogOrder = {QStringLiteral("ai-model")};
+        refreshCatalog(api);
+        require(Settings().tableModel() == QStringLiteral("ai-model") &&
+                    Settings().latexModel() == QStringLiteral("ai-model") && session.busy(mode) &&
+                    server.visionRequests.size() == 1,
+                "catalog migrates future preferences without interrupting legacy extraction");
+        const QString recognized = mode == Mode::Table
+                                       ? QStringLiteral("<table><tr><td>Original</td></tr></table>")
+                                       : QStringLiteral("x^2");
+        RecognitionServer::respond(server.heldVision,
+                                   RecognitionServer::frame(recognized) + "data: [DONE]\n\n",
+                                   "text/event-stream");
+        until([&] { return !session.busy() && !session.workflowResult().isEmpty(); },
+              "legacy extraction completes after catalog migration");
+        const QJsonObject edit =
+            mode == Mode::Table
+                ? QJsonObject{{QStringLiteral("action"), QStringLiteral("set_cell")},
+                              {QStringLiteral("row"), 0},
+                              {QStringLiteral("column"), 0},
+                              {QStringLiteral("text"), QStringLiteral("Edited")}}
+                : QJsonObject{{QStringLiteral("action"), QStringLiteral("set_text")},
+                              {QStringLiteral("text"), QStringLiteral("x^3")}};
+        require(session.editWorkflow(edit), "edit historical recognition result");
+        const auto edited = session.workflowResult();
+        refreshCatalog(api);
+        require(session.workflowResult() == edited && server.visionRequests.size() == 1,
+                "later catalog refresh preserves edited output");
+        const auto snapshot = session.recognitionResultsSnapshot();
+        if (mode == Mode::Table)
+            require(snapshot.tableEntries.first().model == legacy &&
+                        snapshot.tableEntries.first().draftHtml.has_value(),
+                    "historical table draft keeps its original identity");
+        else
+            require(snapshot.latexEntries.first().model == legacy &&
+                        snapshot.latexEntries.first().draft.has_value(),
+                    "historical formula draft keeps its original identity");
+        session.deactivate();
+        ScreenshotRecognitionSessionController restored(nullptr, nullptr, &api, headlessActions());
+        restored.setTarget(imageTarget);
+        restored.seedRecognitionResults(snapshot);
+        restored.activate(mode);
+        until([&] { return !restored.busy() && !restored.workflowResult().isEmpty(); },
+              "restore historical draft against new catalog");
+        require(restored.workflowResult().value(QStringLiteral("text")) ==
+                        edited.value(QStringLiteral("text")) &&
+                    server.visionRequests.size() == 1,
+                "restored draft is not regenerated or relabeled");
+        restored.deactivate();
+        server.holdVisionModel.clear();
+        server.visionSource = recognized;
+        ScreenshotRecognitionSessionController fresh(nullptr, nullptr, &api, headlessActions());
+        fresh.setTarget(target(QStringLiteral("fresh-ai-%1").arg(int(mode))));
+        fresh.activate(mode);
+        until([&] { return !fresh.busy() && server.visionRequests.size() == 2; },
+              "fresh recognition uses migrated selection");
+        const auto request = server.visionRequests.last();
+        require(request.value(QStringLiteral("model")) == QStringLiteral("ai-model") &&
+                    request.value(QStringLiteral("messages"))
+                        .toArray()
+                        .last()
+                        .toObject()
+                        .value(QStringLiteral("content"))
+                        .isArray(),
+                "table and LaTeX send AI Model image requests");
+    }
+}
+
 void choiceOnlySnapshotsRestoreLocalSelectionWithoutChangingPreferences() {
     ModelSettingsGuard guard;
     ScreenshotRecognitionSessionController original(nullptr, nullptr, nullptr, headlessActions());
@@ -1405,6 +1658,10 @@ void runRecognitionModelTests() {
     retryRefreshesUnavailableCatalogsForBothRecognitionModes();
     inFlightModelSwitchesCancelOldRequestsAndRetryFailures();
     defaultVisionModelRemainsBoundAcrossCatalogRefreshes();
+    aiModelMigrationResolvesPendingDiscovery();
+    aiModelMigrationStopsDiscoveryAfterProviderDestruction();
+    aiModelMigrationPreservesInactiveDrafts();
+    aiModelMigrationPreservesInFlightResultsAndDrafts();
     catalogFetchIsSharedAndCancelledSubscribersDoNotAffectOtherTools();
     providerDestructionDuringDiscoveryPublishesRetryableFailure();
     choiceOnlySnapshotsRestoreLocalSelectionWithoutChangingPreferences();

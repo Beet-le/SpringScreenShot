@@ -28,6 +28,10 @@ class ScreenshotToolbarCommandSink {
     virtual void undoCanvasEdit() {}
     virtual void redoCanvasEdit() {}
     virtual void setScreenshotRegionType(int) {}
+    virtual void setLayoutCompaction(bool, int) {}
+    virtual void setSelectionBackgroundOpacityPercent(int) {}
+    virtual void adjustSelectionBackgroundOpacityFromWheel(int) {}
+    virtual void setSelectionBackgroundPreviewVisible(bool) {}
     virtual void addScreenshotRegion() {}
     virtual void subtractScreenshotRegion() {}
     virtual void requestRecapture() {}
@@ -106,6 +110,7 @@ class ScreenshotToolbarCommandSink {
     virtual void startScrollingScreenshot() = 0;
     virtual void restartScrollingScreenshot() {}
     virtual void splitScrollingScreenshot() {}
+    virtual void editScrollingScreenshot() {}
     virtual void setScrollingScreenshotRecognitionMode(ScreenshotScrollingRecognitionMode) {}
     virtual void setScrollingScreenshotAutoScroll(bool) {}
     virtual void setScrollingScreenshotAutoScrollIntervalMs(int) {}
@@ -168,6 +173,7 @@ class ScreenshotSelectionToolbarCommandSink {
     virtual void adjustSelectionFromToolbar(int minDx, int minDy, int maxDx, int maxDy) = 0;
     virtual void setSelectionCornerRadiusFromToolbar(int radius) = 0;
     virtual void setSelectionShadowWidthFromToolbar(int shadowWidth) = 0;
+    virtual void adjustSelectionEffectsFromWheel(int radiusDelta, int shadowDelta) = 0;
     virtual void setSelectionToolbarHovered(bool hovered) = 0;
     virtual void setSelectionToolbarPopupVisible(bool) {}
 };

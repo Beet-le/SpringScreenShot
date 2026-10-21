@@ -162,6 +162,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Official website</translation>
         </message>
         <message>
+            <source>Open Microsoft Store</source>
+            <translation>Open Microsoft Store</translation>
+        </message>
+        <message>
             <source>Pin to screen</source>
             <translation>Pin to screen</translation>
         </message>
@@ -172,6 +176,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Preview</source>
             <translation>Preview</translation>
+        </message>
+        <message>
+            <source>Privacy policy</source>
+            <translation>Privacy policy</translation>
         </message>
         <message>
             <source>QQ Group 3</source>
@@ -238,6 +246,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Update failed: %1</translation>
         </message>
         <message>
+            <source>Updates are managed by Microsoft Store.</source>
+            <translation>Updates are managed by Microsoft Store.</translation>
+        </message>
+        <message>
             <source>Verifying update…</source>
             <translation>Verifying update…</translation>
         </message>
@@ -246,8 +258,8 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>View the source and improve it together</translation>
         </message>
         <message>
-            <source>You are up to date.</source>
-            <translation>You are up to date.</translation>
+            <source>You are up to date</source>
+            <translation>You are up to date</translation>
         </message>
     </context>
     <context>
@@ -528,6 +540,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Invalid annotation shortcut</translation>
         </message>
         <message>
+            <source>Invalid context menu access key</source>
+            <translation>Invalid context menu access key</translation>
+        </message>
+        <message>
             <source>Invalid global shortcut</source>
             <translation>Invalid global shortcut</translation>
         </message>
@@ -586,6 +602,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Unsupported key</source>
             <translation>Unsupported key</translation>
+        </message>
+        <message>
+            <source>Use one letter (A–Z) or digit (0–9) without modifier keys</source>
+            <translation>Use one letter (A–Z) or digit (0–9) without modifier keys</translation>
         </message>
     </context>
     <context>
@@ -846,8 +866,8 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Cancel</translation>
         </message>
         <message>
-            <source>Could not open the selected image file: %1</source>
-            <translation>Could not open the selected image file: %1</translation>
+            <source>Could not open the selected file: %1</source>
+            <translation>Could not open the selected file: %1</translation>
         </message>
         <message>
             <source>Could not pin selected files</source>
@@ -882,8 +902,8 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Snow Shot will close and restart to install the update. Continue?</translation>
         </message>
         <message>
-            <source>The selected image file path is invalid</source>
-            <translation>The selected image file path is invalid</translation>
+            <source>The selected file path is invalid</source>
+            <translation>The selected file path is invalid</translation>
         </message>
         <message>
             <source>Your settings could not be saved. Please retry before updating.</source>

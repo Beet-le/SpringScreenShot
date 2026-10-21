@@ -2,7 +2,7 @@
 #include "snow_shot/storage/settingsadapters.h"
 
 #include "theme/theme_manager.h"
-#include "theme/theme_types.h"
+#include "themeconfig_p.h"
 
 #include <QApplication>
 #include <QStyleHints>
@@ -63,127 +63,6 @@ ThemePreset toThemePreset(adqt::theme::ThemeDensity density) {
                                                          : ThemePreset::Default;
 }
 
-adqt::theme::ThemeScheme toAdqtScheme(ThemeAppearance appearance) {
-    return appearance == ThemeAppearance::Dark ? adqt::theme::ThemeScheme::Dark
-                                               : adqt::theme::ThemeScheme::Light;
-}
-
-adqt::theme::ThemeDensity toAdqtDensity(ThemePreset preset) {
-    return preset == ThemePreset::Compact ? adqt::theme::ThemeDensity::Compact
-                                          : adqt::theme::ThemeDensity::Comfortable;
-}
-
-ThemePresetColorMap normalizePresetColorMap(const ThemePresetColorMap& presetColors) {
-    ThemePresetColorMap normalized;
-    for (auto it = presetColors.cbegin(); it != presetColors.cend(); ++it) {
-        normalized.insert(it.key().trimmed().toLower(), it.value());
-    }
-    return normalized;
-}
-
-QColor presetColorValue(const ThemePresetColorMap& normalizedPresetColors, const QString& key) {
-    const auto it = normalizedPresetColors.constFind(key);
-    return it != normalizedPresetColors.cend() ? it.value() : QColor();
-}
-
-void applyPresetColors(adqt::theme::ThemeConfig* target, const ThemePresetColorMap& presetColors) {
-    if (target == nullptr) {
-        return;
-    }
-
-    const ThemePresetColorMap normalizedPresetColors = normalizePresetColorMap(presetColors);
-
-    const QColor blue = presetColorValue(normalizedPresetColors, QStringLiteral("blue"));
-    const QColor purple = presetColorValue(normalizedPresetColors, QStringLiteral("purple"));
-    const QColor cyan = presetColorValue(normalizedPresetColors, QStringLiteral("cyan"));
-    const QColor green = presetColorValue(normalizedPresetColors, QStringLiteral("green"));
-    const QColor magenta = presetColorValue(normalizedPresetColors, QStringLiteral("magenta"));
-    const QColor pink = presetColorValue(normalizedPresetColors, QStringLiteral("pink"));
-    const QColor red = presetColorValue(normalizedPresetColors, QStringLiteral("red"));
-    const QColor orange = presetColorValue(normalizedPresetColors, QStringLiteral("orange"));
-    const QColor yellow = presetColorValue(normalizedPresetColors, QStringLiteral("yellow"));
-    const QColor volcano = presetColorValue(normalizedPresetColors, QStringLiteral("volcano"));
-    const QColor geekblue = presetColorValue(normalizedPresetColors, QStringLiteral("geekblue"));
-    const QColor gold = presetColorValue(normalizedPresetColors, QStringLiteral("gold"));
-    const QColor lime = presetColorValue(normalizedPresetColors, QStringLiteral("lime"));
-
-    if (blue.isValid()) {
-        target->blue = blue;
-    }
-    if (purple.isValid()) {
-        target->purple = purple;
-    }
-    if (cyan.isValid()) {
-        target->cyan = cyan;
-    }
-    if (green.isValid()) {
-        target->green = green;
-    }
-    if (magenta.isValid()) {
-        target->magenta = magenta;
-    }
-    if (pink.isValid()) {
-        target->pink = pink;
-    }
-    if (red.isValid()) {
-        target->red = red;
-    }
-    if (orange.isValid()) {
-        target->orange = orange;
-    }
-    if (yellow.isValid()) {
-        target->yellow = yellow;
-    }
-    if (volcano.isValid()) {
-        target->volcano = volcano;
-    }
-    if (geekblue.isValid()) {
-        target->geekblue = geekblue;
-    }
-    if (gold.isValid()) {
-        target->gold = gold;
-    }
-    if (lime.isValid()) {
-        target->lime = lime;
-    }
-}
-
-adqt::theme::ThemeConfig toAdqtThemeConfig(const ThemeStyleConfig& config) {
-    adqt::theme::ThemeConfig adqtConfig = adqt::theme::defaultThemeConfig(
-        toAdqtScheme(config.appearance), toAdqtDensity(config.preset));
-
-    if (config.colorPrimary.isValid()) {
-        adqtConfig.primary = config.colorPrimary;
-    }
-    if (config.colorSuccess.isValid()) {
-        adqtConfig.success = config.colorSuccess;
-    }
-    if (config.colorWarning.isValid()) {
-        adqtConfig.warning = config.colorWarning;
-    }
-    if (config.colorError.isValid()) {
-        adqtConfig.error = config.colorError;
-    }
-    if (config.colorInfo.isValid()) {
-        adqtConfig.info = config.colorInfo;
-    }
-    if (config.colorLink.isValid()) {
-        adqtConfig.link = config.colorLink;
-    }
-
-    adqtConfig.appFont = config.appFont;
-    adqtConfig.fontSize = static_cast<double>(config.fontSize);
-    adqtConfig.lineWidth = static_cast<double>(config.lineWidth);
-    adqtConfig.borderRadius = static_cast<double>(config.borderRadius);
-    adqtConfig.sizeUnit = static_cast<double>(config.sizeUnit);
-    adqtConfig.sizeStep = static_cast<double>(config.sizeStep);
-    adqtConfig.controlHeight = static_cast<double>(config.controlHeight);
-    adqtConfig.motion = config.motionUnit > 0.0;
-
-    applyPresetColors(&adqtConfig, config.presetColors);
-    return adqtConfig;
-}
-
 ThemeStyleConfig toThemeStyleConfig(const adqt::theme::ResolvedTheme& resolvedTheme) {
     ThemeStyleConfig config;
     config.preset = toThemePreset(resolvedTheme.config.density);
@@ -213,8 +92,7 @@ ThemeManager::ThemeManager(QObject* parent)
                            adqt::theme::ThemeManager::instance().config()))),
       m_scheme(generateThemeColorScheme(m_config)),
       m_mode(decodeThemeMode(snow_shot::storage::InterfaceSettings().themeMode())),
-      m_baseAppFont(QApplication::font()), m_baseFontSize(m_config.fontSize),
-      m_appFontSizePercentage(storage::InterfaceSettings().appFontSizePercentage()) {
+      m_appFontSize(storage::InterfaceSettings().appFontSize()) {
     m_config.colorPrimary = storage::InterfaceSettings().themePrimaryColor();
     const QString family = storage::InterfaceSettings().appFontFamily();
     if (!family.isEmpty()) {
@@ -222,7 +100,7 @@ ThemeManager::ThemeManager(QObject* parent)
     }
     applyFontSize(m_config);
     auto& adqtThemeManager = adqt::theme::ThemeManager::instance();
-    adqtThemeManager.setConfig(toAdqtThemeConfig(m_config));
+    adqtThemeManager.setConfig(detail::toAdqtThemeConfig(m_config));
     m_config = toThemeStyleConfig(adqt::theme::makeResolvedTheme(adqtThemeManager.config()));
     m_scheme = generateThemeColorScheme(m_config);
 }
@@ -294,7 +172,7 @@ QJsonObject ThemeManager::updateProgressAppearance() const {
 
 void ThemeManager::setThemeStyleConfig(const ThemeStyleConfig& config) {
     auto& adqtThemeManager = adqt::theme::ThemeManager::instance();
-    adqtThemeManager.setConfig(toAdqtThemeConfig(config));
+    adqtThemeManager.setConfig(detail::toAdqtThemeConfig(config));
     m_config = toThemeStyleConfig(adqt::theme::makeResolvedTheme(adqtThemeManager.config()));
     rebuildScheme();
 }
@@ -323,38 +201,27 @@ bool ThemeManager::setAppFontFamily(const QString& family) {
     return true;
 }
 
-int ThemeManager::appFontSizePercentage() const {
-    return m_appFontSizePercentage;
+int ThemeManager::appFontSize() const {
+    return m_appFontSize;
 }
 
-bool ThemeManager::setAppFontSizePercentage(int percentage) {
-    if (!storage::InterfaceSettings().setAppFontSizePercentage(percentage)) {
+bool ThemeManager::setAppFontSize(int pixelSize) {
+    if (!storage::InterfaceSettings().setAppFontSize(pixelSize)) {
         return false;
     }
-    if (m_appFontSizePercentage != percentage) {
-        m_appFontSizePercentage = percentage;
+    if (m_appFontSize != pixelSize) {
+        m_appFontSize = pixelSize;
         auto config = m_config;
         applyFontSize(config);
         setThemeStyleConfig(config);
-        emit appFontSizePercentageChanged(percentage);
+        emit appFontSizeChanged(pixelSize);
     }
     return true;
 }
 
 void ThemeManager::applyFontSize(ThemeStyleConfig& config) const {
-    const qreal scale = m_appFontSizePercentage / 100.0;
-    config.fontSize = qRound(m_baseFontSize * scale);
-    // Always scale the original font, so repeated edits never compound. At 100%, let
-    // application and native popup fonts resolve their original platform sizes again.
-    if (m_baseAppFont.pointSizeF() > 0) {
-        config.appFont.setPointSizeF(m_baseAppFont.pointSizeF() * scale);
-    } else if (m_baseAppFont.pixelSize() > 0) {
-        config.appFont.setPixelSize(qRound(m_baseAppFont.pixelSize() * scale));
-    }
-    if (m_appFontSizePercentage == 100) {
-        config.appFont.setResolveMask(config.appFont.resolveMask() &
-                                      ~static_cast<uint>(QFont::SizeResolved));
-    }
+    config.fontSize = m_appFontSize;
+    config.appFont.setPixelSize(m_appFontSize);
 }
 
 bool ThemeManager::setThemePrimaryColor(const QColor& color) {
@@ -390,7 +257,7 @@ void ThemeManager::setThemePreset(ThemePreset preset) {
     }
 
     auto& adqtThemeManager = adqt::theme::ThemeManager::instance();
-    adqtThemeManager.setDensity(toAdqtDensity(preset));
+    adqtThemeManager.setDensity(detail::toAdqtDensity(preset));
     m_config = toThemeStyleConfig(adqt::theme::makeResolvedTheme(adqtThemeManager.config()));
     rebuildScheme();
 }
@@ -407,7 +274,7 @@ void ThemeManager::applyThemeMode() {
     }
 
     auto& adqtThemeManager = adqt::theme::ThemeManager::instance();
-    adqtThemeManager.setColorScheme(toAdqtScheme(appearance));
+    adqtThemeManager.setColorScheme(detail::toAdqtScheme(appearance));
     m_config = toThemeStyleConfig(adqt::theme::makeResolvedTheme(adqtThemeManager.config()));
     rebuildScheme();
 }

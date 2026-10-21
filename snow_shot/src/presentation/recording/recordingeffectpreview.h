@@ -14,6 +14,7 @@
 #include <vector>
 
 class CanvasStatusReadout;
+class RecordingStatusPrompt;
 class ScreenRecordingAreaWindow;
 
 struct RecordingEffectsFrame {
@@ -52,9 +53,13 @@ class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRend
                    const QColor& keyboardBackground = QColor(0, 0, 0, 204),
                    const QColor& keyboardForeground = QColor(Qt::white), int keyboardSize = 64,
                    const QColor& highlight = QColor(0, 0, 0, 0), bool recordMouseClicks = false,
-                   int highlightRadius = 41);
+                   int highlightRadius = 41, uint32_t playbackOverlay = 0,
+                   const QColor& progressBarColor = QColor(22, 119, 255),
+                   SnowWebcam* webcam = nullptr, int webcamSize = 150, uint32_t webcamShape = 0);
     void setEligible(bool eligible);
+    void setStatusPrompts(bool enabled, const QString& format, bool microphone, bool speaker);
     void stopAndClear(bool present = false);
+    void prepareForSessionEnd();
     [[nodiscard]] bool active() const;
     [[nodiscard]] quint64 generation() const;
     [[nodiscard]] bool hasFrame() const;
@@ -69,12 +74,16 @@ class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRend
     void synchronize();
     void receiveFrame();
     void clearFrame();
+    void clearPlaybackFrame();
     void updateReadout();
     [[nodiscard]] QTransform outputToCanvas(const QSize& output) const;
     [[nodiscard]] QRegion frameRegion(const RecordingEffectsFrame& frame) const;
     ScreenRecordingAreaWindow& m_area;
     std::unique_ptr<RecordingEffectsSource> m_source;
     CanvasStatusReadout* m_readout;
+    RecordingStatusPrompt* m_statusPrompt;
+    bool m_showStatusPrompts = true;
+    bool m_previewVisible = false;
     QTimer m_configurationTimer;
     QRect m_capture;
     QSize m_output;
@@ -87,9 +96,17 @@ class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRend
     QColor m_keyboardBackground{0, 0, 0, 204};
     QColor m_keyboardForeground{Qt::white};
     int m_keyboardSize = 64;
+    uint32_t m_playbackOverlay = 0;
+    QColor m_progressBarColor{22, 119, 255};
+    std::shared_ptr<RecordingEffectsFrame> m_playbackFrame;
+    bool m_playbackDirty = true;
     bool m_keyboard = false;
+    SnowWebcam* m_webcam = nullptr;
+    int m_webcamSize = 150;
+    uint32_t m_webcamShape = 0;
     bool m_eligible = false;
     bool m_running = false;
+    bool m_sessionEnding = false;
     bool m_failed = false;
     bool m_configurationDirty = true;
     bool m_windowBlocked = false;

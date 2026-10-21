@@ -15,6 +15,7 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QColorSpace>
 #include <QFontDatabase>
 #include <QImage>
 #include <QPainter>
@@ -26,6 +27,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <iostream>
+#include <future>
 #include <limits>
 #include <random>
 #include <utility>
@@ -625,7 +627,7 @@ void embossMatchesPixiFormulaAndPreservesPremultipliedAlpha() {
     snow_canvas_filter_render::Parameters parameters;
     parameters.type = 4;
     parameters.logicalSamplingRadius = 1.0;
-    for (double strength : {0.0, 0.5, 1.0}) {
+    for (double strength : {0.0, 0.2, 0.5, 0.63, 1.0}) {
         QImage output = source;
         parameters.strength = strength;
         snow_canvas_filter_render::apply(output, parameters);
@@ -1779,6 +1781,7 @@ void retainedPenFilterMaskSkipsRasterAndScanOnReuse() {
 }
 
 void penMaskRasterizersAndTailInvalidationStayDeterministic() {
+    bool simdExecuted = false;
     const std::vector<std::vector<SnowArrowPoint>> paths{
         {{-70.0, 0.0}, {70.0, 0.0}},
         {{0.0, -70.0}, {0.0, 70.0}},
@@ -1814,13 +1817,20 @@ void penMaskRasterizersAndTailInvalidationStayDeterministic() {
                 const auto scalar =
                     scalarAtlas.tile(item, centerTile, centerTile, info, dpr, scalarOptions);
                 const auto simd = simdAtlas.tile(item, centerTile, centerTile, info, dpr);
+                simdExecuted = simdExecuted || simdAtlas.takeDiagnostics().simdRasterExecutions > 0;
                 require(scalar && simd && scalar->alpha == simd->alpha,
-                        "scalar and AVX2 Pen Filter tiles must have identical quantized alpha");
+                        "scalar and selected SIMD Pen Filter tiles must have identical quantized "
+                        "alpha");
                 require(scalar->coveredPixelCount == simd->coveredPixelCount,
-                        "scalar and AVX2 Pen Filter tile metadata must match");
+                        "scalar and selected SIMD Pen Filter tile metadata must match");
             }
         }
     }
+
+    require(snow_canvas_filter_render::selectedSimdBackend() ==
+                    snow_canvas_filter_render::SimdBackend::Scalar ||
+                simdExecuted,
+            "available SIMD pen rasterization must execute vector batches");
 
     const SnowArrowPoint longStroke[] = {{-100.0, 0.0}, {100.0, 0.0}};
     SnowSceneDisplayItem raw{};
@@ -2011,6 +2021,46 @@ void exportWithoutRuntimeStillRendersSources() {
             "export sources must remain visible when no runtime scene is available");
 }
 
+void sourceOnlyExportMatchesDocumentSamplingOnWorkers() {
+    QImage source(QSize(9, 7), QImage::Format_ARGB32_Premultiplied);
+    source.setColorSpace(QColorSpace::SRgb);
+    for (int y = 0; y < source.height(); ++y)
+        for (int x = 0; x < source.width(); ++x)
+            source.setPixelColor(x, y, (x + y) % 2 == 0 ? Qt::white : Qt::black);
+    QImage overlay(QSize(3, 4), QImage::Format_ARGB32_Premultiplied);
+    overlay.fill(QColor(240, 60, 30, 128));
+    overlay.setPixelColor(1, 2, QColor(20, 160, 240, 192));
+    const QList<CanvasExportSource> sources{
+        {source, QRectF(-3.25, 2.5, 9, 7), QRectF(-2.25, 3.25, 6.5, 5)},
+        {overlay, QRectF(3.125, 4.75, 1.5, 2), QRectF(3.375, 5, 1, 1.25)}};
+    const QRectF frame(-1.75, 3.5, 7.25, 4.25);
+    SnowCanvasRuntime runtime;
+    for (const QSize size : {QSize(9, 6), QSize(29, 17), QSize(5, 3)}) {
+        const auto expected = runtime.renderToImage(frame, size, sources);
+        snow_canvas_export::resetDiagnosticsForCurrentThread();
+        const auto actual = SnowCanvasRuntime::renderImageSourcesToImage(frame, size, sources);
+        const auto diagnostics = snow_canvas_export::diagnosticsForCurrentThread();
+        require(!actual.isNull() && actual == expected,
+                "source-only export must retain document export sampling at fractional scales");
+        require(actual.devicePixelRatio() == 1 && !actual.colorSpace().isValid(),
+                "source-only exports must leave source color metadata to their caller");
+        require(actual.pixelColor(size.width() - 1, size.height() / 2).alpha() == 0,
+                "source coverage must clip projected pixels outside the retained layer");
+        require(diagnostics.directSourceFastPathCount == 0 &&
+                    diagnostics.fullCompositorPathCount == 0 &&
+                    diagnostics.unsynchronizedFallbackCount == 0,
+                "stateless source rendering must not count as a runtime export or fallback");
+        auto worker = std::async(std::launch::async, [&] {
+            return SnowCanvasRuntime::renderImageSourcesToImage(frame, size, sources);
+        });
+        require(worker.get() == expected,
+                "source-only export must produce the same pixels without a worker runtime");
+    }
+    require(SnowCanvasRuntime::renderImageSourcesToImage({}, QSize(9, 6), sources).isNull() &&
+                SnowCanvasRuntime::renderImageSourcesToImage(frame, {}, sources).isNull(),
+            "source-only export must reject an empty projection");
+}
+
 void plainExportUsesDirectSourceFastPath() {
     SnowCanvasRuntime runtime;
     SnowCanvasWidget canvas(runtime);
@@ -2095,6 +2145,11 @@ void annotatedExportUsesDirectSourceFastPath() {
 }
 
 void scalarAvx2AndThreadingProduceIdenticalPixels() {
+#if defined(Q_PROCESSOR_ARM_64)
+    require(snow_canvas_filter_render::selectedSimdBackend() ==
+                snow_canvas_filter_render::SimdBackend::Neon,
+            "ARM64 must select NEON filter kernels");
+#endif
     std::mt19937 generator(0x5a17u);
     for (const QSize size : {QSize(1, 1), QSize(17, 9), QSize(257, 193), QSize(641, 411)}) {
         QImage source(size, QImage::Format_ARGB32_Premultiplied);
@@ -2119,9 +2174,17 @@ void scalarAvx2AndThreadingProduceIdenticalPixels() {
             snow_canvas_filter_render::apply(
                 scalar, parameters, nullptr,
                 snow_canvas_filter_render::ExecutionOptions{true, true});
+            snow_canvas_filter_render::RenderWorkspace selectedWorkspace(0);
             snow_canvas_filter_render::apply(
-                optimized, parameters, nullptr,
+                optimized, parameters, &selectedWorkspace,
                 snow_canvas_filter_render::ExecutionOptions{false, false});
+            if (size.width() >= 8 && (type == 2 || type == 3 || type == 6) &&
+                snow_canvas_filter_render::selectedSimdBackend() !=
+                    snow_canvas_filter_render::SimdBackend::Scalar) {
+                require(selectedWorkspace.diagnostics().backend ==
+                            snow_canvas_filter_render::selectedSimdBackend(),
+                        "selected color SIMD kernels must execute rather than fall back");
+            }
             if (scalar != optimized) {
                 std::cerr << "backend mismatch type=" << type << " size=" << size.width() << 'x'
                           << size.height() << '\n';
@@ -2181,7 +2244,7 @@ void maskedKernelsMatchAcrossBackendsAndRespectBlurMemoryBound() {
     const QRect affected(3, 2, size.width() - 8, size.height() - 7);
     const QImage croppedMask = mask.copy(affected);
     for (std::uint32_t type : {2u, 3u, 4u, 6u}) {
-        for (double strength : {0.0, 0.5, 1.0}) {
+        for (double strength : {0.0, 0.2, 0.5, 0.63, 1.0}) {
             snow_canvas_filter_render::Parameters parameters;
             parameters.type = type;
             parameters.strength = strength;
@@ -2455,13 +2518,18 @@ void croppedCoverageWorkspaceAndFailurePathsStayValid() {
     require(workspace.diagnostics().allocatedBytes == 0,
             "a stable Gaussian frame must allocate zero workspace bytes");
     require(warm == cold, "pooled workspace reuse must not change pixels");
-    if (snow_canvas_filter_render::selectedSimdBackend() ==
-        snow_canvas_filter_render::SimdBackend::Avx2) {
-        require(workspace.diagnostics().backend == snow_canvas_filter_render::SimdBackend::Avx2 &&
-                    workspace.diagnostics().gaussianAvx2Executions > 0,
-                "Gaussian may report AVX2 only after an AVX2 Gaussian stage executes");
-        require(workspace.diagnostics().gaussianDownsampleAvx2Executions > 0 &&
-                    workspace.diagnostics().gaussianReconstructionAvx2Executions > 0,
+    if (snow_canvas_filter_render::selectedSimdBackend() !=
+        snow_canvas_filter_render::SimdBackend::Scalar) {
+        const auto& diagnostics = workspace.diagnostics();
+        require(diagnostics.backend == snow_canvas_filter_render::selectedSimdBackend() &&
+                    diagnostics.gaussianAvx2Executions + diagnostics.gaussianNeonExecutions > 0,
+                "Gaussian may report SIMD only after a vectorized Gaussian stage executes");
+        require(diagnostics.gaussianDownsampleAvx2Executions +
+                            diagnostics.gaussianDownsampleNeonExecutions >
+                        0 &&
+                    diagnostics.gaussianReconstructionAvx2Executions +
+                            diagnostics.gaussianReconstructionNeonExecutions >
+                        0,
                 "Gaussian diagnostics must report downsample and reconstruction SIMD separately");
     }
     workspace.finishFrame();
@@ -2698,6 +2766,51 @@ void runtimeExportUsesExactFractionalProjection() {
             "fractional export must preserve the source pixel before the filter edge");
     require(exported.pixelColor(130, 128) == QColor(135, 225, 245),
             "fractional export must place the filter edge using the exact export projection");
+
+    for (int y = 0; y < base.height(); ++y)
+        for (int x = 0; x < base.width(); ++x)
+            base.setPixelColor(x, y,
+                               QColor((x * 17 + y * 11) % 256, (x * 31 + y * 7) % 256,
+                                      (x * 3 + y * 23) % 256, 48 + (x * 13 + y * 19) % 208));
+    QImage overlay(7, 9, QImage::Format_ARGB32_Premultiplied);
+    for (int y = 0; y < overlay.height(); ++y)
+        for (int x = 0; x < overlay.width(); ++x)
+            overlay.setPixelColor(
+                x, y, QColor((x * 37) % 256, (y * 29) % 256, 190, 32 + (x * 23 + y * 17) % 224));
+    const QList<CanvasExportSource> translucentSources{
+        {base, QRectF(-0.75, -0.5, 100.25, 64.75), QRectF(1.125, 1.75, 90.5, 60.25)},
+        {overlay, QRectF(29.25, 8.125, 10.25, 14.5), QRectF(30.375, 9.25, 7.75, 11.5)}};
+    const QRectF frame(0.25, 0, 64.5, 64);
+    for (const QSize size : {QSize(83, 81), QSize(129, 127), QSize(257, 253)}) {
+        QImage background(size, QImage::Format_ARGB32_Premultiplied);
+        background.fill(Qt::transparent);
+        {
+            // The pre-refactor compositor backdrop contract paints at DPR 1 with
+            // independently projected pixel rectangles, before filtering occurs.
+            QPainter painter(&background);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            const auto project = [&](const QRectF& rect) {
+                const qreal sx = size.width() / frame.width();
+                const qreal sy = size.height() / frame.height();
+                return QRectF((rect.x() - frame.x()) * sx, (rect.y() - frame.y()) * sy,
+                              rect.width() * sx, rect.height() * sy);
+            };
+            for (const auto& source : translucentSources) {
+                painter.save();
+                painter.setClipRect(project(source.coverage), Qt::IntersectClip);
+                painter.drawImage(project(source.canvasRect), source.image);
+                painter.restore();
+            }
+        }
+        const auto expected = runtime.renderToImage(frame, size, translucentSources, background);
+        const auto actual = runtime.renderToImage(frame, size, translucentSources);
+        require(
+            !actual.isNull() && actual == expected,
+            "automatic fractional backdrops must preserve DPR-1 source sampling before filters");
+        require(expected != background,
+                "fractional translucent backdrop comparison must exercise the partial filter");
+    }
 }
 
 void explicitRenderPlanValidatesBoundariesAndCrops() {
@@ -3846,6 +3959,15 @@ void offscreenSerialScenesPreserveExactPainterState() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     snow_canvas_render_diagnostics::setEnabled(true);
+    if (application.arguments().contains(QStringLiteral("--simd-only"))) {
+        scalarAvx2AndThreadingProduceIdenticalPixels();
+        maskedKernelsMatchAcrossBackendsAndRespectBlurMemoryBound();
+        penMaskRasterizersAndTailInvalidationStayDeterministic();
+        adaptiveGaussianReductionAndOpaqueMaskStayValid();
+        gaussianCropMatchesFullFilteringWithoutPaddedDestination();
+        croppedCoverageWorkspaceAndFailurePathsStayValid();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--serial-number-font-only"))) {
         serialNumberFontsStayIdenticalAcrossDirectAndTiledRendering();
         retainedSerialNumberSourcesTrackFontAndRenderHints();
@@ -3854,6 +3976,7 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--export-only"))) {
         exportWithoutRuntimeStillRendersSources();
+        sourceOnlyExportMatchesDocumentSamplingOnWorkers();
         plainExportUsesDirectSourceFastPath();
         annotatedExportUsesDirectSourceFastPath();
         runtimeExportPreservesOffscreenSourceBoundaries();
@@ -3927,6 +4050,7 @@ int main(int argc, char** argv) {
     sparseAndForcedDensePenFiltersMatch();
     customBackdropIsRenderedOnceBelowFilters();
     exportWithoutRuntimeStillRendersSources();
+    sourceOnlyExportMatchesDocumentSamplingOnWorkers();
     plainExportUsesDirectSourceFastPath();
     annotatedExportUsesDirectSourceFastPath();
     scalarAvx2AndThreadingProduceIdenticalPixels();

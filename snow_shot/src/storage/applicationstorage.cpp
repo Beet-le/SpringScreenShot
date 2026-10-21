@@ -1,6 +1,7 @@
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/app/distribution.h"
 #include <QTimer>
 
 #include "snow_shot/presentation/editionfeatures.h"
@@ -152,14 +153,27 @@ ApplicationStorage::resolveDirectory(const StorageInitializationOptions& options
 #endif
     }
     executableDirectory = QDir::cleanPath(executableDirectory);
-    const QString appDataDirectory =
-        QDir::cleanPath(options.appDataDirectory.isEmpty()
-                            ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-                            : options.appDataDirectory);
+    const QString requestedAppData =
+        options.appDataDirectory.isEmpty()
+            ? (app::distribution::isStoreManaged()
+                   ? app::distribution::writableDataDirectory()
+                   : QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+            : options.appDataDirectory;
+    if (requestedAppData.isEmpty()) {
+        StorageDirectorySelection unavailable;
+        unavailable.executableDirectory = executableDirectory;
+        unavailable.fallbackReason = QCoreApplication::translate(
+            "StorageDirectoryChange", "The storage directory path is empty");
+        return unavailable;
+    }
+    const QString appDataDirectory = QDir::cleanPath(requestedAppData);
 
     bool markerPresent = false;
     QString markerError;
-    QString markerDirectory = markerSelection(executableDirectory, &markerPresent, &markerError);
+    QString markerDirectory =
+        app::distribution::isStoreManaged()
+            ? QString()
+            : markerSelection(executableDirectory, &markerPresent, &markerError);
     bool savedSelection = false;
 #ifdef Q_OS_WIN
     QString recoveryWarning;
@@ -234,9 +248,12 @@ StorageResult ApplicationStorage::initialize(const StorageInitializationOptions&
     m_configuration.reset();
     const auto selection = resolveDirectory(options);
     m_executableDirectory = selection.executableDirectory;
-    m_bootstrapDirectory = options.appDataDirectory.isEmpty()
-                               ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-                               : options.appDataDirectory;
+    m_bootstrapDirectory =
+        options.appDataDirectory.isEmpty()
+            ? (app::distribution::isStoreManaged()
+                   ? app::distribution::writableDataDirectory()
+                   : QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+            : options.appDataDirectory;
     const QString effectiveDirectory = selection.effectiveDirectory;
     m_status = {};
     m_status.requestedDirectory = selection.requestedDirectory;

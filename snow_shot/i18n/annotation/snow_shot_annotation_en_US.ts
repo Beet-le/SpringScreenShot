@@ -120,6 +120,10 @@
             <translation>Arabic numerals</translation>
         </message>
         <message>
+            <source>Architect</source>
+            <translation>Architect</translation>
+        </message>
+        <message>
             <source>Arrow</source>
             <translation>Arrow</translation>
         </message>
@@ -144,6 +148,10 @@
             <translation>Arrow stroke width %1</translation>
         </message>
         <message>
+            <source>Artist</source>
+            <translation>Artist</translation>
+        </message>
+        <message>
             <source>Auto Filter</source>
             <translation>Auto Filter</translation>
         </message>
@@ -154,6 +162,10 @@
         <message>
             <source>Auto-scroll interval (scroll to adjust; click to reset to 200 ms)</source>
             <translation>Auto-scroll interval (scroll to adjust; click to reset to 200 ms)</translation>
+        </message>
+        <message>
+            <source>Available for multi-region selections</source>
+            <translation>Available for multi-region selections</translation>
         </message>
         <message>
             <source>Avatar</source>
@@ -208,6 +220,10 @@
             <translation>Capture interface during scrolling screenshot</translation>
         </message>
         <message>
+            <source>Cartoonist</source>
+            <translation>Cartoonist</translation>
+        </message>
+        <message>
             <source>Center horizontally</source>
             <translation>Center horizontally</translation>
         </message>
@@ -230,6 +246,10 @@
         <message>
             <source>Close recording</source>
             <translation>Close recording</translation>
+        </message>
+        <message>
+            <source>Compact layout</source>
+            <translation>Compact layout</translation>
         </message>
         <message>
             <source>Confirm edit</source>
@@ -636,6 +656,10 @@
             <translation>Highlight stroke width %1px</translation>
         </message>
         <message>
+            <source>Horizontal Crop</source>
+            <translation>Horizontal Crop</translation>
+        </message>
+        <message>
             <source>Horizontal scrolling</source>
             <translation>Horizontal scrolling</translation>
         </message>
@@ -646,6 +670,10 @@
         <message>
             <source>Image</source>
             <translation>Image</translation>
+        </message>
+        <message>
+            <source>Image Editing</source>
+            <translation>Image Editing</translation>
         </message>
         <message>
             <source>Image Splitting</source>
@@ -686,6 +714,18 @@
         <message>
             <source>LaTeX-Specific Model</source>
             <translation>LaTeX-Specific Model</translation>
+        </message>
+        <message>
+            <source>Layout compaction disabled</source>
+            <translation>Layout compaction disabled</translation>
+        </message>
+        <message>
+            <source>Layout compaction enabled</source>
+            <translation>Layout compaction enabled</translation>
+        </message>
+        <message>
+            <source>Layout spacing (scroll to adjust; click to reset to 0)</source>
+            <translation>Layout spacing (scroll to adjust; click to reset to 0)</translation>
         </message>
         <message>
             <source>Leader line</source>
@@ -848,6 +888,10 @@
             <translation>Outlined square</translation>
         </message>
         <message>
+            <source>Pan</source>
+            <translation>Pan</translation>
+        </message>
+        <message>
             <source>Pause recording</source>
             <translation>Pause recording</translation>
         </message>
@@ -960,6 +1004,10 @@
             <translation>Record speakers</translation>
         </message>
         <message>
+            <source>Record webcam</source>
+            <translation>Record webcam</translation>
+        </message>
+        <message>
             <source>Recording duration</source>
             <translation>Recording duration</translation>
         </message>
@@ -1042,6 +1090,14 @@
         <message>
             <source>Selected model (%1)</source>
             <translation>Selected model (%1)</translation>
+        </message>
+        <message>
+            <source>Selection background opacity</source>
+            <translation>Selection background opacity</translation>
+        </message>
+        <message>
+            <source>Selection background opacity (scroll to adjust; click to reset to 0%)</source>
+            <translation>Selection background opacity (scroll to adjust; click to reset to 0%)</translation>
         </message>
         <message>
             <source>Send backward</source>
@@ -1182,6 +1238,10 @@
         <message>
             <source>Spotlight</source>
             <translation>Spotlight</translation>
+        </message>
+        <message>
+            <source>Square</source>
+            <translation>Square</translation>
         </message>
         <message>
             <source>Start arrowhead</source>
@@ -1412,6 +1472,10 @@
             <translation>Uppercase letters</translation>
         </message>
         <message>
+            <source>Vertical Crop</source>
+            <translation>Vertical Crop</translation>
+        </message>
+        <message>
             <source>Vertical scrolling</source>
             <translation>Vertical scrolling</translation>
         </message>
@@ -1450,6 +1514,14 @@
         <message>
             <source>Watermark text</source>
             <translation>Watermark text</translation>
+        </message>
+        <message>
+            <source>Webcam Shape</source>
+            <translation>Webcam Shape</translation>
+        </message>
+        <message>
+            <source>Webcam Size</source>
+            <translation>Webcam Size</translation>
         </message>
         <message>
             <source>Yellow</source>

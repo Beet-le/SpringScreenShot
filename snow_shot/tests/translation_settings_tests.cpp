@@ -691,11 +691,6 @@ int main(int argc, char** argv) {
                     QStringLiteral("text_recognition/fill_style"), oldFill),
                 "restore recognition appearance fixture");
 
-        require(!applicationStorage.configuration()
-                        .value(QStringLiteral("text_recognition/direct_ml_acceleration"))
-                        .toBool() &&
-                    !backend.switchValue(settings::SettingsSwitchBinding::DirectMlAcceleration),
-                "DirectML acceleration should be disabled by default");
         const auto binding = settings::SettingsSwitchBinding::OriginalImageTranslation;
         const storage::ScreenshotTranslationSettings translation;
         settings::SettingsRuntimeSession session(settings::builtInSettingsRegistry(), backend);
@@ -747,7 +742,8 @@ int main(int argc, char** argv) {
         for (const QString& action :
              {QStringLiteral("none"), QStringLiteral("reset_zoom"),
               QStringLiteral("thumbnail_mode"), QStringLiteral("hide_to_top"),
-              QStringLiteral("close"), QStringLiteral("destroy")}) {
+              QStringLiteral("show_text_recognition_results"), QStringLiteral("close"),
+              QStringLiteral("destroy")}) {
             require(backend.applySelectValue(pinBinding, action) &&
                         backend.selectValue(pinBinding).toString() == action,
                     "pinned double-click backend must apply every option");
@@ -766,7 +762,8 @@ int main(int argc, char** argv) {
         for (const QString& action :
              {QStringLiteral("none"), QStringLiteral("reset_zoom"),
               QStringLiteral("thumbnail_mode"), QStringLiteral("hide_to_top"),
-              QStringLiteral("close"), QStringLiteral("destroy")}) {
+              QStringLiteral("show_text_recognition_results"), QStringLiteral("close"),
+              QStringLiteral("destroy")}) {
             require(backend.applySelectValue(middleBinding, action) &&
                         backend.selectValue(middleBinding).toString() == action,
                     "pinned middle-click backend must apply every option");
@@ -777,6 +774,23 @@ int main(int argc, char** argv) {
         require(backend.resetSection(settings::SettingsSectionReset::PinToScreenBehavior) &&
                     backend.selectValue(middleBinding).toString() == QStringLiteral("reset_zoom"),
                 "resetting pin behavior must restore reset zoom middle-click");
+        require(
+            session.applySelectValue(pinBinding, QStringLiteral("show_text_recognition_results")) &&
+                backend.selectValue(pinBinding).toString() ==
+                    QStringLiteral("show_text_recognition_results") &&
+                backend.selectValue(middleBinding).toString() == QStringLiteral("reset_zoom") &&
+                session.applySelectValue(middleBinding,
+                                         QStringLiteral("show_text_recognition_results")) &&
+                backend.selectValue(pinBinding).toString() ==
+                    QStringLiteral("show_text_recognition_results") &&
+                backend.selectValue(middleBinding).toString() ==
+                    QStringLiteral("show_text_recognition_results"),
+            "runtime selectors must independently apply text recognition");
+        require(backend.resetSection(settings::SettingsSectionReset::PinToScreenBehavior) &&
+                    backend.selectValue(pinBinding).toString() ==
+                        QStringLiteral("thumbnail_mode") &&
+                    backend.selectValue(middleBinding).toString() == QStringLiteral("reset_zoom"),
+                "resetting recognition mouse actions must restore both defaults");
         const auto fillBinding = settings::SettingsSelectBinding::OcrFillStyle;
         require(backend.selectValue(fillBinding).toString() == QStringLiteral("background_fill"),
                 "OCR fill defaults to Background Fill");
@@ -837,20 +851,21 @@ int main(int argc, char** argv) {
                     !backend.applySelectValue(resizeBinding, QStringLiteral("unsupported")) &&
                     backend.selectValue(resizeBinding).toString() == QStringLiteral("min"),
                 "detector scaling must default to max and persist only supported policies");
-        require(backend.applySelectValue(settings::SettingsSelectBinding::OcrModelType,
-                                         QStringLiteral("medium")) &&
-                    backend.selectValue(settings::SettingsSelectBinding::OcrModelType).toString() ==
-                        QStringLiteral("medium") &&
-                    applicationStorage.configuration().setValue(
-                        QStringLiteral("text_recognition/direct_ml_acceleration"), true) &&
-                    backend.resetSection(settings::SettingsSectionReset::TextRecognition) &&
-                    backend.selectValue(settings::SettingsSelectBinding::OcrModelType).toString() ==
-                        QStringLiteral("small") &&
-                    backend.selectValue(resizeBinding).toString() == QStringLiteral("max") &&
-                    !applicationStorage.configuration()
-                         .value(QStringLiteral("text_recognition/direct_ml_acceleration"))
-                         .toBool(),
-                "reset Text Recognition should restore Small, max scaling, and CPU mode");
+        require(
+            backend.applySelectValue(settings::SettingsSelectBinding::OcrModelType,
+                                     QStringLiteral("medium")) &&
+                backend.selectValue(settings::SettingsSelectBinding::OcrModelType).toString() ==
+                    QStringLiteral("medium") &&
+                !applicationStorage.configuration().setValue(
+                    QStringLiteral("text_recognition/direct_ml_acceleration"), true) &&
+                backend.resetSection(settings::SettingsSectionReset::TextRecognition) &&
+                backend.selectValue(settings::SettingsSelectBinding::OcrModelType).toString() ==
+                    QStringLiteral("small") &&
+                backend.selectValue(resizeBinding).toString() == QStringLiteral("max") &&
+                !applicationStorage.configuration()
+                     .value(QStringLiteral("text_recognition/direct_ml_acceleration"))
+                     .toBool(),
+            "obsolete acceleration settings are rejected and reset restores Small and max scaling");
     }
     require(storage::PinToScreenSettings().setDoubleClickAction(QStringLiteral("reset_zoom")),
             "save pinned double-click action before restart");

@@ -2,6 +2,8 @@
 #include "eraser_toolbar_test_support.h"
 #include "window_close_shortcut_test_support.h"
 #include "../src/presentation/recording/recordingrenderjob.h"
+#include "../src/presentation/recording/recordingrecovery.h"
+#include "snow_shot/app/distribution.h"
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include "recording_effect_test_source.h"
@@ -40,12 +42,15 @@
 #include "physical_key_test_support.h"
 #include "snow_capture.h"
 #include "snow_shot/platform/windowcaptureexclusion.h"
+#include "snow_shot/platform/screenshotwindownames.h"
 #include "snow_recording.h"
 #include "widgets/button.h"
+#include "antd_icons.h"
 #include "../src/presentation/recording/recordingaudiogainpopover.h"
 #include "widgets/popover.h"
 #include "widgets/popup_surface_guard.h"
 #include "widgets/dpi_stable_window_controller.h"
+#include "widgets/message.h"
 
 #include <QApplication>
 #include <QAbstractEventDispatcher>
@@ -55,6 +60,11 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QTemporaryDir>
+#include <QProcess>
+#include <QProcessEnvironment>
+#ifdef Q_OS_WIN
+#include "toolbar_capture_exclusion_native_tests.h"
+#endif
 #include <QElapsedTimer>
 #include <QThread>
 #include <QMouseEvent>
@@ -108,9 +118,13 @@ void setRecordingToolbarAutoHideTestCursor(ScreenRecordingToolbarWindow& toolbar
 
 struct SnowRecordingClipImpl {
     quint64 revision = 0;
+    quint64 position = 0;
+    bool playing = false;
     uint32_t speedPercent = 100;
 };
-struct SnowRecordingClipFrameImpl {};
+struct SnowRecordingClipFrameImpl {
+    QByteArray rgba{32 * 24 * 4, '\x7f'};
+};
 struct SnowRecordingClipExportImpl {};
 struct SnowRecordingSessionImpl {
     QString stagingFile;
@@ -123,7 +137,15 @@ struct SnowRecordingAudioMonitorImpl {
 };
 struct SnowRecordingSourceImpl {};
 struct SnowRecordingRenderTaskImpl {};
+struct SnowWebcam {
+    uint32_t size = 150;
+    uint32_t fps = 30;
+    bool active = false;
+};
 namespace {
+std::atomic<int> webcamCreates = 0, webcamConfigures = 0, webcamDestroys = 0;
+bool failWebcamCreation = false;
+QByteArray webcamError;
 std::vector<std::weak_ptr<RecordingEffectTestState>> effectSources;
 std::unique_ptr<RecordingEffectsSource> testEffectsSource() {
     auto state = std::make_shared<RecordingEffectTestState>();
@@ -138,6 +160,11 @@ std::atomic<int> clipAutoplays = 0;
 std::atomic<int> clipSpeedChanges = 0;
 std::atomic<uint32_t> clipPreviewSpeed = 100, clipExportSpeed = 100;
 bool failClipSpeed = false;
+bool clipPreviewEnabled = false, failClipSeek = false;
+int clipPreviewReads = 0, clipSeekCalls = 0;
+QByteArray clipPreviewError;
+QVector<quint64> clipBoundaries;
+std::function<void(SnowRecordingClipPreview&)> clipPreviewOverride;
 std::atomic<bool> clipDeferred = false;
 QString clipPath;
 quint64 clipFirst = 0, clipEnd = 0;
@@ -189,6 +216,12 @@ std::atomic<bool> sessionDestroyEntered = false;
 std::shared_future<void> sessionCreateGate;
 std::atomic<bool> sessionCreateEntered = false;
 bool recordingFileFixture = false;
+int windowNameLookups = 0;
+QPointF windowNameLookupPoint;
+snow_shot::storage::ScreenshotWindowNameFields windowNameLookupFields;
+std::vector<std::uintptr_t> windowNameLookupExclusions;
+snow_shot::storage::ScreenshotWindowNames desktopWindowNames;
+QString recordingOutputPath;
 std::shared_future<void> clipDestroyGate;
 std::atomic<bool> clipDestroyEntered = false;
 void require(bool condition, const char* message) {
@@ -213,6 +246,16 @@ ScreenshotToolPalette* palette() {
         }
     }
     require(false, "recording toolbar must exist");
+    return nullptr;
+}
+
+ScreenRecordingAreaWindow* recordingAreaWindow() {
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        if (auto* area = qobject_cast<ScreenRecordingAreaWindow*>(widget);
+            area && area->isVisible())
+            return area;
+    }
+    require(false, "recording area must exist");
     return nullptr;
 }
 
@@ -1420,6 +1463,124 @@ void effectsPreviewPhysicalPixels() {
 }
 #endif
 
+void playbackPreviewAtZero() {
+#ifdef Q_OS_WIN
+    // The offscreen QPA does not initialize OLE like Qt's Windows GUI thread does.
+    require(SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)),
+            "playback preview regression must run in the GUI thread's STA apartment");
+    const auto apartment = qScopeGuard([] { CoUninitialize(); });
+#endif
+    auto state = std::make_shared<RecordingEffectTestState>();
+    ScreenRecordingAreaWindow area;
+    area.setRecordingRegion(QRect(40, 40, 640, 480));
+    area.setInputMode(ScreenRecordingAreaWindow::InputMode::PassThrough);
+    RecordingEffectPreview preview(area, std::make_unique<RecordingEffectTestSource>(state));
+    QString previewError;
+    preview.reportError = [&](const QString& error) { previewError = error; };
+    area.show();
+    pumpPreview();
+    const auto configure = [&](uint32_t overlay, const QSize& output) {
+        preview.configure(area.recordingRegion(), output, Qt::transparent, Qt::transparent, false,
+                          500, QColor(0, 0, 0, 204), Qt::white, 64, Qt::transparent, false, 41,
+                          overlay);
+        preview.setEligible(true);
+        pumpPreview();
+        require(previewError.isEmpty(),
+                "zero-second playback preview must initialize without errors");
+    };
+    const auto render = [&] {
+        const qreal dpr = area.devicePixelRatioF();
+        QImage image(
+            QSize(qRound(area.canvas()->width() * dpr), qRound(area.canvas()->height() * dpr)),
+            QImage::Format_RGBA8888_Premultiplied);
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        preview.renderAfterCanvas(painter, {});
+        return image;
+    };
+    const auto visibleBounds = [](const QImage& image) {
+        QRect bounds;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                if (image.pixelColor(x, y).alpha() != 0)
+                    bounds |= QRect(x, y, 1, 1);
+        return bounds;
+    };
+    QImage referenceProgress;
+    QImage referenceTime;
+    for (const QSize output :
+         {QSize(640, 480), QSize(320, 240), QSize(1920, 1080), QSize(3840, 2160)}) {
+        configure(SNOW_RECORDING_PLAYBACK_OVERLAY_PROGRESS_BAR, output);
+        const QImage progress = render();
+        const QRect track = visibleBounds(progress);
+        // Fractional DPI rounds the child canvas outward beyond the exact selection.
+        const QRectF selection = area.selectionRect().translated(-area.canvasGeometry().topLeft());
+        const int selectionBottom = qRound(selection.bottom() * area.devicePixelRatioF()) - 1;
+        const QString trackDescription =
+            QStringLiteral("zero-second progress track: DPR=%1, bounds=%2,%3 %4x%5, canvas=%6x%7, "
+                           "center alpha=%8")
+                .arg(area.devicePixelRatioF())
+                .arg(track.x())
+                .arg(track.y())
+                .arg(track.width())
+                .arg(track.height())
+                .arg(progress.width())
+                .arg(progress.height())
+                .arg(progress.pixelColor(track.center()).alpha());
+        require(!track.isEmpty() && qAbs(track.height() - 12) <= 1 &&
+                    qAbs(track.bottom() - selectionBottom) <= 1 &&
+                    progress.pixelColor(track.center()) == QColor(0, 0, 0, 64),
+                qPrintable(trackDescription));
+        if (referenceProgress.isNull())
+            referenceProgress = progress;
+        require(progress == referenceProgress,
+                "progress preview pixels must not depend on export resolution");
+        configure(SNOW_RECORDING_PLAYBACK_OVERLAY_PLAYBACK_TIME, output);
+        const QImage timer = render();
+        const QRect time = visibleBounds(timer);
+        require(!time.isEmpty() && time.bottom() < track.top(),
+                "switching to zero-second play time must replace the track with a timer badge");
+        if (referenceTime.isNull())
+            referenceTime = timer;
+        require(timer == referenceTime,
+                "playback time preview pixels must not depend on export resolution");
+        require(state->starts == 0 && !state->active,
+                "static playback preview must not start native input observers");
+        preview.setEligible(false);
+        require(visibleBounds(render()).isEmpty(),
+                "starting recording must clear the playback preview");
+        preview.setEligible(true);
+        pumpPreview();
+        require(visibleBounds(render()) == time, "returning to idle must restore zero time");
+        area.hide();
+        require(visibleBounds(render()).isEmpty(), "hiding the area must clear the overlay");
+        area.show();
+        pumpPreview();
+        require(visibleBounds(render()) == time, "showing the area must restore zero time");
+        QDialog modal(&area);
+        modal.setModal(true);
+        modal.show();
+        pumpPreview();
+        require(visibleBounds(render()).isEmpty(), "a modal must suspend the playback preview");
+        modal.close();
+        pumpPreview();
+        require(visibleBounds(render()) == time, "closing a modal must restore zero time");
+        configure(SNOW_RECORDING_PLAYBACK_OVERLAY_NONE, output);
+        require(visibleBounds(render()).isEmpty(), "disabling playback preview must erase it");
+    }
+    preview.configure(area.recordingRegion(), QSize(320, 240), Qt::red, Qt::transparent, false, 500,
+                      QColor(0, 0, 0, 204), Qt::white, 64, Qt::transparent, false, 41,
+                      SNOW_RECORDING_PLAYBACK_OVERLAY_PROGRESS_BAR);
+    pumpPreview();
+    require(state->active && render() != referenceProgress,
+            "mouse effects and playback must share the preview canvas");
+    state->publish(false);
+    pumpPreview();
+    require(render() == referenceProgress,
+            "expiring mouse effects must retain the same fixed-pixel progress track");
+}
+
 void effectsPreviewLifecycle() {
     for (const qreal dpr : {1.0, 1.25, 1.5, 1.75, 2.0}) {
         const QRect selected(-2001, -1103, 641, 479);
@@ -1606,6 +1767,20 @@ void effectsPreviewLifecycle() {
     preview.setEligible(true);
     pumpPreview();
     require(state->active, "a fresh activation must recover after preview failure");
+    const int startsBeforeTermination = state->starts;
+    const int stopsBeforeTermination = state->stops;
+    preview.prepareForSessionEnd();
+    state->frame->error = QStringLiteral("late native failure");
+    state->notify();
+    preview.setEligible(false);
+    preview.configure(area.recordingRegion(), QSize(320, 240), Qt::transparent, Qt::transparent,
+                      false);
+    area.hide();
+    area.show();
+    pumpPreview();
+    require(state->active && state->starts == startsBeforeTermination &&
+                state->stops == stopsBeforeTermination && failures == 1,
+            "terminal preview retains native ownership without joins, restarts, or late UI errors");
 }
 
 void recordingKeyboardFontFollowsApplication() {
@@ -1696,6 +1871,185 @@ void recordingKeyboardColorsFollowBackground() {
                     RecordingKeyboardTheme(pair.first, Qt::green).border == pair.second,
                 "border must blend background toward contrast and preserve its alpha");
     }
+}
+
+void recordingStatusPrompts() {
+    using snow_shot::storage::RecordingSettings;
+    const RecordingSettings settings;
+    const QString previousFormat = settings.outputFormat();
+    const bool previousMicrophone = settings.microphoneEnabled();
+    const bool previousSpeaker = settings.systemAudioEnabled();
+    const int previousDelay = settings.startDelaySeconds();
+    require(settings.showStatusPrompts(), "status prompts are enabled by default");
+    require(settings.setOutputFormat(QStringLiteral("mp4")) &&
+                settings.setMicrophoneEnabled(false) && settings.setSystemAudioEnabled(false) &&
+                settings.setStartDelaySeconds(0),
+            "initialize recording prompt fixture");
+    ScreenRecordingController controller(testEffectsSource);
+    controller.open({40, 40, 640, 480});
+    auto* area = recordingAreaWindow();
+    auto* prompt =
+        area ? area->findChild<QWidget*>(QStringLiteral("screenRecordingStatusPrompt")) : nullptr;
+    require(prompt != nullptr, "recording area must own the status prompt");
+    QElapsedTimer ready;
+    ready.start();
+    while (!prompt->isVisible() && ready.elapsed() < 3000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    require(prompt->isVisible() && !effectSources.back().lock()->active,
+            "status prompts must appear even when all motion effects are disabled");
+    const auto checkCentered = [&] {
+        require(area->selectionRect().contains(prompt->geometry()) &&
+                    QLineF(QRectF(prompt->geometry()).center(), area->selectionRect().center())
+                            .length() <= 1,
+                "status prompts must remain centered inside the recording selection");
+    };
+    checkCentered();
+    require(prompt->testAttribute(Qt::WA_TransparentForMouseEvents) &&
+                prompt->focusPolicy() == Qt::NoFocus,
+            "status prompts must not intercept drawing, region edits or keyboard input");
+    const auto renderPrompt = [&] {
+        QImage image(prompt->size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        prompt->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+        return image;
+    };
+    const QImage disabled = renderPrompt();
+    require(disabled.pixelColor(8, disabled.height() / 2) == QColor(0, 0, 0, 150),
+            "status prompt background must be semi-transparent black");
+    int whitePixels = 0;
+    for (int y = 0; y < disabled.height(); ++y)
+        for (int x = 0; x < disabled.width(); ++x) {
+            const QColor color = disabled.pixelColor(x, y);
+            whitePixels += color.red() > 240 && color.green() > 240 && color.blue() > 240;
+        }
+    require(whitePixels > 20, "format text must remain white beside colored status icons");
+    const auto checkStatusColors = [&](bool success, bool danger) {
+        const auto colors =
+            snow_shot::presentation::styles::ThemeManager::instance().themeColorScheme().map;
+        const QImage image = renderPrompt();
+        const auto countColor = [&](const QColor& expected) {
+            int pixels = 0;
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x) {
+                    const QColor actual = image.pixelColor(x, y);
+                    pixels += qAbs(actual.red() - expected.red()) < 8 &&
+                              qAbs(actual.green() - expected.green()) < 8 &&
+                              qAbs(actual.blue() - expected.blue()) < 8;
+                }
+            return pixels;
+        };
+        require((countColor(colors.colorSuccess) > 5) == success &&
+                    (countColor(colors.colorError) > 5) == danger,
+                "audio icons must use success for enabled and danger for disabled status");
+    };
+    checkStatusColors(false, true);
+    palette()->recordingMicrophoneToggled(true);
+    pumpPreview();
+    const QImage microphone = renderPrompt();
+    require(prompt->accessibleName() ==
+                    QStringLiteral("Format: MP4; Microphone enabled; Speaker disabled") &&
+                microphone != disabled,
+            "microphone toggles must immediately update the prompt text alternative and icon");
+    checkStatusColors(true, true);
+    palette()->recordingSystemAudioToggled(true);
+    pumpPreview();
+    require(prompt->accessibleName() ==
+                    QStringLiteral("Format: MP4; Microphone enabled; Speaker enabled") &&
+                renderPrompt() != microphone,
+            "speaker toggles must immediately update the prompt text alternative and icon");
+    checkStatusColors(true, false);
+    palette()->recordingMicrophoneToggled(false);
+    pumpPreview();
+    checkStatusColors(true, true);
+    using namespace snow_shot::presentation::styles;
+    const auto previousTheme = ThemeManager::instance().themeMode();
+    for (auto theme : {ThemeMode::Light, ThemeMode::Dark}) {
+        ThemeManager::instance().setThemeMode(theme);
+        pumpPreview();
+        checkStatusColors(true, true);
+    }
+    ThemeManager::instance().setThemeMode(previousTheme);
+    palette()->recordingMicrophoneToggled(true);
+    for (const auto& format : {QStringLiteral("gif"), QStringLiteral("webp")}) {
+        palette()->recordingOutputFormatChanged(format);
+        pumpPreview();
+        require(prompt->accessibleName() ==
+                    QStringLiteral("Format: %1; Microphone disabled; Speaker disabled")
+                        .arg(format == QStringLiteral("gif") ? QStringLiteral("GIF")
+                                                             : QStringLiteral("WebP")),
+                "animated formats must show concise names and disabled audio icons");
+        checkStatusColors(false, true);
+        checkCentered();
+    }
+    palette()->recordingOutputFormatChanged(QStringLiteral("mp4"));
+    pumpPreview();
+    require(prompt->accessibleName() ==
+                QStringLiteral("Format: MP4; Microphone enabled; Speaker enabled"),
+            "switching back to video must restore the selected audio status");
+    require(settings.setShowStatusPrompts(false), "disable status prompts in storage");
+    pumpPreview();
+    require(!prompt->isVisible(), "disabling prompts must hide an existing idle prompt");
+    require(settings.setShowStatusPrompts(true), "restore status prompts");
+    pumpPreview();
+    require(prompt->isVisible(), "enabling prompts must restore an existing idle prompt");
+    area->setRecordingRegion({70, 70, 480, 320});
+    pumpPreview();
+    checkCentered();
+    QFont larger = prompt->font();
+    larger.setPixelSize(24);
+    prompt->setFont(larger);
+    checkCentered();
+    class PromptTranslator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            return QByteArray(context) == "RecordingStatusPrompt"
+                       ? QStringLiteral("Translated: ") + QString::fromUtf8(source)
+                       : QString();
+        }
+    } translator;
+    require(qApp->installTranslator(&translator), "install prompt translation fixture");
+    pumpPreview();
+    require(prompt->accessibleName().startsWith(QStringLiteral("Translated: Format:")),
+            "visible prompts must retranslate on language change");
+    checkCentered();
+    qApp->removeTranslator(&translator);
+    prompt->setFont(area->font());
+    pumpPreview();
+    if (const QString path = qEnvironmentVariable("SNOW_TEST_RECORDING_STATUS_PREVIEW");
+        !path.isEmpty()) {
+        QImage snapshot(area->size(), QImage::Format_ARGB32_Premultiplied);
+        snapshot.fill(QColor(233, 237, 242));
+        {
+            QPainter painter(&snapshot);
+            painter.drawImage(QPoint(), previewImage(*area));
+        }
+        require(snapshot.save(path), "save recording status prompt preview");
+    }
+    controller.startRecording();
+    require(!prompt->isVisible(), "prompts must clear synchronously before recording begins");
+    waitForRecording(controller);
+    palette()->recordingPauseRequested();
+    pumpPreview();
+    require(!prompt->isVisible(), "paused recordings must keep prompts hidden");
+    palette()->recordingResumeRequested();
+    pumpPreview();
+    require(!prompt->isVisible(), "resumed recordings must keep prompts hidden");
+    palette()->recordingStopRequested();
+    waitForIdle(controller);
+    pumpPreview();
+    require(prompt->isVisible(), "returning to idle must restore status prompts");
+    palette()->recordingCloseRequested();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(settings.setOutputFormat(previousFormat) &&
+                settings.setMicrophoneEnabled(previousMicrophone) &&
+                settings.setSystemAudioEnabled(previousSpeaker) &&
+                settings.setStartDelaySeconds(previousDelay),
+            "restore recording prompt fixture preferences");
 }
 
 void controllerPreviewTransitions() {
@@ -2071,6 +2425,19 @@ void recordingCaptureExclusionWiring() {
                     require(drawingPopover->surfaceWidget()->isVisible() == captureToolbar,
                             "unavailable native exclusion keeps drawing popup hidden; capture-on "
                             "shows it");
+                    if (!captureToolbar) {
+                        auto* area = recordingAreaWindow();
+                        auto* messages = area->findChild<adqt::widgets::AdMessage*>();
+                        auto* handle = messages
+                                           ? messages->findChild<adqt::widgets::AdMessageHandle*>()
+                                           : nullptr;
+                        require(messages && messages->count() == 1 && handle &&
+                                    handle->key() ==
+                                        QStringLiteral("recording-toolbar-exclusion-error"),
+                                "capture exclusion warnings must appear in the recording area");
+                        require(toolbar->findChild<adqt::widgets::AdMessage*>() == nullptr,
+                                "capture exclusion warnings must not create toolbar messages");
+                    }
                 }
 #ifdef Q_OS_WIN
                 if (QGuiApplication::platformName() == QStringLiteral("windows")) {
@@ -2672,7 +3039,49 @@ int nativeEffectsPreviewCapture() {
 #endif
 } // namespace
 
+namespace snow_shot::platform {
+storage::ScreenshotWindowNames
+screenshotWindowNamesAtPoint(const QPointF& point, std::span<const std::uintptr_t> excludedWindows,
+                             storage::ScreenshotWindowNameFields fields) {
+    require(QThread::currentThread() == qApp->thread(),
+            "recording names must be resolved on the GUI thread");
+    ++windowNameLookups;
+    windowNameLookupPoint = point;
+    windowNameLookupFields = fields;
+    windowNameLookupExclusions.assign(excludedWindows.begin(), excludedWindows.end());
+    return {fields.applicationName ? desktopWindowNames.applicationName : QString(),
+            fields.windowName ? desktopWindowNames.windowName : QString()};
+}
+} // namespace snow_shot::platform
+
 extern "C" {
+SnowWebcam* snow_webcam_create(uint32_t size, uint32_t fps) {
+    ++webcamCreates;
+    if (failWebcamCreation)
+        return nullptr;
+    return new SnowWebcam{size, fps, false};
+}
+uint8_t snow_webcam_configure(const SnowWebcam* source, uint32_t size, uint32_t fps) {
+    auto* camera = const_cast<SnowWebcam*>(source);
+    camera->size = size;
+    camera->fps = fps;
+    ++webcamConfigures;
+    return 1;
+}
+void snow_webcam_set_active(const SnowWebcam* source, uint8_t active) {
+    if (source)
+        const_cast<SnowWebcam*>(source)->active = active != 0;
+}
+void snow_webcam_retry(const SnowWebcam*) {}
+void snow_webcam_destroy(SnowWebcam* source) {
+    delete source;
+    ++webcamDestroys;
+}
+size_t snow_webcam_error(const SnowWebcam*, char* buffer, size_t capacity) {
+    if (buffer && capacity)
+        qstrncpy(buffer, webcamError.constData(), capacity);
+    return static_cast<size_t>(webcamError.size());
+}
 SnowRecordingResult
 snow_recording_session_create_direct(const SnowCaptureDirectRecordingConfig* config,
                                      SnowRecordingSession** result) {
@@ -2686,6 +3095,7 @@ snow_recording_session_create_direct(const SnowCaptureDirectRecordingConfig* con
         gate.wait();
     }
     lastDirectConfig = *config;
+    recordingOutputPath = QString::fromUtf8(config->output_file_utf8);
     liveSystemGain = config->system_audio_gain_db;
     liveMicrophoneGain = config->microphone_gain_db;
     recordingStopRequested = false;
@@ -2849,12 +3259,19 @@ uint8_t snow_recording_clip_info(const SnowRecordingClip*, SnowRecordingClipInfo
     return 1;
 }
 uint64_t snow_recording_clip_boundary(const SnowRecordingClip*, uint64_t frame) {
+    if (!clipBoundaries.isEmpty())
+        return clipBoundaries.at(static_cast<qsizetype>(frame));
     return frame * 1000000 / 30;
 }
 uint64_t snow_recording_clip_seek(SnowRecordingClip* clip, uint64_t frame, uint64_t end,
                                   uint8_t play) {
+    ++clipSeekCalls;
+    if (failClipSeek)
+        return 0;
     clipFirst = frame;
     clipEnd = end;
+    clip->position = snow_recording_clip_boundary(clip, frame);
+    clip->playing = play != 0;
     clipAutoplays += play != 0;
     return ++clip->revision;
 }
@@ -2866,15 +3283,28 @@ uint64_t snow_recording_clip_set_speed(SnowRecordingClip* clip, uint32_t percent
     clipPreviewSpeed = percent;
     return ++clip->revision;
 }
-SnowRecordingClipFrame* snow_recording_clip_acquire(const SnowRecordingClip*,
-                                                    SnowRecordingClipPreview*) {
-    return nullptr;
+SnowRecordingClipFrame* snow_recording_clip_acquire(const SnowRecordingClip* clip,
+                                                    SnowRecordingClipPreview* preview) {
+    if (!clipPreviewEnabled)
+        return nullptr;
+    auto* frame = new SnowRecordingClipFrame;
+    *preview = {clip->revision, clip->position, clip->playing ? 1u : 0u,
+                reinterpret_cast<const uint8_t*>(frame->rgba.constData()),
+                static_cast<size_t>(frame->rgba.size())};
+    if (clipPreviewOverride)
+        clipPreviewOverride(*preview);
+    ++clipPreviewReads;
+    return frame;
 }
 void snow_recording_clip_frame_destroy(SnowRecordingClipFrame* frame) {
     delete frame;
 }
-size_t snow_recording_clip_error(const SnowRecordingClip*, char*, size_t) {
-    return 0;
+size_t snow_recording_clip_error(const SnowRecordingClip*, char* buffer, size_t capacity) {
+    if (clipPreviewError.isEmpty())
+        return 0;
+    if (buffer && capacity > 0)
+        qstrncpy(buffer, clipPreviewError.constData(), capacity);
+    return static_cast<size_t>(clipPreviewError.size()) + 1;
 }
 SnowRecordingClipExport* snow_recording_clip_export_start(const SnowRecordingClip*, uint64_t first,
                                                           uint64_t end, const char* path) {
@@ -3002,6 +3432,341 @@ const char* snow_recording_last_error_message() {
 }
 }
 
+void waitForWebcam(const std::function<bool()>& condition, const char* message) {
+    QElapsedTimer deadline;
+    deadline.start();
+    while (!condition() && deadline.elapsed() < 3000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents, 50);
+    require(condition(), message);
+}
+
+void prepareWebcamSettings(bool enabled) {
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    require(
+        configuration.setValues(
+            {{QStringLiteral("screen_recording/enable_webcam"), enabled},
+             {QStringLiteral("screen_recording/webcam_size"), 150},
+             {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("square")},
+             {QStringLiteral("screen_recording/show_cursor"), false},
+             {QStringLiteral("screen_recording/show_keyboard"), false},
+             {QStringLiteral("screen_recording/record_mouse_clicks"), false},
+             {QStringLiteral("screen_recording/mouse_highlight_enabled"), false},
+             {QStringLiteral("screen_recording/mouse_trail_color"), QStringLiteral("#00000000")},
+             {QStringLiteral("screen_recording/mouse_click_color"), QStringLiteral("#00000000")},
+             {QStringLiteral("screen_recording/enable_microphone"), false},
+             {QStringLiteral("screen_recording/enable_system_audio"), false},
+             {QStringLiteral("screen_recording/post_processing_enabled"), false},
+             {QStringLiteral("screen_recording/start_delay_seconds"), 0},
+             {QStringLiteral("screen_recording/auto_exit_after_recording_ends"), false}}),
+        "prepare an isolated webcam-only recording");
+}
+
+void recordingWebcamPreviewLifecycle() {
+    prepareWebcamSettings(true);
+    const snow_shot::storage::RecordingSettings settings;
+    const int created = webcamCreates;
+    const int destroyed = webcamDestroys;
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open({80, 80, 320, 240});
+        const auto preview = effectSources.back().lock();
+        waitForWebcam([&] { return preview && preview->active && preview->webcam; },
+                      "saved webcam enablement must start preview without a later UI edit");
+        const auto* camera = preview->webcam;
+        waitForWebcam([&] { return camera->active; }, "showing the selection activates the camera");
+        require(webcamCreates == created + 1 && preview->webcamSize == 150 &&
+                    preview->webcamShape == 0,
+                "preview must share one camera with the saved style");
+        require(settings.setWebcamSize(300) && settings.setWebcamShape(QStringLiteral("circle")),
+                "change idle webcam style");
+        waitForWebcam([&] { return preview->webcamSize == 300 && preview->webcamShape == 1; },
+                      "idle saved styles must update the existing preview");
+        require(preview->webcam == camera && camera->size == 300 && webcamCreates == created + 1,
+                "style changes reuse the shared camera source");
+        require(settings.setWebcamEnabled(false), "disable idle webcam");
+        require(!preview->active && !camera->active,
+                "disabling webcam retires preview and capture");
+        require(settings.setWebcamEnabled(true), "re-enable idle webcam");
+        waitForWebcam(
+            [&] { return preview->active && preview->webcam == camera && camera->active; },
+            "re-enabling webcam restores preview on the same source");
+        palette()->recordingCloseRequested();
+        require(!controller.isOpen() && !camera->active, "closing the selection stops capture");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        controller.open({80, 80, 320, 240});
+        const auto reopened = effectSources.back().lock();
+        waitForWebcam([&] { return reopened && reopened->active && reopened->webcam == camera; },
+                      "reopening configures the replacement preview with the retained source");
+        require(webcamCreates == created + 1, "reopening must not create competing camera sources");
+        palette()->recordingCloseRequested();
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(webcamDestroys == destroyed + 1, "controller teardown releases its camera source");
+}
+
+void recordingWarningsUseAreaWindow() {
+    using namespace adqt::widgets;
+    enum class Failure { Initialization, Recording, Paused, Preview };
+    for (const auto failure :
+         {Failure::Initialization, Failure::Recording, Failure::Paused, Failure::Preview}) {
+        prepareWebcamSettings(failure != Failure::Preview);
+        const snow_shot::storage::RecordingSettings settings;
+        require(settings.setAutoHideToolbar(false), "keep warning fixture controls visible");
+        if (failure == Failure::Preview)
+            require(settings.setShowKeyboard(true), "enable the failing motion preview");
+        failWebcamCreation = failure == Failure::Initialization;
+        const auto resetFailure = qScopeGuard([] {
+            failWebcamCreation = false;
+            webcamError.clear();
+        });
+        ScreenRecordingController controller([failure] {
+            auto source = testEffectsSource();
+            if (failure == Failure::Preview)
+                effectSources.back().lock()->fail = true;
+            return source;
+        });
+        controller.open({80, 80, 320, 240});
+        auto* controls = palette();
+        auto* toolbar = qobject_cast<ScreenRecordingToolbarWindow*>(controls->window());
+        QPointer<ScreenRecordingAreaWindow> area = recordingAreaWindow();
+        require(area && area->isVisible(), "warning fixture has a visible recording area");
+        auto* messages = AdMessageService::instance(area);
+        if (failure == Failure::Recording || failure == Failure::Paused) {
+            controller.startRecording();
+            waitForRecording(controller);
+            if (failure == Failure::Paused)
+                controls->recordingPauseRequested();
+            toolbar->hide();
+            webcamError = "test camera disconnected";
+        }
+        waitForWebcam([&] { return messages->count() == 1; },
+                      "recording warnings must appear in the recording area");
+        QPointer<AdMessageHandle> handle = messages->findChild<AdMessageHandle*>();
+        const bool preview = failure == Failure::Preview;
+        require(handle &&
+                    handle->key() == (preview ? QStringLiteral("screen-recording-preview-error")
+                                              : QStringLiteral("screen-recording-webcam-error")),
+                "the recording area must receive the original warning");
+        QPointer<QWidget> notice = handle->noticeWidget();
+        require(notice && notice->window() == area,
+                "warning notices must belong to the recording area window");
+        waitForWebcam(
+            [&] {
+                return notice && notice->isVisible() &&
+                       area->rect().contains(QRect(notice->mapTo(area, QPoint()), notice->size()));
+            },
+            "warning notices must settle inside the recording area bounds");
+        require(toolbar->findChild<AdMessage*>() == nullptr,
+                "recording warnings must not create a toolbar message host");
+        toolbar->showWithoutActivating();
+        toolbar->hide();
+        require(handle && handle->isOpen() && notice->isVisible(),
+                "hiding recording controls must preserve recording area warnings");
+        controls->recordingCloseRequested();
+        waitForIdle(controller);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        require(!area && !handle, "closing the recording UI must retire its warning notices");
+    }
+}
+
+void recordingWebcamPreferencesPreserveSessionSnapshots() {
+    enum class Phase { Scheduled, Countdown, Starting, Recording, Paused, Finalizing };
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    for (const bool initiallyEnabled : {false, true}) {
+        for (const auto phase : {Phase::Scheduled, Phase::Countdown, Phase::Starting,
+                                 Phase::Recording, Phase::Paused, Phase::Finalizing}) {
+            prepareWebcamSettings(initiallyEnabled);
+            const snow_shot::storage::RecordingSettings settings;
+            if (phase == Phase::Countdown)
+                require(settings.setStartDelaySeconds(1), "prepare a controlled countdown");
+            ScreenRecordingController controller(testEffectsSource);
+            controller.open({80, 80, 320, 240});
+            std::promise<void> releaseStart;
+            if (phase == Phase::Starting) {
+                sessionCreateEntered = false;
+                sessionCreateGate = releaseStart.get_future().share();
+            }
+            controller.startRecording();
+            const auto recording = [&] {
+                return controller.automationState().value(QStringLiteral("state")) ==
+                       QStringLiteral("recording");
+            };
+            if (phase == Phase::Starting)
+                waitForWebcam([] { return sessionCreateEntered.load(); }, "hold native startup");
+            else if (phase != Phase::Scheduled && phase != Phase::Countdown)
+                waitForWebcam(recording, "start the webcam snapshot fixture");
+            if (phase == Phase::Paused)
+                palette()->recordingPauseRequested();
+            std::promise<void> releaseExport;
+            std::promise<void> enteredExport;
+            auto exportReady = enteredExport.get_future();
+            if (phase == Phase::Finalizing) {
+                exportGate = releaseExport.get_future().share();
+                exportEntered = &enteredExport;
+                palette()->recordingStopRequested();
+                waitForWebcam(
+                    [&] {
+                        return exportReady.wait_for(std::chrono::seconds(0)) ==
+                               std::future_status::ready;
+                    },
+                    "hold recording finalization");
+            }
+            const int configured = webcamConfigures;
+            require(
+                configuration.setValues(
+                    {{QStringLiteral("screen_recording/enable_webcam"), !initiallyEnabled},
+                     {QStringLiteral("screen_recording/webcam_size"), 300},
+                     {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("circle")}}),
+                "save the next recording's webcam preferences during an active session");
+            const auto options =
+                controller.automationState().value(QStringLiteral("options")).toObject();
+            require(options.value(QStringLiteral("webcam")) == initiallyEnabled &&
+                        options.value(QStringLiteral("webcam_size")) == 150 &&
+                        options.value(QStringLiteral("webcam_shape")) == QStringLiteral("square") &&
+                        webcamConfigures == configured,
+                    "saving preferences must preserve the accepted session's webcam snapshot");
+            if (phase == Phase::Starting) {
+                releaseStart.set_value();
+                sessionCreateGate = {};
+            }
+            if (phase == Phase::Scheduled || phase == Phase::Countdown || phase == Phase::Starting)
+                waitForWebcam(recording, "accepted startup retains its original webcam options");
+            require((lastDirectConfig.webcam_source != nullptr) == initiallyEnabled &&
+                        lastDirectConfig.webcam_size == 150 && lastDirectConfig.webcam_shape == 0,
+                    "native recording receives the accepted webcam snapshot");
+            if (phase == Phase::Paused)
+                palette()->recordingResumeRequested();
+            if (phase == Phase::Finalizing) {
+                releaseExport.set_value();
+                exportGate = {};
+                exportEntered = nullptr;
+            } else {
+                palette()->recordingStopRequested();
+            }
+            waitForWebcam(
+                [&] {
+                    return !controller.isRecording() &&
+                           !controller.automationState().value(QStringLiteral("busy")).toBool();
+                },
+                "finalization returns to editable settings");
+            require(palette()->recordingWebcamEnabled() == !initiallyEnabled &&
+                        palette()->recordingWebcamSize() == 300 &&
+                        palette()->recordingWebcamShape() == QStringLiteral("circle"),
+                    "returning to idle applies saved webcam preferences to the toolbar");
+            if (!initiallyEnabled) {
+                const auto preview = effectSources.back().lock();
+                waitForWebcam(
+                    [&] {
+                        return preview && preview->active && preview->webcam &&
+                               preview->webcamSize == 300 && preview->webcamShape == 1;
+                    },
+                    "deferred enablement configures preview before the next recording");
+            }
+            palette()->recordingStartDelaySecondsChanged(0);
+            controller.open({80, 80, 320, 240});
+            controller.startRecording();
+            waitForWebcam(recording, "start the next manual recording");
+            require(
+                (lastDirectConfig.webcam_source != nullptr) == !initiallyEnabled &&
+                    lastDirectConfig.webcam_size == 300 && lastDirectConfig.webcam_shape == 1,
+                "the next manual recording receives all preferences saved during its predecessor");
+            palette()->recordingCloseRequested();
+            waitForIdle(controller);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+    }
+}
+
+void recordingWebcamAutomationOptionsStayIsolated() {
+    prepareWebcamSettings(false);
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    ScreenRecordingController controller(testEffectsSource);
+    QString error;
+    require(controller.startAutomation({80, 80, 320, 240},
+                                       {{QStringLiteral("webcam"), true},
+                                        {QStringLiteral("webcam_size"), 220},
+                                        {QStringLiteral("webcam_shape"), QStringLiteral("circle")}},
+                                       &error),
+            "start with isolated automation webcam options");
+    waitForWebcam([&] { return controller.isRecording(); }, "start automated webcam fixture");
+    require(configuration.setValues(
+                {{QStringLiteral("screen_recording/enable_webcam"), true},
+                 {QStringLiteral("screen_recording/webcam_size"), 300},
+                 {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("square")}}),
+            "save manual preferences while automation owns recording");
+    const auto saved = configuration.snapshot();
+    require(controller.controlAutomation(QStringLiteral("stop"), {}, &error),
+            "stop the automated recording");
+    waitForIdle(controller);
+    require(palette()->recordingWebcamSize() == 220 &&
+                palette()->recordingWebcamShape() == QStringLiteral("circle"),
+            "automation retains its isolated webcam options through finalization");
+    controller.startRecording();
+    waitForWebcam([&] { return controller.isRecording(); },
+                  "start a manual session after automation");
+    require(lastDirectConfig.webcam_source && lastDirectConfig.webcam_size == 300 &&
+                lastDirectConfig.webcam_shape == 0 && configuration.snapshot() == saved,
+            "manual startup restores current saved options without overwriting preferences");
+    palette()->recordingCloseRequested();
+    waitForIdle(controller);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+void recordingWebcamSettingsSurviveInterruptedStartup() {
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    for (const bool cancelCountdown : {true, false}) {
+        prepareWebcamSettings(true);
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open({80, 80, 320, 240});
+        std::promise<void> release;
+        if (cancelCountdown) {
+            palette()->recordingStartDelaySecondsChanged(10);
+        } else {
+            sessionCreateEntered = false;
+            sessionCreateGate = release.get_future().share();
+        }
+        controller.startRecording();
+        if (!cancelCountdown)
+            waitForWebcam([] { return sessionCreateEntered.load(); }, "hold the failing startup");
+        require(configuration.setValues(
+                    {{QStringLiteral("screen_recording/enable_webcam"), false},
+                     {QStringLiteral("screen_recording/webcam_size"), 280},
+                     {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("circle")}}),
+                "save webcam preferences before interrupted startup retires");
+        ErrorObserver errors;
+        if (cancelCountdown) {
+            palette()->recordingCloseRequested();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            controller.open({80, 80, 320, 240});
+        } else {
+            qApp->installEventFilter(&errors);
+            failStart = true;
+            release.set_value();
+            sessionCreateGate = {};
+            waitForWebcam(
+                [&] {
+                    return !controller.automationState().value(QStringLiteral("busy")).toBool();
+                },
+                "failed startup returns to editable webcam settings");
+            qApp->removeEventFilter(&errors);
+            failStart = false;
+            require(errors.shown == 1, "the controlled startup failure is reported once");
+        }
+        require(!palette()->recordingWebcamEnabled() && palette()->recordingWebcamSize() == 280 &&
+                    palette()->recordingWebcamShape() == QStringLiteral("circle"),
+                "reopening and startup failure restore all deferred webcam preferences");
+        palette()->recordingStartDelaySecondsChanged(0);
+        controller.startRecording();
+        waitForWebcam([&] { return controller.isRecording(); }, "retry the interrupted recording");
+        require(!lastDirectConfig.webcam_source && lastDirectConfig.webcam_size == 280 &&
+                    lastDirectConfig.webcam_shape == 1,
+                "retry uses preferences saved during the interrupted startup");
+        palette()->recordingCloseRequested();
+        waitForIdle(controller);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+}
+
 void recordingSettingsDialog() {
     using namespace adqt::widgets;
     namespace settings = snow_shot::presentation::settings;
@@ -3054,8 +3819,8 @@ void recordingSettingsDialog() {
                 "recording preferences must keep descriptions out of the compact form rows");
     }
     const int apiModeCount = form->field(QStringLiteral("screen-recording.api-mode")) ? 1 : 0;
-    // Video/audio (4), animation (3), encoding (2), capture (1), interaction (4).
-    require(form->items().size() == expectedCount && expectedCount == 14 + apiModeCount,
+    // Video/audio (4), animation (3), encoding (2), capture (1), interaction (5).
+    require(form->items().size() == expectedCount && expectedCount == 15 + apiModeCount,
             "recording popup must contain exactly the requested settings categories");
     auto* autoHide =
         form->findChild<AdSwitch*>(QStringLiteral("screen-recording.auto-hide-toolbar"));
@@ -3086,6 +3851,10 @@ void recordingSettingsDialog() {
         QStringLiteral("screen-recording.delete-files-on-recording-close"));
     require(deleteOnClose && !deleteOnClose->isChecked(),
             "recording settings include deleting files on close disabled by default");
+    auto* statusPrompts =
+        form->findChild<AdSwitch*>(QStringLiteral("screen-recording.show-status-prompts"));
+    require(statusPrompts && statusPrompts->isChecked(),
+            "recording settings include status prompts enabled by default");
     class SettingsTranslator final : public QTranslator {
       public:
         bool isEmpty() const override {
@@ -3118,10 +3887,18 @@ void recordingSettingsDialog() {
                 form->findChild<AdSelect*>(QStringLiteral("screen-recording.encoder"))
                         ->options()
                         .first()
-                        .label == QStringLiteral("Translated: H.264 (Hardware)"),
+                        .label == QStringLiteral("Translated: H.264 (Hardware)") &&
+                form->findChild<AdSelect*>(QStringLiteral("screen-recording.encoder"))
+                        ->options()
+                        .at(1)
+                        .label == QStringLiteral("Translated: H.265 (Hardware)"),
             "open recording preferences must retranslate their title, labels and options");
     QCoreApplication::removeTranslator(&translator);
     QCoreApplication::processEvents();
+    statusPrompts->setChecked(false);
+    require(!snow_shot::storage::RecordingSettings().showStatusPrompts(),
+            "recording settings prompt switch persists immediately");
+    statusPrompts->setChecked(true);
     autoHide->setChecked(true);
     require(snow_shot::storage::RecordingSettings().autoHideToolbar(),
             "recording settings auto-hide switch persists immediately");
@@ -3179,7 +3956,7 @@ void recordingSettingsDialog() {
     select("screen-recording.frame-rate", 60);
     select("screen-recording.animated-image-clarity", QStringLiteral("1080p"));
     select("screen-recording.animated-image-frame-rate", 15);
-    select("screen-recording.encoder", QStringLiteral("h265"));
+    select("screen-recording.encoder", QStringLiteral("h265_hw"));
     select("screen-recording.encoding-preset", QStringLiteral("medium"));
     auto* quality = form->findChild<AdSlider*>(QStringLiteral("screen-recording.video-quality"));
     require(quality != nullptr && quality->minimum() == 0 && quality->maximum() == 100,
@@ -3202,7 +3979,8 @@ void recordingSettingsDialog() {
     const snow_shot::storage::RecordingSettings saved;
     require(saved.screenRecordingClarity() == QStringLiteral("4k") && saved.frameRate() == 60 &&
                 saved.animatedImageClarity() == QStringLiteral("1080p") &&
-                saved.animatedImageFrameRate() == 15 && saved.encoder() == QStringLiteral("h265") &&
+                saved.animatedImageFrameRate() == 15 &&
+                saved.encoder() == QStringLiteral("h265_hw") &&
                 saved.encodingPreset() == QStringLiteral("medium") && saved.videoQuality() == 65 &&
                 !saved.loopAnimatedImages() && saved.separateAudioTracks() &&
                 !saved.captureToolbarInRecording() && saved.autoHideToolbar(),
@@ -3276,6 +4054,7 @@ void recordingSettingsDialog() {
     require(lastDirectConfig.capture_fps == 30 && lastDirectConfig.maximum_width == 3840 &&
                 lastDirectConfig.maximum_height == 2160 &&
                 lastDirectConfig.codec == SNOW_CAPTURE_VIDEO_CODEC_H265 &&
+                lastDirectConfig.encoder_preference == SNOW_CAPTURE_ENCODER_PREFERENCE_HARDWARE &&
                 lastDirectConfig.preset == SNOW_CAPTURE_VIDEO_ENCODING_PRESET_MEDIUM &&
                 lastDirectConfig.quality == 65 && lastDirectConfig.loop_animated_images == 0 &&
                 lastDirectConfig.audio_mode == SNOW_CAPTURE_RECORDING_AUDIO_SEPARATE &&
@@ -3579,8 +4358,24 @@ void recordingPostProcessingLifecycle() {
         WindowInputBlockObserver toolbarInput;
         area->installEventFilter(&areaInput);
         toolbar->installEventFilter(&toolbarInput);
+        pumpPreview();
+        const QImage withoutPlayback = previewImage(*area->canvas());
+        const QPoint trackPoint(withoutPlayback.width() / 2, withoutPlayback.height() - 2);
         controls->recordingPostProcessingEnabledChanged(true);
+        // macOS resolves the initial native output dimensions asynchronously.
+        // Four zero-duration event pumps need not reach that completion timer.
+        wait(
+            [&] {
+                return previewImage(*area->canvas()).pixelColor(trackPoint) !=
+                       withoutPlayback.pixelColor(trackPoint);
+            },
+            "enabling progress bar must display its zero-second track after preview sizing");
         controls->recordingPostProcessingEffectChanged(QStringLiteral("playback_time"));
+        pumpPreview();
+        const QImage withTime = previewImage(*area->canvas());
+        require(withTime != withoutPlayback &&
+                    withTime.pixelColor(trackPoint) == withoutPlayback.pixelColor(trackPoint),
+                "selecting play time must immediately replace the track with the zero timer");
         controls->recordingProgressBarColorChanged(QColor(20, 100, 200, 128));
         require(settings.postProcessingEnabled() &&
                     settings.postProcessingEffect() == QStringLiteral("playback_time") &&
@@ -3593,6 +4388,9 @@ void recordingPostProcessingLifecycle() {
                     controls->recordingPostProcessingEffect() == QStringLiteral("progress_bar") &&
                     controls->recordingProgressBarColor() == QColor(22, 119, 255),
                 "an open toolbar follows externally reset post-processing preferences");
+        pumpPreview();
+        require(previewImage(*area->canvas()) == withoutPlayback,
+                "disabling post processing through settings must clear the preview overlay");
         controls->recordingPostProcessingEnabledChanged(true);
         controls->recordingPostProcessingEffectChanged(QStringLiteral("playback_time"));
         controls->recordingProgressBarColorChanged(QColor(20, 100, 200, 128));
@@ -3965,6 +4763,56 @@ void recordingPostProcessingLifecycle() {
         require(controller.controlAutomation(QStringLiteral("stop"), {}, &error),
                 "the next recording stops through the real-time path");
         waitForIdle(controller);
+    }
+    {
+        std::promise<void> releaseStart;
+        renderStartGate = releaseStart.get_future().share();
+        renderStartEntered = false;
+        const int oldTasks = taskDestroys.load();
+        const int oldSources = sourceDestroys.load();
+        RecordingRenderJob job(new SnowRecordingSource, false, nullptr, nullptr);
+        int finished = 0;
+        job.finished = [&](RecordingRenderJob::Outcome outcome) {
+            require(outcome == RecordingRenderJob::Outcome::Succeeded,
+                    "completion notification preserves successful publication");
+            ++finished;
+        };
+        job.start();
+        auto* timer = job.findChild<QTimer*>(QStringLiteral("recordingRenderProgressPollTimer"));
+        require(timer, "render progress owns its polling timer");
+        timer->setInterval(60000);
+        wait([] { return renderStartEntered.load(); }, "render start reaches its barrier");
+        releaseStart.set_value();
+        renderStartGate = {};
+        wait([&] { return job.state().value(QStringLiteral("render_duration_ms")) == 2300; },
+             "completed render creation is adopted without waiting for a progress timer");
+        renderState = SNOW_RECORDING_RENDER_STATE_SUCCEEDED;
+        require(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection),
+                "one progress observation sees completed publication");
+        wait([&] { return finished == 1; },
+             "task disposal and source release finish without additional progress timer ticks");
+        require(taskDestroys == oldTasks + 1 && sourceDestroys == oldSources + 1,
+                "completion notifications release native ownership exactly once");
+    }
+    {
+        std::promise<void> releaseStart;
+        renderStartGate = releaseStart.get_future().share();
+        renderStartEntered = false;
+        const int oldSources = sourceDestroys.load();
+        const int oldPolls = renderPolls.load();
+        auto* job = new RecordingRenderJob(new SnowRecordingSource, false, nullptr, nullptr);
+        job->start();
+        wait([] { return renderStartEntered.load(); }, "shutdown test holds render creation");
+        job->prepareForSessionEnd();
+        releaseStart.set_value();
+        renderStartGate = {};
+        wait([] { return activeRenderTasks > 0; }, "native creation completes during shutdown");
+        QCoreApplication::processEvents();
+        require(renderPolls == oldPolls && sourceDestroys == oldSources,
+                "late completion notifications cannot resume UI work during session shutdown");
+        delete job;
+        wait([&] { return sourceDestroys > oldSources; },
+             "explicit teardown still retires native work after notifications are disabled");
     }
     for (const int mode : {0, 1, 2, 3}) {
         wait(
@@ -4451,21 +5299,34 @@ void recordingExportNamingTests(const QString& directory) {
     };
     const snow_shot::storage::RecordingSettings settings;
     const QString previousFilenameFormat = settings.videoFilenameFormat();
+    const QString previousDirectory = settings.videoSaveDirectory();
     const QByteArray previousSourcePath = renderSourcePath;
     const auto restoreFilenameFormat = qScopeGuard([&] {
         require(settings.setVideoFilenameFormat(previousFilenameFormat),
                 "restore video filename format");
+        require(settings.setVideoSaveDirectory(previousDirectory), "restore video directory");
+        desktopWindowNames = {};
         renderSourcePath = previousSourcePath;
     });
     for (const QString& format : {QStringLiteral("mp4"), QStringLiteral("gif"),
                                   QStringLiteral("webp"), QStringLiteral("apng")}) {
         for (bool deferred : {false, true}) {
             const QString mode = deferred ? QStringLiteral("deferred") : QStringLiteral("realtime");
-            require(settings.setVideoFilenameFormat(
-                        QStringLiteral("Video_{'clip.name'}_%1_%2").arg(mode, format)),
-                    "configure a video filename with a deterministic date-time placeholder");
+            desktopWindowNames = {QStringLiteral("Browser/Docs"), QStringLiteral("{YYYY}: A/B")};
+            const QString directoryTemplate =
+                QDir(directory).filePath(QStringLiteral("{AN}/{WN}/%1/%2").arg(mode, format));
+            const QString expandedDirectory = QDir(directory).filePath(
+                QStringLiteral("Browser_Docs/{YYYY}_ A_B/%1/%2").arg(mode, format));
+            require(
+                settings.setVideoSaveDirectory(directoryTemplate) &&
+                    settings.setVideoFilenameFormat(
+                        QStringLiteral("Video_{'clip.name'}_{AN}_{WN}_%1_%2").arg(mode, format)) &&
+                    QDir().mkpath(expandedDirectory),
+                "configure recording directory and filename variables with collision fixtures");
             const QString basePath =
-                QDir(directory).filePath(QStringLiteral("Video_clip.name_%1_%2").arg(mode, format));
+                QDir(expandedDirectory)
+                    .filePath(QStringLiteral("Video_clip.name_Browser_Docs_{YYYY}_ A_B_%1_%2")
+                                  .arg(mode, format));
             const auto path = [&](int suffix) {
                 return basePath + (suffix ? QStringLiteral("_%1").arg(suffix) : QString()) +
                        QStringLiteral(".") + format;
@@ -4482,12 +5343,57 @@ void recordingExportNamingTests(const QString& directory) {
             }
             ScreenRecordingController controller(testEffectsSource);
             QString error;
+            const int beforeLookups = windowNameLookups;
             require(controller.startAutomation(QRect(80, 80, 320, 240),
                                                {{QStringLiteral("post_processing"), deferred},
-                                                {QStringLiteral("format"), format}},
+                                                {QStringLiteral("format"), format},
+                                                {QStringLiteral("capture_toolbar"), !deferred},
+                                                {QStringLiteral("start_delay_seconds"), 0}},
                                                &error),
                     "start export naming fixture");
+            auto* toolbar = qobject_cast<ScreenRecordingToolbarWindow*>(palette()->window());
+            require(toolbar != nullptr, "recording naming fixture has a toolbar");
+            auto* edge = toolbar->autoHideControlWindow();
+            QWidget popup(toolbar, Qt::Tool);
+            popup.show();
+            popup.windowHandle()->setTransientParent(toolbar->windowHandle());
+            QWidget unrelated(nullptr, Qt::Tool);
+            unrelated.show();
+            const auto nativeId = [](QWidget* widget) -> std::optional<std::uintptr_t> {
+#ifdef Q_OS_MACOS
+                return snow_shot::platform::captureWindowId(widget);
+#else
+                return static_cast<std::uintptr_t>(widget->internalWinId());
+#endif
+            };
+            std::vector<std::uintptr_t> expectedExclusions;
+            for (QWidget* widget : QApplication::topLevelWidgets()) {
+                if (qobject_cast<ScreenRecordingAreaWindow*>(widget) || widget == toolbar ||
+                    widget == edge || widget == &popup) {
+                    if (const auto id = nativeId(widget))
+                        expectedExclusions.push_back(*id);
+                }
+            }
             waitForRecording(controller);
+            require(windowNameLookups == beforeLookups + 1 &&
+                        windowNameLookupPoint == QPointF(240, 200) &&
+                        windowNameLookupFields ==
+                            snow_shot::storage::ScreenshotWindowNameFields{true, true} &&
+                        recordingOutputPath == path(2),
+                    "one lookup at the selected region center names both templates before capture");
+            for (const auto id : expectedExclusions)
+                require(std::find(windowNameLookupExclusions.begin(),
+                                  windowNameLookupExclusions.end(),
+                                  id) != windowNameLookupExclusions.end(),
+                        "recording surfaces are ignored even when the toolbar is captured");
+            if (const auto id = nativeId(&unrelated))
+                require(std::find(windowNameLookupExclusions.begin(),
+                                  windowNameLookupExclusions.end(),
+                                  *id) == windowNameLookupExclusions.end(),
+                        "unrelated windows must remain eligible for naming");
+            popup.hide();
+            popup.setParent(nullptr);
+            desktopWindowNames = {QStringLiteral("Other App"), QStringLiteral("Changed title")};
             recordingToolbarButton("Trim Video")->click();
             auto* copy = recordingToolbarButton("Copy recording");
             wait([&] {
@@ -4551,9 +5457,251 @@ void recordingExportNamingTests(const QString& directory) {
                             retained.readAll() == (suffix == 2 ? "original" : "existing"),
                         "cropped exports never replace existing videos or the original");
             }
+            require(windowNameLookups == beforeLookups + 1,
+                    "trimmed Copy and Save retain the names captured at start");
             recordingToolbarButton("Close recording")->click();
             QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         }
+    }
+}
+
+void recordingWindowNameFallbackTests(const QString& directory) {
+    const snow_shot::storage::RecordingSettings settings;
+    const QString previousFilename = settings.videoFilenameFormat();
+    const QString previousDirectory = settings.videoSaveDirectory();
+    const auto restore = qScopeGuard([&] {
+        require(settings.setVideoFilenameFormat(previousFilename) &&
+                    settings.setVideoSaveDirectory(previousDirectory),
+                "restore recording naming settings");
+        desktopWindowNames = {};
+    });
+    const QRect region(-501, -301, 321, 241);
+    ScreenRecordingController controller(testEffectsSource);
+    const auto start = [&](const QJsonObject& options,
+                           snow_shot::storage::ScreenshotWindowNameFields expectedFields,
+                           const QString& expectedPath) {
+        const int expectedLookups = expectedFields.any() ? 1 : 0;
+        const int before = windowNameLookups;
+        QString error;
+        require(controller.startAutomation(region, options, &error), "start window naming case");
+        waitForRecording(controller);
+        require(windowNameLookups == before + expectedLookups &&
+                    recordingOutputPath == expectedPath,
+                "window naming must preserve fallbacks, literal output paths and lookup gating");
+        if (expectedLookups)
+            require(windowNameLookupPoint == QPointF(-340.5, -180.5) &&
+                        windowNameLookupFields == expectedFields,
+                    "recording naming preserves its center and requests only required fields");
+        controller.stopRecordingAndCopy();
+        waitForIdle(controller);
+        require(controller.automationState().value(QStringLiteral("path")).toString() ==
+                    expectedPath,
+                "finalized exports retain the destination resolved at capture start");
+        require(controller.controlAutomation(QStringLiteral("close"), {}, &error),
+                "retire the previous automation session before starting another");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    };
+    const QJsonObject options{{QStringLiteral("post_processing"), false},
+                              {QStringLiteral("format"), QStringLiteral("mp4")},
+                              {QStringLiteral("start_delay_seconds"), 0}};
+    require(settings.setVideoSaveDirectory(directory) &&
+                settings.setVideoFilenameFormat(QStringLiteral("Date_{'only'}_{wn}")),
+            "set a template without exact window variables");
+    start(options, {}, QDir(directory).filePath(QStringLiteral("Date_only_wn.mp4")));
+    require(settings.setVideoFilenameFormat(QStringLiteral("{AN}_{WN}")),
+            "set filename-only window variables");
+    desktopWindowNames = {QStringLiteral("Known/App"), {}};
+    start(options, {true, true}, QDir(directory).filePath(QStringLiteral("Known_App_Unknown.mp4")));
+    require(settings.setVideoFilenameFormat(QStringLiteral("{AN}")),
+            "set application-only filename variables");
+    desktopWindowNames = {QStringLiteral("Known/App"), QStringLiteral("Unused title")};
+    start(options, {true, false}, QDir(directory).filePath(QStringLiteral("Known_App.mp4")));
+    require(settings.setVideoSaveDirectory(QDir(directory).filePath(QStringLiteral("{WN}"))) &&
+                settings.setVideoFilenameFormat(QStringLiteral("Video")),
+            "set title-only directory variables");
+    desktopWindowNames = {QStringLiteral("Unused application"), QStringLiteral("Known/title")};
+    start(options, {false, true},
+          QDir(directory).filePath(QStringLiteral("Known_title/Video.mp4")));
+    require(settings.setVideoSaveDirectory(QDir(directory).filePath(QStringLiteral("{AN}/{WN}"))) &&
+                settings.setVideoFilenameFormat(QStringLiteral("Video")),
+            "set directory-only window variables");
+    desktopWindowNames = {};
+    start(options, {true, true},
+          QDir(directory).filePath(QStringLiteral("Unknown/Unknown/Video.mp4")));
+    const QString literal = QDir(directory).filePath(QStringLiteral("literal_{AN}_{WN}.mp4"));
+    auto explicitPath = options;
+    explicitPath.insert(QStringLiteral("path"), literal);
+    start(explicitPath, {true, true}, literal);
+
+    require(settings.setVideoSaveDirectory(directory) &&
+                settings.setVideoFilenameFormat(QStringLiteral("{AN}_{WN}")),
+            "prepare countdown naming case");
+    auto delayed = options;
+    delayed.insert(QStringLiteral("start_delay_seconds"), 1);
+    desktopWindowNames = {QStringLiteral("Before"), QStringLiteral("Countdown")};
+    const int before = windowNameLookups;
+    QString error;
+    require(controller.startAutomation(region, delayed, &error) && windowNameLookups == before,
+            "countdown must not resolve names before capture starts");
+    desktopWindowNames = {QStringLiteral("After"), QStringLiteral("Countdown")};
+    waitForRecording(controller);
+    require(windowNameLookups == before + 1 &&
+                recordingOutputPath ==
+                    QDir(directory).filePath(QStringLiteral("After_Countdown.mp4")),
+            "new sessions replace old names using the window present after countdown");
+    controller.stopRecordingAndCopy();
+    waitForIdle(controller);
+    require(controller.controlAutomation(QStringLiteral("close"), {}, &error),
+            "close window naming fixture");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+void recordingTrimPlaybackTests(const QString& directory) {
+    clipPreviewEnabled = true;
+    // Uneven presentation boundaries catch attempts to derive a frame from nominal FPS.
+    for (quint64 frame = 0; frame <= 30; ++frame)
+        clipBoundaries.append(frame * frame * 1000000 / 900);
+    const auto restorePreview = qScopeGuard([] {
+        clipPreviewEnabled = false;
+        clipPreviewOverride = {};
+        clipBoundaries.clear();
+        clipPreviewError.clear();
+        failClipSeek = false;
+        clipExportState = SNOW_RECORDING_RENDER_STATE_SUCCEEDED;
+    });
+    const auto wait = [](auto predicate) {
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!predicate() && deadline.elapsed() < 5000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        require(predicate(), "playback fixture receives the requested state");
+    };
+    const auto publish = [&](quint64 position, bool playing, bool stale = false) {
+        const int reads = clipPreviewReads;
+        clipPreviewOverride = [=](SnowRecordingClipPreview& preview) {
+            preview.position_us = position;
+            preview.playing = playing ? 1u : 0u;
+            if (stale)
+                preview.revision = 0;
+        };
+        wait([&] { return clipPreviewReads > reads; });
+        clipPreviewOverride = {};
+    };
+    for (bool deferred : {false, true}) {
+        ScreenRecordingController controller(testEffectsSource);
+        QString error;
+        require(controller.startAutomation(
+                    QRect(80, 80, 320, 240),
+                    {{QStringLiteral("post_processing"), deferred},
+                     {QStringLiteral("path"),
+                      directory + QStringLiteral("/playback-%1.mp4").arg(deferred)}},
+                    &error),
+                "start play/pause fixture");
+        waitForRecording(controller);
+        recordingToolbarButton("Trim Video")->click();
+        auto* copy = recordingToolbarButton("Copy recording");
+        wait([&] { return copy->isEnabled(); });
+        auto* panel = static_cast<RecordingTrimToolbar*>(palette()->recordingTrimPanel());
+        auto* toggle = panel->findChild<adqt::widgets::AdButton*>(
+            QStringLiteral("screenRecordingTrimPlayPause"));
+        auto* replay =
+            panel->findChild<adqt::widgets::AdButton*>(QStringLiteral("screenRecordingReplay"));
+        auto* speed =
+            panel->findChild<adqt::widgets::AdSelect*>(QStringLiteral("screenRecordingTrimSpeed"));
+        auto* first = panel->findChild<QSlider*>(QStringLiteral("screenRecordingTrimStart"));
+        auto* end = panel->findChild<QSlider*>(QStringLiteral("screenRecordingTrimEnd"));
+        require(toggle->isEnabled() && toggle->toolTip() == QStringLiteral("Pause"),
+                "opening trim autoplays and immediately offers Pause");
+        publish(clipBoundaries[7] + 100, true);
+        toggle->click();
+        require(clipFirst == 7 && toggle->toolTip() == QStringLiteral("Play"),
+                "Pause freezes the displayed variable-duration frame");
+        const int seeksBeforeSpeed = clipSeekCalls;
+        speed->setCurrentValue(125u);
+        require(clipSeekCalls == seeksBeforeSpeed && toggle->toolTip() == QStringLiteral("Play"),
+                "changing speed preserves paused playback without seeking");
+        toggle->click();
+        require(clipFirst == 7 && clipPreviewSpeed == 125 &&
+                    toggle->toolTip() == QStringLiteral("Pause"),
+                "Play resumes at the paused frame and retains speed");
+        speed->setCurrentValue(150u);
+        require(toggle->toolTip() == QStringLiteral("Pause"),
+                "changing speed also preserves playing state");
+        failClipSeek = true;
+        toggle->click();
+        failClipSeek = false;
+        require(toggle->toolTip() == QStringLiteral("Pause"),
+                "rejected playback requests do not change the accepted state");
+        const int beforeRapid = clipSeekCalls;
+        toggle->click();
+        toggle->click();
+        require(clipSeekCalls == beforeRapid + 2 && clipFirst == 7 &&
+                    toggle->toolTip() == QStringLiteral("Pause"),
+                "rapid clicks alternate immediately before another preview arrives");
+        publish(clipBoundaries[25], false, true);
+        require(toggle->toolTip() == QStringLiteral("Pause"),
+                "stale preview cannot undo a newer playback intent");
+        toggle->click();
+        require(clipFirst == 7, "stale preview cannot replace the accepted playback position");
+        panel->seekRequested(9);
+        require(clipFirst == 9 && toggle->toolTip() == QStringLiteral("Play"),
+                "timeline scrubbing pauses and updates the next resume position");
+        first->setValue(3);
+        end->setValue(20);
+        require(clipFirst == 19 && toggle->toolTip() == QStringLiteral("Play"),
+                "moving the trim end pauses at the final included frame");
+        toggle->click();
+        require(clipFirst == 19 && clipEnd == 20,
+                "a scrubbed final frame resumes without being mistaken for completion");
+        publish(clipBoundaries[20], false);
+        require(toggle->toolTip() == QStringLiteral("Play"),
+                "natural completion changes the action to Play");
+        toggle->click();
+        require(clipFirst == 3 && clipEnd == 20,
+                "Play after completion restarts at the selected beginning");
+        publish(clipBoundaries[12] + 1, true);
+        replay->click();
+        require(clipFirst == 3 && clipPreviewSpeed == 150 &&
+                    toggle->toolTip() == QStringLiteral("Pause"),
+                "Replay restarts the selection and retains speed");
+        first->setValue(19);
+        publish(clipBoundaries[20], false);
+        toggle->click();
+        require(clipFirst == 19 && clipEnd == 20,
+                "a completed one-frame selection restarts within its boundaries");
+        clipExportState = SNOW_RECORDING_RENDER_STATE_RUNNING;
+        copy->click();
+        const int exportingSeeks = clipSeekCalls;
+        toggle->click();
+        panel->playbackToggleRequested();
+        require(!toggle->isEnabled() && clipSeekCalls == exportingSeeks,
+                "export disables playback and guards direct requests");
+        clipExportState = SNOW_RECORDING_RENDER_STATE_SUCCEEDED;
+        wait([&] { return copy->isEnabled(); });
+        require(toggle->isEnabled() && toggle->toolTip() == QStringLiteral("Play"),
+                "export completion restores paused playback controls");
+        toggle->click();
+        clipPreviewError = "fixture preview failure";
+        wait([&] { return !toggle->isEnabled(); });
+        const int failedSeeks = clipSeekCalls;
+        panel->playbackToggleRequested();
+        require(toggle->toolTip() == QStringLiteral("Play") && copy->isEnabled() &&
+                    clipSeekCalls == failedSeeks,
+                "preview failure disables playback while leaving export available");
+        // A successful export must not re-enable a failed preview.
+        copy->click();
+        wait([&] { return copy->isEnabled(); });
+        require(!toggle->isEnabled(), "busy-state changes preserve playback failure availability");
+        QPointer<RecordingTrimToolbar> retired = panel;
+        recordingToolbarButton("Close recording")->click();
+        if (retired)
+            retired->playbackToggleRequested();
+        require(!controller.isOpen() && clipSeekCalls == failedSeeks,
+                "detaching the editor prevents further playback requests");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        clipPreviewError.clear();
     }
 }
 
@@ -4590,10 +5738,12 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
                 QCoreApplication::processEvents();
                 auto* host = toolbar.paletteHost();
                 QList<QPoint> points{panel->mapToGlobal(panel->rect().center())};
-                for (const char* name : {"screenRecordingReplay", "screenRecordingTrimSpeed",
-                                         "screenRecordingTrimStart", "screenRecordingTrimEnd"}) {
+                for (const char* name : {"screenRecordingReplay", "screenRecordingTrimPlayPause",
+                                         "screenRecordingTrimSpeed", "screenRecordingTrimStart",
+                                         "screenRecordingTrimEnd"}) {
                     auto* control = panel->findChild<QWidget*>(QString::fromLatin1(name));
                     require(control != nullptr, "trim input target exists");
+                    require(control->isEnabled() != busy, "busy trim disables every input");
                     points.append(control->mapToGlobal(control->rect().center()));
                 }
                 for (const auto& point : points) {
@@ -4641,8 +5791,36 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
     RecordingTrimToolbar range(&visualHost);
     range.setTimeline(30, 1000000,
                       [](int frame) { return static_cast<quint64>(frame) * 1000000 / 30; });
-    require(range.size() == QSize(440, 40) && range.firstFrame() == 0 && range.endFrame() == 30,
+    require(range.size() == QSize(480, 40) && range.firstFrame() == 0 && range.endFrame() == 30,
             "trim row starts at Select height with the entire clip selected");
+    auto* playPause =
+        range.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenRecordingTrimPlayPause"));
+    require(playPause && playPause->iconRef() == adqt::icons::antd::outlined::PlayCircle() &&
+                playPause->toolTip() == QStringLiteral("Play") &&
+                playPause->accessibleName() == playPause->toolTip(),
+            "paused trim offers the Ant Design Play Circle action");
+    range.setPlaying(true);
+    require(playPause->iconRef() == adqt::icons::antd::outlined::PauseCircle() &&
+                playPause->toolTip() == QStringLiteral("Pause") &&
+                playPause->accessibleName() == playPause->toolTip(),
+            "playing trim offers the matching Pause Circle action");
+    int toggleRequests = 0;
+    range.playbackToggleRequested = [&] { ++toggleRequests; };
+    for (int key : {Qt::Key_Space, Qt::Key_Return}) {
+        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+        QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+        QApplication::sendEvent(playPause, &press);
+        QApplication::sendEvent(playPause, &release);
+    }
+    require(toggleRequests == 2, "Space and Enter each activate the toggle once");
+    range.setPlaybackAvailable(false);
+    playPause->click();
+    range.setEnabled(false);
+    range.setEnabled(true);
+    require(!playPause->isEnabled() && toggleRequests == 2,
+            "unavailable playback remains disabled after the parent becomes ready");
+    range.setPlaybackAvailable(true);
+    range.setPlaying(false);
     auto* speed =
         range.findChild<adqt::widgets::AdSelect*>(QStringLiteral("screenRecordingTrimSpeed"));
     const QVector<quint32> percents{25, 50, 75, 100, 125, 150, 175, 200, 300};
@@ -4682,8 +5860,9 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
     end->setValue(30);
     first->setValue(0);
     range.seekRequested = [&](int frame) { preview = frame; };
-    QMouseEvent click(QEvent::MouseButtonPress, QPointF(280, 20), QPointF(280, 20), Qt::LeftButton,
-                      Qt::LeftButton, Qt::NoModifier);
+    const QPointF trackCenter((first->x() + first->width() + end->x()) / 2.0, range.height() / 2.0);
+    QMouseEvent click(QEvent::MouseButtonPress, trackCenter, range.mapToGlobal(trackCenter),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&range, &click);
     require(preview == 15, "track scrubbing snaps to the nearest presentation frame");
     first->setValue(6);
@@ -4704,6 +5883,8 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
                 end->toolTip().endsWith(QStringLiteral("00:00.800")),
             "trim tooltips expose frame boundary timecodes after dragging");
     range.setEnabled(false);
+    playPause->click();
+    require(toggleRequests == 2, "busy playback cannot emit toggle requests");
     preview = -1;
     QApplication::sendEvent(&range, &click);
     require(preview == -1, "disabled timeline cannot request a seek");
@@ -4754,6 +5935,11 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
             require(replay->size() == QSize(qRound(32 * scale), qRound(32 * scale)) &&
                         replay->iconSize() == QSize(qRound(24 * scale), qRound(24 * scale)),
                     "Replay uses Selection Tool control and icon dimensions at every scale");
+            require(playPause->size() == replay->size() &&
+                        playPause->iconSize() == replay->iconSize() &&
+                        replay->geometry().right() < playPause->geometry().left() &&
+                        playPause->geometry().right() < speed->geometry().left(),
+                    "playback matches Replay dimensions and sits before speed at every scale");
             require(speed->size() == QSize(qRound(72 * scale), qRound(32 * scale)) &&
                         speed->popupWidth() == qRound(96 * scale) &&
                         replay->geometry().right() < speed->geometry().left(),
@@ -4763,6 +5949,7 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
                         "trim handles provide enlarged scaled drag targets");
                 require(range.rect().contains(handle->geometry()) &&
                             !replay->geometry().intersects(handle->geometry()) &&
+                            !playPause->geometry().intersects(handle->geometry()) &&
                             !speed->geometry().intersects(handle->geometry()),
                         "trim targets stay inside the row and clear of Replay and speed");
             }
@@ -4791,19 +5978,19 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
             for (int y = 0; y < progress.height(); ++y) {
                 if (y >= railTop - 1 && y <= railBottom)
                     continue;
-                for (int x = qRound(230 * scale); x < qRound(330 * scale); ++x)
+                for (int x = qRound(270 * scale); x < qRound(370 * scale); ++x)
                     require(progress.pixelColor(x, y) == advanced.pixelColor(x, y),
                             "playback progress must not draw a marker outside the rail");
             }
-            const qreal trackWidth = range.width() - 176 * scale;
-            const qreal firstX = 148 * scale + trackWidth * 0.2;
-            const qreal endX = 148 * scale + trackWidth * 0.8;
+            const qreal trackWidth = range.width() - 216 * scale;
+            const qreal firstX = 188 * scale + trackWidth * 0.2;
+            const qreal endX = 188 * scale + trackWidth * 0.8;
             for (int y : {railTop, railBottom - 1}) {
                 require(progress.pixelColor(qCeil(firstX), y) ==
-                            progress.pixelColor(qRound(230 * scale), y),
+                            progress.pixelColor(qRound(270 * scale), y),
                         "progress rail meets the start handle with square corners");
                 require(progress.pixelColor(qFloor(endX) - 1, y) ==
-                            progress.pixelColor(qRound(330 * scale), y),
+                            progress.pixelColor(qRound(370 * scale), y),
                         "selected rail meets the end handle with square corners");
             }
             range.setPosition(500000);
@@ -4825,6 +6012,19 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
                                                                           : QStringLiteral("light"))
                                             .arg(qRound(scale * 100))),
                     "save trim visual fixture");
+                for (bool playing : {false, true}) {
+                    range.setPlaying(playing);
+                    require(previewTrimImage(visualHost, visualFont)
+                                .save(renders + QStringLiteral("/trim-%1-%2-%3.png")
+                                                    .arg(theme == ThemeMode::Dark
+                                                             ? QStringLiteral("dark")
+                                                             : QStringLiteral("light"))
+                                                    .arg(qRound(scale * 100))
+                                                    .arg(playing ? QStringLiteral("pause")
+                                                                 : QStringLiteral("play"))),
+                            "save both playback icons at every theme and scale");
+                }
+                range.setPlaying(false);
                 speed->showPopup();
                 QCoreApplication::processEvents();
                 require(
@@ -4879,6 +6079,13 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
     QCoreApplication::installTranslator(&translator);
     QEvent languageChange(QEvent::LanguageChange);
     QApplication::sendEvent(&range, &languageChange);
+    require(playPause->toolTip() == QStringLiteral("Translated Play") &&
+                playPause->accessibleName() == playPause->toolTip(),
+            "Play tooltip and accessible name retranslate live");
+    range.setPlaying(true);
+    require(playPause->toolTip() == QStringLiteral("Translated Pause") &&
+                playPause->accessibleName() == playPause->toolTip(),
+            "Pause tooltip and accessible name use the active language");
     require(first->accessibleName() == QStringLiteral("Translated Trim start") &&
                 range.findChild<adqt::widgets::AdButton*>()->toolTip() ==
                     QStringLiteral("Translated Replay"),
@@ -4891,6 +6098,7 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
                 speed->currentText() == QStringLiteral("Translated 1.75x"),
             "speed accessibility and labels retranslate without changing the rate");
     QCoreApplication::removeTranslator(&translator);
+    recordingTrimPlaybackTests(directory);
     for (bool deferred : {false, true}) {
         ScreenRecordingController controller(testEffectsSource);
         QString error;
@@ -5432,6 +6640,108 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
+void recordingSessionEndPreservationCase(const QString& mode, const QString& directory) {
+    using namespace snow_shot::presentation::recording;
+    using snow_shot::storage::RecordingSettings;
+    const bool deferred = mode == u"deferred";
+    const bool failed = mode == u"failed";
+    const bool timedOut = mode == u"timeout";
+    require(deferred || failed || timedOut || mode == u"direct",
+            "terminal recording case must be recognized");
+    qputenv("LOCALAPPDATA", directory.toUtf8());
+    const RecordingSettings settings;
+    require(settings.setStartDelaySeconds(0) && settings.setPostProcessingEnabled(deferred) &&
+                settings.setDeleteFilesOnRecordingClose(false),
+            "terminal recording fixture must configure its pipeline without a countdown");
+    recordingFileFixture = true;
+    failExport = failed;
+    const QString sourcePath = QDir(directory).filePath(QStringLiteral("retained.snowrec"));
+    renderSourcePath = sourcePath.toUtf8();
+    if (deferred) {
+        QFile source(sourcePath);
+        require(source.open(QIODevice::WriteOnly) && source.write("deferred media") == 14,
+                "deferred fixture needs a durable source file");
+    }
+    auto controller = std::make_unique<ScreenRecordingController>(testEffectsSource);
+    controller->open(QRect(40, 40, 320, 240));
+    controller->startRecording();
+    waitForRecording(*controller);
+    const QString output = QDir::fromNativeSeparators(recordingOutputPath);
+    const QString staging = session.stagingFile;
+    require(starts == 1 && !output.isEmpty() && QFile::exists(staging),
+            "terminal preservation must begin with a live fake native session");
+    const int beforeDestroyed = destroyedSessions.load();
+    const int beforeSources = sourceDestroys.load();
+    std::promise<void> release;
+    std::promise<void> entered;
+    auto enteredFuture = entered.get_future();
+    if (timedOut) {
+        exportGate = release.get_future().share();
+        exportEntered = &entered;
+    }
+    controller->prepareForSessionEnd(timedOut ? 0 : 2000);
+    if (timedOut) {
+        require(enteredFuture.wait_for(std::chrono::seconds(3)) == std::future_status::ready &&
+                    destroyedSessions == beforeDestroyed && exports == 0 && QFile::exists(staging),
+                "expired terminal budget must retain a native owner while finalization is blocked");
+    }
+    const auto markerDirectory = snow_shot::app::distribution::writableDataDirectory();
+    const QString marker =
+        QDir(markerDirectory).filePath(QStringLiteral("recording-recovery.json"));
+    if (snow_shot::app::distribution::isStoreManaged()) {
+        const auto record = loadRecovery(marker);
+        require(record && record->outputPath == output &&
+                    record->sourcePath == (deferred ? sourcePath : QString()),
+                "terminal controller must publish its actual output and deferred recovery paths");
+    }
+    if (timedOut) {
+        release.set_value();
+        QElapsedTimer wait;
+        wait.start();
+        while (destroyedSessions == beforeDestroyed && wait.elapsed() < 3000)
+            QThread::msleep(1);
+        require(destroyedSessions == beforeDestroyed + 1,
+                "terminal worker must eventually release a successfully finalized native owner");
+    }
+    require(recordingStopRequested && exports == 1 && renderStarts == 0 && sourceDiscards == 0,
+            "terminal preparation must freeze and finalize once without rendering or discarding");
+    require(
+        destroyedSessions == beforeDestroyed + (failed ? 0 : 1) &&
+            QFile::exists(staging) == failed && QFile::exists(output) == !failed,
+        "successful stop publishes output while failed stop retains native staging and ownership");
+    require(sourceDestroys == beforeSources + (deferred ? 1 : 0) &&
+                (!deferred || QFileInfo::exists(sourcePath)),
+            "deferred finalization must release its source handle while retaining durable media");
+    controller->prepareForSessionEnd(0);
+    controller.reset();
+    require(
+        exports == 1 && destroyedSessions == beforeDestroyed + (failed ? 0 : 1),
+        "repeated terminal preparation and controller destruction cannot stop or destroy twice");
+}
+
+void recordingSessionEndPreservation() {
+    QTemporaryDir fixture;
+    require(fixture.isValid(), "terminal subprocesses need parent-owned temporary storage");
+    auto environment = QProcessEnvironment::systemEnvironment();
+    for (const auto* key : {"TEMP", "TMP", "TMPDIR"})
+        environment.insert(QString::fromLatin1(key), fixture.path());
+    for (const auto* mode : {"direct", "failed", "deferred", "timeout"}) {
+        QProcess child;
+        child.setProcessEnvironment(environment);
+        child.start(QCoreApplication::applicationFilePath(),
+                    {QStringLiteral("--store-preservation-case=") + QString::fromLatin1(mode),
+                     QStringLiteral("-platform"), QStringLiteral("offscreen")});
+        const bool passed = child.waitForStarted() && child.waitForFinished(15000) &&
+                            child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0;
+        if (!passed) {
+            std::cerr << mode << ": " << child.readAllStandardError().constData();
+            child.kill();
+            child.waitForFinished();
+        }
+        require(passed, "terminal recording integration subprocess must pass");
+    }
+}
+
 int main(int argc, char** argv) {
 #ifdef SNOW_RECORDING_EFFECTS_BENCHMARK
     RecordingEffectsBenchmarkApplication app(argc, argv);
@@ -5451,6 +6761,18 @@ int main(int argc, char** argv) {
     require(RecordingSettings().setCaptureToolbarInRecording(true),
             "capture exclusion must be disabled for fake backend");
 #ifdef Q_OS_WIN
+    if (app.arguments().contains(QStringLiteral("--native-capture-exclusion-only")) ||
+        app.arguments().contains(QStringLiteral("--native-capture-exclusion-affinity-only"))) {
+        ScreenRecordingToolbarWindow toolbar;
+        int result = verifyToolbarCaptureExclusionAffinity(*toolbar.autoHideControlWindow(),
+                                                           "recording-edge", false);
+        result |=
+            app.arguments().contains(QStringLiteral("--native-capture-exclusion-affinity-only"))
+                ? verifyToolbarCaptureExclusionAffinity(toolbar, "recording")
+                : verifyToolbarCaptureExclusion(toolbar, "recording");
+        ApplicationStorage::instance().shutdown();
+        return result;
+    }
     if (app.arguments().contains(QStringLiteral("--native-toolbar-display-only")) ||
         app.arguments().contains(QStringLiteral("--native-toolbar-ready-display-only"))) {
         const int result = recordingToolbarAcrossNativeDisplays(
@@ -5501,10 +6823,26 @@ int main(int argc, char** argv) {
     QApplication::setFont(testFont);
     QFontDatabase::setApplicationFallbackFontFamilies(QChar::Script_Han,
                                                       {QStringLiteral("Snow Recording Test Han")});
+    const QString preservationPrefix = QStringLiteral("--store-preservation-case=");
+    for (const auto& argument : app.arguments()) {
+        if (argument.startsWith(preservationPrefix)) {
+            recordingSessionEndPreservationCase(argument.sliced(preservationPrefix.size()),
+                                                temporary.path());
+            // The terminal controller intentionally retains its Impl/UI owners. Each case owns
+            // one process, matching the native end-session callback's termination semantics.
+            std::_Exit(EXIT_SUCCESS);
+        }
+    }
+    if (app.arguments().contains(QStringLiteral("--store-preservation-only"))) {
+        recordingSessionEndPreservation();
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     const bool trimUiOnly = app.arguments().contains(QStringLiteral("--trim-ui-only"));
     if (app.arguments().contains(QStringLiteral("--export-naming-only"))) {
         QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
         recordingExportNamingTests(temporary.path());
+        recordingWindowNameFallbackTests(temporary.path());
         ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -5760,6 +7098,23 @@ int main(int argc, char** argv) {
         ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (app.arguments().contains(QStringLiteral("--webcam-preview-only"))) {
+        recordingWebcamPreviewLifecycle();
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (app.arguments().contains(QStringLiteral("--warnings-only"))) {
+        recordingWarningsUseAreaWindow();
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (app.arguments().contains(QStringLiteral("--webcam-settings-only"))) {
+        recordingWebcamPreferencesPreserveSessionSnapshots();
+        recordingWebcamAutomationOptionsStayIsolated();
+        recordingWebcamSettingsSurviveInterruptedStartup();
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--automation-only"))) {
         {
             ScreenRecordingController manual(testEffectsSource);
@@ -5844,6 +7199,21 @@ int main(int argc, char** argv) {
                                             {{QStringLiteral("quality"), 101}}, &error) &&
                     error == QStringLiteral("invalid_parameters") && !controller.isOpen(),
                 "out-of-range video quality must reject before opening recording UI");
+        for (const auto value : {49.0, 501.0, 150.5}) {
+            require(!controller.startAutomation(QRect(10, 10, 320, 240),
+                                                {{QStringLiteral("webcam_size"), value}}, &error) &&
+                        !controller.isOpen(),
+                    "automation rejects invalid webcam sizes before opening recording UI");
+        }
+        require(!controller.startAutomation(
+                    QRect(10, 10, 320, 240),
+                    {{QStringLiteral("webcam_shape"), QStringLiteral("oval")}}, &error) &&
+                    !controller.isOpen(),
+                "automation rejects unsupported webcam shapes");
+        require(!controller.startAutomation(QRect(10, 10, 320, 240),
+                                            {{QStringLiteral("webcam"), 1}}, &error) &&
+                    !controller.isOpen(),
+                "automation webcam toggle must be boolean");
         for (const auto radius : {7.0, 129.0, 41.5}) {
             require(!controller.startAutomation(
                         QRect(10, 10, 320, 240),
@@ -5882,12 +7252,16 @@ int main(int argc, char** argv) {
                                             {QStringLiteral("start_delay_seconds"), 0},
                                             {QStringLiteral("frame_rate"), 24},
                                             {QStringLiteral("quality"), 63},
+                                            {QStringLiteral("encoder"), QStringLiteral("h265_hw")},
                                             {QStringLiteral("separate_audio_tracks"), true}},
                                            &error),
                 "automation start must succeed");
         waitForRecording(controller);
         require(!QFileInfo::exists(outputPath),
                 "the controller must leave output publication to the recording exporter");
+        require(lastDirectConfig.codec == SNOW_CAPTURE_VIDEO_CODEC_H265 &&
+                    lastDirectConfig.encoder_preference == SNOW_CAPTURE_ENCODER_PREFERENCE_HARDWARE,
+                "automation HEVC hardware preference must reach capture without changing settings");
         require(lastDirectConfig.capture_fps == 24,
                 "automation frame rate must reach the native capture configuration");
         require(lastDirectConfig.audio_mode == SNOW_CAPTURE_RECORDING_AUDIO_SEPARATE &&
@@ -5925,6 +7299,11 @@ int main(int argc, char** argv) {
         return 0;
     }
 #endif
+    if (app.arguments().contains(QStringLiteral("--playback-preview-only"))) {
+        playbackPreviewAtZero();
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--effects-preview-only"))) {
         class KeyTranslator : public QTranslator {
           public:
@@ -5944,12 +7323,19 @@ int main(int argc, char** argv) {
         require(localized.text.contains(QByteArray("Backspace")) &&
                     localized.text.contains(QByteArray("Num 0")),
                 "key legends must use English names");
+        for (const auto& entry : localized.entries) {
+            require(entry.key_code != 0x5B && entry.key_code != 0x5C &&
+                        (entry.key_code < 0xA0 || entry.key_code > 0xA5),
+                    "physical modifier legends must be resolved from native side and AltGr state");
+        }
         app.removeTranslator(&translator);
         recordingKeyboardFontFollowsApplication();
+        playbackPreviewAtZero();
         effectsPreviewLifecycle();
         areaWindowPaintsInputSurfaceOnlyWhenItIsVisible();
         previewIgnoresEventsOtherThanDialogVisibility();
         recordingKeyboardColorsFollowBackground();
+        recordingStatusPrompts();
         controllerPreviewTransitions();
         ApplicationStorage::instance().shutdown();
         return 0;
