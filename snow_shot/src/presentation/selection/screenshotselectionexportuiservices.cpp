@@ -1412,8 +1412,9 @@ bool ScreenshotSelectionExportUiServices::presentRestoredRecord(
     const screenshot_pinned_restore_geometry::PlacementState restored =
         reconcileRestoreState(record, *targetScreen);
     const auto geometry = [targetScreen](const auto& placement) {
-        return placement.isValid()
-                   ? snow_shot::presentation::pinnedWindowRect(placement, *targetScreen)
+        QScreen* screen = snow_shot::presentation::pinnedDisplay(placement, targetScreen);
+        return placement.isValid() && screen
+                   ? snow_shot::presentation::pinnedWindowRect(placement, *screen)
                    : QRect();
     };
     ScreenshotPinnedWindow::Config config;

@@ -12,6 +12,7 @@
 #include "recordingrenderjob.h"
 #include "recordingrecovery.h"
 #include "snow_shot/app/distribution.h"
+#include "snow_shot/app/mcp/recordingoptioncontracts.h"
 #include "snow_shot/platform/filemanager.h"
 #include "widgets/message.h"
 #include "recordingeffectstyle.h"
@@ -2753,82 +2754,48 @@ bool ScreenRecordingController::startAutomation(const QRect& region, const QJson
         return fail("busy");
     if (!region.isValid() || region.width() > 32768 || region.height() > 32768)
         return fail("invalid_region");
-    const QHash<QString, QStringList> enums{
-        {QStringLiteral("webcam_shape"), {QStringLiteral("square"), QStringLiteral("circle")}},
-        {QStringLiteral("post_processing_effect"),
-         {QStringLiteral("progress_bar"), QStringLiteral("playback_time")}},
-        {QStringLiteral("format"),
-         {QStringLiteral("mp4"), QStringLiteral("gif"), QStringLiteral("apng"),
-          QStringLiteral("webp")}},
-        {QStringLiteral("clarity"),
-         {QStringLiteral("4k"), QStringLiteral("2k"), QStringLiteral("1080p"),
-          QStringLiteral("720p"), QStringLiteral("480p")}},
-        {QStringLiteral("animated_clarity"),
-         {QStringLiteral("1080p"), QStringLiteral("720p"), QStringLiteral("480p")}},
-        {QStringLiteral("encoder"),
-         {QStringLiteral("h264"), QStringLiteral("h265"), QStringLiteral("h264_hw"),
-          QStringLiteral("h265_hw")}},
-        {QStringLiteral("encoding_preset"),
-         {QStringLiteral("ultrafast"), QStringLiteral("veryfast"), QStringLiteral("medium"),
-          QStringLiteral("veryslow"), QStringLiteral("placebo")}}};
-    const QStringList booleans{QStringLiteral("post_processing"),
-                               QStringLiteral("microphone"),
-                               QStringLiteral("system_audio"),
-                               QStringLiteral("separate_audio_tracks"),
-                               QStringLiteral("loop"),
-                               QStringLiteral("capture_toolbar"),
-                               QStringLiteral("show_cursor"),
-                               QStringLiteral("show_keyboard"),
-                               QStringLiteral("webcam"),
-                               QStringLiteral("mouse_highlight"),
-                               QStringLiteral("record_mouse_clicks")};
-    const QStringList colors{
-        QStringLiteral("progress_bar_color"),  QStringLiteral("keyboard_background"),
-        QStringLiteral("keyboard_foreground"), QStringLiteral("mouse_trail"),
-        QStringLiteral("mouse_click"),         QStringLiteral("mouse_highlight_color")};
-    const QHash<QString, QPair<int, int>> integers{
-        {QStringLiteral("system_audio_gain_db"), {-24, 24}},
-        {QStringLiteral("microphone_gain_db"), {-24, 24}},
-        {QStringLiteral("start_delay_seconds"), {0, 10}},
-        {QStringLiteral("frame_rate"), {1, 120}},
-        {QStringLiteral("quality"), {0, 100}},
-        {QStringLiteral("animated_frame_rate"), {1, 24}},
-        {QStringLiteral("mouse_trail_duration_ms"), {100, 2000}},
-        {QStringLiteral("keyboard_size"), {32, 128}},
-        {QStringLiteral("webcam_size"), {50, 500}},
-        {QStringLiteral("mouse_highlight_radius"), {8, 128}}};
+    const auto& contracts = snow_shot::app::mcp::recordingAutomationOptionContracts();
     for (auto it = options.begin(); it != options.end(); ++it) {
-        if (enums.contains(it.key())) {
-            if (!it->isString() || !enums.value(it.key()).contains(it->toString()))
-                return fail("invalid_parameters");
-        } else if (booleans.contains(it.key())) {
-            if (!it->isBool())
-                return fail("invalid_parameters");
-        } else if (colors.contains(it.key())) {
-            const QColor parsed = it.key() == QStringLiteral("progress_bar_color")
-                                      ? progressBarColorFromString(it->toString())
-                                      : QColor(it->toString());
-            if (!it->isString() || !parsed.isValid())
-                return fail("invalid_parameters");
-        } else if (integers.contains(it.key())) {
-            const double n = it->toDouble(-1);
-            const auto range = integers.value(it.key());
-            if (!it->isDouble() || !std::isfinite(n) || std::floor(n) != n || n < range.first ||
-                n > range.second)
-                return fail("invalid_parameters");
-            if (it.key() == QStringLiteral("frame_rate") &&
-                !QList<int>{5, 10, 15, 24, 30, 60, 120, 83}.contains(static_cast<int>(n)))
-                return fail("invalid_parameters");
-            if (it.key() == QStringLiteral("animated_frame_rate") &&
-                !QList<int>{5, 10, 15, 24}.contains(static_cast<int>(n)))
-                return fail("invalid_parameters");
-        } else if (it.key() == QStringLiteral("path")) {
+        const QJsonValue descriptor = contracts.value(it.key());
+        if (!descriptor.isObject())
+            return fail("invalid_parameters");
+        const QJsonObject contract = descriptor.toObject();
+        const QString format = contract.value(QStringLiteral("format")).toString();
+        if (format == QStringLiteral("output-path")) {
             if (!it->isString() || !QFileInfo(it->toString()).isAbsolute() ||
                 QFileInfo::exists(it->toString()) ||
                 !QFileInfo(QFileInfo(it->toString()).absolutePath()).isDir())
                 return fail("output_path_unavailable");
-        } else
+        }
+        const QString type = contract.value(QStringLiteral("type")).toString();
+        if (type == QStringLiteral("boolean")) {
+            if (!it->isBool())
+                return fail("invalid_parameters");
+        } else if (type == QStringLiteral("string")) {
+            if (!it->isString())
+                return fail("invalid_parameters");
+        } else if (type == QStringLiteral("integer")) {
+            const double number = it->toDouble();
+            if (!it->isDouble() || !std::isfinite(number) || std::floor(number) != number)
+                return fail("invalid_parameters");
+            const QJsonValue minimum = contract.value(QStringLiteral("minimum"));
+            const QJsonValue maximum = contract.value(QStringLiteral("maximum"));
+            if ((minimum.isDouble() && number < minimum.toDouble()) ||
+                (maximum.isDouble() && number > maximum.toDouble()))
+                return fail("invalid_parameters");
+        } else {
             return fail("invalid_parameters");
+        }
+        const QJsonValue choices = contract.value(QStringLiteral("enum"));
+        if (choices.isArray() && !choices.toArray().contains(it.value()))
+            return fail("invalid_parameters");
+        if (format == QStringLiteral("qt-color")) {
+            const QColor parsed = it.key() == QStringLiteral("progress_bar_color")
+                                      ? progressBarColorFromString(it->toString())
+                                      : QColor(it->toString());
+            if (!parsed.isValid())
+                return fail("invalid_parameters");
+        }
     }
     const snow_shot::storage::RecordingSettings settings;
     s.outputFormat = options.value(QStringLiteral("format")).toString(settings.outputFormat());

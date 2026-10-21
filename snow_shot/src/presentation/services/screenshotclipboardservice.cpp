@@ -5,6 +5,7 @@
 
 #include "screenshotclipboardperfinstrumentation.h"
 #include "screenshotclipboarddibwriter.h"
+#include "screenshotclipboardfilepayload.h"
 #include "snowimageqtcodec.h"
 #ifdef Q_OS_MACOS
 #include "../../platform/macos/imageclipboard.h"
@@ -23,12 +24,14 @@
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
+#include <QtEndian>
 
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <span>
 #include <utility>
 
 struct ScreenshotClipboardCommitState {
@@ -236,6 +239,40 @@ class ClipboardCommitOperation final : public QObject {
 #include <Windows.h>
 #include <ShlObj.h>
 
+namespace snow_shot::presentation::clipboard_detail {
+WindowsClipboardFileData encodeWindowsClipboardFiles(const QList<QUrl>& urls) {
+    if (urls.isEmpty())
+        return {};
+    QString paths;
+    for (const auto& url : urls) {
+        const QString path = QDir::toNativeSeparators(url.toLocalFile());
+        if (!url.isLocalFile() || path.isEmpty() || path.contains(QChar(u'\0')))
+            return {};
+        paths += path;
+        paths += QChar(u'\0');
+    }
+    paths += QChar(u'\0');
+    constexpr qsizetype headerBytes = sizeof(DROPFILES);
+    if (paths.size() > (std::numeric_limits<qsizetype>::max() - headerBytes) / 2)
+        return {};
+    WindowsClipboardFileData data;
+    data.paths = QByteArray(headerBytes + paths.size() * 2, '\0');
+    DROPFILES header{};
+    header.pFiles = sizeof(DROPFILES);
+    header.fWide = TRUE;
+    std::memcpy(data.paths.data(), &header, sizeof(header));
+    std::memcpy(data.paths.data() + headerBytes, paths.utf16(), size_t(paths.size()) * 2);
+    const QString firstUrl = urls.first().toString();
+    data.wideUrl = QByteArray(reinterpret_cast<const char*>(firstUrl.utf16()), firstUrl.size() * 2);
+    data.wideUrl.append(2, '\0');
+    data.url = firstUrl.toLocal8Bit();
+    data.url.append('\0');
+    data.preferredDropEffect = QByteArray(sizeof(DWORD), '\0');
+    qToLittleEndian(quint32(DROPEFFECT_COPY), data.preferredDropEffect.data());
+    return data;
+}
+} // namespace snow_shot::presentation::clipboard_detail
+
 namespace {
 HWND clipboardOwnerWindow() {
     static const HWND owner =
@@ -394,21 +431,17 @@ HGLOBAL prepareDib(const ScreenshotImageRowSource& source) {
     return dib.finish();
 }
 
-ClipboardPublishAttempt publishClipboardPayload(void** pngHandle, void** dibHandle,
-                                                void** placementHandle, void** appearanceHandle,
-                                                void** fileHandle) {
+struct NativeClipboardFormat {
+    UINT format;
+    void** handle;
+};
+
+ClipboardPublishAttempt publishClipboardFormats(std::span<const NativeClipboardFormat> formats) {
     SNOW_SHOT_CLIPBOARD_PERF_SCOPE("clipboard.publish_total");
-    if (*pngHandle == nullptr || *dibHandle == nullptr) {
-        return {ScreenshotClipboardCommitFailure::InvalidPayload, ERROR_INVALID_DATA};
-    }
-    const UINT pngFormat = RegisterClipboardFormatW(L"PNG");
-    const UINT placementFormat =
-        *placementHandle ? RegisterClipboardFormatW(L"SnowShotScreenshotPlacement") : 0;
-    const UINT appearanceFormat =
-        *appearanceHandle ? RegisterClipboardFormatW(L"SnowShotScreenshotAppearance") : 0;
     const HWND owner = clipboardOwnerWindow();
-    if (pngFormat == 0 || (*placementHandle && placementFormat == 0) ||
-        (*appearanceHandle && appearanceFormat == 0) || owner == nullptr) {
+    if (owner == nullptr || std::any_of(formats.begin(), formats.end(), [](const auto& entry) {
+            return *entry.handle && entry.format == 0;
+        })) {
         return {ScreenshotClipboardCommitFailure::ClipboardUnavailable, GetLastError()};
     }
     if (!OpenClipboard(owner)) {
@@ -420,29 +453,15 @@ ClipboardPublishAttempt publishClipboardPayload(void** pngHandle, void** dibHand
         return {ScreenshotClipboardCommitFailure::ClearFailed, error};
     }
     // Ownership transfers separately for each successful SetClipboardData call.
-    bool published = SetClipboardData(pngFormat, static_cast<HGLOBAL>(*pngHandle)) != nullptr;
-    if (published) {
-        *pngHandle = nullptr;
-        published = SetClipboardData(CF_DIB, static_cast<HGLOBAL>(*dibHandle)) != nullptr;
-        if (published)
-            *dibHandle = nullptr;
-    }
-    if (published && *placementHandle) {
-        published =
-            SetClipboardData(placementFormat, static_cast<HGLOBAL>(*placementHandle)) != nullptr;
-        if (published)
-            *placementHandle = nullptr;
-    }
-    if (published && *appearanceHandle) {
-        published =
-            SetClipboardData(appearanceFormat, static_cast<HGLOBAL>(*appearanceHandle)) != nullptr;
-        if (published)
-            *appearanceHandle = nullptr;
-    }
-    if (published && *fileHandle) {
-        published = SetClipboardData(CF_HDROP, static_cast<HGLOBAL>(*fileHandle)) != nullptr;
-        if (published)
-            *fileHandle = nullptr;
+    bool published = true;
+    for (const auto& entry : formats) {
+        if (*entry.handle) {
+            if (SetClipboardData(entry.format, static_cast<HGLOBAL>(*entry.handle)) == nullptr) {
+                published = false;
+                break;
+            }
+            *entry.handle = nullptr;
+        }
     }
     const DWORD error = published ? ERROR_SUCCESS : GetLastError();
     if (!published) {
@@ -455,6 +474,74 @@ ClipboardPublishAttempt publishClipboardPayload(void** pngHandle, void** dibHand
     }
     SNOW_SHOT_CLIPBOARD_PERF_COUNTER("clipboard.success", 1);
     return {};
+}
+
+ClipboardPublishAttempt publishClipboardPayload(void** pngHandle, void** dibHandle,
+                                                void** placementHandle, void** appearanceHandle,
+                                                void** fileHandle) {
+    if (*pngHandle == nullptr || *dibHandle == nullptr)
+        return {ScreenshotClipboardCommitFailure::InvalidPayload, ERROR_INVALID_DATA};
+    const std::array formats{
+        NativeClipboardFormat{RegisterClipboardFormatW(L"PNG"), pngHandle},
+        NativeClipboardFormat{CF_DIB, dibHandle},
+        NativeClipboardFormat{
+            *placementHandle ? RegisterClipboardFormatW(L"SnowShotScreenshotPlacement") : 0,
+            placementHandle},
+        NativeClipboardFormat{
+            *appearanceHandle ? RegisterClipboardFormatW(L"SnowShotScreenshotAppearance") : 0,
+            appearanceHandle},
+        NativeClipboardFormat{CF_HDROP, fileHandle}};
+    return publishClipboardFormats(formats);
+}
+
+struct NativeClipboardFiles {
+    std::array<void*, 6> handles{};
+    bool valid = false;
+    ~NativeClipboardFiles() {
+        for (void* handle : handles) {
+            if (handle)
+                GlobalFree(static_cast<HGLOBAL>(handle));
+        }
+    }
+};
+
+std::shared_ptr<NativeClipboardFiles> prepareClipboardFiles(const QList<QUrl>& urls,
+                                                            const QByteArray& placement,
+                                                            const QByteArray& appearance) {
+    auto payload = std::make_shared<NativeClipboardFiles>();
+    const auto data = snow_shot::presentation::clipboard_detail::encodeWindowsClipboardFiles(urls);
+    if (!data.isValid())
+        return payload;
+    const std::array bytes{&data.paths, &data.wideUrl, &data.url, &data.preferredDropEffect,
+                           &placement,  &appearance};
+    payload->valid = true;
+    for (size_t index = 0; index < bytes.size(); ++index) {
+        if (!bytes[index]->isEmpty()) {
+            payload->handles[index] = copyToGlobal(*bytes[index]);
+            payload->valid = payload->valid && payload->handles[index] != nullptr;
+        }
+    }
+    return payload;
+}
+
+ClipboardPublishAttempt publishClipboardFiles(NativeClipboardFiles& payload) {
+    if (!payload.valid)
+        return {ScreenshotClipboardCommitFailure::InvalidPayload, ERROR_INVALID_DATA};
+    const std::array formats{
+        NativeClipboardFormat{CF_HDROP, &payload.handles[0]},
+        NativeClipboardFormat{RegisterClipboardFormatW(L"UniformResourceLocatorW"),
+                              &payload.handles[1]},
+        NativeClipboardFormat{RegisterClipboardFormatW(L"UniformResourceLocator"),
+                              &payload.handles[2]},
+        NativeClipboardFormat{RegisterClipboardFormatW(L"Preferred DropEffect"),
+                              &payload.handles[3]},
+        NativeClipboardFormat{
+            payload.handles[4] ? RegisterClipboardFormatW(L"SnowShotScreenshotPlacement") : 0,
+            &payload.handles[4]},
+        NativeClipboardFormat{
+            payload.handles[5] ? RegisterClipboardFormatW(L"SnowShotScreenshotAppearance") : 0,
+            &payload.handles[5]}};
+    return publishClipboardFormats(formats);
 }
 } // namespace
 #endif
@@ -878,9 +965,21 @@ ScreenshotClipboardService::commitMimeData(QClipboard* clipboard, QObject* recei
     const QList<QUrl> fileUrls = fileOnly ? mimeData->urls() : QList<QUrl>{};
     const QByteArray placementBytes = fileOnly ? mimeData->data(placementFormat) : QByteArray{};
     const QByteArray appearanceBytes = fileOnly ? mimeData->data(appearanceFormat) : QByteArray{};
+    ClipboardCommitOperation::Attempt nativeFilePublication;
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    if (!fileUrls.isEmpty() && QGuiApplication::platformName() == QStringLiteral("windows") &&
+        std::all_of(fileUrls.begin(), fileUrls.end(),
+                    [](const QUrl& url) { return url.isLocalFile(); })) {
+        // Qt's OleSetClipboard retries sleep on the GUI thread. Use the same nonblocking native
+        // transaction as image publication so the operation owns retry timing and cancellation.
+        auto files = prepareClipboardFiles(fileUrls, placementBytes, appearanceBytes);
+        nativeFilePublication = [files] { return publishClipboardFiles(*files); };
+    }
+#endif
     const QPointer<QClipboard> guardedClipboard(clipboard);
     auto attempt = [guardedClipboard, holder, publicationId, fileUrls, placementFormat,
-                    placementBytes, appearanceFormat, appearanceBytes]() {
+                    placementBytes, appearanceFormat, appearanceBytes,
+                    nativeFilePublication = std::move(nativeFilePublication)]() {
         if (publicationId != g_latestPublicationId.load(std::memory_order_acquire)) {
             return ClipboardPublishAttempt{};
         }
@@ -891,6 +990,8 @@ ScreenshotClipboardService::commitMimeData(QClipboard* clipboard, QObject* recei
         if (*holder == nullptr) {
             return ClipboardPublishAttempt{ScreenshotClipboardCommitFailure::InvalidPayload, 0};
         }
+        if (nativeFilePublication)
+            return nativeFilePublication();
         if (!fileUrls.isEmpty()) {
             // Qt owns each attempted MIME object, including failed native publications.
             auto* attemptMime = new QMimeData();

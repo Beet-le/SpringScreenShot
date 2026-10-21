@@ -146,6 +146,8 @@ class ApplicationStorage final : public QObject {
 
   private:
     explicit ApplicationStorage(QObject* parent = nullptr);
+    static void releaseApplicationResources();
+    void drainRuntimeWork();
     void updateConfigurationError(const QString& error);
     void updateHistoryError(const QString& error);
     void updateHistoryUsage(const CaptureHistoryUsage& usage);
@@ -165,6 +167,7 @@ class ApplicationStorage final : public QObject {
 
     StorageStatus m_status;
     std::unique_ptr<ConfigurationStore> m_configuration;
+    std::unique_ptr<QTimer> m_pinnedCleanupTimer;
     std::unique_ptr<CaptureHistoryRepository> m_captureHistory;
     std::unique_ptr<PinnedWindowRepository> m_pinnedWindows;
     QThreadPool m_pinnedPreviewPool;

@@ -46,6 +46,7 @@
 #include <QShowEvent>
 #include <QVector>
 #include <QTemporaryDir>
+#include <QScopeGuard>
 #include <QThread>
 
 #include <cstdlib>
@@ -1354,6 +1355,7 @@ void toolbarSkinProfilesAndLifecycle() {
     require(temporary.isValid() &&
                 storage.initialize({temporary.path(), temporary.path(), 60000}).success,
             "initialize isolated toolbar skin configuration");
+    const auto shutdownStorage = qScopeGuard([&storage] { storage.shutdown(); });
     const auto waitUntil = [](const auto& condition) {
         QElapsedTimer timer;
         timer.start();
@@ -2038,6 +2040,14 @@ void speechBubbleReusesShapeControlsWithIndependentStyles() {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    QTemporaryDir storageDirectory;
+    require(storageDirectory.isValid() &&
+                snow_shot::storage::ApplicationStorage::instance()
+                    .initialize({storageDirectory.path(), storageDirectory.path(), 60000})
+                    .success,
+            "initialize isolated toolbar test configuration");
+    const auto shutdownStorage =
+        qScopeGuard([] { snow_shot::storage::ApplicationStorage::instance().shutdown(); });
     if (application.arguments().contains(QStringLiteral("--recording-audio-only"))) {
         recordingAudioIconsFollowSettings();
         return 0;

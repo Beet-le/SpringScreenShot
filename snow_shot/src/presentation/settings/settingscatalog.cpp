@@ -3,7 +3,7 @@
 #include "snow_shot/ocrtextoptions.h"
 #include "snow_shot/translation/translationlanguagecatalog.h"
 
-#include "snow_shot/presentation/editionfeatures.h"
+#include "snow_shot/app/editionfeatures.h"
 
 #include "antd_icons.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
@@ -4356,7 +4356,7 @@ SettingsCatalog::SettingsCatalog(QVector<SettingsPageDefinition> pages,
             for (auto& section : page.sections) {
                 section.items.removeIf([](const SettingsItemDefinition& item) {
                     return !item.configurationKey.isEmpty() &&
-                           !editionConfigurationKeyAvailable(item.configurationKey);
+                           !app::editionConfigurationKeyAvailable(item.configurationKey);
                 });
             }
             page.sections.removeIf(

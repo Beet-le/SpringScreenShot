@@ -13,6 +13,8 @@
 #include "widgets/modal.h"
 #include "widgets/input_text_edit.h"
 #include "widgets/select.h"
+#include "widgets/button.h"
+#include "widgets/context_menu.h"
 
 #include <QAction>
 #include <QApplication>
@@ -61,6 +63,26 @@ class FakeCaptureBackend final : public SelectedTextCaptureBackend {
 void flushEvents() {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QCoreApplication::processEvents();
+}
+
+void triggerTranslationMenuAction(TranslationPageWidget& page, const QString& actionName) {
+    auto* trigger = page.findChild<adqt::widgets::AdButton*>(QStringLiteral("translationActions"));
+    require(trigger != nullptr && trigger->isVisible(),
+            "the translation action trigger is visible");
+    trigger->click();
+    adqt::widgets::AdContextMenu* activeMenu = nullptr;
+    for (auto* menu : page.findChildren<adqt::widgets::AdContextMenu*>(
+             QStringLiteral("translationActionsMenu"))) {
+        if (menu->isPopupVisible() && !menu->isRetiring()) {
+            activeMenu = menu;
+            break;
+        }
+    }
+    require(activeMenu != nullptr, "opening translation actions creates a live popup session");
+    auto* action = activeMenu->findChild<QAction*>(actionName);
+    require(action != nullptr && action->isEnabled(),
+            "the live translation copy action is enabled");
+    action->trigger();
 }
 
 int visibleTranslationWindows() {
@@ -390,7 +412,11 @@ void pageActionsAndLifecycle() {
     }
     copy->click();
     require(qApp->clipboard()->text() == QStringLiteral("translated result") && modal->isOpen(),
-            "copy preserves standalone window");
+            "inline copy preserves standalone window");
+    qApp->clipboard()->setText(QStringLiteral("stale clipboard"));
+    triggerTranslationMenuAction(*page, QStringLiteral("translationCopy"));
+    require(qApp->clipboard()->text() == QStringLiteral("translated result") && modal->isOpen(),
+            "menu copy preserves standalone window");
     styles::ThemeManager::instance().setThemeMode(styles::ThemeMode::Dark);
     flushEvents();
     bool themedLabel = false;
@@ -413,12 +439,7 @@ void pageActionsAndLifecycle() {
     LanguageManager::instance().languageChanged(QStringLiteral("en_US"), QLocale(QLocale::English));
     flushEvents();
     QPointer<TranslationPageWidget> oldPage = page;
-    auto* actions = page->findChild<adqt::widgets::AdButton*>(QStringLiteral("translationActions"));
-    require(actions != nullptr, "standalone page exposes the actions menu trigger");
-    actions->click();
-    auto* copyClose = page->findChild<QAction*>(QStringLiteral("translationCopyAndClose"));
-    require(copyClose != nullptr, "opening actions creates the copy-and-close action");
-    copyClose->trigger();
+    triggerTranslationMenuAction(*page, QStringLiteral("translationCopyAndClose"));
     require(!modal->isOpen() && existingMain.isVisible() && !controller->active(),
             "copy-and-close closes only standalone and deactivates streaming page");
     waitUntil([&] { return server.disconnected(0); }, "closing cancels translation stream");

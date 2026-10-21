@@ -15,14 +15,13 @@ struct PlacementState {
     snow_shot::storage::PinnedWindowPlacement hideToTopPlacement;
 };
 
-// Re-anchor every saved placement onto the target display, retaining its local
-// position, window extent and geometry units whenever it intersects any current
-// usable display area. Only wholly unreachable placements need recovery.
-// Reconcile all variants together so callers derive native rectangles from the
-// same placements used for presentation and subsequent persistence.
+// Preserve each connected display anchor and its local position, window extent
+// and geometry units. Missing displays use the selected fallback. Only wholly
+// unreachable variants need recovery. Keep each resolved placement consistent
+// with the rectangle used for presentation and subsequent persistence.
 [[nodiscard]] PlacementState
 reconcileSavedState(const PlacementState& saved,
-                    const snow_shot::presentation::PinnedDisplayGeometry& targetScreen,
+                    const snow_shot::presentation::PinnedDisplayGeometry& fallbackScreen,
                     const QList<snow_shot::presentation::PinnedDisplayGeometry>& screens);
 
 } // namespace screenshot_pinned_restore_geometry

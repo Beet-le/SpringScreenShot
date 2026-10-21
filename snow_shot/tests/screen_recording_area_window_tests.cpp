@@ -126,6 +126,8 @@ struct RegionMouseInput {
     DWORD removingThread = 0;
     bool failInstall = false;
     bool native = false;
+    bool initialPositionOnly = false;
+    QPoint initialPosition{-80, 120};
 
     static HHOOK WINAPI install(int kind, HOOKPROC callback, HINSTANCE, DWORD) {
         instance->installingThread = GetCurrentThreadId();
@@ -140,6 +142,11 @@ struct RegionMouseInput {
             instance->observed.release();
             SetLastError(ERROR_ACCESS_DENIED);
             return nullptr;
+        }
+        if (instance->initialPositionOnly) {
+            QTimer::singleShot(0, QAbstractEventDispatcher::instance(),
+                               [] { instance->observed.release(); });
+            return reinterpret_cast<HHOOK>(static_cast<INT_PTR>(1));
         }
         QTimer::singleShot(0, QAbstractEventDispatcher::instance(), [callback] {
             require(callback(-1, WM_MOUSEMOVE, 0) == 17,
@@ -173,14 +180,42 @@ struct RegionMouseInput {
         return 17;
     }
 
+    static BOOL WINAPI cursorPosition(LPPOINT point) {
+        if (instance->native)
+            return GetCursorPos(point);
+        point->x = instance->initialPosition.x();
+        point->y = instance->initialPosition.y();
+        return TRUE;
+    }
+
     RecordingRegionMouseApi api() {
         instance = this;
-        return {install, remove, next, [] { return true; }};
+        return {install, remove, next, [] { return true; }, cursorPosition};
     }
 };
 
 void regionObservationNeverWaitsForTheGui() {
     const DWORD guiThread = GetCurrentThreadId();
+    for (const bool retireBeforeDelivery : {false, true}) {
+        RegionMouseInput input;
+        input.initialPositionOnly = true;
+        int deliveries = 0;
+        auto router = std::make_unique<RecordingRegionInputRouter>(
+            [&](const QPoint& point) {
+                require(GetCurrentThreadId() == guiThread && point == input.initialPosition,
+                        "observer startup must publish the current pointer on the GUI thread");
+                ++deliveries;
+            },
+            input.api());
+        require(input.observed.tryAcquire(1, 1000),
+                "observer startup must complete without awaiting movement");
+        require(deliveries == 0, "startup observation must not call widgets from the worker");
+        if (retireBeforeDelivery)
+            router.reset();
+        QCoreApplication::processEvents();
+        require(deliveries == (retireBeforeDelivery ? 0 : 1),
+                "initial routing must deliver once and retire with its observer");
+    }
     for (const bool retireBeforeDelivery : {false, true}) {
         RegionMouseInput input;
         int deliveries = 0;
@@ -324,8 +359,10 @@ bool imageHasVisiblePixel(const QImage& image) {
     return false;
 }
 
-QImage renderWidget(QWidget& widget) {
-    QImage image(widget.size(), QImage::Format_RGBA8888);
+QImage renderWidget(QWidget& widget, qreal scale = 1.0) {
+    QImage image(QSize(qCeil(widget.width() * scale), qCeil(widget.height() * scale)),
+                 QImage::Format_RGBA8888);
+    image.setDevicePixelRatio(scale);
     image.fill(Qt::transparent);
     QPainter painter(&image);
     widget.render(&painter);
@@ -619,15 +656,15 @@ void drawingSurfaceFollowsEffectiveInputMode() {
                         "empty drawing pixels must receive layered-window hits only while drawing");
             }
         }
-#ifdef Q_OS_MACOS
-        // The point-based frame begins at the window origin. Sample its inner gap,
-        // not the visible outer border.
-        const QPoint padding(qFloor(area.selectionRect().left() - 0.5),
-                             qFloor(area.selectionRect().center().y()));
-#else
-        const QPoint padding(0, 0);
-#endif
-        require(image.pixelColor(padding).alpha() == 0,
+        // The window origin can lie on the visible border. Sample the physical
+        // pixel immediately outside the capture instead, inside its transparent gap.
+        const qreal scale = area.devicePixelRatioF();
+        const QImage physicalImage = renderWidget(area, scale);
+        const QPoint padding(qRound(area.selectionRect().left() * scale) - 1,
+                             qRound(area.selectionRect().center().y() * scale));
+        require(physicalImage.rect().contains(padding),
+                "the recording frame must reserve a pixel outside its capture");
+        require(physicalImage.pixelColor(padding).alpha() == 0,
                 "drawing input must not fill the padding outside the recording region");
     };
 
@@ -1353,6 +1390,7 @@ int nativeWebcamGestures() {
         qWarning("Skipping native webcam test: the interactive pointer is unavailable or busy");
         return 77;
     }
+    const HWND foreground = GetForegroundWindow();
     ScreenRecordingAreaWindow area;
     const QRect region(
         ScreenshotGeometryMapper::physicalRectForScreen(*QGuiApplication::primaryScreen())
@@ -1408,16 +1446,29 @@ int nativeWebcamGestures() {
         if (pressed)
             click(MOUSEEVENTF_LEFTUP);
         SetCursorPos(saved.x, saved.y);
+        if (foreground && IsWindow(foreground))
+            SetForegroundWindow(foreground);
     });
     const auto pointerAt = [](QPoint point) {
         POINT actual{};
-        return GetCursorPos(&actual) && QPoint(actual.x, actual.y) == point;
+        const bool readable = GetCursorPos(&actual);
+        const bool matches = readable && QPoint(actual.x, actual.y) == point;
+        if (!matches)
+            qInfo() << "Native webcam pointer mismatch" << "expected" << point << "actual"
+                    << QPoint(actual.x, actual.y) << "readable" << readable;
+        return matches;
     };
     const auto position = [&](QPoint point) {
-        if (!SetCursorPos(point.x(), point.y()))
+        INPUT movement = nativeRegionMovement(point);
+        if (SendInput(1, &movement, sizeof(movement)) != 1)
             return false;
-        QCoreApplication::processEvents();
-        return pointerAt(point);
+        const bool positioned = waitForNativeRegionInput([&] {
+            POINT actual{};
+            return GetCursorPos(&actual) && QPoint(actual.x, actual.y) == point;
+        });
+        if (!positioned)
+            static_cast<void>(pointerAt(point));
+        return positioned;
     };
     const auto unavailable = [] {
         qWarning("Skipping native webcam test: pointer injection is unavailable or interrupted");
@@ -1430,6 +1481,20 @@ int nativeWebcamGestures() {
             return unavailable();
         if (!completed) {
             qWarning("%s", message);
+            POINT nativeOrigin{};
+            ClientToScreen(hwnd, &nativeOrigin);
+            const QPointF local =
+                QPointF(point - QPoint(nativeOrigin.x, nativeOrigin.y)) / area.devicePixelRatioF();
+            qInfo() << "Native webcam routing" << "point" << point << "local" << local
+                    << "initial DPR" << scale << "current DPR" << area.devicePixelRatioF()
+                    << "window" << area.geometry() << "region" << area.recordingRegion()
+                    << "selection" << area.selectionRect() << "control" << control->geometry()
+                    << "visible" << control->isVisible() << "input contains"
+                    << ScreenRecordingAreaWindowTestAccess::inputRegion(area).contains(
+                           local.toPoint())
+                    << "observer" << ScreenRecordingAreaWindowTestAccess::observing(area)
+                    << "transparent"
+                    << bool(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TRANSPARENT);
             return 1;
         }
         return 0;
@@ -1475,33 +1540,90 @@ int nativeWebcamGestures() {
 
 void nativeRecordingBordersCross() {
     POINT saved{};
-    GetCursorPos(&saved);
-    const auto setPointer = [](const QPoint& position) {
-        require(SetCursorPos(position.x(), position.y()) != FALSE,
-                "native recording input requires an accessible interactive desktop");
-        POINT actual{};
-        require(GetCursorPos(&actual) && QPoint(actual.x, actual.y) == position,
-                "native recording test could not position the physical pointer");
+    require(GetCursorPos(&saved) && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000),
+            "native recording input requires an available interactive pointer");
+    const HWND foreground = GetForegroundWindow();
+    ScreenRecordingAreaWindow* active = nullptr;
+    bool pressed = false;
+    const auto sendButton = [&](DWORD flags) {
+        INPUT input{};
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = flags;
+        const bool sent = SendInput(1, &input, sizeof(input)) == 1;
+        if (sent)
+            pressed = flags == MOUSEEVENTF_LEFTDOWN;
+        return sent;
+    };
+    const auto cleanup = [&] {
+        if (active) {
+            ScreenRecordingAreaWindowTestAccess::cancel(*active);
+            active->hide();
+        }
+        if (pressed)
+            sendButton(MOUSEEVENTF_LEFTUP);
+        SetCursorPos(saved.x, saved.y);
+        if (foreground && IsWindow(foreground))
+            SetForegroundWindow(foreground);
+    };
+    const auto cleanupOnExit = qScopeGuard(cleanup);
+    const auto check = [&](bool condition, const char* message) {
+        if (!condition)
+            cleanup();
+        require(condition, message);
+    };
+    const auto setPointer = [&](const QPoint& position) {
+        INPUT input = nativeRegionMovement(position);
+        check(SendInput(1, &input, sizeof(input)) == 1,
+              "native recording input must deliver a pointer move");
+        check(waitForNativeRegionInput([&] {
+                  POINT actual{};
+                  return GetCursorPos(&actual) && QPoint(actual.x, actual.y) == position;
+              }),
+              "native recording test could not position the physical pointer");
+    };
+    const auto matchesNativeRegion = [](ScreenRecordingAreaWindow& area, const QRect& expected) {
+        const HWND hwnd = reinterpret_cast<HWND>(area.winId());
+        RECT client{};
+        POINT origin{};
+        return GetClientRect(hwnd, &client) && ClientToScreen(hwnd, &origin) &&
+               area.recordingRegion() == expected &&
+               QRect(origin.x, origin.y, client.right - client.left, client.bottom - client.top)
+                       .marginsRemoved(ScreenRecordingAreaWindowTestAccess::insets(area)) ==
+                   expected;
     };
     for (QScreen* display : QGuiApplication::screens()) {
         ScreenRecordingAreaWindow area;
+        active = &area;
         const QRect bounds = ScreenshotGeometryMapper::physicalRectForScreen(*display);
         const QRect original(bounds.topLeft() + QPoint(250, 200), QSize(240, 120));
         area.setRecordingRegion(original);
         area.setInputMode(ScreenRecordingAreaWindow::InputMode::RegionEditing);
         area.show();
-        QCoreApplication::processEvents();
         const HWND hwnd = reinterpret_cast<HWND>(area.winId());
+        check(waitForNativeRegionInput(
+                  [&] { return IsWindowVisible(hwnd) && matchesNativeRegion(area, original); }),
+              "native recording fixture must publish its initial physical region");
         const QPoint start = original.topLeft() + QPoint(original.width(), original.height());
-        setPointer(start);
-        pressNativeRegionControl(area);
-        require(ScreenRecordingAreaWindowTestAccess::dragging(area) && GetCapture() == hwnd,
-                "native recording border must own mouse capture");
+        const auto pressBorder = [&] {
+            setPointer(start);
+            check(waitForNativeRegionInput([&] {
+                      return !(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TRANSPARENT) &&
+                             WindowFromPoint(POINT{start.x(), start.y()}) == hwnd;
+                  }),
+                  "native recording border must receive the next pointer press");
+            check(sendButton(MOUSEEVENTF_LEFTDOWN),
+                  "native recording input must deliver a border press");
+            check(waitForNativeRegionInput([&] {
+                      return ScreenRecordingAreaWindowTestAccess::dragging(area) &&
+                             GetCapture() == hwnd;
+                  }),
+                  "native recording border must own mouse capture");
+        };
+        pressBorder();
         const QPoint crossed = original.topLeft() - QPoint(60, 30);
         setPointer(crossed);
-        QMouseEvent move(QEvent::MouseMove, QPointF(), QPointF(QCursor::pos()), Qt::NoButton,
-                         Qt::LeftButton, Qt::NoModifier);
-        QCoreApplication::sendEvent(&area, &move);
+        const bool crossedExactly = waitForNativeRegionInput(
+            [&] { return matchesNativeRegion(area, QRect(crossed, QSize(60, 30))); });
         if (area.recordingRegion() != QRect(crossed, QSize(60, 30))) {
             POINT observed{};
             GetCursorPos(&observed);
@@ -1509,44 +1631,54 @@ void nativeRecordingBordersCross() {
                     << QPoint(observed.x, observed.y) << "actual" << area.recordingRegion()
                     << "active" << ScreenRecordingAreaWindowTestAccess::dragging(area);
         }
-        require(area.recordingRegion() == QRect(crossed, QSize(60, 30)),
-                "native recording crossing must preserve exact physical dimensions");
+        check(crossedExactly, "native recording crossing must preserve exact physical dimensions");
         for (QScreen* destination : QGuiApplication::screens()) {
             const QPoint end =
                 ScreenshotGeometryMapper::physicalRectForScreen(*destination).center();
+            const QRect before = area.recordingRegion();
             setPointer(end);
-            QCoreApplication::sendEvent(&area, &move);
-            require(area.recordingRegion().width() >= 10 && area.recordingRegion().height() >= 10 &&
-                        ScreenRecordingAreaWindowTestAccess::dragging(area),
-                    "cross-display recording resize must retain capture and its minimum");
+            check(waitForNativeRegionInput([&] {
+                      return area.recordingRegion() != before &&
+                             area.recordingRegion().width() >= 10 &&
+                             area.recordingRegion().height() >= 10 &&
+                             ScreenRecordingAreaWindowTestAccess::dragging(area) &&
+                             GetCapture() == hwnd &&
+                             matchesNativeRegion(area, area.recordingRegion());
+                  }),
+                  "cross-display recording resize must retain capture and its minimum");
         }
         SendMessageW(hwnd, WM_CANCELMODE, 0, 0);
-        require(area.recordingRegion() == original &&
-                    !ScreenRecordingAreaWindowTestAccess::dragging(area),
-                "native recording cancellation must restore exact geometry");
+        check(sendButton(MOUSEEVENTF_LEFTUP),
+              "native recording input must release the cancelled drag");
+        check(waitForNativeRegionInput([&] {
+                  return matchesNativeRegion(area, original) &&
+                         !ScreenRecordingAreaWindowTestAccess::dragging(area) &&
+                         !(GetAsyncKeyState(VK_LBUTTON) & 0x8000);
+              }),
+              "native recording cancellation must restore exact geometry");
         const QPoint end = original.topLeft() - QPoint(1, 1);
-        setPointer(start);
-        pressNativeRegionControl(area);
+        pressBorder();
         setPointer(end);
-        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(), QPointF(QCursor::pos()),
-                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-        QCoreApplication::sendEvent(&area, &release);
-        QCoreApplication::processEvents();
+        check(sendButton(MOUSEEVENTF_LEFTUP),
+              "native recording input must deliver the final border release");
+        const bool releasedMinimum = waitForNativeRegionInput([&] {
+            return matchesNativeRegion(area,
+                                       QRect(original.topLeft() - QPoint(10, 10), QSize(10, 10))) &&
+                   !ScreenRecordingAreaWindowTestAccess::dragging(area);
+        });
         if (area.recordingRegion() != QRect(original.topLeft() - QPoint(10, 10), QSize(10, 10)))
             qInfo() << "Native minimum release" << "expected"
                     << QRect(original.topLeft() - QPoint(10, 10), QSize(10, 10)) << "actual"
                     << area.recordingRegion() << "pointer" << QCursor::pos() << "input mode"
                     << int(area.inputMode());
-        require(area.recordingRegion() ==
-                        QRect(original.topLeft() - QPoint(10, 10), QSize(10, 10)) &&
-                    !ScreenRecordingAreaWindowTestAccess::dragging(area),
-                "native release must commit the crossed minimum-sized region");
+        check(releasedMinimum, "native release must commit the crossed minimum-sized region");
         auto* button = area.findChild<QWidget*>(QStringLiteral("screenRecordingRegionDragHandle"));
-        require(button && button->isVisible() &&
-                    area.selectionRect().contains(QRectF(button->geometry())),
-                "minimum-sized regions must keep the child handle inside at the display scale");
+        check(button && button->isVisible() &&
+                  area.selectionRect().contains(QRectF(button->geometry())),
+              "minimum-sized regions must keep the child handle inside at the display scale");
+        area.hide();
+        active = nullptr;
     }
-    SetCursorPos(saved.x, saved.y);
 }
 
 void nativeWindowsGeometryAndInteraction() {

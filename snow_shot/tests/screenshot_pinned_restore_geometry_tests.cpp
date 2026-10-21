@@ -87,6 +87,47 @@ void visibilityOnAnotherDisplayPreservesPlacement() {
     }
 }
 
+void connectedVariantDisplaysKeepTheirOwnDestinations() {
+    const PinnedDisplayGeometry primary{QStringLiteral("primary"), QStringLiteral("primary-id"),
+                                        QRectF(0, 0, 2560, 1440), QRectF(0, 0, 2560, 1400), 1.5};
+    const PinnedDisplayGeometry left{QStringLiteral("left"), QStringLiteral("left-id"),
+                                     QRectF(-3840, 0, 3840, 2160), QRectF(-3840, 0, 3840, 2120),
+                                     1.0};
+    for (const auto units :
+         {PinnedGeometryUnits::PhysicalPixels, PinnedGeometryUnits::LogicalPixels}) {
+        restore_geometry::PlacementState saved;
+        saved.placement = {left.name, left.serial, QPointF(3780, 1044), QSize(80, 50), units};
+        saved.preThumbnailPlacement = {primary.name, primary.serial, QPointF(-40, 696),
+                                       QSize(160, 100), units};
+        saved.hideToTopPlacement = {primary.name, primary.serial, QPointF(20, 30), QSize(40, 20),
+                                    units};
+        const auto restored = restore_geometry::reconcileSavedState(saved, left, {primary, left});
+        require(restored.placement == saved.placement &&
+                    restored.preThumbnailPlacement == saved.preThumbnailPlacement &&
+                    restored.hideToTopPlacement == saved.hideToTopPlacement,
+                "connected display anchors must preserve every placement variant independently");
+        require(pinnedDesktopRect(restored.preThumbnailPlacement, primary) ==
+                        pinnedDesktopRect(saved.preThumbnailPlacement, primary) &&
+                    pinnedDesktopRect(restored.hideToTopPlacement, primary) ==
+                        pinnedDesktopRect(saved.hideToTopPlacement, primary),
+                "restoring a thumbnail on another display must not relocate its expanded image");
+
+        saved.preThumbnailPlacement.displayName = QStringLiteral("disconnected");
+        saved.preThumbnailPlacement.displaySerial = QStringLiteral("missing-id");
+        const auto fallback = restore_geometry::reconcileSavedState(saved, left, {primary, left});
+        require(fallback.placement == saved.placement &&
+                    fallback.hideToTopPlacement == saved.hideToTopPlacement &&
+                    fallback.preThumbnailPlacement.displayName == left.name &&
+                    fallback.preThumbnailPlacement.displaySerial == left.serial &&
+                    fallback.preThumbnailPlacement.position ==
+                        saved.preThumbnailPlacement.position &&
+                    fallback.preThumbnailPlacement.windowSize ==
+                        saved.preThumbnailPlacement.windowSize &&
+                    fallback.preThumbnailPlacement.units == units,
+                "only a disconnected variant must fall back to the selected restore display");
+    }
+}
+
 void changedDisplayPreservesLocalPositionAndWindowUnits() {
     for (const auto units :
          {PinnedGeometryUnits::PhysicalPixels, PinnedGeometryUnits::LogicalPixels}) {
@@ -158,6 +199,7 @@ int main() {
     try {
         visiblePlacementsStayExact();
         visibilityOnAnotherDisplayPreservesPlacement();
+        connectedVariantDisplaysKeepTheirOwnDestinations();
         changedDisplayPreservesLocalPositionAndWindowUnits();
         unreachablePlacementsRecoverIndependently();
     } catch (const std::exception& error) {

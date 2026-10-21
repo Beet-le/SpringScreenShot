@@ -18,6 +18,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <QScopeGuard>
 #include <QTemporaryDir>
@@ -42,6 +44,16 @@ void require(bool condition, const char* message) {
         std::cerr << message << '\n';
         std::exit(1);
     }
+}
+
+template <typename Predicate> void waitUntil(Predicate ready, const char* message) {
+    QElapsedTimer deadline;
+    deadline.start();
+    while (!ready() && deadline.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(ready(), message);
 }
 
 QJsonObject shortcutObject(const QString& portable, std::optional<quint32> macKey = std::nullopt) {
@@ -3150,9 +3162,9 @@ void asynchronousMutationResultsAreObservable() {
     const auto policyResult = applicationStorage.requestCaptureHistoryPolicyAsync(policy);
     require(policyResult.valid() && policyResult.get().success,
             "asynchronous policy mutation did not complete successfully");
-    QCoreApplication::processEvents();
-    require(!applicationStorage.status().historyPolicyUpdating,
-            "policy mutation remained busy after completion");
+    // Worker futures can become ready before their GUI completion notification is queued.
+    waitUntil([&] { return !applicationStorage.status().historyPolicyUpdating; },
+              "policy mutation remained busy after completion");
     require(applicationStorage.captureHistoryPolicy() == policy &&
                 applicationStorage.configuration()
                     .value(QStringLiteral("capture_history/keep_permanently"))
@@ -3164,12 +3176,19 @@ void asynchronousMutationResultsAreObservable() {
     require(applicationStorage.captureHistoryPolicy() == policy,
             "permanent history and existing limits must survive restart");
 
+    QObject completionObserver;
+    bool clearNotified = false;
+    QObject::connect(&applicationStorage, &storage::ApplicationStorage::captureHistoryClearFinished,
+                     &completionObserver, [&](bool success, const QString& error) {
+                         require(success && error.isEmpty(),
+                                 "history clear notification reports the successful mutation");
+                         clearNotified = true;
+                     });
     const auto clearResult = applicationStorage.requestCaptureHistoryClearAsync();
     require(clearResult.valid() && clearResult.get().success,
             "asynchronous history clear did not complete successfully");
-    QCoreApplication::processEvents();
-    require(!applicationStorage.status().historyClearing,
-            "history clear remained busy after completion");
+    waitUntil([&] { return clearNotified && !applicationStorage.status().historyClearing; },
+              "history clear remained busy after completion");
 }
 
 void idlePinnedRetentionSweepPreservesQuietPeriod() {
@@ -3330,13 +3349,26 @@ void appUsageScanAndCacheCleanup() {
                 scanned.appUsage.historyBytes + 30 + 150 + 64 + 80 + scanned.appUsage.otherBytes,
             "total app usage must be the sum of all categories");
 
+    QObject completionObserver;
+    int clearNotifications = 0;
+    storage::StorageCacheKind lastCleared = storage::StorageCacheKind::ThumbnailCache;
+    QObject::connect(&applicationStorage, &storage::ApplicationStorage::cacheClearFinished,
+                     &completionObserver, [&](storage::StorageCacheKind kind, bool success) {
+                         require(success, "cache clear notification reports successful cleanup");
+                         lastCleared = kind;
+                         ++clearNotifications;
+                     });
     const auto thumbnailClear = applicationStorage.requestThumbnailCacheClearAsync();
     require(thumbnailClear.valid() && thumbnailClear.get().success,
             "thumbnail cache clear did not complete successfully");
     require(applicationStorage.flushNow().success, "post-clear flush must succeed");
-    QCoreApplication::processEvents();
-    require(!applicationStorage.status().cacheClearing,
-            "cache clear remained busy after completion");
+    waitUntil(
+        [&] {
+            return clearNotifications == 1 &&
+                   lastCleared == storage::StorageCacheKind::ThumbnailCache &&
+                   !applicationStorage.status().cacheClearing;
+        },
+        "cache clear remained busy after completion");
     require(!QFile::exists(thumbnail), "thumbnail cache clear left files behind");
     require(applicationStorage.status().appUsage.thumbnailCacheBytes == 0,
             "thumbnail cache bytes must be zero after the clear");
@@ -3345,7 +3377,13 @@ void appUsageScanAndCacheCleanup() {
     require(recordingClear.valid() && recordingClear.get().success,
             "recording temp clear did not complete successfully");
     require(applicationStorage.flushNow().success, "post-recording-clear flush must succeed");
-    QCoreApplication::processEvents();
+    waitUntil(
+        [&] {
+            return clearNotifications == 2 &&
+                   lastCleared == storage::StorageCacheKind::RecordingTemp &&
+                   !applicationStorage.status().cacheClearing;
+        },
+        "recording cache clear remained busy after completion");
     require(!QFile::exists(staleRecording), "recording temp clear left stale files behind");
     require(QFile::exists(activeRecording), "recording temp clear must keep active-session files");
     require(applicationStorage.status().appUsage.recordingTempBytes == 48,
@@ -3362,6 +3400,70 @@ class LifetimeObservedApplication final : public QCoreApplication {
     }
 };
 
+int applicationDestructionChild(int& argc, char** argv) {
+    storage::ApplicationStorage* applicationStorage = nullptr;
+    storage::ConfigurationStore* configuration = nullptr;
+    storage::CaptureHistoryRepository* history = nullptr;
+    storage::PinnedWindowRepository* pins = nullptr;
+    {
+        LifetimeObservedApplication application(argc, argv);
+        const QString directory = application.arguments().at(2);
+        applicationStorage = &storage::ApplicationStorage::instance();
+        require(
+            applicationStorage
+                ->initialize({QDir(directory).filePath(QStringLiteral("bin")), directory, 60000})
+                .success,
+            "no-exec storage host must initialize");
+        configuration = &applicationStorage->configuration();
+        history = &applicationStorage->captureHistory();
+        pins = &applicationStorage->pinnedWindows();
+        require(storage::ScreenshotSettings().setShowCursor(false) &&
+                    applicationStorage->flushNow().success &&
+                    storage::ScreenshotSettings().setShowCursor(true) && configuration->isDirty(),
+                "no-exec storage host must leave a debounced configuration write pending");
+        require(applicationStorage->findChildren<QTimer*>().size() == 1 &&
+                    applicationStorage->findChild<QTimer*>()->isActive(),
+                "no-exec storage host must leave periodic retention scheduled");
+    }
+    require(applicationStorage->isInitialized() &&
+                &applicationStorage->configuration() == configuration &&
+                &applicationStorage->captureHistory() == history &&
+                &applicationStorage->pinnedWindows() == pins &&
+                storage::ScreenshotSettings().showCursor(),
+            "application destruction must preserve repositories for remaining consumers");
+    require(applicationStorage->findChildren<QTimer*>().isEmpty() && !configuration->isDirty(),
+            "application destruction must retire retention and flush pending configuration");
+    // Deliberately leave explicit shutdown to the singleton destructor after Qt teardown.
+    return 0;
+}
+
+void applicationDestructionRetiresStorageRuntime() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "no-exec storage host needs isolated storage");
+    QProcess child;
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("QT_FATAL_WARNINGS"), QStringLiteral("1"));
+    child.setProcessEnvironment(environment);
+    child.setProcessChannelMode(QProcess::MergedChannels);
+    child.start(QCoreApplication::applicationFilePath(),
+                {QStringLiteral("--application-destruction-child"), temporary.path()});
+    require(child.waitForStarted(5000), "start no-exec storage lifetime host");
+    const bool finished = child.waitForFinished(30000);
+    if (!finished) {
+        child.kill();
+        child.waitForFinished(5000);
+    }
+    require(finished && child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0,
+            qPrintable(QStringLiteral("no-exec storage lifetime host must exit cleanly: %1")
+                           .arg(QString::fromUtf8(child.readAll()))));
+    require(readObject(temporary.filePath(QStringLiteral("config.json")))
+                .value(QStringLiteral("screenshot"))
+                .toObject()
+                .value(QStringLiteral("capture_cursor"))
+                .toBool(),
+            "application destruction must persist the pending no-exec host mutation");
+}
+
 void applicationQuitPreservesStorageForConsumerDestruction(
     LifetimeObservedApplication& application) {
     QTemporaryDir temporary;
@@ -3375,21 +3477,37 @@ void applicationQuitPreservesStorageForConsumerDestruction(
     QObject::connect(&application, &QCoreApplication::aboutToQuit, &unrelatedObserver,
                      [&unrelatedQuitNotifications] { ++unrelatedQuitNotifications; });
     const int originalObservers = application.quitObserverCount();
+    const auto activeStorageTimers = [&] {
+        int active = 0;
+        for (auto* timer : applicationStorage.findChildren<QTimer*>()) {
+            if (timer->isActive())
+                ++active;
+        }
+        return active;
+    };
     for (int iteration = 0; iteration < 8; ++iteration) {
         require(applicationStorage.initialize(options).success,
                 "repeated quit-lifetime initialization must succeed");
         require(application.quitObserverCount() == originalObservers + 1,
                 "initialized storage must own exactly one application quit observer");
+        require(activeStorageTimers() == 1,
+                "initialized storage must schedule one periodic retention sweep");
         require(applicationStorage.initialize(options).success,
                 "quit-lifetime storage must support reinitialization");
         require(application.quitObserverCount() == originalObservers + 1,
                 "reinitializing storage must replace its application quit observer");
+        require(activeStorageTimers() == 1,
+                "reinitializing storage must replace its periodic retention timer");
         applicationStorage.shutdown();
         require(application.quitObserverCount() == originalObservers,
                 "storage shutdown must release only its application quit observer");
+        require(activeStorageTimers() == 0,
+                "storage shutdown must retire timers before the application thread is destroyed");
         applicationStorage.shutdown();
         require(application.quitObserverCount() == originalObservers,
                 "repeated storage shutdown must preserve unrelated quit observers");
+        require(activeStorageTimers() == 0,
+                "repeated storage shutdown must leave retention scheduling stopped");
     }
     require(applicationStorage.initialize(options).success,
             "quit-lifetime storage must initialize");
@@ -3417,6 +3535,9 @@ void applicationQuitPreservesStorageForConsumerDestruction(
     applicationStorage.shutdown();
     require(application.quitObserverCount() == originalObservers,
             "shutdown after quit must release its application quit observer");
+    require(activeStorageTimers() == 0,
+            "shutdown after quit must release timers while preserving consumer repositories");
+    applicationDestructionRetiresStorageRuntime();
 }
 
 void trayDarkIconSettingsPersistAndValidate() {
@@ -3771,6 +3892,9 @@ void recordingGainSettingsPersistAndValidate() {
 }
 
 int main(int argc, char** argv) {
+    if (argc == 3 && QByteArray(argv[1]) == "--application-destruction-child") {
+        return applicationDestructionChild(argc, argv);
+    }
 #ifdef Q_OS_MACOS
     if (argc == 2 && QByteArray(argv[1]) == "--directory-resolution-only") {
         require(QCoreApplication::instance() == nullptr,

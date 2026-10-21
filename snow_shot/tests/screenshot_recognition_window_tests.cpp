@@ -7,6 +7,7 @@
 #include "snow_shot/presentation/screenshotlatexrenderer.h"
 #include "snow_shot/presentation/screenshottableeditor.h"
 #include "snow_shot/presentation/windowshortcutmanager.h"
+#include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/settingsadapters.h"
 
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
@@ -42,6 +43,7 @@
 #include <QPointer>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPainterPathStroker>
 #include <QScrollBar>
 #include <QScreen>
 #include <QScopeGuard>
@@ -52,6 +54,7 @@
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QTextFragment>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QThread>
 #include <QTranslator>
@@ -470,8 +473,18 @@ void ocrTextHighlightingUnionsOverlappingLabels() {
                     signedArea(items[1]->mapToScene(items[1]->boundingRect())) <
                 0,
             "the overlap fixture projects text rectangles with opposite winding");
+    // Keep the visible labels' exact geometry in the mask, without composing native glyph
+    // antialiasing over its edge. The preceding style test checks text and mask together;
+    // this fixture independently checks every pixel of the opposite-winding hole union.
+    for (auto* item : items) {
+        item->setOpacity(0);
+        require(item->isVisible(), "transparent glyph paint must retain the label's mask hole");
+    }
     const QPainterPath overlap =
         ocrLabelScenePath(*items[0]).intersected(ocrLabelScenePath(*items[1]));
+    QPainterPath labelBoundaries;
+    for (const auto* item : items)
+        labelBoundaries.addPath(ocrLabelScenePath(*item));
     const QColor mask(30, 120, 210, 91);
     for (const qreal dpr : {1.0, 1.25, 2.0}) {
         layer.setTextHighlighting(false, mask);
@@ -481,8 +494,35 @@ void ocrTextHighlightingUnionsOverlappingLabels() {
         const QImage expected = renderOcrHighlightingScene(layer, dpr, mask);
         layer.setTextHighlighting(true, mask);
         const QImage actual = renderOcrHighlightingScene(layer, dpr);
-        require(actual == expected &&
-                    actual.pixelColor(*overlapWhitespace) == QColor(214, 227, 239),
+        QPainterPathStroker boundaryStroke;
+        boundaryStroke.setWidth(2.0 / dpr);
+        const QPainterPath boundaryPixels = boundaryStroke.createStroke(labelBoundaries);
+        const QRgb clear = QColor(214, 227, 239).rgba();
+        const QRgb fullyMasked = singleOcrMaskBlend(mask).rgba();
+        bool masksMatch = actual.size() == expected.size() &&
+                          actual.devicePixelRatio() == expected.devicePixelRatio() &&
+                          actual.format() == expected.format();
+        for (int y = 0; y < actual.height() && masksMatch; ++y) {
+            for (int x = 0; x < actual.width(); ++x) {
+                const QRgb observed = actual.pixel(x, y);
+                const QRgb reference = expected.pixel(x, y);
+                if (observed == reference)
+                    continue;
+                // Independently subtracting the same floating-point contours can round an
+                // antialiased boundary channel by one. Clear/fully covered pixels remain exact;
+                // only proven, partially covered boundary pixels admit that quantization.
+                masksMatch = reference != clear && reference != fullyMasked && observed != clear &&
+                             observed != fullyMasked &&
+                             boundaryPixels.contains(QPointF((x + 0.5) / dpr, (y + 0.5) / dpr)) &&
+                             qAlpha(observed) == qAlpha(reference) &&
+                             qAbs(qRed(observed) - qRed(reference)) <= 1 &&
+                             qAbs(qGreen(observed) - qGreen(reference)) <= 1 &&
+                             qAbs(qBlue(observed) - qBlue(reference)) <= 1;
+                if (!masksMatch)
+                    break;
+            }
+        }
+        require(masksMatch && actual.pixelColor(*overlapWhitespace) == QColor(214, 227, 239),
                 "overlapping labels form a union of clear holes regardless of winding");
         require(actual.pixelColor(qFloor(5 * dpr), qFloor(5 * dpr)) == singleOcrMaskBlend(mask) &&
                     layer.scene()->items() == sceneItems,
@@ -1505,7 +1545,7 @@ void recognitionMessageUsesOnlyItsPaintedShadow() {
     themes.setConfig(originalTheme);
 }
 
-void recognitionWindowUsesOrdinaryQtWindowBehavior() {
+void recognitionWindowUsesOrdinaryQtWindowBehavior(bool nativeSurfaceOnly = false) {
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen != nullptr, "a primary screen is required");
 
@@ -1590,11 +1630,6 @@ void recognitionWindowUsesOrdinaryQtWindowBehavior() {
             "the recognition window should preserve the mapped selection geometry");
     require(window.windowHandle() != nullptr && window.windowHandle()->screen() == screen,
             "the recognition window DPI should come from the configured selection screen");
-#if defined(Q_OS_WIN) || defined(_WIN32)
-    const QRect actualClientGeometry = nativeClientGeometry(window);
-    require(actualClientGeometry.isValid() && !actualClientGeometry.isEmpty(),
-            "the recognition window should expose a valid native client surface");
-#endif
     require(window.findChild<SnowCanvasWidget*>() == nullptr,
             "the recognition window should not create a screenshot canvas");
     require(window.testAttribute(Qt::WA_TranslucentBackground) && !window.autoFillBackground(),
@@ -1629,6 +1664,30 @@ void recognitionWindowUsesOrdinaryQtWindowBehavior() {
                        (canvasPosition.y() - canvasSelection.top()) * window.height() /
                            canvasSelection.height());
     };
+    const QPointF blankCanvasPosition = canvasSelection.topLeft() + QPointF(12.0, 12.0);
+    const QPointF blankLocalPosition = localForCanvas(blankCanvasPosition);
+    if (nativeSurfaceOnly) {
+#if defined(Q_OS_WIN) || defined(_WIN32)
+        const QRect actualClientGeometry = nativeClientGeometry(window);
+        require(actualClientGeometry.isValid() && !actualClientGeometry.isEmpty(),
+                "the recognition window should expose a valid native client surface");
+        window.repaint();
+        QApplication::processEvents();
+        const QRect actualNative = nativeClientGeometry(window);
+        const POINT blankNativePosition{
+            actualNative.left() +
+                qRound(blankLocalPosition.x() * actualNative.width() / window.width()),
+            actualNative.top() +
+                qRound(blankLocalPosition.y() * actualNative.height() / window.height()),
+        };
+        const HWND blankOwner = windowAtPhysicalPoint(blankNativePosition);
+        const HWND recognitionHwnd = reinterpret_cast<HWND>(window.winId());
+        require(blankOwner == recognitionHwnd,
+                "transparent blank pixels should remain part of the recognition input surface");
+#endif
+        window.hide();
+        return;
+    }
     const QPointF localStart = localForCanvas(selectionCenter + QPointF(-70.0, 0.0));
     const QPointF localEnd = localForCanvas(selectionCenter + QPointF(70.0, 0.0));
     QMouseEvent recognitionPress(QEvent::MouseButtonPress, localStart,
@@ -1659,23 +1718,6 @@ void recognitionWindowUsesOrdinaryQtWindowBehavior() {
             "recognition copy must win over the lower-priority screenshot copy binding and end "
             "the screenshot");
 
-    const QPointF blankCanvasPosition = canvasSelection.topLeft() + QPointF(12.0, 12.0);
-    const QPointF blankLocalPosition = localForCanvas(blankCanvasPosition);
-#if defined(Q_OS_WIN) || defined(_WIN32)
-    window.repaint();
-    QApplication::processEvents();
-    const QRect actualNative = nativeClientGeometry(window);
-    const POINT blankNativePosition{
-        actualNative.left() +
-            qRound(blankLocalPosition.x() * actualNative.width() / window.width()),
-        actualNative.top() +
-            qRound(blankLocalPosition.y() * actualNative.height() / window.height()),
-    };
-    const HWND blankOwner = windowAtPhysicalPoint(blankNativePosition);
-    const HWND recognitionHwnd = reinterpret_cast<HWND>(window.winId());
-    require(blankOwner == recognitionHwnd,
-            "transparent blank pixels should remain part of the recognition input surface");
-#endif
     QMouseEvent blankPress(QEvent::MouseButtonPress, blankLocalPosition,
                            window.mapToGlobal(blankLocalPosition.toPoint()), Qt::LeftButton,
                            Qt::LeftButton, Qt::NoModifier);
@@ -3813,6 +3855,22 @@ void latexPreviewUsesPassiveCompanionAndSurvivesEditing() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
+    QTemporaryDir storageDirectory;
+    require(storageDirectory.isValid(), "recognition tests require isolated storage");
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    require(storage
+                .initialize(
+                    {storageDirectory.filePath(QStringLiteral("bin")), storageDirectory.path(), 0})
+                .success,
+            "recognition test storage must initialize");
+    const auto shutdown = qScopeGuard([&] { storage.shutdown(); });
+    if (application.arguments().contains(QStringLiteral("--native-surface-only"))) {
+        recognitionWindowUsesOrdinaryQtWindowBehavior(true);
+        recognitionWindowCanExtendBeyondItsDpiScreen();
+        ocrTextHighlightingTests();
+        recognitionMessageUsesOnlyItsPaintedShadow();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--ocr-box-selection-only"))) {
 #ifdef Q_OS_WIN
         require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=

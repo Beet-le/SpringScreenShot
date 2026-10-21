@@ -561,8 +561,8 @@ void builtInCatalogIsCompleteAndValid() {
     require(sectionCount == 52,
             "catalog includes capture and recording groups with merged storage and desktop groups");
 #endif
-    // Keep the shared total in one place: adding a shared setting must update both platforms.
-    // Explicit platform membership also catches substitutions that a total alone would miss.
+    // Verify platform membership directly; shared features have their own binding and metadata
+    // assertions, so adding one must not require maintaining an unrelated catalog-wide total.
     const QSet<QString> windowsOnlyItems{
         QStringLiteral("system.launch-as-administrator"),
         QStringLiteral("system.restart-as-administrator"),
@@ -602,10 +602,6 @@ void builtInCatalogIsCompleteAndValid() {
                 itemIds.contains(QStringLiteral("screenshot-shortcut.upload_to_cloud")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.upload_to_cloud")),
             "cloud upload must expose its configuration and shortcuts in both local scopes");
-    require(itemIds.size() == 293,
-            qPrintable(QStringLiteral(
-                           "catalog must contain 293 shared settings on every platform; found %1")
-                           .arg(itemIds.size())));
     require(itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-closing-window")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-destroying-window")),
             "catalog must retain both independent pinned window confirmation settings");

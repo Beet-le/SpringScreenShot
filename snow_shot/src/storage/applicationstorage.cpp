@@ -2,9 +2,8 @@
 #include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/app/distribution.h"
+#include "snow_shot/app/edition.h"
 #include <QTimer>
-
-#include "snow_shot/presentation/editionfeatures.h"
 
 #include "snow_shot/storage/capturehistoryrepository.h"
 #include "snow_shot/storage/pinnedwindowrepository.h"
@@ -344,11 +343,11 @@ StorageResult ApplicationStorage::initialize(const StorageInitializationOptions&
     static_cast<void>(m_pinnedWindows->setPolicy(pinnedWindowPolicy(), false));
     m_pinnedWindows->setCompressionLevel(
         m_configuration->value(QStringLiteral("pinned_history/compression_level")).toString());
-    auto* pinnedCleanupTimer = new QTimer(m_configuration.get());
-    pinnedCleanupTimer->setInterval(60000);
-    connect(pinnedCleanupTimer, &QTimer::timeout, this,
+    m_pinnedCleanupTimer = std::make_unique<QTimer>(this);
+    m_pinnedCleanupTimer->setInterval(60000);
+    connect(m_pinnedCleanupTimer.get(), &QTimer::timeout, this,
             [this] { requestPinnedWindowRetentionCleanup(false); });
-    pinnedCleanupTimer->start();
+    m_pinnedCleanupTimer->start();
     connect(
         m_configuration.get(), &ConfigurationStore::valueChanged, this,
         [this](const QString& key, const QJsonValue&) {
@@ -383,6 +382,9 @@ StorageResult ApplicationStorage::initialize(const StorageInitializationOptions&
                 }
             });
     if (QCoreApplication::instance() != nullptr) {
+        // Post routines also run for hosts that return without entering exec(), before
+        // Qt destroys its dispatcher. Repository consumers can still finish destruction.
+        qAddPostRoutine(&ApplicationStorage::releaseApplicationResources);
         m_aboutToQuitConnection =
             connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this]() {
                 // Consumers still hold repository pointers while their destructors run.
@@ -460,8 +462,23 @@ StorageResult ApplicationStorage::flushNow() {
 }
 
 void ApplicationStorage::shutdown() {
+    qRemovePostRoutine(&ApplicationStorage::releaseApplicationResources);
     disconnect(m_aboutToQuitConnection);
     m_aboutToQuitConnection = {};
+    drainRuntimeWork();
+    m_initialized = false;
+}
+
+void ApplicationStorage::releaseApplicationResources() {
+    // Unlike explicit shutdown, application teardown must not make settings reads
+    // reinitialize and replace repositories still held by consumer destructors.
+    instance().drainRuntimeWork();
+}
+
+void ApplicationStorage::drainRuntimeWork() {
+    // Periodic admission ends with storage, while repositories remain available to consumers.
+    // An active timer must not survive until this singleton's post-application destruction.
+    m_pinnedCleanupTimer.reset();
     if (m_directoryWorker.valid())
         m_directoryWorker.wait();
     if (!m_initialized) {
@@ -494,7 +511,6 @@ void ApplicationStorage::shutdown() {
         m_status.appUsage = m_usageTracker->usage();
         m_usageTracker.reset();
     }
-    m_initialized = false;
 }
 
 ConfigurationStore& ApplicationStorage::configuration() {

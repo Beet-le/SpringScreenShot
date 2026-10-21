@@ -11,13 +11,13 @@
 #include "snow_shot/texttranslationconfiguration.h"
 #endif
 
-#include "snow_shot/presentation/editionfeatures.h"
+#include "snow_shot/app/editionfeatures.h"
 
 #include "snow_shot/storage/capturehistorytypes.h"
 #include "snow_shot/storage/persistedselectioncodec.h"
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/shortcuts/menuaccesskey.h"
-#include "snow_shot/presentation/screenshotregiontypeshortcut.h"
+#include "snow_shot/shortcuts/screenshotregiontypeshortcut.h"
 #include "snow_draw_engine.h"
 
 #include <QJsonArray>
@@ -37,13 +37,13 @@
 namespace snow_shot::storage {
 namespace {
 QStringList editionActionIds(QStringList ids) {
-    ids.removeIf([](const QString& id) { return !presentation::editionActionToolAvailable(id); });
+    ids.removeIf([](const QString& id) { return !app::editionActionToolAvailable(id); });
     return ids;
 }
 QVector<QStringList> editionActionPositions(QVector<QStringList> positions) {
     for (QStringList& position : positions) {
         position.removeIf([](const QString& id) {
-            return !presentation::editionActionToolAvailable(id) ||
+            return !app::editionActionToolAvailable(id) ||
                    (app::edition::isMini && id == QStringLiteral("text-recognition"));
         });
     }
@@ -1872,7 +1872,7 @@ QVector<ConfigurationSchemaEntry> buildEntries() {
                    macGlobalShortcutDefault(QStringLiteral("Meta+3"), 20));
 #endif
     result.removeIf([](const ConfigurationSchemaEntry& entry) {
-        return !presentation::editionConfigurationKeyAvailable(entry.key);
+        return !app::editionConfigurationKeyAvailable(entry.key);
     });
     if constexpr (!app::edition::textTranslation) {
         for (auto& entry : result) {
@@ -2610,7 +2610,7 @@ const QVector<ConfigurationSchemaEntry>& ConfigurationSchema::entries() {
 }
 
 const ConfigurationSchemaEntry* ConfigurationSchema::entry(const QString& key) {
-    if (!presentation::editionConfigurationKeyAvailable(key))
+    if (!app::editionConfigurationKeyAvailable(key))
         return nullptr;
     const auto found = entryIndex().constFind(key);
     return found == entryIndex().cend() ? nullptr : &kEntries.at(found.value());

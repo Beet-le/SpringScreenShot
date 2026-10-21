@@ -138,6 +138,23 @@ void writeNativeRect(const QRect& source, RECT* target) {
 } // namespace
 bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QByteArray& eventType,
                                        void* message, qintptr* result) {
+    Qt::KeyboardModifiers modifiers = Qt::NoModifier;
+    const bool isWindowsMessage = eventType == QByteArrayLiteral("windows_generic_MSG") ||
+                                  eventType == QByteArrayLiteral("windows_dispatcher_MSG");
+    if (isWindowsMessage && message && static_cast<const MSG*>(message)->message == WM_NCHITTEST) {
+        // Hit testing can precede any key event delivered to this nonactivating
+        // window. Sample the live device state once for every routing policy.
+        if (GetAsyncKeyState(VK_CONTROL) & 0x8000)
+            modifiers |= Qt::ControlModifier;
+        if (GetAsyncKeyState(VK_MENU) & 0x8000)
+            modifiers |= Qt::AltModifier;
+    }
+    return handle(window, eventType, message, result, modifiers);
+}
+
+bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QByteArray& eventType,
+                                       void* message, qintptr* result,
+                                       Qt::KeyboardModifiers modifiers) {
 
     const bool isWindowsMessage = eventType == QByteArrayLiteral("windows_generic_MSG") ||
                                   eventType == QByteArrayLiteral("windows_dispatcher_MSG");
@@ -483,13 +500,7 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
                 return true;
             }
             int hitTest = HTCLIENT;
-            Qt::KeyboardModifiers pointerModifiers = Qt::NoModifier;
-            if (GetKeyState(VK_CONTROL) & 0x8000) {
-                pointerModifiers |= Qt::ControlModifier;
-            }
-            if (GetKeyState(VK_MENU) & 0x8000) {
-                pointerModifiers |= Qt::AltModifier;
-            }
+            const Qt::KeyboardModifiers pointerModifiers = modifiers;
             const QRect nativeGeometry =
                 native::currentClientGeometry(reinterpret_cast<WId>(pinnedHwnd));
             const QPoint screenPosition(GET_X_LPARAM(nativeMessage->lParam),
@@ -497,8 +508,8 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             const ScreenshotPinnedGeometryMapping mapping(nativeGeometry, window.size(),
                                                           window.devicePixelRatioF());
             const QPoint selectionPosition = mapping.localPosition(screenPosition).toPoint();
-            if (window.m_selectionController &&
-                window.m_selectionController->routesPointerToClient(window, selectionPosition)) {
+            if (window.m_selectionController && window.m_selectionController->routesPointerToClient(
+                                                    window, selectionPosition, pointerModifiers)) {
                 // A click may clear/toggle selection. Keep the initial press in
                 // Qt until its drag threshold has chosen a geometry/export gesture.
                 if (!window.m_selectionGeometryActive)
@@ -541,7 +552,7 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             } else if (!window.m_windowDragActive) {
                 window.clearWindowDragCursor();
             }
-            if (hitTest == HTCAPTION && (GetKeyState(VK_CONTROL) & 0x8000) &&
+            if (hitTest == HTCAPTION && pointerModifiers.testFlag(Qt::ControlModifier) &&
                 window.exportDragEnabledAt(mapping.localPosition(screenPosition).toPoint(),
                                            pointerModifiers)) {
                 hitTest = HTCLIENT;

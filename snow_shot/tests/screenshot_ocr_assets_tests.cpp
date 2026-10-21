@@ -119,6 +119,15 @@ void changeFixtureContentsWithoutResizing(const QString& path) {
     writeFixture(path, contents);
 }
 
+void writeInstalledSmallModelFixture(const QString& root) {
+    const QDir model(QDir(root).filePath(QStringLiteral("models/ppocrv6-small-463ea9f")));
+    writeFixture(model.filePath(QStringLiteral("PP-OCRv6_det_small.onnx")), "detector");
+    writeFixture(model.filePath(QStringLiteral("PP-OCRv6_rec_small.onnx")), "recognizer");
+    writeFixture(model.filePath(QStringLiteral("ppocrv6_dict.txt")), "dictionary");
+    writeFixture(model.filePath(QStringLiteral(".complete.json")),
+                 R"({"schema":1,"component":"ppocrv6-small-463ea9f"})");
+}
+
 void writeAssetManifest(const QString& root, bool completePayload) {
     const QByteArray process("process");
     const QByteArray runtimeManifest("runtime");
@@ -127,21 +136,13 @@ void writeAssetManifest(const QString& root, bool completePayload) {
     const QByteArray dictionary("dictionary");
     const QString runtimeDirectory =
         QDir(root).filePath(QStringLiteral("runtimes/1.1.0/%1").arg(kWindowsPlatform));
-    const QString modelDirectory =
-        QDir(root).filePath(QStringLiteral("models/ppocrv6-small-463ea9f"));
     if (completePayload) {
         writeFixture(QDir(runtimeDirectory).filePath(kWindowsWorkerName), process);
         writeFixture(QDir(runtimeDirectory).filePath(QStringLiteral("runtime-manifest.json")),
                      runtimeManifest);
-        writeFixture(QDir(modelDirectory).filePath(QStringLiteral("PP-OCRv6_det_small.onnx")),
-                     detector);
-        writeFixture(QDir(modelDirectory).filePath(QStringLiteral("PP-OCRv6_rec_small.onnx")),
-                     recognizer);
-        writeFixture(QDir(modelDirectory).filePath(QStringLiteral("ppocrv6_dict.txt")), dictionary);
         writeFixture(QDir(runtimeDirectory).filePath(QStringLiteral(".complete.json")),
                      R"({"schema":1,"component":"1.1.0"})");
-        writeFixture(QDir(modelDirectory).filePath(QStringLiteral(".complete.json")),
-                     R"({"schema":1,"component":"ppocrv6-small-463ea9f"})");
+        writeInstalledSmallModelFixture(root);
     }
     const QJsonArray runtimeFiles{
         assetFile(kWindowsWorkerName, process),
@@ -451,6 +452,8 @@ void acquiredRuntimeStillRequiresMatchingHashes() {
         require(offline.isValid() && cache.isValid(),
                 "temporary OCR runtime integrity roots should be available");
         writeAssetManifest(offline.path(), false);
+        // Runtime integrity must reach the runtime phase without first publishing unrelated models.
+        writeInstalledSmallModelFixture(offline.path());
         const QByteArray archive = buildRuntimeArchiveBytes();
         const QString manifestPath =
             QDir(offline.path()).filePath(QStringLiteral("asset-manifest.json"));
@@ -472,10 +475,16 @@ void acquiredRuntimeStillRequiresMatchingHashes() {
         ScreenshotOcrAssets::Options options;
         options.offlineRoot = offline.path();
         options.cacheRoot = cache.path();
+        std::atomic<int> runtimeDownloads = 0;
+        std::atomic<int> unexpectedModelDownloads = 0;
         options.downloadOverride = [&](const QString& url, const QString& destination,
                                        QString* error) {
-            if (url != QStringLiteral("https://example.invalid/runtime"))
-                return writeDownloadedModelFixture(destination, error);
+            if (url != QStringLiteral("https://example.invalid/runtime")) {
+                ++unexpectedModelDownloads;
+                *error = QStringLiteral("the runtime fixture must reuse its installed model");
+                return false;
+            }
+            ++runtimeDownloads;
             writeFixture(destination, archive);
             if (stage == QStringLiteral("archive"))
                 changeFixtureContentsWithoutResizing(destination);
@@ -499,6 +508,15 @@ void acquiredRuntimeStillRequiresMatchingHashes() {
         assets.prepare();
         require(waitUntil([&] { return ready || !failure.isEmpty(); }, 5'000),
                 "runtime acquisition integrity validation should complete");
+        if (ready || !failure.contains(QStringLiteral("invalid SHA-256")) ||
+            runtimeDownloads != 1 || unexpectedModelDownloads != 0) {
+            std::cerr << "runtime integrity stage=" << stage.toStdString() << " ready=" << ready
+                      << " runtime downloads=" << runtimeDownloads
+                      << " model downloads=" << unexpectedModelDownloads
+                      << " failure=" << failure.toStdString() << '\n';
+        }
+        require(runtimeDownloads == 1 && unexpectedModelDownloads == 0,
+                "runtime integrity must acquire only the runtime and reuse the installed model");
         require(!ready && failure.contains(QStringLiteral("invalid SHA-256")),
                 "runtime archives, extracted entries, and staged overrides must match SHA-256");
         require(

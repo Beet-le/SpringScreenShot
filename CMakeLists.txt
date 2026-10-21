@@ -401,7 +401,7 @@ if(NOT TARGET snow-all)
 endif()
 
 if(NOT TARGET snow-tests)
-    set(_snow_deterministic_test_exclude "interactive^|e2e^|benchmark")
+    set(_snow_deterministic_test_exclude "interactive|e2e|benchmark")
     add_custom_target(snow-tests
         COMMAND ${CMAKE_CTEST_COMMAND}
             --test-dir "${CMAKE_BINARY_DIR}"
@@ -409,6 +409,7 @@ if(NOT TARGET snow-tests)
             -LE ${_snow_deterministic_test_exclude}
             --output-on-failure
         USES_TERMINAL
+        VERBATIM
     )
     add_dependencies(snow-tests snow-all)
     unset(_snow_deterministic_test_exclude)

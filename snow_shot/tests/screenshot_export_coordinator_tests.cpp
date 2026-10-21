@@ -425,11 +425,10 @@ void shutdownAbandonsAWorkerThatIgnoresCancellation() {
             "shutdown abandon job was not admitted");
     require(processUntil([&entered]() { return entered.load(std::memory_order_acquire); }),
             "shutdown abandon job did not start");
-    QElapsedTimer timer;
-    timer.start();
     coordinator.shutdown();
-    require(timer.elapsed() < 2000,
-            "shutdown blocked on a worker that ignores its cancellation token");
+    require(!release.load(std::memory_order_acquire) && workerThread != nullptr &&
+                !workerThread->isFinished(),
+            "shutdown must return while the cancellation-ignoring worker remains gated");
     require(snow_shot::runtime::RuntimeActivityTracker::shared().snapshot().activeCount > idleCount,
             "an abandoned running export must keep memory trimming blocked");
     release.store(true, std::memory_order_release);
@@ -448,10 +447,11 @@ void shutdownAbandonsAWorkerThatIgnoresCancellation() {
                    idleCount;
         }),
         "settled abandoned work must release its memory activity reservation");
-    QElapsedTimer secondShutdown;
-    secondShutdown.start();
     coordinator.shutdown();
-    require(secondShutdown.elapsed() < 100, "a second shutdown did not return immediately");
+    QCoreApplication::processEvents();
+    require(coordinator.pendingJobCount() == 0 && completionCount == 1 &&
+                workerThread->isFinished(),
+            "repeated shutdown must preserve drained work and its single completion");
 }
 
 void shutdownDropsQueuedWorkWhenAbandoned() {

@@ -44,6 +44,7 @@
 #include "widgets/tooltip.h"
 
 #include <QApplication>
+#include <QScopeGuard>
 #include <QBackingStore>
 #include <QColor>
 #include <QCursor>
@@ -1859,11 +1860,17 @@ void requireChangedPixelsCoveredByDirtyRegion(const QImage& previous, const QIma
     require(previous.size() == next.size(), "rendered frames should have equal sizes");
     require(qFuzzyCompare(previous.devicePixelRatio(), next.devicePixelRatio()),
             "rendered frames should have equal device pixel ratios");
+    require(previous.format() == next.format() &&
+                (previous.format() == QImage::Format_RGBA8888 ||
+                 previous.format() == QImage::Format_ARGB32_Premultiplied),
+            "damage comparisons require matching 32-bit rendered frame formats");
 
     const qreal devicePixelRatio = previous.devicePixelRatio();
     for (int y = 0; y < previous.height(); ++y) {
+        const auto* previousRow = reinterpret_cast<const QRgb*>(previous.constScanLine(y));
+        const auto* nextRow = reinterpret_cast<const QRgb*>(next.constScanLine(y));
         for (int x = 0; x < previous.width(); ++x) {
-            if (previous.pixel(x, y) == next.pixel(x, y)) {
+            if (previousRow[x] == nextRow[x]) {
                 continue;
             }
 
@@ -7196,6 +7203,7 @@ void horizontalScrollingThumbnailUsesColumnTilesAndHorizontalInteraction() {
     ScreenshotScrollingThumbnailWidget thumbnail(parent);
     thumbnail.setRecognitionMode(ScreenshotScrollingRecognitionMode::Horizontal);
     thumbnail.setMaximumPreviewExtent(220);
+    thumbnail.setCaptureViewportSize(QSize(220, 128));
 
     QImage initial(300, 128, QImage::Format_RGBA8888);
     initial.fill(QColor(20, 40, 60));
@@ -9837,6 +9845,15 @@ void runScreenshotOcrHighlightingBenchmark();
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    QTemporaryDir storageDirectory;
+    require(storageDirectory.isValid(), "canvas tests require isolated application storage");
+    auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
+    const auto storageLifetime = qScopeGuard([&] { applicationStorage.shutdown(); });
+    require(applicationStorage
+                .initialize({storageDirectory.filePath(QStringLiteral("bin")),
+                             storageDirectory.filePath(QStringLiteral("data")), 60000})
+                .success,
+            "initialize isolated canvas application storage");
     if (application.arguments().contains(QStringLiteral("--background-opacity-only"))) {
         compoundSelectionPreviewPreservesGapAnnotations();
         tiledBackgroundMatchesExportAtFractionalDpi();
@@ -9960,15 +9977,7 @@ int main(int argc, char** argv) {
     }
 #endif
     if (application.arguments().contains(QStringLiteral("--window-shadow-only"))) {
-        QTemporaryDir directory;
-        auto& storage = snow_shot::storage::ApplicationStorage::instance();
-        require(storage
-                    .initialize({directory.filePath(QStringLiteral("bin")),
-                                 directory.filePath(QStringLiteral("data")), 60000})
-                    .success,
-                "initialize temporary storage for window shadow tests");
         overlayWindowHasNoNativeShadow();
-        storage.shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--pinned-filter-reference-only"))) {
@@ -10055,20 +10064,12 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--delete-text-after-cursor-only"))) {
-        QTemporaryDir directory;
-        auto& storage = snow_shot::storage::ApplicationStorage::instance();
-        require(storage
-                    .initialize({directory.filePath(QStringLiteral("bin")),
-                                 directory.filePath(QStringLiteral("data")), 60000})
-                    .success,
-                "initialize overlay preference test storage");
         canvas_text_editing_preferences_test::exercise([](auto verify) {
             SnowCanvasRuntime runtime;
             NoopOverlayEventSink sink;
             ScreenshotOverlayWindow overlay(sink, new ScreenshotOverlayCanvasWidget(runtime));
             verify(*overlay.canvas());
         });
-        storage.shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--session-input-cleanup-only"))) {

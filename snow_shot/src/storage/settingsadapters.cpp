@@ -1,8 +1,9 @@
 #include "snow_shot/shortcuts/screenshotshortcutcontext.h"
+#include "snow_shot/shortcuts/pinnedshortcutcontext.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/storage/floatingtoolbarsettings.h"
 
-#include "snow_shot/presentation/editionfeatures.h"
+#include "snow_shot/app/editionfeatures.h"
 
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationschema.h"
@@ -113,7 +114,7 @@ const QStringList& screenshotShortcutActionIds() {
             QStringLiteral("redo"),
         };
         result.removeIf([](const QString& id) {
-            return !snow_shot::presentation::editionConfigurationKeyAvailable(
+            return !snow_shot::app::editionConfigurationKeyAvailable(
                 QStringLiteral("screenshot_shortcuts/") + id);
         });
         return result;
@@ -1540,17 +1541,7 @@ PinToScreenShortcutSettings::shortcuts(const QString& actionId) const {
 }
 
 bool PinToScreenShortcutSettings::actionsMayConflict(const QString& first, const QString& second) {
-    const auto animation = [](const QString& id) {
-        return id == QStringLiteral("toggle_playback") || id == QStringLiteral("next_frame") ||
-               id == QStringLiteral("previous_frame") ||
-               id.endsWith(QStringLiteral("playback_speed"));
-    };
-    const auto staticContent = [](const QString& id) {
-        return id == QStringLiteral("drawing_mode") || id == QStringLiteral("resize_window") ||
-               id == QStringLiteral("show_text_recognition_results");
-    };
-    return !((animation(first) && staticContent(second)) ||
-             (animation(second) && staticContent(first)));
+    return shortcuts::pinnedShortcutActionsMayConflict(first, second);
 }
 
 bool PinToScreenShortcutSettings::setShortcuts(
