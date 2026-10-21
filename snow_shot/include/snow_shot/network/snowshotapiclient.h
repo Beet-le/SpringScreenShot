@@ -10,6 +10,7 @@
 #endif
 
 #include <QHash>
+#include <QElapsedTimer>
 #include <QImage>
 #include <QObject>
 #include <QPointer>
@@ -19,6 +20,8 @@
 #include <functional>
 
 class QNetworkAccessManager;
+class QJsonObject;
+class QTimer;
 class SnowShotApiClient;
 
 struct SnowShotTableResult {
@@ -170,6 +173,7 @@ class SnowShotApiClient final : public QObject {
                           TranslationDelta delta,
                           std::function<void(SnowShotImageConversionResult)> completion);
     void cancel(RequestToken token);
+    [[nodiscard]] bool isQueued(RequestToken token) const;
     void setTextTranslationConfigurations(const snow_shot::TextTranslationConfigurations& values);
     [[nodiscard]] bool isTextTranslation(const QString& id) const;
     [[nodiscard]] int translationConcurrency(const QString& id) const;
@@ -213,6 +217,8 @@ class SnowShotApiClient final : public QObject {
     bool finishExpiredImageRequest(RequestToken token);
     void submitChatStream(RequestToken token, QByteArray body);
     void pumpCustomChatStreams();
+    void pumpBuiltInChatStreams();
+    bool retryBuiltInTranslation(RequestToken token, const QJsonObject& problem);
     void startChatStream(RequestToken token, const QByteArray& body);
     void drainChatStream(RequestToken token);
     void completeChatStream(RequestToken token);
@@ -231,6 +237,11 @@ class SnowShotApiClient final : public QObject {
     snow_shot::TextTranslationConfigurations m_textTranslations;
     QList<RequestToken> m_translationQueue;
     QList<RequestToken> m_customChatQueue;
+    QList<RequestToken> m_builtinChatQueue;
+    QElapsedTimer m_builtinChatClock;
+    QTimer* m_builtinChatTimer = nullptr;
+    qint64 m_builtinChatNextStartMs = 0;
+    QHash<QString, qint64> m_builtinChatResumeTimes;
     void rebuildAvailableModels();
     void appendLocalModels(QVector<SnowShotChatModel>& models) const;
     const snow_shot::CustomAiModelConfiguration* customModel(const QString& id) const;

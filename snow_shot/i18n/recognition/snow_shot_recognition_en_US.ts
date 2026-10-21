@@ -232,6 +232,10 @@
             <translation>Some text could not be translated</translation>
         </message>
         <message>
+            <source>Some text could not be translated: %1</source>
+            <translation>Some text could not be translated: %1</translation>
+        </message>
+        <message>
             <source>Table recognition failed</source>
             <translation>Table recognition failed</translation>
         </message>

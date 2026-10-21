@@ -434,11 +434,14 @@ void TranslationJob::pump() {
                     m_result = result;
                 if (result.httpStatus == 429) {
                     m_rateLimited = true;
-                    if (m_client->isTextTranslation(m_preferences.modelId)) {
-                        // Requests waiting in the provider queue must not continue spending
-                        // quota after this job is throttled. Retry preserves completed units.
-                        const auto requests = std::exchange(m_requests, {});
-                        for (auto it = requests.cbegin(); it != requests.cend(); ++it) {
+                    // A terminal limit must also retire requests in the shared built-in
+                    // queue. Already dispatched chat streams can finish without losing
+                    // their partial output or incurring a duplicate provider call.
+                    const auto requests = m_requests;
+                    for (auto it = requests.cbegin(); it != requests.cend(); ++it) {
+                        if (m_client->isTextTranslation(m_preferences.modelId) ||
+                            m_client->isQueued(it.value())) {
+                            m_requests.remove(it.key());
                             m_client->cancel(it.value());
                             for (const int index : m_unitGroups[it.key()])
                                 m_units[index].state = State::Failed;

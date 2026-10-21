@@ -232,6 +232,10 @@
             <translation>部分文字未能翻译</translation>
         </message>
         <message>
+            <source>Some text could not be translated: %1</source>
+            <translation>部分文字未能翻译：%1</translation>
+        </message>
+        <message>
             <source>Table recognition failed</source>
             <translation>表格识别失败</translation>
         </message>

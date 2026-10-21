@@ -862,6 +862,9 @@ void partialFailuresRetryOnlyFailedBoxes() {
     server.finish(3);
     waitUntil([&]() { return !session.streaming; }, "partial failure run should settle");
     require(session.errors.size() == 1, "partial failure should report exactly one error summary");
+    require(session.errors.first().contains(QStringLiteral("test failure")) ||
+                session.errors.first().contains(QStringLiteral("The model returned no content")),
+            "overlay failure summary includes the underlying reason");
     require(session.displayed->lines[0].text == QStringLiteral("partial"),
             "the first failed box should keep its partial output");
     require(session.displayed->lines[1].text == QStringLiteral("source 1"),

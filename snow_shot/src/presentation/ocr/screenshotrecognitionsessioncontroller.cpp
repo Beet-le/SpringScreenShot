@@ -2327,7 +2327,11 @@ void ScreenshotRecognitionSessionController::reportOverlayTranslationFailure() {
         it->overlayTranslation.status == TextCacheEntry::TranslationStatus::Failed &&
         !it->overlayTranslation.failureReported) {
         it->overlayTranslation.failureReported = true;
-        if (!showStatus(tr("Some text could not be translated"), true))
+        const QString detail = it->translationJob ? it->translationJob->errorText() : QString{};
+        const QString message = detail.isEmpty()
+                                    ? tr("Some text could not be translated")
+                                    : tr("Some text could not be translated: %1").arg(detail);
+        if (!showStatus(message, true))
             return;
     }
 #endif

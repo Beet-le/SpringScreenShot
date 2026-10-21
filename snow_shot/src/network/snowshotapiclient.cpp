@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -41,6 +42,10 @@ constexpr int kMaximumSide = 2880;
 constexpr int kWebpQuality = 75;
 constexpr int kRequestTimeoutMs = 35'000;
 constexpr int kTranslationTimeoutMs = 120'000;
+// The built-in service accepts 600 requests/minute per identity. Share its eight
+// slots across all consumers and spread starts at ten requests/second.
+constexpr int kBuiltInChatStartIntervalMs = 100;
+constexpr int kMaximumBuiltInChatAttempts = 3;
 constexpr qsizetype kMaximumResponseBytes = snow_shot::network::kMaximumJsonResponseBytes;
 constexpr qsizetype kMaximumChatRequestBytes = 2 * 1024 * 1024;
 constexpr int kChatStreamEventsPerBatch = 64;
@@ -493,7 +498,7 @@ struct SnowShotApiClient::Request {
     QElapsedTimer elapsed;
     QElapsedTimer transport;
     QString operation = QUuid::createUuid().toString(QUuid::Id128);
-    void report(const QString& outcome, int status = 0) const {
+    void report(const QString& outcome, int status = 0, const QString& errorCode = {}) const {
         snow_shot::diagnostics::logEvent(
             QStringLiteral("snow_shot.network"), QStringLiteral("request.finished"),
             {{QStringLiteral("operation"), operation},
@@ -504,6 +509,8 @@ struct SnowShotApiClient::Request {
              {QStringLiteral("outcome"), outcome},
              {QStringLiteral("model"), model},
              {QStringLiteral("format"), format},
+             {QStringLiteral("error_code"), errorCode.left(128)},
+             {QStringLiteral("attempts"), chatAttempts},
              {QStringLiteral("code"), reply ? static_cast<int>(reply->error()) : 0}},
             outcome == QStringLiteral("failed") ? QtWarningMsg : QtInfoMsg);
     }
@@ -541,6 +548,8 @@ struct SnowShotApiClient::Request {
     QByteArray apiKey;
     QByteArray pendingBody;
     bool custom = false;
+    bool builtInChat = false;
+    int chatAttempts = 0;
     bool textTranslation = false;
     SnowShotTranslationRequest translationInput;
     QString format;
@@ -557,7 +566,13 @@ QString SnowShotApiClient::configuredBaseUrl(const QString& savedUrl) {
 }
 
 SnowShotApiClient::SnowShotApiClient(QString baseUrl, QObject* parent)
-    : QObject(parent), m_baseUrl(normalizedBaseUrl(std::move(baseUrl))) {}
+    : QObject(parent), m_baseUrl(normalizedBaseUrl(std::move(baseUrl))) {
+    m_builtinChatClock.start();
+    m_builtinChatTimer = new QTimer(this);
+    m_builtinChatTimer->setSingleShot(true);
+    m_builtinChatTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_builtinChatTimer, &QTimer::timeout, this, &SnowShotApiClient::pumpBuiltInChatStreams);
+}
 
 SnowShotApiClient::~SnowShotApiClient() {
     const auto tokens = m_requests.keys();
@@ -1407,7 +1422,22 @@ void SnowShotApiClient::submitChatStream(RequestToken token, QByteArray body) {
     if (!state)
         return;
     if (!state->custom) {
-        startChatStream(token, body);
+        state->builtInChat = true;
+        state->pendingBody = std::move(body);
+        if (state->kind == Request::Kind::Translation) {
+            auto* deadline = new QTimer(this);
+            deadline->setSingleShot(true);
+            state->timeout = deadline;
+            connect(deadline, &QTimer::timeout, this, [this, token] {
+                SnowShotTranslationResult result;
+                result.error = tr("Translation request timed out.");
+                result.code = QStringLiteral("translation_timeout");
+                finishTranslation(token, std::move(result));
+            });
+            deadline->start(kTranslationTimeoutMs);
+        }
+        m_builtinChatQueue.append(token);
+        QTimer::singleShot(0, this, &SnowShotApiClient::pumpBuiltInChatStreams);
         return;
     }
     if (state->imageResponse && !state->absoluteDeadline && state->timeout)
@@ -1448,6 +1478,109 @@ void SnowShotApiClient::pumpCustomChatStreams() {
     }
 }
 
+void SnowShotApiClient::pumpBuiltInChatStreams() {
+    int active = 0;
+    for (const auto* request : m_requests)
+        if (request->builtInChat && request->reply)
+            ++active;
+    if (active >= 8 || m_builtinChatQueue.isEmpty())
+        return;
+    const qint64 now = m_builtinChatClock.elapsed();
+    qint64 next = std::numeric_limits<qint64>::max();
+    const auto queued = m_builtinChatQueue;
+    const QPointer<SnowShotApiClient> guard(this);
+    for (const auto token : queued) {
+        auto* request = m_requests.value(token);
+        if (!request) {
+            m_builtinChatQueue.removeAll(token);
+            continue;
+        }
+        const qint64 ready =
+            std::max(m_builtinChatNextStartMs, m_builtinChatResumeTimes.value(request->endpoint));
+        if (ready > now) {
+            next = std::min(next, ready);
+            continue;
+        }
+        m_builtinChatQueue.removeAll(token);
+        m_builtinChatNextStartMs = now + kBuiltInChatStartIntervalMs;
+        const QByteArray body = request->pendingBody;
+        if (request->kind != Request::Kind::Translation)
+            request->pendingBody.clear();
+        startChatStream(token, body);
+        if (!guard)
+            return;
+        if (!m_builtinChatQueue.isEmpty())
+            m_builtinChatTimer->start(kBuiltInChatStartIntervalMs);
+        return;
+    }
+    if (next != std::numeric_limits<qint64>::max())
+        m_builtinChatTimer->start(
+            static_cast<int>(std::min<qint64>(next - now, std::numeric_limits<int>::max())));
+}
+
+bool SnowShotApiClient::retryBuiltInTranslation(RequestToken token, const QJsonObject& problem) {
+    auto* request = m_requests.value(token);
+    if (!request || !request->builtInChat || request->kind != Request::Kind::Translation ||
+        !request->reply || request->hasContent ||
+        request->reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 429)
+        return false;
+    const QString code = problem.value(QStringLiteral("code")).toString();
+    // These admission errors occur before model execution. Quota exhaustion and
+    // ambiguous provider failures must remain terminal, even when they carry 429.
+    if (code != QStringLiteral("rate_limited") && code != QStringLiteral("queue_full"))
+        return false;
+    const auto header = request->reply->rawHeader("Retry-After").trimmed();
+    bool numeric = false;
+    const qint64 seconds = header.toLongLong(&numeric);
+    qint64 delay = -1;
+    if (numeric && seconds >= 0 && seconds <= kTranslationTimeoutMs / 1000)
+        delay = seconds * 1000;
+    else if (numeric)
+        return false;
+    else if (!numeric && !header.isEmpty()) {
+        const auto date = QDateTime::fromString(QString::fromLatin1(header), Qt::RFC2822Date);
+        if (date.isValid())
+            delay = std::max<qint64>(0, QDateTime::currentDateTimeUtc().msecsTo(date));
+    }
+    const auto bodyDelay = problem.value(QStringLiteral("retry_after_seconds"));
+    if (bodyDelay.isDouble() && bodyDelay.toDouble() >= 0 &&
+        bodyDelay.toDouble() <= kTranslationTimeoutMs / 1000 &&
+        bodyDelay.toDouble() == bodyDelay.toInt(-1))
+        delay = std::max(delay, qint64(bodyDelay.toInt()) * 1000);
+    if (delay < 0 || delay > kTranslationTimeoutMs)
+        return false;
+    // Even Retry-After: 0 must pass through the shared pacing gate.
+    delay = std::max<qint64>(delay, kBuiltInChatStartIntervalMs);
+    auto& resume = m_builtinChatResumeTimes[request->endpoint];
+    resume = std::max(resume, m_builtinChatClock.elapsed() + delay);
+    if (request->chatAttempts >= kMaximumBuiltInChatAttempts ||
+        request->elapsed.elapsed() + delay >= kTranslationTimeoutMs)
+        return false;
+    snow_shot::diagnostics::logEvent(QStringLiteral("snow_shot.network"),
+                                     QStringLiteral("request.retry_scheduled"),
+                                     {{QStringLiteral("operation"), request->operation},
+                                      {QStringLiteral("request_kind"), request->kindName()},
+                                      {QStringLiteral("error_code"), code},
+                                      {QStringLiteral("attempt"), request->chatAttempts},
+                                      {QStringLiteral("delay_ms"), delay}});
+    auto* reply = request->reply.data();
+    disconnect(reply, nullptr, this, nullptr);
+    request->reply = nullptr;
+    reply->deleteLater();
+    request->streamBuffer.clear();
+    request->streamLineStart = 0;
+    request->streamScanPosition = 0;
+    request->streamDone = false;
+    request->streamFailed = false;
+    request->streamParsing = false;
+    request->streamParseQueued = false;
+    request->streamFinished = false;
+    request->receivedBytes = 0;
+    m_builtinChatQueue.prepend(token);
+    QTimer::singleShot(0, this, &SnowShotApiClient::pumpBuiltInChatStreams);
+    return true;
+}
+
 void SnowShotApiClient::startChatStream(RequestToken token, const QByteArray& body) {
     if (finishExpiredImageRequest(token))
         return;
@@ -1471,6 +1604,7 @@ void SnowShotApiClient::startChatStream(RequestToken token, const QByteArray& bo
     request.setRawHeader("X-Request-ID",
                          QUuid::createUuid().toString(QUuid::WithoutBraces).toUtf8());
     request.setTransferTimeout(kTranslationTimeoutMs);
+    ++state->chatAttempts;
     state->transport.start();
     QNetworkReply* reply = networkAccessManager()->post(request, body);
     reply->setReadBufferSize(64 * 1024);
@@ -1571,6 +1705,7 @@ void SnowShotApiClient::drainChatStream(RequestToken token) {
                                                          : tr("Translation failed");
             }
             result.code = object.value(QStringLiteral("code")).toVariant().toString();
+            result.httpStatus = object.value(QStringLiteral("status")).toInt();
             finishTranslation(token, std::move(result));
             return;
         }
@@ -1651,7 +1786,9 @@ void SnowShotApiClient::completeChatStream(RequestToken token) {
         if (problem.value(QStringLiteral("error")).isObject())
             problem = problem.value(QStringLiteral("error")).toObject();
         result.code = problem.value(QStringLiteral("code")).toVariant().toString();
-        result.error = formatFailure(result.httpStatus, {},
+        if (retryBuiltInTranslation(token, problem))
+            return;
+        result.error = formatFailure(result.httpStatus, result.code,
                                      problemDetail(problem).isEmpty() ? reply->errorString()
                                                                       : problemDetail(problem));
     } else if (current->streamFailed) {
@@ -1684,6 +1821,11 @@ void SnowShotApiClient::cleanupRequest(Request* request) {
         reply->deleteLater();
 }
 
+bool SnowShotApiClient::isQueued(RequestToken token) const {
+    return m_builtinChatQueue.contains(token) || m_customChatQueue.contains(token) ||
+           m_translationQueue.contains(token);
+}
+
 void SnowShotApiClient::cancel(RequestToken token) {
     Request* request = m_requests.take(token);
     if (!request) {
@@ -1701,6 +1843,8 @@ void SnowShotApiClient::cancel(RequestToken token) {
     const QPointer<SnowShotApiClient> guard(this);
     m_translationQueue.removeAll(token);
     m_customChatQueue.removeAll(token);
+    m_builtinChatQueue.removeAll(token);
+    QTimer::singleShot(0, this, &SnowShotApiClient::pumpBuiltInChatStreams);
     cleanupRequest(request);
     if (!guard)
         return;
@@ -1807,7 +1951,7 @@ void SnowShotApiClient::finishTranslation(RequestToken token, SnowShotTranslatio
     request->report(result.cancelled     ? QStringLiteral("cancelled")
                     : result.succeeded() ? QStringLiteral("succeeded")
                                          : QStringLiteral("failed"),
-                    result.httpStatus);
+                    result.httpStatus, result.code);
     m_requests.erase(it);
     const QPointer<QObject> receiver = request->receiver;
     TranslationCompletion completion = std::move(request->translationCompletion);
@@ -1815,6 +1959,8 @@ void SnowShotApiClient::finishTranslation(RequestToken token, SnowShotTranslatio
     const bool translation = request->textTranslation;
     const bool custom = request->custom;
     m_customChatQueue.removeAll(token);
+    m_builtinChatQueue.removeAll(token);
+    QTimer::singleShot(0, this, &SnowShotApiClient::pumpBuiltInChatStreams);
     if (translation)
         QTimer::singleShot(0, this, &SnowShotApiClient::pumpTextTranslations);
     if (custom)
