@@ -1,59 +1,37 @@
 #include "screenshotpinnedrestoregeometry.h"
 
-#include <QtGlobal>
-
 #include <algorithm>
 
 namespace screenshot_pinned_restore_geometry {
 namespace {
 
-QRect translateGeometry(const QRect& savedGeometry, const SavedState& saved,
-                        const ScreenGeometry& targetScreen, const QList<ScreenGeometry>& screens) {
-    if (savedGeometry.isEmpty()) {
-        return savedGeometry;
+snow_shot::storage::PinnedWindowPlacement
+restorePlacement(snow_shot::storage::PinnedWindowPlacement placement,
+                 const snow_shot::presentation::PinnedDisplayGeometry& targetScreen,
+                 const QList<snow_shot::presentation::PinnedDisplayGeometry>& screens) {
+    if (!placement.isValid()) {
+        return placement;
     }
-    QRect geometry = savedGeometry;
-    if (!saved.screenPhysicalBounds.isEmpty()) {
-        // A restored window keeps its saved physical pixel size; only its
-        // anchor onto the monitor layout is re-based when the saving monitor
-        // is gone or moved.
-        const QPoint relative = geometry.topLeft() - saved.screenPhysicalBounds.topLeft();
-        geometry.moveTopLeft(targetScreen.physicalBounds.topLeft() + relative);
-    }
-    bool visible = false;
-    for (const ScreenGeometry& screen : screens) {
-        if (screen.availableBounds.intersects(geometry)) {
-            visible = true;
-            break;
-        }
-    }
-    if (!visible) {
-        const QRect& available = targetScreen.availableBounds;
-        const int left = geometry.width() >= available.width()
-                             ? available.left()
-                             : qBound(available.left(), geometry.left(),
-                                      available.right() - geometry.width() + 1);
-        const int top = geometry.height() >= available.height()
-                            ? available.top()
-                            : qBound(available.top(), geometry.top(),
-                                     available.bottom() - geometry.height() + 1);
-        geometry.moveLeft(left);
-        geometry.moveTop(top);
-    }
-    return geometry;
+    placement.displayName = targetScreen.name;
+    placement.displaySerial = targetScreen.serial;
+    const QRectF geometry = snow_shot::presentation::pinnedDesktopRect(placement, targetScreen);
+    const bool visible =
+        std::any_of(screens.begin(), screens.end(), [&geometry](const auto& screen) {
+            return screen.usableBounds.intersects(geometry);
+        });
+    return visible ? placement
+                   : snow_shot::presentation::recoverPinnedPlacement(placement, targetScreen);
 }
 
 } // namespace
 
-RestoredState reconcileSavedState(const SavedState& saved, const ScreenGeometry& targetScreen,
-                                  const QList<ScreenGeometry>& screens) {
-    RestoredState restored;
-    restored.nativeGeometry = translateGeometry(saved.nativeGeometry, saved, targetScreen, screens);
-    restored.preThumbnailNativeGeometry =
-        translateGeometry(saved.preThumbnailNativeGeometry, saved, targetScreen, screens);
-    restored.hideToTopHandleNativeGeometry =
-        translateGeometry(saved.hideToTopHandleNativeGeometry, saved, targetScreen, screens);
-    return restored;
+PlacementState
+reconcileSavedState(const PlacementState& saved,
+                    const snow_shot::presentation::PinnedDisplayGeometry& targetScreen,
+                    const QList<snow_shot::presentation::PinnedDisplayGeometry>& screens) {
+    return {restorePlacement(saved.placement, targetScreen, screens),
+            restorePlacement(saved.preThumbnailPlacement, targetScreen, screens),
+            restorePlacement(saved.hideToTopPlacement, targetScreen, screens)};
 }
 
 } // namespace screenshot_pinned_restore_geometry

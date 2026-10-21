@@ -4917,6 +4917,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/pinned/screenshotpinnedrestoregeometry.cpp
     )
     target_include_directories(snow-shot-pinned-restore-geometry-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/pinned"
     )
     target_link_libraries(snow-shot-pinned-restore-geometry-tests PRIVATE
@@ -5776,6 +5777,13 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-pinned-window-tests --selection-restore-only -platform offscreen)
     add_test(NAME snow-shot-pinned-restored-state-persistence-tests
         COMMAND snow-shot-pinned-window-tests --restored-state-persistence-only -platform offscreen)
+    foreach(scale IN ITEMS 1 1.5 2)
+        add_test(NAME snow-shot-pinned-partial-placement-restore-${scale}-tests
+            COMMAND snow-shot-pinned-window-tests --partial-placement-restore-only -platform offscreen)
+        set_tests_properties(snow-shot-pinned-partial-placement-restore-${scale}-tests PROPERTIES
+            LABELS "unit" TIMEOUT 60 RUN_SERIAL TRUE SNOW_TEST_CROSS_PLATFORM TRUE
+            ENVIRONMENT "QT_SCALE_FACTOR=${scale};${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    endforeach()
     set_tests_properties(snow-shot-pinned-restored-state-persistence-tests PROPERTIES
         LABELS "unit" TIMEOUT 60)
     if(WIN32)

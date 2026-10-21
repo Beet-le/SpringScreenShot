@@ -10443,6 +10443,59 @@ void closeRestoredPinnedWindow(ScreenshotPinnedWindow* window, const QString& re
     require(processUntilDeleted(guardedWindow, 2000), "restored pinned window was not deleted");
 }
 
+void restoredPartiallyVisiblePlacementStaysExact() {
+    using namespace snow_shot::presentation;
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen, "placement restore requires a screen");
+    const auto display = pinnedDisplayGeometry(*screen);
+    const QRectF available = display.usableBounds.translated(-display.desktopBounds.topLeft());
+    const qreal scale = pinnedGeometryScale(display.backingScale);
+    const std::array positions{QPointF(available.left() - 60 / scale, available.center().y()),
+                               QPointF(available.center().x(), available.top() - 40 / scale),
+                               QPointF(available.right() - 60 / scale, available.center().y()),
+                               QPointF(available.center().x(), available.bottom() - 40 / scale)};
+    IsolatedPinnedStorage storage;
+    for (const bool thumbnail : {false, true}) {
+        for (const QPointF& position : positions) {
+            auto record = savedPinnedRecord(*screen, 1.0, QSize(160, 100), thumbnail ? 50.0 : 100.0,
+                                            QPoint());
+            record.placement.position = position;
+            record.nativeGeometry = pinnedWindowRect(record.placement, *screen);
+            record.placement = pinnedPlacement(record.nativeGeometry, *screen);
+            record.thumbnailMode = thumbnail;
+            if (thumbnail) {
+                record.preThumbnailPlacement = record.placement;
+                record.preThumbnailPlacement.windowSize = record.initialWindowSize;
+                record.preThumbnailNativeGeometry =
+                    pinnedWindowRect(record.preThumbnailPlacement, *screen);
+            }
+            require(
+                display.usableBounds.intersects(pinnedDesktopRect(record.placement, display)) &&
+                    !display.usableBounds.contains(pinnedDesktopRect(record.placement, display)),
+                "restore fixture must be partially outside the monitor");
+            // Recreate the saved result again to catch persistence-induced drift too.
+            for (int recreation = 0; recreation < 2; ++recreation) {
+                ScreenshotSelectionExportUiServices services;
+                auto* window = restoreSeededPinnedWindow(services, record);
+                const auto restored = window->persistenceSnapshot();
+                require(restored.nativeGeometry == record.nativeGeometry &&
+                            restored.placement == record.placement,
+                        "recreating a partially visible pin must preserve its exact placement");
+                require(
+                    restored.thumbnailMode == thumbnail &&
+                        restored.preThumbnailNativeGeometry == record.preThumbnailNativeGeometry,
+                    "recreation must preserve the partially visible expanded thumbnail geometry");
+                if (thumbnail) {
+                    require(restored.preThumbnailPlacement == record.preThumbnailPlacement,
+                            "expanded thumbnail placement must match its restored geometry");
+                }
+                closeRestoredPinnedWindow(window, record.id);
+                record = restored;
+            }
+        }
+    }
+}
+
 void restoredStateSavePreservesSourceRevision() {
     IsolatedPinnedStorage isolated;
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
@@ -26504,6 +26557,10 @@ int main(int argc, char* argv[]) {
             restoredSelectionPreservesShapeAndCreationSource();
             return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--partial-placement-restore-only"))) {
+            restoredPartiallyVisiblePlacementStaysExact();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--restored-state-persistence-only"))) {
             restoredStateSavePreservesSourceRevision();
             return 0;
@@ -26580,6 +26637,7 @@ int main(int argc, char* argv[]) {
         pinnedWheelScalingUsesConfiguredAnchor(sourceRuntime);
         pinnedFollowsPerMonitorDpiScaling(sourceRuntime);
         restoredSelectionPreservesShapeAndCreationSource();
+        restoredPartiallyVisiblePlacementStaysExact();
         restoredStateSavePreservesSourceRevision();
         restoredPinnedWindowIgnoresMonitorDpiChange(sourceRuntime);
         restoredThumbnailScaleMenuStaysConsistentThroughExit(sourceRuntime);
