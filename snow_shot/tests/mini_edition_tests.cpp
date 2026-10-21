@@ -127,6 +127,7 @@ void toolbarDefaultsAndImports() {
           QStringLiteral("screenshot_table/model"), QStringLiteral("screenshot_latex/model"),
           QStringLiteral("screenshot_toolbar/table_qr_tool"),
           QStringLiteral("interface/translation_window_size"),
+          QStringLiteral("interface/translation_window_geometry"),
           QStringLiteral("extended_features/translation_page_enabled")}) {
         require(!storage::ConfigurationSchema::contains(key) &&
                     !storage::ConfigurationSchema::normalize(key, true).valid,
@@ -239,6 +240,7 @@ void fullArchiveImportPreservesSupportedChoices() {
         {QStringLiteral("screenshot_latex/model"), QStringLiteral("snow-shot:vision")},
         {QStringLiteral("screenshot_toolbar/table_qr_tool"), QStringLiteral("table-recognition")},
         {QStringLiteral("interface/translation_window_size"), QJsonObject()},
+        {QStringLiteral("interface/translation_window_geometry"), QJsonObject()},
         {QStringLiteral("extended_features/translation_page_enabled"), true}};
     QMap<QString, QJsonValue> fullSnapshot = unavailable;
     fullSnapshot.insert(QStringLiteral("interface/theme_mode"), QStringLiteral("dark"));

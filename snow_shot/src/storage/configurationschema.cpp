@@ -418,6 +418,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("interface/main_window_geometry"), QJsonObject(),
      ConfigurationValueKind::Structured},
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+    {QStringLiteral("interface/translation_window_geometry"), QJsonObject(),
+     ConfigurationValueKind::Structured},
     {QStringLiteral("interface/translation_window_size"), QJsonObject(),
      ConfigurationValueKind::Structured},
 #endif

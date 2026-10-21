@@ -608,6 +608,16 @@ bool WindowMemorySettings::setMainWindowGeometry(const QRect& normalGeometry,
 }
 
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+std::optional<PersistedWindowGeometry> WindowMemorySettings::translationWindowGeometry() const {
+    return parseWindowGeometry(
+        cache().value(QStringLiteral("interface/translation_window_geometry")).toObject());
+}
+
+bool WindowMemorySettings::setTranslationWindowGeometry(const QRect& normalGeometry) const {
+    return cache().setValue(QStringLiteral("interface/translation_window_geometry"),
+                            windowGeometryToJson(normalGeometry, false));
+}
+
 std::optional<QSize> WindowMemorySettings::translationWindowSize() const {
     return parseWindowSize(
         cache().value(QStringLiteral("interface/translation_window_size")).toObject());

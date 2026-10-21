@@ -149,6 +149,8 @@ class WindowMemorySettings final {
     [[nodiscard]] std::optional<PersistedWindowGeometry> mainWindowGeometry() const;
     bool setMainWindowGeometry(const QRect& normalGeometry, bool maximized) const;
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+    [[nodiscard]] std::optional<PersistedWindowGeometry> translationWindowGeometry() const;
+    bool setTranslationWindowGeometry(const QRect& normalGeometry) const;
     [[nodiscard]] std::optional<QSize> translationWindowSize() const;
     bool setTranslationWindowSize(const QSize& size) const;
 #endif
