@@ -10498,6 +10498,21 @@ if(WIN32)
     endif()
 endif()
 
+target_sources(snow_shot PRIVATE src/diagnostics/ffmpegdiagnostics.cpp)
+if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-recording-diagnostics-tests
+        tests/recording_diagnostics_tests.cpp src/diagnostics/ffmpegdiagnostics.cpp)
+    target_link_libraries(snow-shot-recording-diagnostics-tests PRIVATE
+        snow_shot_diagnostics PkgConfig::SNOW_SHOT_FFMPEG)
+    add_test(NAME snow-shot-recording-diagnostics-tests
+        COMMAND snow-shot-recording-diagnostics-tests)
+    set_tests_properties(snow-shot-recording-diagnostics-tests PROPERTIES LABELS "unit" TIMEOUT 30)
+    if(WIN32)
+        set_tests_properties(snow-shot-recording-diagnostics-tests PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SNOW_FFMPEG_ROOT}/bin")
+    endif()
+endif()
+
 function(snow_shot_stage_ffmpeg_runtime target)
     if(WIN32 AND NOT SNOW_SHOT_RELEASE_STATIC AND SNOW_SHOT_FFMPEG_RUNTIME_FILES)
         add_custom_command(TARGET ${target} POST_BUILD

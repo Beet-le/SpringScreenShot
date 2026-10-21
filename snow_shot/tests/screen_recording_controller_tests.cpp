@@ -39,6 +39,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
+#include "snow_shot/diagnostics/diagnostics.h"
 #include "physical_key_test_support.h"
 #include "snow_capture.h"
 #include "snow_shot/platform/windowcaptureexclusion.h"
@@ -75,6 +76,7 @@
 #include <QScopeGuard>
 #include <QTimer>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QMessageBox>
 #include <QLabel>
 #include <QLayout>
@@ -163,6 +165,7 @@ bool failClipSpeed = false;
 bool clipPreviewEnabled = false, failClipSeek = false;
 int clipPreviewReads = 0, clipSeekCalls = 0;
 QByteArray clipPreviewError;
+QByteArray clipExportError;
 QVector<quint64> clipBoundaries;
 std::function<void(SnowRecordingClipPreview&)> clipPreviewOverride;
 std::atomic<bool> clipDeferred = false;
@@ -3327,8 +3330,13 @@ uint32_t snow_recording_clip_export_poll(const SnowRecordingClipExport*, float* 
     *percent = clipExportState == SNOW_RECORDING_RENDER_STATE_RUNNING ? 41.75f : 100;
     return clipExportState;
 }
-size_t snow_recording_clip_export_error(const SnowRecordingClipExport*, char*, size_t) {
-    return 0;
+size_t snow_recording_clip_export_error(const SnowRecordingClipExport*, char* buffer,
+                                        size_t capacity) {
+    if (clipExportState != SNOW_RECORDING_RENDER_STATE_FAILED || clipExportError.isEmpty())
+        return 0;
+    if (buffer && capacity)
+        qstrncpy(buffer, clipExportError.constData(), capacity);
+    return static_cast<size_t>(clipExportError.size()) + 1;
 }
 void snow_recording_clip_export_cancel(SnowRecordingClipExport*) {
     clipExportState = SNOW_RECORDING_RENDER_STATE_CANCELED;
@@ -5706,6 +5714,14 @@ void recordingTrimPlaybackTests(const QString& directory) {
 }
 
 void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
+    auto& diagnostics = snow_shot::diagnostics::DiagnosticsService::instance();
+    snow_shot::diagnostics::DiagnosticsOptions diagnosticOptions;
+    diagnosticOptions.directories = {directory + QStringLiteral("/trim-logs")};
+    diagnosticOptions.enableCrashCapture = false;
+    diagnosticOptions.installMessageHandler = false;
+    diagnosticOptions.mirrorToConsole = false;
+    require(diagnostics.initialize(diagnosticOptions), "initialize trim diagnostic log");
+    const auto stopDiagnostics = qScopeGuard([&] { diagnostics.shutdown(); });
     const QString renders = qEnvironmentVariable("SNOW_TRIM_VISUAL_OUTPUT");
     QFont visualFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
 #ifdef Q_OS_WIN
@@ -6418,13 +6434,54 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
             }
             start->setValue(7);
             const auto notificationsBeforeFailure = notificationPaths.size();
+            clipExportError = "encode error: video packet mux: Invalid argument";
             clipExportState = SNOW_RECORDING_RENDER_STATE_FAILED;
             copy->click();
             wait([&] { return copy->isEnabled() && clipExports == oldExports + 2; });
+            clipExportError.clear();
             require(start->value() == 7 && finish->value() == 20 && controller.isOpen(),
                     "export failure preserves the source session and selected range");
             require(notificationPaths.size() == notificationsBeforeFailure,
                     "failed trimmed exports do not notify");
+            require(diagnostics.flush(), "flush the failed trim's diagnostic evidence");
+            QFile diagnosticFile(diagnostics.status().currentFile);
+            require(diagnosticFile.open(QIODevice::ReadOnly), "read trim diagnostic log");
+            QJsonObject lastFailure;
+            bool loggedControllerError = false;
+            bool loggedUnexplainedFailure = false;
+            for (const auto& line : diagnosticFile.readAll().split('\n')) {
+                const auto record = QJsonDocument::fromJson(line).object();
+                if (record.value(QStringLiteral("event")) == QStringLiteral("recording.failed") &&
+                    record.value(QStringLiteral("message"))
+                        .toString()
+                        .contains(QStringLiteral("video packet mux: Invalid argument")))
+                    loggedControllerError = true;
+                if (record.value(QStringLiteral("event")) !=
+                    QStringLiteral("recording.trim_export_failed"))
+                    continue;
+                if (record.value(QStringLiteral("message")) ==
+                    QStringLiteral("Recording export failed without a native error message"))
+                    loggedUnexplainedFailure = true;
+                const auto fields = record.value(QStringLiteral("fields")).toObject();
+                if (fields.value(QStringLiteral("deferred")).toBool() != deferred)
+                    continue;
+                lastFailure = record;
+            }
+            const auto fields = lastFailure.value(QStringLiteral("fields")).toObject();
+            require(fields.value(QStringLiteral("first_frame")).toInt() == 7 &&
+                        fields.value(QStringLiteral("end_frame")).toInt() == 20 &&
+                        fields.value(QStringLiteral("speed_percent")).toInt() == 100 &&
+                        fields.value(QStringLiteral("action")) == QStringLiteral("copy") &&
+                        !fields.value(QStringLiteral("cache_hit")).toBool() &&
+                        !fields.value(QStringLiteral("operation")).toString().isEmpty() &&
+                        lastFailure.value(QStringLiteral("message"))
+                            .toString()
+                            .contains(QStringLiteral("video packet mux: Invalid argument")),
+                    "failed trim logs the submitted range, rate, action, and native error");
+            require(loggedControllerError, "controller failure logs retain the displayed error");
+            require(
+                loggedUnexplainedFailure,
+                "failed native tasks without error text are logged as failures, not cancellation");
             clipExportState = SNOW_RECORDING_RENDER_STATE_SUCCEEDED;
             copy->click();
             wait([&] { return copy->isEnabled() && clipExports == oldExports + 3; });

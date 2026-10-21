@@ -1304,7 +1304,7 @@ struct ScreenRecordingController::Impl {
             sessionStatus = ScreenshotToolPalette::RecordingSessionStatus::idle();
             automationRevision = snow_shot::presentation::nextAutomationRevision();
             if (!result.error.isEmpty()) {
-                report(QStringLiteral("recording.failed"), QtWarningMsg);
+                report(QStringLiteral("recording.failed"), QtWarningMsg, result.error);
             }
             return;
         }
@@ -2340,7 +2340,7 @@ struct ScreenRecordingController::Impl {
     void showError(const QString& message) {
         if (!recordingSession)
             setCaptureActivity(false);
-        report(QStringLiteral("recording.failed"), QtWarningMsg);
+        report(QStringLiteral("recording.failed"), QtWarningMsg, message);
         automationError = message;
         automationRevision = snow_shot::presentation::nextAutomationRevision();
         if (automationOwned || automationCommand)
@@ -2451,11 +2451,21 @@ struct ScreenRecordingController::Impl {
     QColor sessionMouseClickColor{0, 0, 0, 0};
     bool sessionShowCursor = true;
     QString sessionCaptureBackendPreference = QStringLiteral("auto");
-    void report(const QString& event, QtMsgType level = QtInfoMsg) const {
-        snow_shot::diagnostics::logEvent(
-            QStringLiteral("snow_shot.recording"), event,
+    void report(const QString& event, QtMsgType level = QtInfoMsg,
+                const QString& message = {}) const {
+        snow_shot::diagnostics::DiagnosticsService::instance().record(
+            level, QStringLiteral("snow_shot.recording"), event, message,
             {{QStringLiteral("operation"), operation},
              {QStringLiteral("backend_preference"), sessionCaptureBackendPreference},
+             {QStringLiteral("format"), sessionOutputSettings.extension},
+             {QStringLiteral("codec"), static_cast<int>(sessionOutputSettings.codec)},
+             {QStringLiteral("hardware"), sessionOutputSettings.useHardwareEncoder},
+             {QStringLiteral("fps"), static_cast<int>(sessionOutputSettings.targetFps)},
+             {QStringLiteral("quality"), static_cast<int>(sessionOutputSettings.quality)},
+             {QStringLiteral("encoding_preset"), static_cast<int>(sessionOutputSettings.preset)},
+             {QStringLiteral("deferred"), sessionDeferred},
+             {QStringLiteral("width"), recordingRegion.width()},
+             {QStringLiteral("height"), recordingRegion.height()},
              {QStringLiteral("duration_ms"),
               operationTimer.isValid() ? operationTimer.elapsed() : 0},
              {QStringLiteral("backend"),
@@ -2464,8 +2474,7 @@ struct ScreenRecordingController::Impl {
 #else
               QStringLiteral("auto")
 #endif
-             }},
-            level);
+             }});
     }
     QString operation;
     QElapsedTimer operationTimer;

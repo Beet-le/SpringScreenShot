@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <future>
 #include <functional>
 #include <atomic>
@@ -65,10 +66,11 @@ class RecordingTrimSession final : public QObject {
     void togglePlayback();
     void setSpeed(quint32 percent);
     void setBusy(bool busy);
-    void finishExport(bool ok, const QString& error);
+    void finishExport(bool ok, const QString& error, bool canceled = false);
     void publish();
     void releaseMedia();
     void showProgress();
+    void report(const QString& event, const QString& message = {}, QtMsgType level = QtInfoMsg);
     QPointer<ScreenRecordingAreaWindow> m_area;
     QPointer<ScreenRecordingToolbarWindow> m_toolbar;
     QPointer<RecordingTrimToolbar> m_panel;
@@ -80,6 +82,13 @@ class RecordingTrimSession final : public QObject {
     snow_shot::runtime::RuntimeActivityLease m_mediaActivity;
     SnowRecordingClipExport* m_export = nullptr;
     SnowRecordingClipInfo m_info{};
+    SnowRecordingClipOptions m_options{};
+    QString m_operation;
+    QElapsedTimer m_exportTimer;
+    int m_exportAttempt = 0;
+    quint64 m_pendingStartUs = 0;
+    quint64 m_pendingEndUs = 0;
+    bool m_cacheHit = false;
     quint64 m_revision = 0;
     quint64 m_position = 0;
     quint64 m_first = 0;

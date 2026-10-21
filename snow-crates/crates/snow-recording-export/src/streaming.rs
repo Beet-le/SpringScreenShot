@@ -423,6 +423,23 @@ struct PendingFrame {
     reuse_cpu_pixels: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct VideoPacketTiming {
+    pts: Option<i64>,
+    dts: Option<i64>,
+    duration: i64,
+}
+
+impl From<&ffmpeg::Packet> for VideoPacketTiming {
+    fn from(packet: &ffmpeg::Packet) -> Self {
+        Self {
+            pts: packet.pts(),
+            dts: packet.dts(),
+            duration: packet.duration(),
+        }
+    }
+}
+
 struct StreamingAudioState {
     track_id: String,
     encoder: ffmpeg::encoder::audio::Encoder,
@@ -455,6 +472,7 @@ pub struct StreamingEncoder {
     gif_packet: Option<ffmpeg::Packet>,
     stream_index: usize,
     stream_time_base: ffmpeg::Rational,
+    last_video_mux_dts: Option<i64>,
     frame_converter: Option<crate::frame_converter::FrameConverter>,
     scaler: Option<crate::output_scaler::OutputScaler>,
     #[cfg(target_os = "macos")]
@@ -1088,6 +1106,7 @@ impl StreamingEncoder {
             gif_packet: None,
             stream_index,
             stream_time_base,
+            last_video_mux_dts: None,
             scaler,
             #[cfg(target_os = "macos")]
             native_input,
@@ -1878,6 +1897,7 @@ impl StreamingEncoder {
                 }
                 packet
             };
+            let native_timing = VideoPacketTiming::from(&packet);
             if flushing && self.report.encoded_frames <= 2 && self.report.video_encoder == "libx265"
             {
                 // x265's B-pyramid delay is initialized by the third input.
@@ -1903,9 +1923,41 @@ impl StreamingEncoder {
                     packet.set_duration(packet.duration().min(end.saturating_sub(pts).max(1)));
                 }
             }
-            packet.write_interleaved(output).map_err(|cause| {
-                RecordingExportError::Encode(format!("video packet mux: {cause}"))
-            })?;
+            // av_interleaved_write_frame consumes/unrefs the packet even on failure.
+            // Snapshot the actual submitted values before crossing that boundary.
+            let mux_timing = VideoPacketTiming::from(&packet);
+            if let Err(cause) = packet.write_interleaved(output) {
+                let message = video_mux_failure_message(
+                    &self.report,
+                    self.format,
+                    (self.width, self.height),
+                    self.fps,
+                    self.encoder.time_base(),
+                    self.stream_time_base,
+                    native_timing,
+                    mux_timing,
+                    self.last_video_mux_dts,
+                    flushing,
+                    cause,
+                );
+                // Route through FFmpeg's diagnostic callback, which the application
+                // connects to its file logger. Keep the user-facing error concise.
+                if let Ok(message) = std::ffi::CString::new(message) {
+                    // SAFETY: Both format and message are live NUL-terminated strings.
+                    unsafe {
+                        ffmpeg::ffi::av_log(
+                            std::ptr::null_mut(),
+                            ffmpeg::ffi::AV_LOG_ERROR,
+                            c"%s\n".as_ptr(),
+                            message.as_ptr(),
+                        );
+                    }
+                }
+                return Err(RecordingExportError::Encode(format!(
+                    "video packet mux: {cause}"
+                )));
+            }
+            self.last_video_mux_dts = mux_timing.dts;
             self.report.video_packets += 1;
         }
     }
@@ -2356,6 +2408,51 @@ impl StreamingEncoder {
         self.report.encoded_frames = self.report.encoded_frames.saturating_add(1);
         Ok(())
     }
+}
+
+fn video_mux_failure_message(
+    report: &StreamingEncoderReport,
+    format: ExportFormat,
+    size: (u32, u32),
+    fps: u32,
+    encoder_time_base: ffmpeg::Rational,
+    stream_time_base: ffmpeg::Rational,
+    native: VideoPacketTiming,
+    mux: VideoPacketTiming,
+    previous_dts: Option<i64>,
+    flushing: bool,
+    cause: ffmpeg::Error,
+) -> String {
+    format!(
+        "recording.video_packet_mux_failed: error={cause}; code={}; \
+         encoder={}; requested_encoder={}; hardware={}; hardware_fallback={}; \
+         format={format:?}; width={}; height={}; fps={fps}; pixel_format={}; \
+         encoder_time_base={}/{}; stream_time_base={}/{}; \
+         native_pts={:?}; native_dts={:?}; native_duration={}; \
+         pts={:?}; dts={:?}; duration={}; previous_dts={previous_dts:?}; \
+         flushing={flushing}; encoded_frames={}; video_packets={}; coalesced_frames={}",
+        i32::from(cause),
+        report.video_encoder,
+        report.requested_video_encoder,
+        report.used_hardware_video_encoder,
+        report.hardware_fallback,
+        size.0,
+        size.1,
+        report.pixel_format,
+        encoder_time_base.numerator(),
+        encoder_time_base.denominator(),
+        stream_time_base.numerator(),
+        stream_time_base.denominator(),
+        native.pts,
+        native.dts,
+        native.duration,
+        mux.pts,
+        mux.dts,
+        mux.duration,
+        report.encoded_frames,
+        report.video_packets,
+        report.coalesced_frames,
+    )
 }
 
 fn pad_owned_rgba(rgba: &mut RasterBuffer) {
@@ -4851,6 +4948,155 @@ mod tests {
             assert_eq!(packet.duration(), duration);
         }
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn video_mux_diagnostics_preserve_native_and_submitted_packet_timing() {
+        let mut packet = ffmpeg::Packet::empty();
+        packet.set_pts(Some(12));
+        packet.set_dts(Some(11));
+        packet.set_duration(2);
+        let native = VideoPacketTiming::from(&packet);
+        packet.rescale_ts((1, 30), (1, 15360));
+        let mux = VideoPacketTiming::from(&packet);
+        let report = StreamingEncoderReport {
+            video_encoder: "libx264".into(),
+            requested_video_encoder: "h264_amf".into(),
+            pixel_format: "YUV420P".into(),
+            hardware_fallback: true,
+            encoded_frames: 20,
+            video_packets: 19,
+            coalesced_frames: 100,
+            ..Default::default()
+        };
+        // The native packet is consumed during muxing. The diagnostic must use
+        // the snapshots rather than reading the now-unreferenced packet.
+        drop(packet);
+        let message = video_mux_failure_message(
+            &report,
+            ExportFormat::Mp4,
+            (1920, 1080),
+            30,
+            (1, 30).into(),
+            (1, 15360).into(),
+            native,
+            mux,
+            Some(6000),
+            true,
+            ffmpeg::Error::from(-22),
+        );
+        for expected in [
+            "code=-22",
+            "encoder=libx264",
+            "requested_encoder=h264_amf",
+            "hardware=false",
+            "hardware_fallback=true",
+            "format=Mp4",
+            "width=1920; height=1080; fps=30",
+            "pixel_format=YUV420P",
+            "encoder_time_base=1/30; stream_time_base=1/15360",
+            "native_pts=Some(12); native_dts=Some(11); native_duration=2",
+            "pts=Some(6144); dts=Some(5632); duration=1024; previous_dts=Some(6000)",
+            "flushing=true; encoded_frames=20; video_packets=19; coalesced_frames=100",
+        ] {
+            assert!(message.contains(expected), "missing {expected}: {message}");
+        }
+        let absent = VideoPacketTiming {
+            pts: None,
+            dts: None,
+            duration: 0,
+        };
+        let message = video_mux_failure_message(
+            &report,
+            ExportFormat::Mp4,
+            (1920, 1080),
+            30,
+            (1, 30).into(),
+            (1, 15360).into(),
+            absent,
+            absent,
+            None,
+            false,
+            ffmpeg::Error::from(-22),
+        );
+        assert!(message.contains("pts=None; dts=None; duration=0; previous_dts=None"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn video_mux_failure_logs_packet_before_native_unref() {
+        use std::ffi::{CStr, c_char, c_void};
+        thread_local! {
+            static MESSAGE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+        }
+        unsafe extern "C" fn capture(
+            context: *mut c_void,
+            level: i32,
+            format: *const c_char,
+            arguments: *mut c_char,
+        ) {
+            let mut line = [0_i8; 4096];
+            let mut prefix = 1;
+            // SAFETY: Windows va_list is a by-value pointer, so each callee
+            // consumes its own cursor. Keep the default logger for other tests.
+            unsafe {
+                ffmpeg::ffi::av_log_format_line2(
+                    context,
+                    level,
+                    format,
+                    arguments,
+                    line.as_mut_ptr(),
+                    line.len() as i32,
+                    &mut prefix,
+                );
+                ffmpeg::ffi::av_log_default_callback(context, level, format, arguments);
+            }
+            // SAFETY: av_log_format_line2 NUL-terminates the bounded buffer.
+            let message = unsafe { CStr::from_ptr(line.as_ptr()) }.to_string_lossy();
+            if message.starts_with("recording.video_packet_mux_failed:") {
+                MESSAGE.with(|slot| *slot.borrow_mut() = Some(message.into_owned()));
+            }
+        }
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                // SAFETY: Restore the process-default callback after this probe.
+                unsafe {
+                    ffmpeg::ffi::av_log_set_callback(Some(ffmpeg::ffi::av_log_default_callback))
+                };
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = encoder_config(directory.path().join("bad-clock.mp4"), ExportFormat::Mp4);
+        config.video.speed = snow_recording_model::VideoEncodingSpeed::UltraFast;
+        let mut encoder = StreamingEncoder::create(config).unwrap();
+        // Collapse distinct input timestamps into the same submitted mux tick.
+        // This triggers real muxer validation without capture or a GPU.
+        encoder.stream_time_base = (1, 1).into();
+        // SAFETY: The callback has process-static code and thread-local storage.
+        unsafe { ffmpeg::ffi::av_log_set_callback(Some(capture)) };
+        let _restore = Restore;
+        let result = (|| {
+            for pts in 10..13 {
+                encoder.push_rgba_frame_at_pts(pts, &[80 + (pts - 10) as u8 * 20; 16 * 16 * 4])?;
+            }
+            encoder.finish_at_pts(13)
+        })();
+        let error = result.unwrap_err().to_string();
+        assert_eq!(error, "encode error: video packet mux: Invalid argument");
+        let message = MESSAGE
+            .with(|slot| slot.borrow_mut().take())
+            .expect("mux diagnostic emitted");
+        for expected in [
+            "code=-22",
+            "encoder=libx264",
+            "stream_time_base=1/1",
+            "pts=Some(1)",
+            "dts=Some(1)",
+            "previous_dts=Some(1)",
+        ] {
+            assert!(message.contains(expected), "missing {expected}: {message}");
+        }
     }
 
     #[test]

@@ -23,6 +23,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/update/startupupdate.h"
 #include "snow_shot/diagnostics/diagnostics.h"
+#include "snow_shot/diagnostics/ffmpegdiagnostics.h"
 #include "diagnosticsbridge.h"
 #include "startupregistrationreport.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -493,6 +494,7 @@ int main(int argc, char* argv[]) {
     auto& diagnostics = snow_shot::diagnostics::DiagnosticsService::instance();
     struct DiagnosticsLifetime {
         ~DiagnosticsLifetime() {
+            snow_shot::diagnostics::stopFfmpegDiagnostics();
             snow_shot::diagnostics::DiagnosticsService::instance().shutdown();
         }
     } diagnosticsLifetime;
@@ -515,6 +517,7 @@ int main(int argc, char* argv[]) {
     diagnosticsOptions.buildConfiguration = QStringLiteral(SNOW_DIAGNOSTICS_BUILD);
     static_cast<void>(diagnostics.initialize(std::move(diagnosticsOptions)));
     snow_diagnostics_install_panic_hook(snow_diag_panic);
+    snow_shot::diagnostics::installFfmpegDiagnostics();
 
     // Capture overlays embed native window-type children (the floating tool
     // palette) alongside alien, click-through children (selection toolbar,
