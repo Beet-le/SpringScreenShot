@@ -12415,6 +12415,15 @@ if(SNOW_SHOT_BUILD_TESTS)
         endforeach()
         add_test(NAME snow-shot-pinned-show-shadow-tests
             COMMAND snow-shot-pinned-window-tests --show-shadow-only -platform offscreen)
+        foreach(_snow_pinned_filter_alpha_dpr IN ITEMS 1 1.25 2)
+            set(_snow_pinned_filter_alpha_test
+                "snow-shot-pinned-filter-alpha-${_snow_pinned_filter_alpha_dpr}-tests")
+            add_test(NAME ${_snow_pinned_filter_alpha_test}
+                COMMAND snow-shot-pinned-window-tests --filter-alpha-only -platform offscreen)
+            set_tests_properties(${_snow_pinned_filter_alpha_test} PROPERTIES
+                LABELS "unit" RUN_SERIAL TRUE TIMEOUT 90
+                ENVIRONMENT "QT_SCALE_FACTOR=${_snow_pinned_filter_alpha_dpr};${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+        endforeach()
         add_test(NAME snow-shot-pinned-shadow-geometry-tests
             COMMAND snow-shot-pinned-window-tests --shadow-geometry-only -platform offscreen)
         set_tests_properties(snow-shot-pinned-show-shadow-tests

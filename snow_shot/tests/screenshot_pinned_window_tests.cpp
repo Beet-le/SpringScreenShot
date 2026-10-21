@@ -24323,6 +24323,101 @@ void pinnedToolbarPlacementCanRetireItsOwnerOffscreen() {
     }
 }
 
+void pinnedFiltersPreserveSourceAlphaOffscreen() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    auto* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "pinned filter alpha fixture requires a screen");
+    QImage content(120, 80, QImage::Format_ARGB32_Premultiplied);
+    content.fill(QColor(42, 84, 126));
+    ScreenshotResultStyle style;
+    style.cornerRadius = 12;
+    style.shadowWidth = 16;
+    const QImage shadowed = ScreenshotResultCompositor::compose(content, style);
+    QImage translucent = content;
+    {
+        QPainter painter(&translucent);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.fillRect(QRect(0, 0, 12, 80), Qt::transparent);
+        painter.fillRect(QRect(12, 0, 12, 80), QColor(80, 120, 160, 96));
+    }
+    for (const QImage& source : {shadowed, translucent}) {
+        for (const QByteArray& filter :
+             {QByteArrayLiteral("inversion"), QByteArrayLiteral("gaussian_blur")}) {
+            auto config = clickThroughTestConfig(*screen);
+            config.canvasSourceRect = QRectF(source.rect());
+            config.imageSource = ScreenshotImageSource::fromImage(source, config.canvasSourceRect);
+            config.initialWindowSize = source.size();
+            config.nativeGeometry = physicalPinGeometry(*screen, QPoint(40, 40), source.size());
+            config.checkerboardEnabled = false;
+            config.initialBorderVisible = false;
+            config.initialShadowVisible = false;
+            ScreenshotPinnedWindow window;
+            Access::prepareReplacement(window, config);
+            window.show();
+            waitForUi(20);
+            auto* canvas = window.findChild<SnowCanvasWidget*>();
+            require(canvas != nullptr, "pinned filter alpha fixture has a canvas");
+            const qreal dpr = canvas->devicePixelRatioF();
+            const auto paint = [canvas, dpr] {
+                // Match the screen's physical grid: a 1-DPR image would introduce another
+                // resampling pass when testing a canvas on a higher-DPR display.
+                QImage image(QSize(qCeil(canvas->width() * dpr), qCeil(canvas->height() * dpr)),
+                             QImage::Format_ARGB32_Premultiplied);
+                image.setDevicePixelRatio(dpr);
+                image.fill(Qt::transparent);
+                QPainter painter(&image);
+                canvas->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+                return image;
+            };
+            const auto pixelPosition = [canvas, dpr](QPointF point) {
+                return (canvas->canvasToViewTransform().map(point) * dpr).toPoint();
+            };
+            const QImage before = paint();
+            const QPoint transparent = pixelPosition(QPointF(0, 0));
+            const QPoint shadow = pixelPosition(
+                QPointF(source.width() == content.width() ? 18 : 8, source.height() / 2));
+            require(before.pixelColor(transparent).alpha() == 0 &&
+                        before.pixelColor(shadow).alpha() > 0 &&
+                        before.pixelColor(shadow).alpha() < 255,
+                    "fixture must contain transparent and translucent source pixels");
+            const QByteArray transaction =
+                QByteArrayLiteral(
+                    R"({"version":1,"operations":[{"type":"rectangle_filter","bounds":[40,30,30,20],"style":{"filter":")") +
+                filter + QByteArrayLiteral(R"(","strength":0.7}}]})");
+            require(!Access::applyAnnotationTransaction(window, transaction).isEmpty(),
+                    "add a filter away from the transparent shadow");
+            const QPoint filtered = pixelPosition(QPointF(55, 40));
+            const auto verify = [&] {
+                const QImage after = paint();
+                if (after.pixelColor(transparent) != before.pixelColor(transparent) ||
+                    after.pixelColor(shadow) != before.pixelColor(shadow)) {
+                    std::cerr << "filter=" << filter.toStdString()
+                              << " DPR=" << canvas->devicePixelRatioF()
+                              << " transparent before/after=" << std::hex
+                              << before.pixel(transparent) << '/' << after.pixel(transparent)
+                              << " shadow before/after=" << before.pixel(shadow) << '/'
+                              << after.pixel(shadow) << std::dec << '\n';
+                }
+                require(after.pixelColor(transparent) == before.pixelColor(transparent) &&
+                            after.pixelColor(shadow) == before.pixelColor(shadow),
+                        "filter rendering must preserve transparent pixels and shadow alpha");
+                if (filter == QByteArrayLiteral("inversion"))
+                    require(after.pixelColor(filtered) == QColor(213, 171, 129),
+                            "the filter must still modify the annotated content");
+            };
+            verify();
+            verify();
+            require(canvas->undo(), "undo the pinned filter");
+            require(paint() == before,
+                    "undoing the only filter restores the direct transparent surface");
+            require(canvas->redo(), "redo the pinned filter");
+            verify();
+            canvas->clearRenderState();
+            verify();
+        }
+    }
+}
+
 void pinnedShadowStateAndMarginsOffscreen() {
     using Access = ScreenshotPinnedWindowTestAccess;
     using snow_shot::presentation::pinnedOuterRect;
@@ -25601,6 +25696,10 @@ int main(int argc, char* argv[]) {
         }
         if (app.arguments().contains(QStringLiteral("--show-shadow-only"))) {
             pinnedShadowStateAndMarginsOffscreen();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--filter-alpha-only"))) {
+            pinnedFiltersPreserveSourceAlphaOffscreen();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--shadow-geometry-only"))) {

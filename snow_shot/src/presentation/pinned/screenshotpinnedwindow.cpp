@@ -3336,7 +3336,9 @@ void ScreenshotPinnedWindow::createUi() {
     m_canvas->setAttribute(Qt::WA_TranslucentBackground, false);
     m_canvas->setAttribute(Qt::WA_NoSystemBackground, true);
     m_canvas->setAutoFillBackground(false);
-    m_canvas->setClearBackgroundEnabled(true);
+    // The screenshot renderer owns the full backdrop, including transparent shadow pixels.
+    // Filter/reference surfaces must use the same transparent baseline as direct painting.
+    m_canvas->setClearBackgroundEnabled(false);
     m_canvas->setMouseTracking(true);
     m_canvas->setFocusPolicy(Qt::StrongFocus);
     m_canvas->installEventFilter(this);
