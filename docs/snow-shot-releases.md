@@ -44,6 +44,14 @@ Pushing a version tag does not start a GitHub Actions build or create a release
 draft. The remaining Actions workflows handle package-manager publication and
 verification.
 
+Stable Windows x64 packaging also builds the Store preset and saves an unsigned
+MSIX, its SHA-256 sidecar and audit manifest in `artifacts/msix/<version>/` for
+later Microsoft Store submission. These files remain local during GitHub/Gitee
+publication. See [Store packaging](snow-shot-msix.md) for SDK prerequisites and
+the separate Store build tree. `package-snow-shot.ps1 -SkipBuild` requires matching
+standalone and Store builds; the publisher's `-SkipBuild` reuses existing packages
+without invoking either packager.
+
 The local publisher signs and audits all Windows packages, optionally packages a
 macOS DMG and standalone installer, publishes GitHub assets, verifies their bytes,
 then publishes the release. With `-DeployWebsite`, it then runs the separate official

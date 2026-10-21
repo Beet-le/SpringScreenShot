@@ -1569,3 +1569,15 @@ Write-Output "OCR runtime checksum: $runtimeArchiveChecksum"
 Write-Output "OCR runtime manifest: $runtimeReleaseManifest"
 
 . (Join-Path $PSScriptRoot "package-snow-shot-mini.ps1")
+
+# Store staging returns above; it must never invoke this release step recursively.
+if (-not $store -and -not $StageOnly -and $Architecture -eq 'x64') {
+    if ($packageVersion -ceq $packageVersionNumeric) {
+        & (Join-Path $PSScriptRoot 'package-snow-shot-msix.ps1') -Architecture x64 `
+            -OutputDirectory (Join-Path $repoRoot "artifacts/msix/$packageVersion") `
+            -ExpectedVersion $packageVersion -OcrRuntimeArchives @{ x64 = $runtimeArchivePath } `
+            -Parallelism $Parallelism -SkipBuild:$SkipBuild
+    } else {
+        Write-Output 'Skipping MSIX generation: the Store channel requires a stable numeric version.'
+    }
+}

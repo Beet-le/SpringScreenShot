@@ -43,7 +43,20 @@ live publication or how the deployed service handles data.
 
 ## Build the submission package
 
-From the repository root, run:
+Stable x64 release packaging through `scripts/package-snow-shot.ps1` (including
+`stage-snow-shot-release.ps1` and the local release publisher) also builds the Store
+preset and generates an unsigned MSIX. It reuses the verified x64 OCR runtime and
+saves the package, SHA-256 sidecar and `store-packages.manifest.json` under
+`artifacts/msix/<version>/`. These files stay local for a later manual Store
+submission; the publisher does not upload them to GitHub, Gitee or Microsoft Store.
+ARM64 and preview releases keep their existing standalone outputs.
+
+With `package-snow-shot.ps1 -SkipBuild`, both the standalone and Store build trees
+must already contain the same release version. The Store build uses
+`build/snow-shot-msvc-store-release` even when a custom standalone build directory
+is selected. Staging-only operations do not generate another MSIX.
+
+To generate only the Store package, run from the repository root:
 
 ```powershell
 pwsh -File scripts/package-snow-shot-msix.ps1

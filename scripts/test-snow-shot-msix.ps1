@@ -84,9 +84,67 @@ try {
         $targets = if ($storeFixture) { 'snow_shot' } else { 'snow_shot|snow_shot_mini' }
         Require (($invocation.Arguments -join '|') -ceq "--build|fixture-build|--config|Release|--target|$targets|--parallel|2") 'Packaging must pass complete target names to CMake for both channels.'
     }
+    # Run the actual release hook with a recording MSIX driver. Keep compiler,
+    # network, signing and publishing operations out of this workflow fixture.
+    $releaseHook = @($packageAst.EndBlock.Statements | Where-Object {
+        $_.Extent.Text.Contains("'package-snow-shot-msix.ps1'")
+    })
+    Require ($releaseHook.Count -eq 1) 'Release packaging must invoke the MSIX driver once.'
+    $releaseScripts = Join-Path $testRoot 'release-scripts'
+    $null = New-Item -ItemType Directory -Path $releaseScripts
+    $releaseFixture = Join-Path $releaseScripts 'package-release.ps1'
+    $fixtureSetup = @'
+param([string]$Architecture = 'x64', [bool]$store = $false, [switch]$StageOnly,
+    [string]$packageVersion = '1.3.2', [string]$packageVersionNumeric = '1.3.2',
+    [switch]$SkipBuild)
+$repoRoot = $PSScriptRoot
+$runtimeArchivePath = Join-Path $PSScriptRoot 'verified-runtime.zip'
+$Parallelism = 7
+'@
+    Set-Content -LiteralPath $releaseFixture -Value ($fixtureSetup + "`n" + $releaseHook[0].Extent.Text)
+    @'
+[CmdletBinding()]
+param([string]$Architecture, [string]$OutputDirectory, [string]$ExpectedVersion,
+    [hashtable]$OcrRuntimeArchives, [int]$Parallelism, [switch]$SkipBuild)
+@{ Architecture = $Architecture; OutputDirectory = $OutputDirectory;
+    ExpectedVersion = $ExpectedVersion; OcrRuntimeArchives = $OcrRuntimeArchives;
+    Parallelism = $Parallelism; SkipBuild = [bool]$SkipBuild } |
+    ConvertTo-Json -Compress | Add-Content -LiteralPath (Join-Path $PSScriptRoot 'calls.jsonl')
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'fail-msix')) { throw 'Injected MSIX packaging failure.' }
+'@ | Set-Content -LiteralPath (Join-Path $releaseScripts 'package-snow-shot-msix.ps1')
+    $callLog = Join-Path $releaseScripts 'calls.jsonl'
+    & $releaseFixture
+    $calls = @(Get-Content -LiteralPath $callLog | ConvertFrom-Json)
+    Require ($calls.Count -eq 1 -and $calls[0].Architecture -ceq 'x64' -and
+        $calls[0].ExpectedVersion -ceq '1.3.2' -and -not $calls[0].SkipBuild -and
+        $calls[0].Parallelism -eq 7 -and
+        $calls[0].OutputDirectory -ceq (Join-Path $releaseScripts 'artifacts/msix/1.3.2') -and
+        $calls[0].OcrRuntimeArchives.x64 -ceq (Join-Path $releaseScripts 'verified-runtime.zip')) 'Stable x64 releases must build an unsigned local MSIX using the verified runtime and a separate versioned output folder.'
+    & $releaseFixture -SkipBuild
+    $calls = @(Get-Content -LiteralPath $callLog | ConvertFrom-Json)
+    Require ($calls.Count -eq 2 -and $calls[1].SkipBuild) 'Release repackaging must forward SkipBuild to the Store packager.'
+    & $releaseFixture -Architecture arm64
+    & $releaseFixture -store $true
+    & $releaseFixture -StageOnly
+    & $releaseFixture -packageVersion '1.3.2-beta'
+    Require (@(Get-Content -LiteralPath $callLog).Count -eq 2) 'ARM64, Store stages, staging-only runs and previews must not invoke the release MSIX hook.'
+    Set-Content -LiteralPath (Join-Path $releaseScripts 'fail-msix') -Value 'fixture'
+    Reject { & $releaseFixture } 'MSIX failures must fail release packaging.' '*Injected MSIX packaging failure*'
     $driver = Join-Path $PSScriptRoot 'package-snow-shot-msix.ps1'
     $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
         $driver, [ref]$null, [ref]$null)
+    $versionGuard = @($driverAst.EndBlock.Statements | Where-Object {
+        $_.Extent.Text.StartsWith('if ($ExpectedVersion')
+    })
+    Require ($versionGuard.Count -eq 1) 'The Store driver must check the requested release version before creating the MSIX.'
+    $checkVersion = [scriptblock]::Create($versionGuard[0].Extent.Text)
+    $audit = [pscustomobject]@{ PackageVersion = '1.3.2' }
+    $ExpectedVersion = '1.3.2'
+    & $checkVersion
+    $ExpectedVersion = ''
+    & $checkVersion
+    $ExpectedVersion = '1.3.3'
+    Reject { & $checkVersion } 'A stale Store build must not produce an MSIX for another release.' '*does not match release version*'
     $driverParameters = [scriptblock]::Create($driverAst.ParamBlock.Extent.Text + "`n" + '$Architecture')
     Require ((& $driverParameters -IdentityPath 'fixture' -OutputDirectory 'fixture') -ceq 'x64') 'MSIX packaging must default to x64 only.'
     Require ((& $driverParameters -Architecture x64 -IdentityPath 'fixture' -OutputDirectory 'fixture') -ceq 'x64') 'Explicit x64 MSIX packaging must remain supported.'
