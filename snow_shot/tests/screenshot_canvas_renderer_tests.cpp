@@ -8261,6 +8261,46 @@ void overlaySelectionCursorUpdatesAreIdempotentWhileSelecting() {
             "leaving the selection stage should transition the cursor exactly once");
 }
 
+void initialNativeSelectionCursorBelongsToThePointerOverlay() {
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() != QStringLiteral("windows"))
+        return;
+
+    NoopOverlayEventSink eventSink;
+    ScreenshotOverlayWindow owner(eventSink, new SnowCanvasWidget);
+    ScreenshotOverlayWindow other(eventSink, new SnowCanvasWidget);
+    const QPoint pointer = QCursor::pos();
+    owner.setScreen(QGuiApplication::screenAt(pointer));
+    owner.setCaptureGeometry(QRect(pointer - QPoint(50, 50), QSize(100, 100)));
+    other.setCaptureGeometry(QRect(pointer + QPoint(200, 200), QSize(100, 100)));
+
+    const HCURSOR previous = GetCursor();
+    const HCURSOR marker = LoadCursorW(nullptr, IDC_WAIT);
+    SetCursor(marker);
+    other.commitInitialSelectionCursor();
+    const bool untouched = GetCursor() == marker;
+    owner.commitInitialSelectionCursor();
+    const HCURSOR crosshair = GetCursor();
+    ICONINFO info{};
+    const bool inspected = crosshair != marker && GetIconInfo(crosshair, &info);
+    BITMAP bitmap{};
+    const bool sized = inspected && GetObjectW(info.hbmColor, sizeof(bitmap), &bitmap);
+    other.commitInitialSelectionCursor();
+    const bool preserved = GetCursor() == crosshair;
+    SetCursor(previous);
+    if (info.hbmColor)
+        DeleteObject(info.hbmColor);
+    if (info.hbmMask)
+        DeleteObject(info.hbmMask);
+
+    const int size = 2 * qRound(16 * owner.canvas()->devicePixelRatioF());
+    require(untouched && preserved,
+            "another overlay's reveal or delayed focus must never replace the native cursor");
+    require(sized && bitmap.bmWidth == size && bitmap.bmHeight == size,
+            "the pointer overlay must install its crosshair at the correct display scale");
+#endif
+}
+
 void overlayPresenterRespectsSelectionHandleVisibility() {
     NoopOverlayEventSink eventSink;
     auto* canvas = new SnowCanvasWidget;
@@ -9910,6 +9950,7 @@ int main(int argc, char** argv) {
         runScreenshotCursorTests();
         canvasCursorLayersKeepToolCursorAfterScreenshotSelection();
         overlaySelectionCursorUpdatesAreIdempotentWhileSelecting();
+        initialNativeSelectionCursorBelongsToThePointerOverlay();
         return 0;
     }
 #if defined(SNOW_SHOT_CURSOR_BENCHMARK)
@@ -10109,6 +10150,7 @@ int main(int argc, char** argv) {
     if (application.arguments().contains(QStringLiteral("--cursor-layer-priority"))) {
         canvasCursorLayersKeepToolCursorAfterScreenshotSelection();
         overlaySelectionCursorUpdatesAreIdempotentWhileSelecting();
+        initialNativeSelectionCursorBelongsToThePointerOverlay();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--screenshot-ui-preferences"))) {
