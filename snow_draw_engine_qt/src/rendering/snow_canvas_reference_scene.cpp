@@ -79,6 +79,9 @@ bool SnowCanvasReferenceScene::sync(SnowRuntime runtime,
         clearRenderState();
         return false;
     }
+    // Damage scheduling can sync again before painting, replacing the geometry deltas.
+    // Keep the source-grid masks in step with every patch while those deltas are available.
+    m_penMasks.beginFrame(this, m_displayCache.sceneInfo(), 1.0, &m_displayCache);
     if (!m_image.isNull() && previousRevision != m_displayCache.patchCursor().scene_revision) {
         const QRect sourceRect(QPoint(), m_pixelSize);
         // Consume every patch before another sync replaces its dirty rectangles. Effects can
@@ -183,8 +186,7 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
         sourceRequest.backgroundContext = &context;
         sourceRequest.displayCache = &m_displayCache;
         sourceRequest.workspace = &workspace;
-        sourceRequest.penMaskAtlas =
-            request.penMaskAtlas != nullptr ? request.penMaskAtlas : &m_penMasks;
+        sourceRequest.penMaskAtlas = &m_penMasks;
         sourceRequest.enableFilterTileCache = false;
         sourceRequest.enableOriginalBackgroundCache = true;
         sourceRequest.cacheNamespace = this;
