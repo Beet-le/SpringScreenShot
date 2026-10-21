@@ -5,6 +5,7 @@
 #include "snow_shot/presentation/settings/settingsregistry.h"
 #include "snow_shot/presentation/systemtraycontroller.h"
 #include "../src/presentation/services/systemtraymenuposition.h"
+#include "../src/presentation/capture/screenshotcaptureinputblockers.h"
 #include "snow_shot/presentation/mainwindowskincontroller.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -130,6 +131,32 @@ QAction* menuActionNamed(QMenu* menu, const QString& name) {
 void drainMenus() {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+void verifyCaptureDismissesTrayMenus(snow_shot::presentation::SystemTrayController& controller) {
+    controller.setMenuOptions(snow_shot::storage::TraySettings().menuOptions());
+    for (const bool openSubmenu : {false, true}) {
+        QPointer<adqt::widgets::AdContextMenu> menu = controller.createContextMenu();
+        menu->setNativeMenuEnabled(false);
+        menu->popupAt(QPoint(200, 200));
+        QPointer<QMenu> submenu;
+        if (openSubmenu) {
+            auto* groupAction =
+                menuActionNamed(menu, QStringLiteral("systemTrayWindowGroupAction"));
+            require(groupAction && groupAction->menu(), "the tray should expose its group submenu");
+            submenu = groupAction->menu();
+            submenu->popup(QPoint(300, 200));
+        }
+        require(QApplication::activePopupWidget() == (submenu ? submenu.data() : menu.data()),
+                "the open tray menu must own popup input before capture");
+        require(snow_shot::presentation::closeCaptureInputBlockers(),
+                "capture preparation must dismiss the tray menu and any open submenu");
+        require(QApplication::activePopupWidget() == nullptr && !menu->isPopupVisible() &&
+                    menu->isRetiring(),
+                "capture must release tray input through the normal menu retirement lifecycle");
+        drainMenus();
+        require(!menu && !submenu, "capture dismissal must release the transient tray menu tree");
+    }
 }
 
 void verifyTrayMenuPosition() {
@@ -725,6 +752,11 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     snow_shot::presentation::SystemTrayController controller;
+    if (application.arguments().contains(QStringLiteral("--capture-input-only"))) {
+        verifyCaptureDismissesTrayMenus(controller);
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--theme-icons-only"))) {
         verifyThemeIcons(storageDirectory);
         snow_shot::storage::ApplicationStorage::instance().shutdown();

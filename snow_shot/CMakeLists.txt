@@ -3558,6 +3558,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-system-tray-controller-tests --group-refresh-only -platform offscreen)
     add_test(NAME snow-shot-tray-menu-position-tests
         COMMAND snow-shot-system-tray-controller-tests --menu-position-only -platform offscreen)
+    add_test(NAME snow-shot-tray-capture-input-tests
+        COMMAND snow-shot-system-tray-controller-tests --capture-input-only -platform offscreen)
+    set_tests_properties(snow-shot-tray-capture-input-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30 SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-tray-menu-selection-tests
         COMMAND snow-shot-system-tray-controller-tests --configured-menu-only -platform offscreen)
     add_test(NAME snow-shot-tray-fullscreen-suppression-tests
@@ -4129,15 +4135,16 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-capture-workflow-tests
     )
 
-    add_executable(snow-shot-capture-modal-closer-tests
-        tests/screenshot_capture_modal_closer_tests.cpp
-        src/presentation/capture/screenshotcapturemodalcloser.h
+    add_executable(snow-shot-capture-input-blockers-tests
+        tests/screenshot_capture_input_blockers_tests.cpp
+        src/presentation/capture/screenshotcaptureinputblockers.h
     )
-    target_link_libraries(snow-shot-capture-modal-closer-tests PRIVATE Qt6::Widgets)
-    snow_shot_import_offscreen_platform(snow-shot-capture-modal-closer-tests)
-    add_test(NAME snow-shot-capture-modal-closer-tests
-        COMMAND snow-shot-capture-modal-closer-tests)
-    set_tests_properties(snow-shot-capture-modal-closer-tests PROPERTIES
+    target_link_libraries(snow-shot-capture-input-blockers-tests PRIVATE Qt6::Widgets)
+    snow_shot_import_offscreen_platform(snow-shot-capture-input-blockers-tests)
+    add_test(NAME snow-shot-capture-input-blockers-tests
+        COMMAND snow-shot-capture-input-blockers-tests)
+    set_tests_properties(snow-shot-capture-input-blockers-tests PROPERTIES
+        TIMEOUT 30
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 

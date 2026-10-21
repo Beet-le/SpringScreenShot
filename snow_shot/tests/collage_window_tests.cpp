@@ -11,7 +11,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/capturehistoryrepository.h"
 #include "snow_shot/storage/pinnedwindowrepository.h"
-#include "../src/presentation/capture/screenshotcapturemodalcloser.h"
+#include "../src/presentation/capture/screenshotcaptureinputblockers.h"
 #include "theme/theme_manager.h"
 #include "widgets/button.h"
 #include "widgets/color_picker.h"
@@ -860,7 +860,7 @@ void independentWindowsAndClosePolicy() {
                 firstSurface->findChild<QToolButton*>(QStringLiteral("ad-modal-maximize")),
             "collage windows expose native window-management capabilities and an icon");
     mainWindow.hide();
-    require(first.modal()->isOpen() && second.modal()->isOpen() && closeActiveCaptureModalWindows(),
+    require(first.modal()->isOpen() && second.modal()->isOpen() && closeCaptureInputBlockers(),
             "main-window hiding and capture modal cleanup preserve independent collages");
     require(QApplication::activeModalWidget() == nullptr,
             "collages do not block the main application or screenshot overlays");
