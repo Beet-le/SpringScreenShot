@@ -55,6 +55,8 @@ pub struct SnowRecordingEffectsConfig {
     pub webcam_source: *const snow_webcam::Source,
     pub webcam_size: u32,
     pub webcam_shape: u32,
+    pub webcam_offset_left: u32,
+    pub webcam_offset_bottom: u32,
 }
 #[repr(C)]
 pub struct SnowRecordingEffectsTile {
@@ -118,7 +120,8 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
         5 => std::mem::offset_of!(SnowRecordingEffectsConfig, canvas_scale),
         6 => std::mem::offset_of!(SnowRecordingEffectsConfig, highlight_radius),
         7 => std::mem::offset_of!(SnowRecordingEffectsConfig, webcam_source),
-        8 => std::mem::size_of::<SnowRecordingEffectsConfig>(),
+        8 => std::mem::offset_of!(SnowRecordingEffectsConfig, webcam_offset_left),
+        9 => std::mem::size_of::<SnowRecordingEffectsConfig>(),
         _ => return Err("unsupported effects configuration version".into()),
     };
     if unsafe { *header.add(1) } != size as u32 {
@@ -164,6 +167,13 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
         webcam: if raw.version >= 8 {
             unsafe {
                 snow_webcam::config_from_raw(raw.webcam_source, raw.webcam_size, raw.webcam_shape)?
+                    .map(|mut webcam| {
+                        if raw.version >= 9 {
+                            webcam.style.offset_left = raw.webcam_offset_left;
+                            webcam.style.offset_bottom = raw.webcam_offset_bottom;
+                        }
+                        webcam
+                    })
             }
         } else {
             None
@@ -718,7 +728,9 @@ mod tests {
             webcam_source: std::ptr::null(),
             webcam_size: 150,
             webcam_shape: 0,
-            version: 8,
+            webcam_offset_left: 48,
+            webcam_offset_bottom: 48,
+            version: 9,
             struct_size: std::mem::size_of::<SnowRecordingEffectsConfig>() as u32,
             x: -1920,
             y: -100,
@@ -757,12 +769,26 @@ mod tests {
         let mut raw = valid();
         raw.webcam_source = &source;
         raw.webcam_shape = 1;
+        raw.webcam_offset_left = 300;
+        raw.webcam_offset_bottom = 220;
         let parsed = unsafe { config(&raw) }.unwrap();
         assert_eq!(
             parsed.webcam.as_ref().unwrap().style.shape,
             snow_webcam::WebcamShape::Circle
         );
         assert_eq!(parsed.webcam.as_ref().unwrap().source, source);
+        assert_eq!(parsed.webcam.as_ref().unwrap().style.offset_left, 300);
+        assert_eq!(parsed.webcam.as_ref().unwrap().style.offset_bottom, 220);
+        raw.struct_size -= 1;
+        assert!(unsafe { config(&raw) }.is_err());
+        raw.version = 8;
+        raw.struct_size =
+            std::mem::offset_of!(SnowRecordingEffectsConfig, webcam_offset_left) as u32;
+        let legacy = unsafe { config(&raw) }.unwrap().webcam.unwrap();
+        assert_eq!(
+            (legacy.style.offset_left, legacy.style.offset_bottom),
+            (48, 48)
+        );
         for size in [49, 501] {
             raw.webcam_size = size;
             assert!(unsafe { config(&raw) }.is_err());

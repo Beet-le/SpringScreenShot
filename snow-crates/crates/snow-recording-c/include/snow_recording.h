@@ -156,7 +156,7 @@ typedef struct SnowCaptureExclusions {
 } SnowCaptureExclusions;
 #endif
 
-#define SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION 13u
+#define SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION 14u
 
 /* Strings are bounded UTF-8 key names, copied during session creation. */
 typedef struct SnowCaptureKeyboardLabel {
@@ -234,6 +234,9 @@ typedef struct SnowCaptureDirectRecordingConfig {
     const SnowWebcam* webcam_source;
     uint32_t webcam_size;
     uint32_t webcam_shape;
+    /* Preferred pixel distances from the region's left and bottom edges. */
+    uint32_t webcam_offset_left;
+    uint32_t webcam_offset_bottom;
 } SnowCaptureDirectRecordingConfig;
 
 #define SNOW_RECORDING_DEFERRED_OPTIONS_VERSION 1u

@@ -1301,6 +1301,8 @@ mod tests {
                         } else {
                             snow_webcam::WebcamShape::Circle
                         },
+                        offset_left: 32 + index as u32 * 12,
+                        offset_bottom: 32 + index as u32 * 6,
                     },
                     size,
                 );

@@ -15,15 +15,35 @@ Camera errors never become screen-recording errors. Stop retires the camera
 before encoder draining or deferred-bundle packing, even while preview and
 recording configurations still retain the shared source.
 
+The native camera format is selected for the full 500 px / 30 fps editable range and is
+negotiated only when capture activates. Size and cadence changes update software
+processing without reconnecting or clearing fresh preview samples. Recording
+accepts only samples with its requested dimensions. Layout-only preview changes
+retain their generation and displayed frame until replacement; the effects worker
+keeps its input observers and animation state. Position-only movement reuses camera
+pixels and native textures. Stop, pause, disable and real device failures still
+retire stale images immediately.
+
 Preview uses physical display pixels; output uses video pixels. All renderers
 use the same placement and antialiased mask implementation. The inset starts
 at 48 px, shrinks before the image does, and never modifies the saved size.
-The camera sits below cursor, keyboard, mouse, and playback effects. GPU capture
-does not read the desktop back to the CPU; it uploads a compact camera texture
+The camera sits below cursor, keyboard, mouse, and playback effects.
+
+In setup's region-editing mode, drag the camera body to move it or its top-right
+resize button to resize it at a fixed 1:1 aspect ratio. Offsets measure physical
+preview pixels (video pixels in output) rightward and upward from the region's
+bottom-left. A completed gesture saves position and size; Escape or interruption
+restores the initial layout. Startup locks editing before taking its snapshot.
+Fitting first reduces offsets, then size, without changing saved preferences.
+The 32-DIP semi-transparent black control is UI-only and shrinks for tiny regions.
+Webcam metadata v2 stores offsets; v1 remains readable at the original 48 px inset.
+
+GPU capture does not read the desktop back to the CPU; it uploads a compact camera texture
 only when the camera image changes.
 
-Direct C configuration v13 and preview v8 retain the camera source; older
-layouts remain accepted with the camera disabled. Deferred bundles optionally
+Direct C configuration v14 and preview v9 retain the camera source and offsets.
+Direct v13 and preview v8 retain the camera at the default inset; earlier layouts
+remain accepted with the camera disabled. Deferred bundles optionally
 contain `WebcamVideo`, `WebcamIndex`, and versioned `WebcamMetadata` assets. Their
 timestamps and availability transitions use active recording time. Playback,
 trim, speed changes, and export reuse the same camera replay and renderer.
@@ -35,7 +55,9 @@ Run only these affected targets, from the repository build environment:
 ```powershell
 cmake --build --preset build-windows-msvc-debug --target snow-shot-screenshot-tool-palette-tests snow-shot-screen-recording-controller-tests snow-shot-screen-recording-interaction-settings-tests
 ctest --preset test-windows-msvc-debug -R '^snow-shot-(screen-recording-toolbar|screen-recording-interaction-settings|screen-recording-controller|mcp-recording)-tests$' --output-on-failure
-ctest --preset test-windows-msvc-debug -R '^snow-shot-recording-webcam-(preview|settings)-tests$' --output-on-failure
+ctest --preset test-windows-msvc-debug -R '^snow-shot-recording-webcam-(preview|settings|interaction)-tests$' --output-on-failure
+# Interactive pointer check; run on an idle desktop (skips if pointer injection is unavailable).
+ctest --test-dir build/windows-msvc-debug -C Debug -R '^snow-shot-recording-webcam-native-tests$' --output-on-failure
 cmake --build --preset build-windows-msvc-debug --target snow_shot_update_translations
 ```
 

@@ -12,6 +12,7 @@
 #include "snow_shot/storage/persistedwindowgeometry.h"
 
 #include <QColor>
+#include <QPoint>
 #include <QByteArray>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -520,6 +521,9 @@ class RecordingSettings final {
     bool setWebcamEnabled(bool enabled) const;
     [[nodiscard]] int webcamSize() const;
     bool setWebcamSize(int size) const;
+    [[nodiscard]] int webcamOffsetLeft() const;
+    [[nodiscard]] int webcamOffsetBottom() const;
+    bool setWebcamLayout(int size, const QPoint& offset) const;
     [[nodiscard]] QString webcamShape() const;
     bool setWebcamShape(const QString& shape) const;
     [[nodiscard]] bool showKeyboard() const;

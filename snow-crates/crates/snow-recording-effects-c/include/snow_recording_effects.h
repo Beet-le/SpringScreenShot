@@ -15,7 +15,7 @@ typedef struct SnowRecordingEffectsKeyLabel {
     const char* label_utf8;
 } SnowRecordingEffectsKeyLabel;
 
-#define SNOW_RECORDING_EFFECTS_CONFIG_VERSION 8u
+#define SNOW_RECORDING_EFFECTS_CONFIG_VERSION 9u
 typedef struct SnowRecordingEffectsConfig {
     uint32_t version;
     uint32_t struct_size;
@@ -51,6 +51,9 @@ typedef struct SnowRecordingEffectsConfig {
     const SnowWebcam* webcam_source;
     uint32_t webcam_size;
     uint32_t webcam_shape;
+    /* Preferred pixel distances from the region's left and bottom edges. */
+    uint32_t webcam_offset_left;
+    uint32_t webcam_offset_bottom;
 } SnowRecordingEffectsConfig;
 
 typedef struct SnowRecordingEffectsTile {

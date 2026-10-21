@@ -2896,6 +2896,12 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("screen_recording/webcam_size"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/webcam_size"))},
+            {QStringLiteral("screen_recording/webcam_offset_left"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screen_recording/webcam_offset_left"))},
+            {QStringLiteral("screen_recording/webcam_offset_bottom"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screen_recording/webcam_offset_bottom"))},
             {QStringLiteral("screen_recording/webcam_shape"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/webcam_shape"))},

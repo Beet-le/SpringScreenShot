@@ -1017,6 +1017,7 @@ fn run_sample(
                     style: snow_webcam::WebcamStyle {
                         size,
                         shape: options.webcam_shape,
+                        ..Default::default()
                     },
                 })
             })

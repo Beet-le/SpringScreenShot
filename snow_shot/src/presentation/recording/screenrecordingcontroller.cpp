@@ -283,6 +283,7 @@ struct ScreenRecordingController::Impl {
         keyboardSize = settings.keyboardSize();
         webcamEnabled = settings.webcamEnabled();
         webcamSize = settings.webcamSize();
+        webcamOffset = QPoint(settings.webcamOffsetLeft(), settings.webcamOffsetBottom());
         webcamShape = settings.webcamShape();
         keyboardBackgroundColor = settings.keyboardBackgroundColor();
         keyboardForegroundColor = settings.keyboardForegroundColor();
@@ -306,7 +307,9 @@ struct ScreenRecordingController::Impl {
                              }
                              if (key == QStringLiteral("screen_recording/enable_webcam") ||
                                  key == QStringLiteral("screen_recording/webcam_size") ||
-                                 key == QStringLiteral("screen_recording/webcam_shape")) {
+                                 key == QStringLiteral("screen_recording/webcam_shape") ||
+                                 key == QStringLiteral("screen_recording/webcam_offset_left") ||
+                                 key == QStringLiteral("screen_recording/webcam_offset_bottom")) {
                                  // Saved preferences belong to the next editable session. Keep
                                  // the refresh pending while recording or automation owns options.
                                  webcamSettingsRefreshPending = true;
@@ -605,6 +608,19 @@ struct ScreenRecordingController::Impl {
                                  uiSession->settingsModal->close();
                          });
         connectDrawingToolbar(*palette);
+        QObject::connect(areaWindow, &ScreenRecordingAreaWindow::webcamLayoutPreviewed,
+                         uiSession->connections.get(), [this](int size, const QPoint& offset) {
+                             setOption(webcamSize, size);
+                             setOption(webcamOffset, offset);
+                             toolbarWindow->palette()->setRecordingWebcamSize(size);
+                             syncPreview();
+                         });
+        QObject::connect(areaWindow, &ScreenRecordingAreaWindow::webcamLayoutCommitted,
+                         uiSession->connections.get(), [this](int size, const QPoint& offset) {
+                             if (recordingOptionsEditable())
+                                 snow_shot::storage::RecordingSettings().setWebcamLayout(size,
+                                                                                         offset);
+                         });
         QObject::connect(palette, &ScreenshotToolPalette::recordingKeyboardSizeChanged,
                          uiSession->connections.get(), [this](int value) {
                              setOption(keyboardSize, value);
@@ -971,6 +987,7 @@ struct ScreenRecordingController::Impl {
         if (!isOpen() || !recordingOptionsEditable()) {
             return;
         }
+        areaWindow->cancelWebcamInteraction();
         // UI starts after an automated session use current saved preferences.
         if (automationOwned && !automationNextStart) {
             automationRevision = snow_shot::presentation::nextAutomationRevision();
@@ -1190,6 +1207,8 @@ struct ScreenRecordingController::Impl {
                 webcamEnabled ? webcam.get() : nullptr,
                 static_cast<uint32_t>(webcamSize),
                 webcamShape == QStringLiteral("circle") ? 1u : 0u,
+                static_cast<uint32_t>(webcamOffset.x()),
+                static_cast<uint32_t>(webcamOffset.y()),
             };
             sessionLoopAnimatedImages = config.loop_animated_images != 0;
             const QDateTime outputTimestamp = QDateTime::currentDateTime();
@@ -1865,6 +1884,8 @@ struct ScreenRecordingController::Impl {
             {QStringLiteral("show_keyboard"), showKeyboard},
             {QStringLiteral("webcam"), webcamEnabled},
             {QStringLiteral("webcam_size"), webcamSize},
+            {QStringLiteral("webcam_offset_left"), webcamOffset.x()},
+            {QStringLiteral("webcam_offset_bottom"), webcamOffset.y()},
             {QStringLiteral("webcam_shape"), webcamShape},
             {QStringLiteral("record_mouse_clicks"), recordMouseClicks},
             {QStringLiteral("mouse_highlight"), mouseHighlightEnabled},
@@ -2132,10 +2153,13 @@ struct ScreenRecordingController::Impl {
             !recordingOptionsEditable())
             return;
         webcamSettingsRefreshPending = false;
+        if (areaWindow)
+            areaWindow->cancelWebcamInteraction();
         const snow_shot::storage::RecordingSettings saved;
         const bool enabledChanged = webcamEnabled != saved.webcamEnabled();
         setOption(webcamEnabled, saved.webcamEnabled());
         setOption(webcamSize, saved.webcamSize());
+        setOption(webcamOffset, QPoint(saved.webcamOffsetLeft(), saved.webcamOffsetBottom()));
         setOption(webcamShape, saved.webcamShape());
         if (enabledChanged) {
             webcamFailed = false;
@@ -2183,6 +2207,8 @@ struct ScreenRecordingController::Impl {
     }
 
     void notifyWebcamError(const QString& error) {
+        if (areaWindow)
+            areaWindow->setWebcamOverlay({});
         showRecordingWarning(QStringLiteral("screen-recording-webcam-error"),
                              tr("Webcam unavailable: %1").arg(error));
     }
@@ -2269,8 +2295,8 @@ struct ScreenRecordingController::Impl {
             : postProcessingEffect == QStringLiteral("playback_time")
                 ? SNOW_RECORDING_PLAYBACK_OVERLAY_PLAYBACK_TIME
                 : SNOW_RECORDING_PLAYBACK_OVERLAY_PROGRESS_BAR,
-            progressBarColor, webcamEnabled ? webcam.get() : nullptr, webcamSize,
-            webcamShape == QStringLiteral("circle") ? 1u : 0u);
+            progressBarColor, webcamEnabled && !webcamFailed ? webcam.get() : nullptr, webcamSize,
+            webcamShape == QStringLiteral("circle") ? 1u : 0u, webcamOffset);
         const bool audioSupported = outputFormat == QStringLiteral("mp4");
         uiSession->preview->setStatusPrompts(
             snow_shot::storage::RecordingSettings().showStatusPrompts(), outputFormat,
@@ -2407,6 +2433,7 @@ struct ScreenRecordingController::Impl {
     snow_shot::storage::ScreenshotWindowNames sessionWindowNames;
     bool webcamEnabled = false;
     int webcamSize = 150;
+    QPoint webcamOffset{48, 48};
     QString webcamShape = QStringLiteral("square");
     bool webcamSettingsRefreshPending = false;
     std::shared_ptr<SnowWebcam> webcam;
@@ -2824,6 +2851,7 @@ bool ScreenRecordingController::startAutomation(const QRect& region, const QJson
     s.showKeyboard = options.value(QStringLiteral("show_keyboard")).toBool(settings.showKeyboard());
     s.webcamEnabled = options.value(QStringLiteral("webcam")).toBool(settings.webcamEnabled());
     s.webcamSize = options.value(QStringLiteral("webcam_size")).toInt(settings.webcamSize());
+    s.webcamOffset = QPoint(settings.webcamOffsetLeft(), settings.webcamOffsetBottom());
     s.webcamShape = options.value(QStringLiteral("webcam_shape")).toString(settings.webcamShape());
     s.recordMouseClicks =
         options.value(QStringLiteral("record_mouse_clicks")).toBool(settings.recordMouseClicks());

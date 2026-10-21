@@ -1917,6 +1917,19 @@ bool RecordingSettings::setWebcamSize(int size) const {
     return cache().setValue(QStringLiteral("screen_recording/webcam_size"), size);
 }
 
+int RecordingSettings::webcamOffsetLeft() const {
+    return cache().value(QStringLiteral("screen_recording/webcam_offset_left")).toInt();
+}
+int RecordingSettings::webcamOffsetBottom() const {
+    return cache().value(QStringLiteral("screen_recording/webcam_offset_bottom")).toInt();
+}
+bool RecordingSettings::setWebcamLayout(int size, const QPoint& offset) const {
+    return cache().setValues(
+        {{QStringLiteral("screen_recording/webcam_size"), size},
+         {QStringLiteral("screen_recording/webcam_offset_left"), offset.x()},
+         {QStringLiteral("screen_recording/webcam_offset_bottom"), offset.y()}});
+}
+
 QString RecordingSettings::webcamShape() const {
     return cache().value(QStringLiteral("screen_recording/webcam_shape")).toString();
 }

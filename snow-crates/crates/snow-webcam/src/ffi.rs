@@ -5,6 +5,33 @@ use std::ffi::c_char;
 use std::time::Instant;
 
 pub type SnowWebcam = Source;
+
+#[repr(C)]
+pub struct SnowWebcamPlacement {
+    pub x: u32,
+    pub y: u32,
+    pub size: u32,
+}
+
+/// Pure geometry shared with the Qt preview's input surface. No camera is required.
+#[unsafe(no_mangle)]
+pub extern "C" fn snow_webcam_placement(
+    width: u32,
+    height: u32,
+    size: u32,
+    offset_left: u32,
+    offset_bottom: u32,
+) -> SnowWebcamPlacement {
+    let (x, y, size) = crate::WebcamStyle {
+        size,
+        offset_left,
+        offset_bottom,
+        ..Default::default()
+    }
+    .placement((width, height));
+    SnowWebcamPlacement { x, y, size }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn snow_webcam_create(size: u32, fps: u32) -> *mut SnowWebcam {
     Source::new(CaptureOptions { size, fps }).map_or(std::ptr::null_mut(), |source| {
@@ -57,4 +84,16 @@ pub unsafe extern "C" fn snow_webcam_error(
         }
     }
     if error.is_empty() { 0 } else { error.len() + 1 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn webcam_placement_ffi_uses_bottom_left_offsets_and_fits_small_regions() {
+        let placed = snow_webcam_placement(800, 600, 150, 120, 90);
+        assert_eq!((placed.x, placed.y, placed.size), (120, 360, 150));
+        let fitted = snow_webcam_placement(20, 30, 150, u32::MAX, u32::MAX);
+        assert_eq!((fitted.x, fitted.y, fitted.size), (0, 0, 20));
+    }
 }

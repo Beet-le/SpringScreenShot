@@ -259,22 +259,33 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
                                        const QColor& highlight, bool recordMouseClicks,
                                        int highlightRadius, uint32_t playbackOverlay,
                                        const QColor& progressBarColor, SnowWebcam* webcam,
-                                       int webcamSize, uint32_t webcamShape) {
+                                       int webcamSize, uint32_t webcamShape,
+                                       const QPoint& webcamOffset) {
     if (m_sessionEnding)
         return;
-    if (m_capture == capture && m_output == output && m_trail == trail && m_click == click &&
+    const bool sameScene =
+        m_capture == capture && m_output == output && m_trail == trail && m_click == click &&
         m_keyboard == keyboard && m_trailDurationMs == trailDurationMs &&
         m_keyboardBackground == keyboardBackground && m_keyboardForeground == keyboardForeground &&
         m_keyboardSize == keyboardSize && m_highlight == highlight &&
         m_recordMouseClicks == recordMouseClicks && m_highlightRadius == highlightRadius &&
         m_playbackOverlay == playbackOverlay && m_progressBarColor == progressBarColor &&
-        m_webcam == webcam && m_webcamSize == webcamSize && m_webcamShape == webcamShape) {
+        m_webcam == webcam;
+    if (sameScene && m_webcamSize == webcamSize && m_webcamShape == webcamShape &&
+        m_webcamOffset == webcamOffset) {
         return;
     }
-    // Clear with the old transform before changing geometry or disabling an effect.
-    clearFrame();
-    clearPlaybackFrame();
-    ++m_generation;
+    if (sameScene && webcam) {
+        // Layout edits share the active stream's generation. Keep its displayed frame
+        // until the worker replaces it; rapid gestures must not starve presentation.
+        m_webcamLayoutDirty = true;
+    } else {
+        // Clear with the old transform before changing the scene or disabling an effect.
+        clearFrame();
+        clearPlaybackFrame();
+        ++m_generation;
+        m_configurationDirty = true;
+    }
     m_playbackOverlay = playbackOverlay;
     m_progressBarColor = progressBarColor;
     m_capture = capture;
@@ -287,12 +298,13 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
     m_keyboard = keyboard;
     m_webcam = webcam;
     m_webcamSize = webcamSize;
+    m_webcamOffset = webcamOffset;
     m_webcamShape = webcamShape;
+    updateWebcamControl();
     m_keyboardSize = keyboardSize;
     m_trailDurationMs = trailDurationMs;
     m_keyboardBackground = keyboardBackground;
     m_keyboardForeground = keyboardForeground;
-    m_configurationDirty = true;
     m_failed = false;
     if (trail.alpha() == 0 && click.alpha() == 0 && !keyboard && highlight.alpha() == 0 &&
         !recordMouseClicks && playbackOverlay == 0 && !webcam) {
@@ -336,6 +348,7 @@ void RecordingEffectPreview::synchronize() {
         return;
     }
     m_previewVisible = true;
+    updateWebcamControl();
     updateReadout();
 #ifdef Q_OS_MACOS
     // Native input uses desktop points; every preview layer uses physical display pixels.
@@ -372,12 +385,14 @@ void RecordingEffectPreview::synchronize() {
         m_configurationDirty = false;
         return;
     }
-    if (m_failed || (m_running && !m_configurationDirty)) {
+    if (m_failed || (m_running && !m_configurationDirty && !m_webcamLayoutDirty)) {
         updateReadout();
         return;
     }
-    ++m_generation;
-    clearFrame();
+    if (!m_running || m_configurationDirty) {
+        ++m_generation;
+        clearFrame();
+    }
     const RecordingKeyboardLabels labels(m_keyboard || m_recordMouseClicks);
     const RecordingKeyboardTheme theme(m_keyboardBackground, m_keyboardForeground);
     const RecordingKeyboardFont font;
@@ -410,7 +425,9 @@ void RecordingEffectPreview::synchronize() {
                                       static_cast<uint32_t>(m_highlightRadius),
                                       m_webcam,
                                       static_cast<uint32_t>(m_webcamSize),
-                                      m_webcamShape};
+                                      m_webcamShape,
+                                      static_cast<uint32_t>(m_webcamOffset.x()),
+                                      static_cast<uint32_t>(m_webcamOffset.y())};
     font.applyTo(config);
     QString error;
     const bool success = m_running ? m_source->configure(config, error)
@@ -430,6 +447,7 @@ void RecordingEffectPreview::synchronize() {
                                          error);
     m_running = success;
     m_configurationDirty = false;
+    m_webcamLayoutDirty = false;
     if (!success) {
         stopAndClear();
         m_failed = true;
@@ -440,9 +458,11 @@ void RecordingEffectPreview::synchronize() {
 }
 
 void RecordingEffectPreview::stopAndClear(bool present) {
+    m_area.setWebcamOverlay({});
     m_configurationTimer.stop();
     ++m_generation;
     m_running = false;
+    m_webcamLayoutDirty = false;
     m_source->stop();
     clearFrame();
     clearPlaybackFrame();
@@ -544,6 +564,32 @@ QRegion RecordingEffectPreview::frameRegion(const RecordingEffectsFrame& frame) 
     return result.intersected(m_area.canvas()->rect());
 }
 
+void RecordingEffectPreview::updateWebcamControl() {
+    if (!m_previewVisible || !m_eligible || !m_webcam || m_capture.isEmpty()) {
+        m_area.setWebcamOverlay({});
+        return;
+    }
+#ifdef Q_OS_MACOS
+    const qreal scale = m_area.devicePixelRatioF();
+#else
+    const qreal scale = 1;
+#endif
+    const QSize physical(qRound(m_capture.width() * scale), qRound(m_capture.height() * scale));
+    const auto placement = snow_webcam_placement(
+        static_cast<uint32_t>(physical.width()), static_cast<uint32_t>(physical.height()),
+        static_cast<uint32_t>(m_webcamSize), static_cast<uint32_t>(m_webcamOffset.x()),
+        static_cast<uint32_t>(m_webcamOffset.y()));
+    const QRectF bounds =
+        outputToCanvas(physical)
+            .mapRect(QRectF(placement.x, placement.y, placement.size, placement.size))
+            .translated(m_area.canvasGeometry().topLeft());
+    m_area.setWebcamOverlay(
+        bounds, physical, m_webcamSize, m_webcamOffset,
+        QPoint(static_cast<int>(placement.x),
+               physical.height() - static_cast<int>(placement.y + placement.size)),
+        m_webcamShape == 1);
+}
+
 void RecordingEffectPreview::updateReadout() {
     m_statusPrompt->present(m_area.selectionRect(), m_previewVisible && m_showStatusPrompts);
     if (!m_running || !m_frame) {
@@ -577,6 +623,7 @@ bool RecordingEffectPreview::eventFilter(QObject* watched, QEvent* event) {
             m_configurationTimer.start();
             break;
         case QEvent::Resize:
+            updateWebcamControl();
             updateReadout();
             break;
         case QEvent::DevicePixelRatioChange:

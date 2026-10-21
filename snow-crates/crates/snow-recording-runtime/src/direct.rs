@@ -3743,6 +3743,8 @@ mod tests {
             let style = snow_webcam::WebcamStyle {
                 size: 50,
                 shape: snow_webcam::WebcamShape::Circle,
+                offset_left: 17,
+                offset_bottom: 31,
             };
             settings.webcam = Some(snow_webcam::Config {
                 source: source.clone(),
@@ -3777,7 +3779,7 @@ mod tests {
             let first = compositor
                 .compose_with_cursor(&settings, &frame, 0, None)
                 .unwrap();
-            assert_eq!(&first[(107 * 240 + 73) * 4..][..4], &[240, 10, 10, 255]);
+            assert_eq!(&first[(124 * 240 + 42) * 4..][..4], &[240, 10, 10, 255]);
             let mut encoder = StreamingEncoder::builder(settings.streaming_config())
                 .create()
                 .unwrap();
@@ -3894,6 +3896,7 @@ mod tests {
                     snow_webcam::WebcamStyle {
                         size: 50,
                         shape: snow_webcam::WebcamShape::Circle,
+                        ..Default::default()
                     },
                     output,
                 );

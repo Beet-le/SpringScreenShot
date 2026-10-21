@@ -8364,6 +8364,9 @@ if(SNOW_SHOT_BUILD_TESTS)
     endforeach()
     add_test(NAME snow-shot-recording-webcam-preview-tests
         COMMAND snow-shot-screen-recording-controller-tests --webcam-preview-only)
+    add_test(NAME snow-shot-recording-webcam-interaction-tests
+        COMMAND snow-shot-screen-recording-area-window-tests --webcam-only -platform offscreen)
+    set_tests_properties(snow-shot-recording-webcam-interaction-tests PROPERTIES LABELS "unit")
     add_test(NAME snow-shot-recording-webcam-settings-tests
         COMMAND snow-shot-screen-recording-controller-tests --webcam-settings-only)
     add_test(NAME snow-shot-recording-warning-placement-tests
@@ -8493,6 +8496,10 @@ if(SNOW_SHOT_BUILD_TESTS)
             COMMAND snow-shot-screen-recording-area-window-tests --native-geometry-only -platform windows)
         set_tests_properties(snow-shot-screen-recording-area-native-tests PROPERTIES
             LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 45)
+        add_test(NAME snow-shot-recording-webcam-native-tests
+            COMMAND snow-shot-screen-recording-area-window-tests --webcam-native-only -platform windows)
+        set_tests_properties(snow-shot-recording-webcam-native-tests PROPERTIES
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 30 SKIP_RETURN_CODE 77)
     endif()
     set_tests_properties(snow-shot-screen-recording-area-window-tests PROPERTIES
         ENVIRONMENT
@@ -11248,6 +11255,8 @@ foreach(_target IN LISTS _overlay_widget_targets)
     get_target_property(_sources ${_target} SOURCES)
     if(_sources MATCHES "screenrecordingareawindow.cpp")
         target_sources(${_target} PRIVATE
+            src/presentation/recording/recordingwebcamcontrol.cpp
+            src/presentation/recording/recordingwebcamcontrol.h
             src/presentation/recording/recordingregiondraghandle.cpp
             src/presentation/recording/recordingregiondraghandle.h
             src/presentation/recording/recordingregioninputrouter.cpp

@@ -23,7 +23,9 @@ struct RecordingEffectTestState {
     const SnowWebcam* webcam = nullptr;
     uint32_t webcamSize = 0;
     uint32_t webcamShape = 0;
+    QPoint webcamOffset;
     bool fail = false;
+    bool autoPublish = true;
     std::function<void()> notify;
     std::shared_ptr<RecordingEffectsFrame> frame;
     void publish(bool visible = true) {
@@ -74,9 +76,11 @@ class RecordingEffectTestSource final : public RecordingEffectsSource {
         state->webcam = config.webcam_source;
         state->webcamSize = config.webcam_size;
         state->webcamShape = config.webcam_shape;
+        state->webcamOffset = QPoint(config.webcam_offset_left, config.webcam_offset_bottom);
         state->output = QSize(qRound(config.width * config.canvas_scale),
                               qRound(config.height * config.canvas_scale));
-        state->publish();
+        if (state->autoPublish)
+            state->publish();
         return true;
     }
     void stop() override {

@@ -205,6 +205,17 @@
         </message>
     </context>
     <context>
+        <name>RecordingWebcamControl</name>
+        <message>
+            <source>Move webcam</source>
+            <translation>移动摄像头画面</translation>
+        </message>
+        <message>
+            <source>Resize webcam</source>
+            <translation>调整摄像头画面大小</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenRecordingController</name>
         <message>
             <source>A recording was interrupted when Windows ended the session. Recover the saved recording or open its folder.</source>

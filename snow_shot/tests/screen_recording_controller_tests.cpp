@@ -7,6 +7,7 @@
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include "recording_effect_test_source.h"
+#include "../src/presentation/recording/recordingwebcamcontrol.h"
 #include "../src/presentation/recording/recordingeffectstyle.h"
 #include "../src/presentation/recording/recordingeffectgeometry.h"
 #ifdef SNOW_RECORDING_EFFECTS_BENCHMARK
@@ -3454,6 +3455,8 @@ void prepareWebcamSettings(bool enabled) {
         configuration.setValues(
             {{QStringLiteral("screen_recording/enable_webcam"), enabled},
              {QStringLiteral("screen_recording/webcam_size"), 150},
+             {QStringLiteral("screen_recording/webcam_offset_left"), 48},
+             {QStringLiteral("screen_recording/webcam_offset_bottom"), 48},
              {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("square")},
              {QStringLiteral("screen_recording/show_cursor"), false},
              {QStringLiteral("screen_recording/show_keyboard"), false},
@@ -3467,6 +3470,58 @@ void prepareWebcamSettings(bool enabled) {
              {QStringLiteral("screen_recording/start_delay_seconds"), 0},
              {QStringLiteral("screen_recording/auto_exit_after_recording_ends"), false}}),
         "prepare an isolated webcam-only recording");
+}
+
+void webcamPreviewRetainsFramesAcrossLayoutUpdates() {
+    auto state = std::make_shared<RecordingEffectTestState>();
+    ScreenRecordingAreaWindow area;
+    area.setRecordingRegion(QRect(40, 40, 640, 480));
+    area.setInputMode(ScreenRecordingAreaWindow::InputMode::PassThrough);
+    RecordingEffectPreview preview(area, std::make_unique<RecordingEffectTestSource>(state));
+    SnowWebcam camera;
+    const auto configure = [&](int size, const QPoint& offset, uint32_t shape, SnowWebcam* source) {
+        preview.configure(area.recordingRegion(), QSize(640, 480), Qt::transparent, Qt::transparent,
+                          false, 500, QColor(0, 0, 0, 204), Qt::white, 64, Qt::transparent, false,
+                          41, 0, QColor(22, 119, 255), source, size, shape, offset);
+    };
+    area.show();
+    configure(150, QPoint(48, 48), 0, &camera);
+    preview.setEligible(true);
+    pumpPreview();
+    require(preview.hasFrame(), "camera preview starts with a visible frame");
+    const quint64 generation = preview.generation();
+    const QImage initial = previewImage(*area.canvas());
+    state->autoPublish = false;
+    for (int step = 0; step < 40; ++step) {
+        configure(150 + step, QPoint(48 + step, 48 + step), step % 2, &camera);
+        require(preview.hasFrame(),
+                "layout updates retain the camera until its replacement arrives");
+        pumpPreview();
+        require(preview.hasFrame() && preview.generation() == generation &&
+                    previewImage(*area.canvas()) == initial && state->starts == 1 &&
+                    state->stops == 0,
+                "rapid webcam movement and resizing must not blank or restart the preview");
+    }
+    state->publish();
+    state->frame->tiles.front().rect.translate(100, 0);
+    pumpPreview();
+    const QImage moved = previewImage(*area.canvas());
+    require(preview.hasFrame() && moved != initial,
+            "a replacement frame must swap in while layout updates continue");
+    for (int y = 0; y < initial.height(); ++y) {
+        for (int x = 0; x < initial.width(); ++x) {
+            if (initial.pixelColor(x, y).alpha() != 0)
+                require(
+                    moved.pixelColor(x, y).alpha() == 0,
+                    "replacing the camera frame clears its old footprint without a ghost image");
+        }
+    }
+    const auto late = state->frame;
+    configure(150, QPoint(48, 48), 0, nullptr);
+    require(!preview.hasFrame() && !state->active, "disabling the camera still clears immediately");
+    state->frame = late;
+    pumpPreview();
+    require(!preview.hasFrame(), "retained frames cannot resurrect a disabled camera");
 }
 
 void recordingWebcamPreviewLifecycle() {
@@ -3485,10 +3540,15 @@ void recordingWebcamPreviewLifecycle() {
         require(webcamCreates == created + 1 && preview->webcamSize == 150 &&
                     preview->webcamShape == 0,
                 "preview must share one camera with the saved style");
-        require(settings.setWebcamSize(300) && settings.setWebcamShape(QStringLiteral("circle")),
+        require(settings.setWebcamLayout(300, QPoint(80, 60)) &&
+                    settings.setWebcamShape(QStringLiteral("circle")),
                 "change idle webcam style");
-        waitForWebcam([&] { return preview->webcamSize == 300 && preview->webcamShape == 1; },
-                      "idle saved styles must update the existing preview");
+        waitForWebcam(
+            [&] {
+                return preview->webcamSize == 300 && preview->webcamShape == 1 &&
+                       preview->webcamOffset == QPoint(80, 60);
+            },
+            "idle saved styles must update the existing preview");
         require(preview->webcam == camera && camera->size == 300 && webcamCreates == created + 1,
                 "style changes reuse the shared camera source");
         require(settings.setWebcamEnabled(false), "disable idle webcam");
@@ -3510,6 +3570,72 @@ void recordingWebcamPreviewLifecycle() {
     }
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     require(webcamDestroys == destroyed + 1, "controller teardown releases its camera source");
+}
+
+void recordingWebcamGesturesPersistAndFreezeAtStartup() {
+    prepareWebcamSettings(true);
+    const snow_shot::storage::RecordingSettings settings;
+    require(settings.setWebcamLayout(150, QPoint(120, 90)), "save an initial webcam layout");
+    ScreenRecordingController controller(testEffectsSource);
+    controller.open({80, 80, 640, 480});
+    auto* area = recordingAreaWindow();
+    require(area != nullptr, "webcam editing needs a recording preview");
+    area->setInputMode(ScreenRecordingAreaWindow::InputMode::RegionEditing);
+    RecordingWebcamControl* control = nullptr;
+    waitForWebcam(
+        [&] {
+            control = area->findChild<RecordingWebcamControl*>();
+            return control && control->isVisible();
+        },
+        "idle webcam preview exposes its input surface");
+    const auto preview = effectSources.back().lock();
+    const auto* camera = preview->webcam;
+    const QSize initialWindowSize = area->size();
+    const QRect initialControl = control->geometry();
+    area->resize(90, 70);
+    waitForWebcam([&] { return preview->output.width() < 150 && preview->output.height() < 150; },
+                  "shrinking the recording region refits the webcam preview");
+    require(area->selectionRect().adjusted(-1, -1, 1, 1).contains(control->geometry()) &&
+                settings.webcamSize() == 150 && settings.webcamOffsetLeft() == 120 &&
+                settings.webcamOffsetBottom() == 90,
+            "temporary fitting keeps the webcam inside without overwriting its preferences");
+    area->resize(initialWindowSize);
+    waitForWebcam([&] { return control->geometry() == initialControl; },
+                  "growing the recording region restores the preferred webcam layout");
+    require(preview->webcam == camera, "region changes keep the same camera source");
+    const auto send = [](QWidget& target, QEvent::Type type, QPointF global,
+                         Qt::MouseButton changed, Qt::MouseButtons held) {
+        const QPointF local = target.mapFromGlobal(global);
+        QMouseEvent event(type, local, local, global, changed, held, Qt::NoModifier);
+        QCoreApplication::sendEvent(&target, &event);
+    };
+    QPointF origin = control->mapToGlobal(QPointF(control->rect().center()));
+    const QPointF delta(40 / area->devicePixelRatioF(), -20 / area->devicePixelRatioF());
+    send(*control, QEvent::MouseButtonPress, origin, Qt::LeftButton, Qt::LeftButton);
+    send(*control, QEvent::MouseMove, origin + delta, Qt::NoButton, Qt::LeftButton);
+    require(settings.webcamOffsetLeft() == 120 && settings.webcamOffsetBottom() == 90,
+            "in-progress webcam edits must not write preferences");
+    send(*control, QEvent::MouseButtonRelease, origin + delta, Qt::LeftButton, Qt::NoButton);
+    require(settings.webcamOffsetLeft() == 160 && settings.webcamOffsetBottom() == 110,
+            "finished webcam gestures save the bottom-left offsets");
+    waitForWebcam([&] { return preview->webcamOffset == QPoint(160, 110); },
+                  "move reaches the native preview");
+    require(preview->webcam == camera, "moving reuses the camera source");
+    auto* button = control->findChild<QToolButton*>(QStringLiteral("screenRecordingWebcamResize"));
+    origin = button->mapToGlobal(QPointF(button->rect().center()));
+    send(*button, QEvent::MouseButtonPress, origin, Qt::LeftButton, Qt::LeftButton);
+    send(*control, QEvent::MouseMove, origin + delta, Qt::NoButton, Qt::LeftButton);
+    require(palette()->recordingWebcamSize() == 180 && settings.webcamSize() == 150,
+            "resize previews synchronize the size control without saving");
+    controller.startRecording();
+    waitForWebcam([&] { return controller.isRecording(); },
+                  "start recording during an unfinished resize");
+    require(lastDirectConfig.webcam_size == 150 && lastDirectConfig.webcam_offset_left == 160 &&
+                lastDirectConfig.webcam_offset_bottom == 110 && !control->isVisible(),
+            "startup cancels an unfinished resize before freezing the webcam layout");
+    palette()->recordingCloseRequested();
+    waitForIdle(controller);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
 void recordingWarningsUseAreaWindow() {
@@ -3624,6 +3750,8 @@ void recordingWebcamPreferencesPreserveSessionSnapshots() {
                 configuration.setValues(
                     {{QStringLiteral("screen_recording/enable_webcam"), !initiallyEnabled},
                      {QStringLiteral("screen_recording/webcam_size"), 300},
+                     {QStringLiteral("screen_recording/webcam_offset_left"), 80},
+                     {QStringLiteral("screen_recording/webcam_offset_bottom"), 60},
                      {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("circle")}}),
                 "save the next recording's webcam preferences during an active session");
             const auto options =
@@ -3640,7 +3768,9 @@ void recordingWebcamPreferencesPreserveSessionSnapshots() {
             if (phase == Phase::Scheduled || phase == Phase::Countdown || phase == Phase::Starting)
                 waitForWebcam(recording, "accepted startup retains its original webcam options");
             require((lastDirectConfig.webcam_source != nullptr) == initiallyEnabled &&
-                        lastDirectConfig.webcam_size == 150 && lastDirectConfig.webcam_shape == 0,
+                        lastDirectConfig.webcam_size == 150 && lastDirectConfig.webcam_shape == 0 &&
+                        lastDirectConfig.webcam_offset_left == 48 &&
+                        lastDirectConfig.webcam_offset_bottom == 48,
                     "native recording receives the accepted webcam snapshot");
             if (phase == Phase::Paused)
                 palette()->recordingResumeRequested();
@@ -3676,7 +3806,9 @@ void recordingWebcamPreferencesPreserveSessionSnapshots() {
             waitForWebcam(recording, "start the next manual recording");
             require(
                 (lastDirectConfig.webcam_source != nullptr) == !initiallyEnabled &&
-                    lastDirectConfig.webcam_size == 300 && lastDirectConfig.webcam_shape == 1,
+                    lastDirectConfig.webcam_size == 300 && lastDirectConfig.webcam_shape == 1 &&
+                    lastDirectConfig.webcam_offset_left == 80 &&
+                    lastDirectConfig.webcam_offset_bottom == 60,
                 "the next manual recording receives all preferences saved during its predecessor");
             palette()->recordingCloseRequested();
             waitForIdle(controller);
@@ -3687,6 +3819,8 @@ void recordingWebcamPreferencesPreserveSessionSnapshots() {
 
 void recordingWebcamAutomationOptionsStayIsolated() {
     prepareWebcamSettings(false);
+    require(snow_shot::storage::RecordingSettings().setWebcamLayout(150, QPoint(90, 70)),
+            "save non-default offsets for automation to inherit");
     auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
     ScreenRecordingController controller(testEffectsSource);
     QString error;
@@ -3697,9 +3831,14 @@ void recordingWebcamAutomationOptionsStayIsolated() {
                                        &error),
             "start with isolated automation webcam options");
     waitForWebcam([&] { return controller.isRecording(); }, "start automated webcam fixture");
+    require(lastDirectConfig.webcam_offset_left == 90 &&
+                lastDirectConfig.webcam_offset_bottom == 70,
+            "automation inherits saved webcam offsets");
     require(configuration.setValues(
                 {{QStringLiteral("screen_recording/enable_webcam"), true},
                  {QStringLiteral("screen_recording/webcam_size"), 300},
+                 {QStringLiteral("screen_recording/webcam_offset_left"), 80},
+                 {QStringLiteral("screen_recording/webcam_offset_bottom"), 60},
                  {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("square")}}),
             "save manual preferences while automation owns recording");
     const auto saved = configuration.snapshot();
@@ -3707,13 +3846,24 @@ void recordingWebcamAutomationOptionsStayIsolated() {
             "stop the automated recording");
     waitForIdle(controller);
     require(palette()->recordingWebcamSize() == 220 &&
-                palette()->recordingWebcamShape() == QStringLiteral("circle"),
+                palette()->recordingWebcamShape() == QStringLiteral("circle") &&
+                controller.automationState()
+                        .value(QStringLiteral("options"))
+                        .toObject()
+                        .value(QStringLiteral("webcam_offset_left"))
+                        .toInt() == 90 &&
+                controller.automationState()
+                        .value(QStringLiteral("options"))
+                        .toObject()
+                        .value(QStringLiteral("webcam_offset_bottom"))
+                        .toInt() == 70,
             "automation retains its isolated webcam options through finalization");
     controller.startRecording();
     waitForWebcam([&] { return controller.isRecording(); },
                   "start a manual session after automation");
     require(lastDirectConfig.webcam_source && lastDirectConfig.webcam_size == 300 &&
-                lastDirectConfig.webcam_shape == 0 && configuration.snapshot() == saved,
+                lastDirectConfig.webcam_shape == 0 && lastDirectConfig.webcam_offset_left == 80 &&
+                lastDirectConfig.webcam_offset_bottom == 60 && configuration.snapshot() == saved,
             "manual startup restores current saved options without overwriting preferences");
     palette()->recordingCloseRequested();
     waitForIdle(controller);
@@ -7156,7 +7306,9 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (app.arguments().contains(QStringLiteral("--webcam-preview-only"))) {
+        webcamPreviewRetainsFramesAcrossLayoutUpdates();
         recordingWebcamPreviewLifecycle();
+        recordingWebcamGesturesPersistAndFreezeAtStartup();
         ApplicationStorage::instance().shutdown();
         return 0;
     }

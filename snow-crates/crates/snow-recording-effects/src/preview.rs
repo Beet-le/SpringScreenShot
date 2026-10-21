@@ -32,6 +32,22 @@ pub struct PreviewConfig {
 }
 
 impl PreviewConfig {
+    fn same_scene(&self, next: &Self) -> bool {
+        self.region == next.region
+            && self.canvas == next.canvas
+            && self.output == next.output
+            && self.trail == next.trail
+            && self.trail_duration_ms == next.trail_duration_ms
+            && self.click == next.click
+            && self.highlight_radius == next.highlight_radius
+            && self.highlight == next.highlight
+            && self.record_mouse_clicks == next.record_mouse_clicks
+            && self.show_keyboard == next.show_keyboard
+            && self.keyboard == next.keyboard
+            && self.generation == next.generation
+            && self.webcam.as_ref().map(|w| &w.source) == next.webcam.as_ref().map(|w| &w.source)
+    }
+
     fn effects_output(&self) -> (u32, u32) {
         // Preview styles belong to the desktop capture canvas. Export dimensions
         // only affect saved video and must not rescale live effects.
@@ -120,6 +136,15 @@ impl std::ops::DerefMut for EffectsPreview {
 }
 
 impl EffectsPreview {
+    fn update_webcam_layout(&mut self, next: &PreviewConfig) -> bool {
+        if !self.config.same_scene(next) {
+            return false;
+        }
+        // Retain observers, input animations, surfaces and camera pixels during a gesture.
+        self.config.webcam = next.webcam.clone();
+        true
+    }
+
     pub fn new(config: PreviewConfig, rasterizer: Option<Box<dyn KeycapRasterizer>>) -> Self {
         let output = config.effects_output();
         let keycap_size = config
@@ -520,7 +545,15 @@ fn run(
             };
             select_biased! {
                 recv(receiver) -> command => match command {
-                    Ok(Command::Configure(next)) => { config = next; continue 'configure; }
+                    Ok(Command::Configure(next)) => {
+                        let layout_only = effects.update_webcam_layout(&next);
+                        config = next;
+                        if layout_only {
+                            dirty = true;
+                        } else {
+                            continue 'configure;
+                        }
+                    }
                     _ => return,
                 },
                 recv(mouse) -> event => if let Ok(event) = event {
@@ -586,6 +619,160 @@ mod tests {
             show_keyboard: true,
             keyboard: None,
             generation: 7,
+        }
+    }
+
+    #[test]
+    fn webcam_session_keeps_presenting_during_live_layout_changes() {
+        struct OneFrame(Option<snow_webcam::RawFrame>);
+        impl snow_webcam::CameraBackend for OneFrame {
+            fn poll(&mut self, timeout: Duration) -> Result<Option<snow_webcam::RawFrame>, String> {
+                if self.0.is_none() {
+                    std::thread::sleep(timeout);
+                }
+                Ok(self.0.take())
+            }
+        }
+        let source = snow_webcam::Source::with_backend(
+            snow_webcam::CaptureOptions { size: 150, fps: 30 },
+            |_| {
+                Ok(Box::new(OneFrame(Some(snow_webcam::RawFrame {
+                    width: 150,
+                    height: 150,
+                    stride: 600,
+                    rgba: [220, 20, 10, 255].repeat(150 * 150),
+                    at: Instant::now(),
+                }))))
+            },
+        )
+        .unwrap();
+        source.set_active(true);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while source.snapshot(Instant::now()).frame.is_none() {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let mut cfg = config();
+        cfg.region = (-400, -200, 640, 480);
+        cfg.canvas = (640, 480);
+        cfg.output = (640, 480);
+        cfg.trail = [0; 4];
+        cfg.click = [0; 4];
+        cfg.show_keyboard = false;
+        cfg.webcam = Some(snow_webcam::Config {
+            source: source.clone(),
+            style: Default::default(),
+        });
+        let (notifications, received) = bounded(1);
+        let mut session = PreviewSession::start(
+            cfg.clone(),
+            Arc::new(move || {
+                let _ = notifications.try_send(());
+            }),
+        )
+        .unwrap();
+        for step in 0..8 {
+            let style = &mut cfg.webcam.as_mut().unwrap().style;
+            style.offset_left = 20 + step * 20;
+            style.offset_bottom = 30 + step * 10;
+            style.size = 100 + step * 20;
+            source
+                .configure(snow_webcam::CaptureOptions {
+                    size: style.size,
+                    fps: 30,
+                })
+                .unwrap();
+            let (x, y, side) = style.placement(cfg.canvas);
+            let expected = (x, y, x + side - 1, y + side - 1);
+            session.configure(cfg.clone()).unwrap();
+            loop {
+                received.recv_timeout(Duration::from_secs(1)).unwrap();
+                let frame = session.latest().unwrap();
+                assert!(frame.error.is_none());
+                let mut bounds = (u32::MAX, u32::MAX, 0, 0);
+                for tile in &frame.tiles {
+                    for (i, pixel) in tile.pixels.chunks_exact(4).enumerate() {
+                        if pixel[3] != 0 {
+                            let (px, py) =
+                                (tile.x + i as u32 % TILE_SIZE, tile.y + i as u32 / TILE_SIZE);
+                            bounds = (
+                                bounds.0.min(px),
+                                bounds.1.min(py),
+                                bounds.2.max(px),
+                                bounds.3.max(py),
+                            );
+                        }
+                    }
+                }
+                assert_ne!(
+                    bounds.0,
+                    u32::MAX,
+                    "layout changes never publish a blank camera frame"
+                );
+                if bounds == expected {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "latest webcam layout must reach the preview"
+                );
+            }
+        }
+        session.stop();
+        source.set_active(false);
+    }
+
+    #[test]
+    fn webcam_layout_updates_preserve_input_animation_and_scene_boundaries() {
+        let source = snow_webcam::Source::with_backend(
+            snow_webcam::CaptureOptions { size: 150, fps: 30 },
+            |_| unreachable!(),
+        )
+        .unwrap();
+        let mut cfg = config();
+        cfg.webcam = Some(snow_webcam::Config {
+            source,
+            style: Default::default(),
+        });
+        let mut preview = EffectsPreview::new(cfg, None);
+        preview.observe(Some((40, 50)), 10);
+        preview.observe(Some((80, 70)), 20);
+        preview.key_event(key(20, true));
+        let pending = preview.pending_keys.len();
+        let render_trail = |preview: &mut EffectsPreview| {
+            let mut surface = TileSurface::new(preview.config.canvas);
+            preview.trail.draw_to(&mut surface, 20, [255, 0, 0, 128]);
+            surface
+                .snapshot()
+                .into_iter()
+                .map(|tile| (tile.x, tile.y, tile.pixels))
+                .collect::<Vec<_>>()
+        };
+        let trail = render_trail(&mut preview);
+        assert!(!trail.is_empty());
+        let mut next = preview.config.clone();
+        let style = &mut next.webcam.as_mut().unwrap().style;
+        style.offset_left = 310;
+        style.offset_bottom = 120;
+        style.size = 260;
+        style.shape = snow_webcam::WebcamShape::Circle;
+        assert!(preview.update_webcam_layout(&next));
+        assert!(preview.config == next);
+        assert_eq!(preview.pending_keys.len(), pending);
+        assert_eq!(render_trail(&mut preview), trail);
+        assert_eq!(preview.position, Some((80, 70)));
+        // Real scene changes must still reconstruct observers and invalidate old frames.
+        for change in 0..5 {
+            let mut changed = next.clone();
+            match change {
+                0 => changed.region.0 += 1,
+                1 => changed.canvas.0 += 1,
+                2 => changed.show_keyboard = !changed.show_keyboard,
+                3 => changed.generation += 1,
+                _ => changed.webcam = None,
+            }
+            assert!(!preview.update_webcam_layout(&changed));
+            assert!(preview.config == next);
         }
     }
 
@@ -791,7 +978,11 @@ mod tests {
                 cfg.show_keyboard = false;
                 cfg.webcam = Some(snow_webcam::Config {
                     source: source.clone(),
-                    style: Default::default(),
+                    style: snow_webcam::WebcamStyle {
+                        offset_left: 123,
+                        offset_bottom: 67,
+                        ..Default::default()
+                    },
                 });
                 let mut preview = EffectsPreview::new(cfg, None);
                 let frame = preview.render(0).unwrap();
@@ -810,7 +1001,7 @@ mod tests {
                         count += 1;
                     }
                 }
-                assert_eq!(bounds, (48, canvas.1 - 198, 197, canvas.1 - 49));
+                assert_eq!(bounds, (123, canvas.1 - 217, 272, canvas.1 - 68));
                 assert_eq!(count, 150 * 150);
                 assert_eq!(preview.next_frame_at(0), Some(33));
                 source.report_error("disconnected".into());

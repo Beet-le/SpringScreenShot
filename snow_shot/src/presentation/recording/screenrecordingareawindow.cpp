@@ -14,6 +14,7 @@
 #include "screenrecordinggeometry.h"
 #include "../resizegeometry.h"
 #include "recordingregiondraghandle.h"
+#include "recordingwebcamcontrol.h"
 #include "recordingregioninputrouter.h"
 #include <QApplication>
 #ifdef Q_OS_MACOS
@@ -148,6 +149,10 @@ ScreenRecordingAreaWindow::ScreenRecordingAreaWindow(QWidget* parent)
 }
 
 ScreenRecordingAreaWindow::~ScreenRecordingAreaWindow() {
+    if (m_webcamControl) {
+        disconnect(m_webcamControl, nullptr, this, nullptr);
+        m_webcamControl->cancelInteraction();
+    }
     m_regionDragActive = false;
     m_regionInputRouter.reset();
     m_canvas->removeEventFilter(this);
@@ -163,6 +168,7 @@ void ScreenRecordingAreaWindow::setTrimming(bool enabled) {
     if (m_trimming == enabled)
         return;
     cancelRegionInteraction();
+    cancelWebcamInteraction();
     m_trimming = enabled;
     if (enabled)
         setFixedSize(size());
@@ -203,6 +209,7 @@ QRect ScreenRecordingAreaWindow::recordingRegion() const {
 
 void ScreenRecordingAreaWindow::setRecordingRegion(const QRect& requestedRegion) {
     cancelRegionInteraction();
+    cancelWebcamInteraction();
     const QRect region =
         snow_shot::presentation::recording::screenRecordingNormalizedRegion(requestedRegion);
     if (!region.isValid() || region.isEmpty()) {
@@ -266,6 +273,7 @@ void ScreenRecordingAreaWindow::setRecordingState(ScreenshotToolPalette::Recordi
     if (m_state == state) {
         return;
     }
+    cancelWebcamInteraction();
     m_state = state;
     cancelRegionInteraction();
     applyInputMode();
@@ -276,6 +284,7 @@ void ScreenRecordingAreaWindow::setInputMode(InputMode mode) {
         applyInputMode();
         return;
     }
+    cancelWebcamInteraction();
     m_inputMode = mode;
     m_angleWheelSteps.reset();
     cancelRegionInteraction();
@@ -291,6 +300,7 @@ void ScreenRecordingAreaWindow::setDrawingBlocked(bool blocked) {
     if (m_drawingBlocked == blocked) {
         return;
     }
+    cancelWebcamInteraction();
     m_drawingBlocked = blocked;
     cancelRegionInteraction();
     m_gestureButton = Qt::NoButton;
@@ -302,11 +312,13 @@ bool ScreenRecordingAreaWindow::drawingBlocked() const {
 }
 
 void ScreenRecordingAreaWindow::startCountdown(int seconds) {
+    cancelWebcamInteraction();
     if (m_countdownOverlay == nullptr) {
         m_countdownOverlay =
             new snow_shot::presentation::recording::RecordingCountdownOverlay(this);
     }
     m_countdownOverlay->start(seconds);
+    layoutWebcamControl();
     layoutCountdownOverlay();
     // The indicator must stay above the annotation canvas.
     m_countdownOverlay->raise();
@@ -325,6 +337,7 @@ void ScreenRecordingAreaWindow::clearCountdown() {
         return;
     }
     m_countdownOverlay->clear();
+    layoutWebcamControl();
     update();
 }
 
@@ -342,7 +355,45 @@ void ScreenRecordingAreaWindow::layoutCountdownOverlay() {
                                     side, side);
 }
 
+void ScreenRecordingAreaWindow::setWebcamOverlay(const QRectF& bounds, const QSize& region,
+                                                 int size, const QPoint& offset,
+                                                 const QPoint& fittedOffset, bool circle) {
+    m_webcamVisible = !bounds.isEmpty() && region.isValid();
+    if (m_webcamVisible) {
+        if (!m_webcamControl) {
+            m_webcamControl = new RecordingWebcamControl(this);
+            connect(m_webcamControl, &RecordingWebcamControl::layoutPreviewed, this,
+                    &ScreenRecordingAreaWindow::webcamLayoutPreviewed);
+            connect(m_webcamControl, &RecordingWebcamControl::layoutCommitted, this,
+                    &ScreenRecordingAreaWindow::webcamLayoutCommitted);
+            connect(m_webcamControl, &RecordingWebcamControl::interactionChanged, this,
+                    [this] { updateNativeMouseRouting(regionPointer(QCursor::pos())); });
+        }
+        m_webcamControl->present(bounds, region, size, offset, fittedOffset, circle);
+    }
+    layoutWebcamControl();
+    updateNativeMouseRouting(regionPointer(QCursor::pos()));
+}
+
+void ScreenRecordingAreaWindow::cancelWebcamInteraction() {
+    if (m_webcamControl)
+        m_webcamControl->cancelInteraction();
+}
+
+void ScreenRecordingAreaWindow::layoutWebcamControl() {
+    if (!m_webcamControl)
+        return;
+    const bool visible = m_webcamVisible && regionEditingEnabled() && !m_trimming &&
+                         !countdownActive() && isVisible();
+    if (!visible)
+        cancelWebcamInteraction();
+    m_webcamControl->setVisible(visible);
+    if (visible)
+        m_webcamControl->raise();
+}
+
 void ScreenRecordingAreaWindow::layoutRegionDragHandle() {
+    layoutWebcamControl();
     const QPoint corner(qCeil(m_selectionRect.left()), qCeil(m_selectionRect.top()));
     const QRect bounds = QRect(corner, QSize(qFloor(m_selectionRect.right()) - corner.x(),
                                              qFloor(m_selectionRect.bottom()) - corner.y()))
@@ -377,6 +428,8 @@ void ScreenRecordingAreaWindow::layoutRegionDragHandle() {
     m_regionDragHandle->move(bounds.right() + 1 - side - inset, bounds.bottom() + 1 - side - inset);
     m_regionDragHandle->show();
     m_regionDragHandle->raise();
+    // Webcam controls take priority where the two controls overlap in a small region.
+    layoutWebcamControl();
     if (!m_regionInputRouter) {
         m_regionInputRouter = std::make_unique<RecordingRegionInputRouter>(
             [this](const QPoint& point) { updateNativeMouseRouting(point); });
@@ -398,6 +451,8 @@ QRegion ScreenRecordingAreaWindow::regionInteractionRegion() const {
     QRegion input = QRegion(rect()) - QRegion(interior);
     if (m_regionDragHandle && m_regionDragHandle->isVisible() && m_regionDragHandle->isEnabled())
         input |= m_regionDragHandle->geometry();
+    if (m_webcamControl && m_webcamControl->isVisible())
+        input |= m_webcamControl->mask().translated(m_webcamControl->pos());
     return input;
 }
 
@@ -414,6 +469,7 @@ void ScreenRecordingAreaWindow::updateNativeMouseRouting(const QPoint& desktopPo
     // interior clicks. The observer queues routing work onto the UI thread; the
     // system mouse hook never waits for these native window operations.
     applyNativePassThrough(!m_regionDragActive &&
+                           !(m_webcamControl && m_webcamControl->interacting()) &&
                            !regionInteractionRegion().contains(local.toPoint()));
 }
 
@@ -921,7 +977,12 @@ bool ScreenRecordingAreaWindow::nativeEvent(const QByteArray& eventType, void* m
                                                reinterpret_cast<HWND>(msg->lParam) != msg->hwnd))) {
             cancelRegionInteraction();
         }
-        if (m_regionDragActive && msg->message == WM_NCHITTEST) {
+        if (m_webcamControl && m_webcamControl->interacting() &&
+            (msg->message == WM_CANCELMODE || (msg->message == WM_CAPTURECHANGED &&
+                                               reinterpret_cast<HWND>(msg->lParam) != msg->hwnd)))
+            cancelWebcamInteraction();
+        if ((m_regionDragActive || (m_webcamControl && m_webcamControl->interacting())) &&
+            msg->message == WM_NCHITTEST) {
             *result = HTCLIENT;
             return true;
         }

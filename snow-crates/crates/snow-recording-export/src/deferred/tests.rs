@@ -49,7 +49,12 @@ fn add_webcam(fixture: &Fixture, shape: snow_recording_model::WebcamShape) {
     snow_recording_model::webcam::write_metadata(
         &metadata,
         &snow_recording_model::webcam::WebcamMetadata {
-            style: snow_recording_model::WebcamStyle { size: 50, shape },
+            style: snow_recording_model::WebcamStyle {
+                size: 50,
+                shape,
+                offset_left: 17,
+                offset_bottom: 31,
+            },
             fps: 30,
             duration_ms: 1001,
             visibility: vec![(200, true), (700, false), (900, true)],
@@ -166,7 +171,7 @@ fn webcam_deferred_formats_replay_gaps_rewinds_and_retries_on_source_time() {
                 reader.read(at, &cancel).unwrap();
                 reader.copy_rgba(&mut preview).unwrap();
                 assert!(
-                    preview[((107 * 240 + 73) * 4) + channel] > 200,
+                    preview[((124 * 240 + 42) * 4) + channel] > 200,
                     "trim preview camera at {at}"
                 );
             }
@@ -179,7 +184,7 @@ fn webcam_deferred_formats_replay_gaps_rewinds_and_retries_on_source_time() {
             )
             .unwrap();
             let (frames, width, _, _) = decode_frames(&fixture.config.output_path);
-            let center = ((107 * width + 73) * 4) as usize;
+            let center = ((124 * width + 42) * 4) as usize;
             assert!(
                 frames
                     .iter()
@@ -221,7 +226,7 @@ fn webcam_deferred_formats_replay_gaps_rewinds_and_retries_on_source_time() {
             .unwrap();
             assert_eq!(result.duration_ms, 250);
             let (retimed, width, _, _) = decode_frames(&result.output_path);
-            let center = ((107 * width + 73) * 4) as usize;
+            let center = ((124 * width + 42) * 4) as usize;
             assert!(retimed.first().unwrap()[center] > 200);
             assert!(retimed.last().unwrap()[center + 1] > 200);
         }
