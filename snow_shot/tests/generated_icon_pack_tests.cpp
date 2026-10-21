@@ -97,8 +97,8 @@ void everySnowShotEntryRenders() {
     const auto registered = icons::registerWith(renderer);
     require(registered.ok(), "Snow Shot pack registration should succeed");
     const adqt::icons::IconPack* staticPack = icons::pack().staticPack();
-    require(staticPack != nullptr && staticPack->entryCount == 197,
-            "Snow Shot pack should contain all 197 project-owned assets");
+    require(staticPack != nullptr && staticPack->entryCount == 198,
+            "Snow Shot pack should contain all 198 project-owned assets");
 
     adqt::icons::IconRenderRequest request;
     request.logicalSize = QSize(32, 32);
@@ -311,16 +311,52 @@ void ocrTranslateIconUsesTheSuppliedProjectAsset() {
             "OCR Translate should render the supplied project asset with its primary color");
 }
 
-void flipVerticalIconUsesTheRotatedProjectAsset() {
+void flipIconsShowMirroredShapesWithoutDividers() {
     namespace icons = snow_shot::presentation::icons::custom;
-    const auto ref = icons::outlined::FlipVertical();
-    const auto metadata = adqt::icons::describeIcon(ref);
-    const QRect bounds = alphaBounds(render(ref, QSize(64, 64)).toImage());
-
-    require(metadata.key.pack == QStringLiteral("snow-shot") &&
-                metadata.key.name == QStringLiteral("flip-vertical") &&
-                bounds.height() > bounds.width(),
-            "flip-vertical should use the rotated Snow Shot project asset");
+    for (const QColor tint : {QColor(31, 31, 31), QColor(240, 240, 240), QColor(22, 119, 255)}) {
+        const auto colors = adqt::icons::IconColors::primary(tint);
+        const auto horizontalRef = icons::outlined::FlipHorizontal(colors);
+        const auto verticalRef = icons::outlined::FlipVertical(colors);
+        const auto horizontalMetadata = adqt::icons::describeIcon(horizontalRef);
+        const auto verticalMetadata = adqt::icons::describeIcon(verticalRef);
+        require(horizontalMetadata.key.pack == QStringLiteral("snow-shot") &&
+                    horizontalMetadata.key.name == QStringLiteral("flip-horizontal") &&
+                    verticalMetadata.key.pack == QStringLiteral("snow-shot") &&
+                    verticalMetadata.key.name == QStringLiteral("flip-vertical"),
+                "both flip operations should resolve to their dedicated project assets");
+        for (const int size : {16, 20, 24, 32}) {
+            for (const qreal dpr : {1.0, 1.25, 2.0}) {
+                for (const auto& ref : {horizontalRef, verticalRef}) {
+                    const QImage image = render(ref, QSize(size, size), dpr).toImage();
+                    require(!alphaBounds(image).isEmpty() && containsOpaqueColor(image, tint),
+                            "flip icons should remain visible and theme-aware at toolbar sizes");
+                }
+            }
+        }
+        const QImage horizontal = render(horizontalRef, QSize(64, 64)).toImage();
+        const QImage vertical = render(verticalRef, QSize(64, 64)).toImage();
+        require(opaquePixelCount(horizontal, QRect(29, 0, 6, 64)) == 0 &&
+                    opaquePixelCount(vertical, QRect(0, 29, 64, 6)) == 0,
+                "flip icons should leave the space between mirrored shapes free of dividers");
+        require(horizontal.pixelColor(25, 32).alpha() > 0 &&
+                    horizontal.pixelColor(38, 32).alpha() > 0 &&
+                    horizontal.pixelColor(20, 40).alpha() == 0 &&
+                    horizontal.pixelColor(43, 40).alpha() == 0 &&
+                    vertical.pixelColor(31, 25).alpha() > 0 &&
+                    vertical.pixelColor(31, 38).alpha() > 0 &&
+                    vertical.pixelColor(23, 20).alpha() == 0 &&
+                    vertical.pixelColor(23, 43).alpha() == 0,
+                "both icons should retain two outlined mirrored panels in the correct orientation");
+        require(horizontal.pixelColor(10, 14).alpha() == 0 &&
+                    horizontal.pixelColor(53, 14).alpha() == 0 &&
+                    horizontal.pixelColor(22, 12).alpha() > 0 &&
+                    horizontal.pixelColor(41, 12).alpha() > 0 &&
+                    vertical.pixelColor(49, 10).alpha() == 0 &&
+                    vertical.pixelColor(49, 53).alpha() == 0 &&
+                    vertical.pixelColor(51, 22).alpha() > 0 &&
+                    vertical.pixelColor(51, 41).alpha() > 0,
+                "the clipped outer corners should visibly reverse across the reflection direction");
+    }
 }
 
 void conversionIconsUseTheSuppliedProjectAssets() {
@@ -840,6 +876,10 @@ void borderFillIconMatchesToolbarGeometry() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
+        if (application.arguments().contains(QStringLiteral("--flip-icons-only"))) {
+            flipIconsShowMirroredShapesWithoutDividers();
+            return 0;
+        }
         cropIconsFollowAntDesign();
         if (application.arguments().contains(QStringLiteral("--crop-icons-only"))) {
             return 0;
@@ -891,7 +931,7 @@ int main(int argc, char** argv) {
         miniLogoPreservesTheWordmarkAndAddsRoundedVectorLettering();
         ocrTranslateIconUsesTheSuppliedProjectAsset();
         scrollingIconsUseTheRequestedOrientations();
-        flipVerticalIconUsesTheRotatedProjectAsset();
+        flipIconsShowMirroredShapesWithoutDividers();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

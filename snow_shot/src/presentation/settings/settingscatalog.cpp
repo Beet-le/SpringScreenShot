@@ -2791,7 +2791,7 @@ QVector<SettingsItemDefinition> pinToScreenShortcutItems() {
         localShortcutItem(SettingsLocalShortcutScope::PinToScreen,
                           QStringLiteral("flip_horizontal"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Flip horizontally"),
-                          []() { return outlined_icons::Swap(); }),
+                          []() { return custom_outlined_icons::FlipHorizontal(); }),
         localShortcutItem(SettingsLocalShortcutScope::PinToScreen, QStringLiteral("flip_vertical"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Flip vertically"),
                           []() { return custom_outlined_icons::FlipVertical(); }),

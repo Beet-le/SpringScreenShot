@@ -3809,8 +3809,8 @@ void ScreenshotPinnedWindow::createContextMenu() {
                 QStringLiteral("screenshotPinnedRotateCounterClockwiseAction"));
             connect(rotateCounterClockwise, &QAction::triggered, this,
                     [this]() { executeImageCommand(QStringLiteral("rotate_counterclockwise")); });
-            QAction* flipHorizontal =
-                processMenu->addItem(tr("Flip horizontally"), outlined_icons::Swap());
+            QAction* flipHorizontal = processMenu->addItem(tr("Flip horizontally"),
+                                                           custom_outlined_icons::FlipHorizontal());
             setActionTranslationSource(flipHorizontal, "Flip horizontally");
             flipHorizontal->setObjectName(QStringLiteral("screenshotPinnedFlipHorizontalAction"));
             connect(flipHorizontal, &QAction::triggered, this,

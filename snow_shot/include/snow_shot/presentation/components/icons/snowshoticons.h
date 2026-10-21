@@ -120,6 +120,7 @@ BrushPressureSensitive(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ExportSettings(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef FillBorder(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef FillSolid(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef FlipHorizontal(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef FlipVertical(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef FontSizeLarge(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef FontSizeMedium(const adqt::icons::IconColors& colors = {});
