@@ -571,7 +571,10 @@ void mcpCredentialRedactionAndRevision(const QTemporaryDir& temporary) {
         QStringLiteral("https://example.invalid/v1"),
         QStringLiteral("private-test-secret"),
         QStringLiteral("model"),
-        false};
+        false,
+        false,
+        4,
+        QStringLiteral("doubao")};
     const QMap<QString, QJsonValue> original{{key, snow_shot::customAiModelsToJson({model})}};
     const auto path = temporary.filePath(QStringLiteral("mcp-redacted.zip"));
     require(storage::ConfigurationArchive::write(
@@ -581,6 +584,9 @@ void mcpCredentialRedactionAndRevision(const QTemporaryDir& temporary) {
     auto imported = storage::ConfigurationArchive::read(path);
     require(imported.isValid() && imported.redactedCredentialIds.contains(model.id),
             "redacted archives identify omitted credentials");
+    require(snow_shot::customAiModelsFromJson(imported.values.value(key)).first().provider ==
+                model.provider,
+            "redacted archives retain the custom model provider");
     require(snow_shot::customAiModelsFromJson(imported.values.value(key)).first().apiKey.isEmpty(),
             "an MCP archive must not contain the stored credential");
     imported.preserveOmittedCredentials(original);

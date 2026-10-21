@@ -809,12 +809,35 @@ void customModelsStayAvailableAndInvalidateTogether(const QString& directory) {
               "explicit retry starts updated connection");
     require(custom.streams.last().headers.contains("Authorization: Bearer updated-key"),
             "retry uses new credentials");
+    custom.delta(2, QStringLiteral("completed"));
+    custom.finish(2);
+    waitUntil([&] { return !second->busy(); }, "cache a result before changing the provider");
+    auto* active = service.createJob({QStringLiteral("provider change input")}, &owner);
+    active->start();
+    waitUntil([&] { return custom.streams.size() == 4; }, "another job remains active");
+    model.provider = QStringLiteral("deepseek");
+    require(settings.setValue(key, snow_shot::customAiModelsToJson({model})),
+            "change only the provider type");
+    waitUntil([&] { return custom.disconnected(3); }, "provider edit aborts the active stream");
+    require(active->state() == TranslationJob::State::Invalidated &&
+                second->state() == TranslationJob::State::Invalidated &&
+                active->units().first().text.isEmpty() && second->units().first().text.isEmpty() &&
+                custom.streams.size() == 4,
+            "provider-only edits invalidate completed and running results without restarting");
+    second->retry();
+    waitUntil([&] { return custom.streams.size() == 5; }, "retry uses the updated provider");
+    require(custom.streams.last().headers.contains("Authorization: Bearer updated-key") &&
+                custom.streams.last()
+                        .body.value(QStringLiteral("thinking"))
+                        .toObject()
+                        .value(QStringLiteral("type")) == QStringLiteral("disabled"),
+            "retry uses the new provider controls with the existing credentials");
     builtIn.respondModels();
     waitUntil([&] { return !service.loadingModels(); }, "finish builtin discovery");
     require(settings.setValue(key, QJsonArray{}), "delete selected custom model");
     require(second->state() == TranslationJob::State::Invalidated &&
                 service.preferences().modelId == QStringLiteral("general") &&
-                custom.streams.size() == 3 && builtIn.streams.isEmpty(),
+                custom.streams.size() == 5 && builtIn.streams.isEmpty(),
             "deletion selects shared fallback without sending another translation");
 }
 

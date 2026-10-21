@@ -664,17 +664,39 @@ void runMcpApplicationTests() {
     model.baseUrl = QStringLiteral("https://example.invalid/v1");
     model.model = QStringLiteral("test-model");
     model.apiKey = QStringLiteral("test-secret-never-returned");
+    model.provider = QStringLiteral("deepseek");
     require(session.applyCustomAiModels({model}), "prepare existing model");
     const auto models = call(QStringLiteral("models_list"));
     require(models.ok && !QJsonDocument(models.result).toJson().contains(model.apiKey.toUtf8()),
             "model discovery redacts secrets");
+    require(models.result.value(QStringLiteral("models"))
+                    .toArray()
+                    .first()
+                    .toObject()
+                    .value(QStringLiteral("provider")) == model.provider,
+            "model discovery includes the provider type");
     auto publicModel = publicModels({model}).first().toObject();
     publicModel.insert(QStringLiteral("name"), QStringLiteral("Renamed"));
+    publicModel.insert(QStringLiteral("provider"), QStringLiteral("doubao"));
     require(call(QStringLiteral("models_update"),
                  {{QStringLiteral("models"), QJsonArray{publicModel}}}, configuration.revision())
                     .ok &&
-                session.customAiModels().first().apiKey == model.apiKey,
+                session.customAiModels().first().apiKey == model.apiKey &&
+                session.customAiModels().first().provider == QStringLiteral("doubao"),
             "omitted credential preserved for same provider endpoint");
+    publicModel.insert(QStringLiteral("provider"), QStringLiteral("unknown"));
+    require(!call(QStringLiteral("models_update"),
+                  {{QStringLiteral("models"), QJsonArray{publicModel}}}, configuration.revision())
+                    .ok &&
+                session.customAiModels().first().provider == QStringLiteral("doubao"),
+            "invalid provider updates preserve the previous model");
+    publicModel.remove(QStringLiteral("provider"));
+    require(call(QStringLiteral("models_update"),
+                 {{QStringLiteral("models"), QJsonArray{publicModel}}}, configuration.revision())
+                    .ok &&
+                session.customAiModels().first().provider == QStringLiteral("qwen"),
+            "legacy MCP model updates retain Qwen request behavior");
+    publicModel.insert(QStringLiteral("provider"), QStringLiteral("doubao"));
     publicModel.insert(QStringLiteral("base_url"), QStringLiteral("https://different.invalid/v1"));
     require(call(QStringLiteral("models_update"),
                  {{QStringLiteral("models"), QJsonArray{publicModel}}}, configuration.revision())

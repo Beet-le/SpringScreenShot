@@ -1058,6 +1058,29 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    #[cfg(not(feature = "mini"))]
+    fn custom_model_provider_schema_accepts_supported_and_legacy_models() {
+        let legacy = json!({"expected_revision":1,"models":[{
+            "id":"11111111-1111-4111-8111-111111111111","name":"Provider",
+            "base_url":"https://example.invalid/v1","model":"test-model"
+        }]});
+        assert!(schema("snow_shot_models_update", Some(legacy.clone())).is_ok());
+        for provider in ["openai", "qwen", "deepseek", "doubao"] {
+            let mut input = legacy.clone();
+            input["models"][0]["provider"] = json!(provider);
+            assert!(
+                schema("snow_shot_models_update", Some(input)).is_ok(),
+                "{provider}"
+            );
+        }
+        for provider in [json!("unknown"), json!(""), json!(1), json!(false)] {
+            let mut input = legacy.clone();
+            input["models"][0]["provider"] = provider;
+            assert!(schema("snow_shot_models_update", Some(input)).is_err());
+        }
+    }
+
+    #[test]
     fn border_fill_and_legacy_modes_validate_across_canvas_domains() {
         for target in [
             "rectangle",

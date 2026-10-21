@@ -117,9 +117,19 @@ QString imageConversionPrompt(SnowShotImageConversionFormat format) {
                       "forms, iframes, SVG, or style attributes."));
 }
 
+void applyCustomReasoning(QJsonObject& body, const QString& provider, bool enabled) {
+    if (provider == QStringLiteral("qwen")) {
+        body.insert(QStringLiteral("enable_thinking"), enabled);
+    } else if (provider == QStringLiteral("deepseek") || provider == QStringLiteral("doubao")) {
+        body.insert(QStringLiteral("thinking"),
+                    QJsonObject{{QStringLiteral("type"), enabled ? QStringLiteral("enabled")
+                                                                 : QStringLiteral("disabled")}});
+    }
+}
+
 QByteArray imageChatBody(const QString& model, const QImage& image, const QString& prompt,
                          const std::function<QByteArray(const QImage&)>& prepare, bool custom,
-                         bool supportsReasoning) {
+                         const QString& provider, bool supportsReasoning) {
     const QByteArray webp =
         prepare ? prepare(image)
                 : SnowShotApiClient::encodeWebp(SnowShotApiClient::prepareImage(image));
@@ -136,13 +146,15 @@ QByteArray imageChatBody(const QString& model, const QImage& image, const QStrin
                                                      QString::fromLatin1(webp.toBase64())}}}}};
     QJsonObject body{{QStringLiteral("model"), model},
                      {QStringLiteral("stream"), true},
-                     {QStringLiteral("enable_thinking"), custom && supportsReasoning},
                      {QStringLiteral("messages"),
                       QJsonArray{QJsonObject{{QStringLiteral("role"), QStringLiteral("system")},
                                              {QStringLiteral("content"), prompt}},
                                  QJsonObject{{QStringLiteral("role"), QStringLiteral("user")},
                                              {QStringLiteral("content"), content}}}}};
-    if (!custom) {
+    if (custom) {
+        applyCustomReasoning(body, provider, supportsReasoning);
+    } else {
+        body.insert(QStringLiteral("enable_thinking"), false);
         body.insert(QStringLiteral("temperature"), 0);
         body.insert(QStringLiteral("max_tokens"), 8192);
     }
@@ -926,7 +938,8 @@ void SnowShotApiClient::setCustomModels(const snow_shot::CustomAiModels& models)
         const auto* current = customModel(id);
         const bool changed = current == nullptr || old.baseUrl != current->baseUrl ||
                              old.apiKey != current->apiKey || old.model != current->model ||
-                             old.supportsReasoning != current->supportsReasoning;
+                             old.supportsReasoning != current->supportsReasoning ||
+                             old.provider != current->provider;
         const bool vision = changed || (old.supportsVision && !current->supportsVision);
         if (!changed && !vision) {
             continue;
@@ -1191,12 +1204,13 @@ SnowShotApiClient::streamTranslation(const SnowShotTranslationRequest& input, QO
                         QJsonObject{{QStringLiteral("role"), QStringLiteral("user")},
                                     {QStringLiteral("content"), input.text}},
                     });
-        body.insert(QStringLiteral("enable_thinking"), false);
+        if (custom == nullptr)
+            body.insert(QStringLiteral("enable_thinking"), false);
     }
     if (custom != nullptr) {
         body.remove(QStringLiteral("temperature"));
         body.remove(QStringLiteral("max_tokens"));
-        body.insert(QStringLiteral("enable_thinking"), custom->supportsReasoning);
+        applyCustomReasoning(body, custom->provider, custom->supportsReasoning);
         body.insert(QStringLiteral("stream"), true);
     }
     const RequestToken token = ++m_nextToken;
@@ -1348,11 +1362,11 @@ SnowShotApiClient::streamImageRequest(const QString& model, const QImage& image,
         absoluteDeadline ? m_tableImagePreparation : std::function<QByteArray(const QImage&)>{};
     QThreadPool::globalInstance()->start(snow_shot::runtime::trackRuntimeWork(
         [guard, token, effectiveModel, image, prompt, prepare, absoluteDeadline,
-         isCustom = custom != nullptr,
+         isCustom = custom != nullptr, provider = custom != nullptr ? custom->provider : QString(),
          supportsReasoning = custom != nullptr && custom->supportsReasoning]() {
             snow_shot::platform::applyApplicationQoSToCurrentThread();
-            const QByteArray body =
-                imageChatBody(effectiveModel, image, prompt, prepare, isCustom, supportsReasoning);
+            const QByteArray body = imageChatBody(effectiveModel, image, prompt, prepare, isCustom,
+                                                  provider, supportsReasoning);
             QMetaObject::invokeMethod(
                 QCoreApplication::instance(),
                 snow_shot::runtime::trackRuntimeWork([guard, token, body, absoluteDeadline]() {

@@ -1236,6 +1236,7 @@ void customModelsUseIndependentOpenAiConnections() {
                                                 QStringLiteral("test-secret"),
                                                 QStringLiteral("provider-model"),
                                                 true};
+    model.provider = QStringLiteral("qwen");
     SnowShotApiClient client(QStringLiteral("http://127.0.0.1:1"));
     client.setCustomModels({model});
     require(client.cachedChatModels().size() == 1 &&
@@ -1428,6 +1429,12 @@ void customModelsUseIndependentOpenAiConnections() {
     require(invalidations == 2 &&
                 client.modelFingerprint(model.selectionId()) != reasoningFingerprint,
             "reasoning changes invalidate cached results");
+    const auto providerFingerprint = client.modelFingerprint(model.selectionId());
+    model.provider = QStringLiteral("deepseek");
+    client.setCustomModels({model});
+    require(invalidations == 3 &&
+                client.modelFingerprint(model.selectionId()) != providerFingerprint,
+            "provider changes invalidate cached results");
     model.supportsVision = false;
     client.setCustomModels({model});
     QImage image(4, 4, QImage::Format_RGBA8888);
@@ -1440,6 +1447,152 @@ void customModelsUseIndependentOpenAiConnections() {
                 {model.selectionId(), {}, {}, QStringLiteral("Hello")}, &client,
                 [](const QString&) {}, [](auto) {}) == 0,
             "deleted custom ID never routes to builtin service");
+}
+
+void customProvidersControlReasoningAcrossWorkflows() {
+    translation_tests::Server server;
+    server.streamPath = QByteArrayLiteral("/v1/chat/completions");
+    SnowShotApiClient client(QString{});
+    snow_shot::CustomAiModelConfiguration model{QUuid::createUuid().toString(QUuid::WithoutBraces),
+                                                QStringLiteral("Provider matrix"),
+                                                server.url() + QStringLiteral("/v1"),
+                                                {},
+                                                QStringLiteral("provider-model"),
+                                                true};
+    QImage image(16, 16, QImage::Format_RGBA8888);
+    image.fill(Qt::white);
+    for (const auto& provider : {QStringLiteral("openai"), QStringLiteral("qwen"),
+                                 QStringLiteral("deepseek"), QStringLiteral("doubao")}) {
+        for (const bool enabled : {false, true}) {
+            model.provider = provider;
+            model.supportsReasoning = enabled;
+            client.setCustomModels({model});
+            for (int workflow = 0; workflow < 5; ++workflow) {
+                bool done = false;
+                const auto finished = [&](const auto& result) {
+                    require(result.succeeded(), "provider matrix request completes successfully");
+                    done = true;
+                };
+                const auto index = static_cast<int>(server.streams.size());
+                SnowShotApiClient::RequestToken token = 0;
+                if (workflow == 0) {
+                    token = client.streamTranslation(
+                        {model.selectionId(), {}, {}, QStringLiteral("Hello")}, &client,
+                        [](const QString&) {}, finished);
+                } else if (workflow <= 2) {
+                    token = client.streamImageConversion(
+                        {model.selectionId(), image,
+                         workflow == 1 ? SnowShotImageConversionFormat::Markdown
+                                       : SnowShotImageConversionFormat::Html},
+                        &client, [](const QString&) {}, finished);
+                } else if (workflow == 3) {
+                    token =
+                        client.extractTableVision(image, model.selectionId(), &client, finished);
+                } else {
+                    token =
+                        client.extractLatexVision(image, model.selectionId(), &client, finished);
+                }
+                require(token != 0, "provider matrix request starts");
+                translation_tests::waitUntil([&] { return server.streams.size() == index + 1; },
+                                             "provider matrix request reaches the server");
+                const auto body = server.streams[index].body;
+                require(body.value(QStringLiteral("model")) == model.model &&
+                            body.value(QStringLiteral("stream")).toBool() &&
+                            !body.contains(QStringLiteral("temperature")) &&
+                            !body.contains(QStringLiteral("max_tokens")) &&
+                            !body.contains(QStringLiteral("reasoning_effort")),
+                        "custom providers retain streaming and omit optional tuning parameters");
+                if (provider == QStringLiteral("qwen")) {
+                    require(body.value(QStringLiteral("enable_thinking")) == QJsonValue(enabled) &&
+                                !body.contains(QStringLiteral("thinking")),
+                            "Qwen sends only the enable_thinking boolean");
+                } else if (provider == QStringLiteral("openai")) {
+                    require(!body.contains(QStringLiteral("enable_thinking")) &&
+                                !body.contains(QStringLiteral("thinking")),
+                            "OpenAI leaves reasoning to the model for either switch value");
+                } else {
+                    require(!body.contains(QStringLiteral("enable_thinking")) &&
+                                body.value(QStringLiteral("thinking")) ==
+                                    QJsonObject{{QStringLiteral("type"),
+                                                 enabled ? QStringLiteral("enabled")
+                                                         : QStringLiteral("disabled")}},
+                            "DeepSeek and Doubao send only the explicit thinking type");
+                }
+                if (workflow != 0)
+                    require(QJsonDocument(body).toJson().contains("data:image/webp;base64,"),
+                            "provider-aware image requests retain image content");
+                server.delta(index, workflow == 3
+                                        ? QStringLiteral("<table><tr><td>cell</td></tr></table>")
+                                        : QStringLiteral("x^2"));
+                server.finish(index);
+                translation_tests::waitUntil([&] { return done; },
+                                             "provider matrix response completes");
+            }
+        }
+    }
+}
+
+void providerChangesCancelActiveQueuedAndPreparingRequests() {
+    translation_tests::Server server;
+    server.streamPath = QByteArrayLiteral("/v1/chat/completions");
+    SnowShotApiClient client(QString{});
+    snow_shot::CustomAiModelConfiguration model{QUuid::createUuid().toString(QUuid::WithoutBraces),
+                                                QStringLiteral("Provider switch"),
+                                                server.url() + QStringLiteral("/v1"),
+                                                {},
+                                                QStringLiteral("provider-model"),
+                                                true,
+                                                false,
+                                                1,
+                                                QStringLiteral("qwen")};
+    client.setCustomModels({model});
+    const auto start = [&] {
+        return client.streamTranslation(
+            {model.selectionId(), {}, {}, QStringLiteral("Hello")}, &client, [](const QString&) {},
+            [](auto) {});
+    };
+    require(start() != 0 && start() != 0, "start active and queued provider requests");
+    translation_tests::waitUntil([&] { return server.streams.size() == 1; },
+                                 "first request is active");
+    require(SnowShotApiClientTestAccess::customQueued(client) == 1, "second request queues");
+    QSemaphore entered;
+    QSemaphore release;
+    SnowShotApiClientTestAccess::prepare(client, [&](const QImage&) {
+        entered.release();
+        release.acquire();
+        return QByteArrayLiteral("prepared-webp");
+    });
+    QImage image(16, 16, QImage::Format_RGBA8888);
+    image.fill(Qt::white);
+    require(client.extractTableVision(image, model.selectionId(), &client, [](auto) {}) != 0 &&
+                entered.tryAcquire(1, 5000),
+            "image preparation is pending when the provider changes");
+    int invalidations = 0;
+    QObject::connect(&client, &SnowShotApiClient::customModelInvalidated, &client,
+                     [&](const QString& id, bool translation, bool vision) {
+                         require(id == model.selectionId() && translation && vision,
+                                 "provider switch invalidates both workflows");
+                         ++invalidations;
+                     });
+    model.provider = QStringLiteral("doubao");
+    client.setCustomModels({model});
+    release.release();
+    require(QThreadPool::globalInstance()->waitForDone(5000), "old image preparation completes");
+    translation_tests::waitUntil([&] { return server.disconnected(0); },
+                                 "provider switch aborts the active stream");
+    translation_tests::flushEvents();
+    require(invalidations == 1 && SnowShotApiClientTestAccess::requests(client) == 0 &&
+                SnowShotApiClientTestAccess::customQueued(client) == 0 &&
+                server.streams.size() == 1,
+            "provider switch cancels queued and preparing requests before upload");
+    require(start() != 0, "new provider request starts");
+    translation_tests::waitUntil([&] { return server.streams.size() == 2; },
+                                 "new provider receives the retried request");
+    require(server.streams.last()
+                    .body.value(QStringLiteral("thinking"))
+                    .toObject()
+                    .value(QStringLiteral("type")) == QStringLiteral("disabled"),
+            "replacement requests use the newly selected provider");
 }
 
 void latexUploadDimensions() {
@@ -2528,6 +2681,7 @@ void visionExtractionDeadlinesCoverPreparationAndCustomQueues() {
 
     SnowShotApiClientTestAccess::visionTimeout(client, 120000);
     model.supportsReasoning = true;
+    model.provider = QStringLiteral("qwen");
     client.setCustomModels({model});
     SnowShotTableResult customResult;
     bool customCompleted = false;
@@ -2824,6 +2978,8 @@ int main(int argc, char** argv) {
     latexResponseContracts();
     customModelConcurrency();
     customModelsUseIndependentOpenAiConnections();
+    customProvidersControlReasoningAcrossWorkflows();
+    providerChangesCancelActiveQueuedAndPreparingRequests();
     apiClientUsesModelCatalogAndStreamingChatContracts();
     translationPromptPreservesEditorContract();
     failedRequestsIdentifyTheirKindWithoutContent();

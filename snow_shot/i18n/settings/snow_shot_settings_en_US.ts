@@ -356,6 +356,10 @@
             <translation>Copy</translation>
         </message>
         <message>
+            <source>DeepSeek</source>
+            <translation>DeepSeek</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>Delete</translation>
         </message>
@@ -366,6 +370,10 @@
         <message>
             <source>Delete model "%1"? If selected, another available model will be used.</source>
             <translation>Delete model "%1"? If selected, another available model will be used.</translation>
+        </message>
+        <message>
+            <source>Doubao</source>
+            <translation>Doubao</translation>
         </message>
         <message>
             <source>Edit</source>
@@ -416,6 +424,10 @@
             <translation>No custom models configured</translation>
         </message>
         <message>
+            <source>OpenAI</source>
+            <translation>OpenAI</translation>
+        </message>
+        <message>
             <source>OpenAI-compatible Chat Completions. /chat/completions is appended to this base URL.</source>
             <translation>OpenAI-compatible Chat Completions. /chat/completions is appended to this base URL.</translation>
         </message>
@@ -424,12 +436,28 @@
             <translation>Optional for servers that do not require authentication.</translation>
         </message>
         <message>
+            <source>Provider Type</source>
+            <translation>Provider Type</translation>
+        </message>
+        <message>
+            <source>Qwen</source>
+            <translation>Qwen</translation>
+        </message>
+        <message>
             <source>Reasoning Support</source>
             <translation>Reasoning Support</translation>
         </message>
         <message>
+            <source>Reasoning is controlled by the model for the OpenAI provider.</source>
+            <translation>Reasoning is controlled by the model for the OpenAI provider.</translation>
+        </message>
+        <message>
             <source>Save</source>
             <translation>Save</translation>
+        </message>
+        <message>
+            <source>Select the provider whose reasoning controls this API uses.</source>
+            <translation>Select the provider whose reasoning controls this API uses.</translation>
         </message>
         <message>
             <source>The API key must not contain line breaks.</source>

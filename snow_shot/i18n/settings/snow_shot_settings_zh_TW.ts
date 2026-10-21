@@ -356,6 +356,10 @@
             <translation>複製</translation>
         </message>
         <message>
+            <source>DeepSeek</source>
+            <translation>DeepSeek</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>刪除</translation>
         </message>
@@ -366,6 +370,10 @@
         <message>
             <source>Delete model "%1"? If selected, another available model will be used.</source>
             <translation>刪除模型「%1」？如果目前已選取此模型，將改用其他可用模型。</translation>
+        </message>
+        <message>
+            <source>Doubao</source>
+            <translation>豆包</translation>
         </message>
         <message>
             <source>Edit</source>
@@ -416,6 +424,10 @@
             <translation>尚未設定自訂模型</translation>
         </message>
         <message>
+            <source>OpenAI</source>
+            <translation>OpenAI</translation>
+        </message>
+        <message>
             <source>OpenAI-compatible Chat Completions. /chat/completions is appended to this base URL.</source>
             <translation>相容 OpenAI 的 Chat Completions。系統會在此基底 URL 後附加 /chat/completions。</translation>
         </message>
@@ -424,12 +436,28 @@
             <translation>不需要身分驗證的伺服器可留空。</translation>
         </message>
         <message>
+            <source>Provider Type</source>
+            <translation>提供者類型</translation>
+        </message>
+        <message>
+            <source>Qwen</source>
+            <translation>通義千問</translation>
+        </message>
+        <message>
             <source>Reasoning Support</source>
             <translation>推理支援</translation>
         </message>
         <message>
+            <source>Reasoning is controlled by the model for the OpenAI provider.</source>
+            <translation>選擇 OpenAI 提供者時，推理由模型控制。</translation>
+        </message>
+        <message>
             <source>Save</source>
             <translation>儲存</translation>
+        </message>
+        <message>
+            <source>Select the provider whose reasoning controls this API uses.</source>
+            <translation>選擇此 API 使用的推理控制方式所屬的提供者。</translation>
         </message>
         <message>
             <source>The API key must not contain line breaks.</source>

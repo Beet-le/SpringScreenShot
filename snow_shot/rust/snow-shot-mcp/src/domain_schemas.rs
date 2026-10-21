@@ -149,7 +149,14 @@ input!(SettingsReset {
 });
 input!(SettingsAction { field_id: String, path: Option<String> });
 #[cfg(not(feature = "mini"))]
-input!(Model { id: String, name: String, base_url: String, model: String, supports_vision: Option<bool>, supports_reasoning: Option<bool>, api_key: Option<String>, credential_set: Option<bool> });
+choices!(ModelProvider {
+    Openai,
+    Qwen,
+    Deepseek,
+    Doubao
+});
+#[cfg(not(feature = "mini"))]
+input!(Model { id: String, name: String, base_url: String, model: String, supports_vision: Option<bool>, supports_reasoning: Option<bool>, api_key: Option<String>, credential_set: Option<bool>, provider: Option<ModelProvider> });
 #[cfg(not(feature = "mini"))]
 input!(ModelsUpdate { models: Vec<Model> });
 #[cfg(not(feature = "mini"))]
