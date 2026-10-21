@@ -11,6 +11,46 @@ using namespace snow_shot::translation;
 using snow_shot::storage::ConfigurationStore;
 
 namespace {
+void builtInConcurrencyUsesEightRequests(const QString& directory) {
+    Server server;
+    SnowShotApiClient client(server.url());
+    ConfigurationStore settings(directory + QStringLiteral("/concurrency.json"), true, true, 60000);
+    auto& service = TranslationService::forClient(client, settings, QLocale::English);
+    service.refreshModels();
+    waitUntil([&] { return !service.loadingModels(); }, "load built-in models for concurrency");
+    auto preferences = service.preferences();
+    preferences.modelId = QStringLiteral("general");
+    preferences.sourceLanguage = QStringLiteral("en");
+    preferences.targetLanguage = QStringLiteral("zh-Hans");
+    preferences.secondaryTargetLanguage.clear();
+    QObject owner;
+    QStringList texts;
+    for (int index = 0; index < 9; ++index)
+        texts.append(QString::number(index));
+    auto* job = service.createJob(texts, preferences, &owner);
+    job->start();
+    waitUntil([&] { return server.streams.size() == 8; },
+              "eight built-in requests reach the server concurrently");
+    int streaming = 0;
+    int idle = 0;
+    for (const auto& unit : job->units()) {
+        streaming += unit.state == TranslationJob::State::Streaming;
+        idle += unit.state == TranslationJob::State::Idle;
+    }
+    require(streaming == 8 && idle == 1, "ninth unit waits for built-in capacity");
+    for (int index = 0; index < 8; ++index)
+        server.delta(index, QStringLiteral("translated"));
+    server.finish(0);
+    waitUntil([&] { return server.streams.size() == 9; },
+              "completion starts the next built-in request");
+    server.delta(8, QStringLiteral("translated"));
+    for (int index = 1; index < 9; ++index)
+        server.finish(index);
+    waitUntil([&] { return !job->busy(); }, "all built-in requests complete");
+    require(job->state() == TranslationJob::State::Completed,
+            "built-in translation completes after replenishing capacity");
+}
+
 void aiModelSelectionMigratesOnlyAfterDiscovery(const QString& directory) {
     for (const QString& legacy :
          {QStringLiteral("qwen3.8-flash"), QStringLiteral("qwen-mt-flash")}) {
@@ -1099,6 +1139,7 @@ int main(int argc, char** argv) {
     invalidationNotificationsRespectReentrantRetry(directory.path());
     if (application.arguments().contains(QStringLiteral("--notification-lifetime-only")))
         return 0;
+    builtInConcurrencyUsesEightRequests(directory.path());
     aiModelSelectionMigratesOnlyAfterDiscovery(directory.path());
     discoverySharesRequestsAndCancellation(directory.path());
     secondaryTargetsPersistAndReachEveryUnit(directory.path());

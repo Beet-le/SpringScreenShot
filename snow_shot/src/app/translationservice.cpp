@@ -392,7 +392,7 @@ void TranslationJob::pump() {
     const auto generation = m_generation;
     for (int group = 0;
          group < m_unitGroups.size() &&
-         m_requests.size() < (m_client->isTextTranslation(m_preferences.modelId) ? 16 : 4) &&
+         m_requests.size() < (m_client->isTextTranslation(m_preferences.modelId) ? 16 : 8) &&
          !m_rateLimited;
          ++group) {
         const auto indices = m_unitGroups[group];

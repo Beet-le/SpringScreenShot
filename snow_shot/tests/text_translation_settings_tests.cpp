@@ -88,7 +88,7 @@ void contracts(QApplication& app) {
         auto* applicationId = body->findChild<AdLineEdit*>(QStringLiteral("applicationId"));
         require(name && url && secret && provider && limit && applicationId,
                 "all configuration fields");
-        require(!secret->textVisible() && limit->value() == 4 && limit->minimum() == 1 &&
+        require(!secret->textVisible() && limit->value() == 8 && limit->minimum() == 1 &&
                     limit->maximum() == 16,
                 "masked secret and concurrency defaults");
         require(!applicationId->isVisible(), "DeepL hides application ID");

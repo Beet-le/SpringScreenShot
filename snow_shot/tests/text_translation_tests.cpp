@@ -37,8 +37,7 @@ TextTranslationConfiguration config(const QString& endpoint,
             provider,
             endpoint,
             QStringLiteral("secret"),
-            QStringLiteral("app"),
-            4};
+            QStringLiteral("app")};
 }
 class HttpServer : public QObject {
   public:
@@ -97,6 +96,8 @@ class HttpServer : public QObject {
 void persistence() {
     QTemporaryDir directory;
     auto value = config(QStringLiteral("http://localhost/custom/?a=1%2B2"));
+    require(value.concurrency == 8, "new configurations default to eight concurrent requests");
+    value.concurrency = 4;
     const auto path = directory.filePath(QStringLiteral("config.json"));
     {
         storage::ConfigurationStore store(path, true, true, 8000);
@@ -126,8 +127,8 @@ void persistence() {
         require(!validTranslationEndpoint(url), "invalid endpoint rejected");
     auto json = textTranslationConfigurationsToJson({value}).first().toObject();
     json.remove(QStringLiteral("concurrency"));
-    require(textTranslationConfigurationsFromJson(QJsonArray{json}).first().concurrency == 4,
-            "missing limit defaults to four");
+    require(textTranslationConfigurationsFromJson(QJsonArray{json}).first().concurrency == 8,
+            "missing limit defaults to eight");
     json.insert(QStringLiteral("concurrency"), 1.5);
     require(!storage::ConfigurationSchema::normalize(key, QJsonArray{json}).valid,
             "fraction rejected");
@@ -289,7 +290,7 @@ void providerFailures() {
 }
 
 void queueAndJobs() {
-    for (int limit : {1, 4, 16}) {
+    for (int limit : {1, 4, 8, 16}) {
         HttpServer server;
         QTemporaryDir directory;
         storage::ConfigurationStore settings(directory.filePath(QStringLiteral("config.json")),

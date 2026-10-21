@@ -742,6 +742,9 @@ void SnowShotApiClient::startImageUpload(RequestToken token, const QByteArray& w
     auto* manager = networkAccessManager();
     requestState->transport.start();
     QNetworkRequest request(QUrl(requestState->endpoint));
+    QHttp1Configuration http1;
+    http1.setNumberOfConnectionsPerHost(8);
+    request.setHttp1Configuration(http1);
     request.setRawHeader("X-Request-ID",
                          QUuid::createUuid().toString(QUuid::WithoutBraces).toUtf8());
     request.setTransferTimeout(static_cast<int>(remaining));
@@ -1044,6 +1047,10 @@ SnowShotApiClient::fetchChatModels(const QString& locale, QObject* receiver,
         return token;
     }
     QNetworkRequest request(QUrl(m_baseUrl + QStringLiteral("/api/v2/chat/models")));
+    // The first request to a host fixes the pool size used by later translation streams.
+    QHttp1Configuration http1;
+    http1.setNumberOfConnectionsPerHost(8);
+    request.setHttp1Configuration(http1);
     request.setRawHeader("X-Request-ID",
                          QUuid::createUuid().toString(QUuid::WithoutBraces).toUtf8());
     if (!locale.trimmed().isEmpty()) {
@@ -1435,10 +1442,10 @@ void SnowShotApiClient::startChatStream(RequestToken token, const QByteArray& bo
         return;
     }
     QNetworkRequest request(QUrl(state->endpoint));
+    QHttp1Configuration http1;
+    http1.setNumberOfConnectionsPerHost(state->custom ? 16 : 8);
+    request.setHttp1Configuration(http1);
     if (state->custom) {
-        QHttp1Configuration http1;
-        http1.setNumberOfConnectionsPerHost(16);
-        request.setHttp1Configuration(http1);
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                              QNetworkRequest::SameOriginRedirectPolicy);
         if (!state->apiKey.isEmpty()) {
@@ -1820,7 +1827,7 @@ bool SnowShotApiClient::isTextTranslation(const QString& id) const {
 
 int SnowShotApiClient::translationConcurrency(const QString& id) const {
     const auto* config = textTranslation(id);
-    return config == nullptr ? 4 : config->concurrency;
+    return config == nullptr ? 8 : config->concurrency;
 }
 
 void SnowShotApiClient::setTextTranslationConfigurations(
