@@ -73,6 +73,7 @@ inline TextTranslationConfigurations textTranslationConfigurationsFromJson(const
             object.value(QStringLiteral("application_id")).toString().trimmed(),
             concurrency};
         const bool providerValid = value.provider == QStringLiteral("deepl") ||
+                                   value.provider == QStringLiteral("deeplx") ||
                                    value.provider == QStringLiteral("baidu") ||
                                    value.provider == QStringLiteral("youdao");
         if (!typesValid || !providerValid || QUuid(value.id).isNull() ||

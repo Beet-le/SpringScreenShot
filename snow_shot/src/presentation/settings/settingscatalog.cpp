@@ -4034,8 +4034,9 @@ QVector<SettingsPageDefinition> builtInPages() {
 #if SNOW_SHOT_ENABLE_API_CONFIGURATION
              {QStringLiteral("text-translation"),
               settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Translation services")),
-              settingsText(QT_TRANSLATE_NOOP(
-                  "SettingsCatalog", "Custom DeepL, Baidu, and Youdao-compatible services")),
+              settingsText(
+                  QT_TRANSLATE_NOOP("SettingsCatalog",
+                                    "Custom DeepL, DeepLX, Baidu, and Youdao-compatible services")),
               SettingsSectionReset::TextTranslationConfigurations,
               {{QStringLiteral("api.text-translation"),
                 settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Translation Configurations")),

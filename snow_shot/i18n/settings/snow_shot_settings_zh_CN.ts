@@ -1992,8 +1992,8 @@
             <translation>自定义 AI 模型</translation>
         </message>
         <message>
-            <source>Custom DeepL, Baidu, and Youdao-compatible services</source>
-            <translation>自定义兼容 DeepL、百度和有道的服务</translation>
+            <source>Custom DeepL, DeepLX, Baidu, and Youdao-compatible services</source>
+            <translation>自定义兼容 DeepL、DeepLX、百度和有道的服务</translation>
         </message>
         <message>
             <source>Custom Models</source>
@@ -5281,6 +5281,10 @@ Unavailable: %2</source>
             <translation>DeepL</translation>
         </message>
         <message>
+            <source>DeepLX</source>
+            <translation>DeepLX</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>删除</translation>
         </message>
@@ -5315,6 +5319,10 @@ Unavailable: %2</source>
         <message>
             <source>No translation configurations added</source>
             <translation>尚未添加翻译配置</translation>
+        </message>
+        <message>
+            <source>Optional access token sent as a Bearer token.</source>
+            <translation>可选的访问令牌，以 Bearer 令牌形式发送。</translation>
         </message>
         <message>
             <source>Optional for servers that do not require authentication.</source>

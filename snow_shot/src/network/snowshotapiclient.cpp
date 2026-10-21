@@ -1939,13 +1939,16 @@ void SnowShotApiClient::startTextTranslation(RequestToken token) {
     request.setHttp1Configuration(http1);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::SameOriginRedirectPolicy);
-    request.setHeader(QNetworkRequest::ContentTypeHeader,
-                      config.provider == QStringLiteral("deepl")
-                          ? QStringLiteral("application/json")
-                          : QStringLiteral("application/x-www-form-urlencoded"));
+    request.setHeader(
+        QNetworkRequest::ContentTypeHeader,
+        (config.provider == QStringLiteral("deepl") || config.provider == QStringLiteral("deeplx"))
+            ? QStringLiteral("application/json")
+            : QStringLiteral("application/x-www-form-urlencoded"));
     request.setRawHeader("Accept", "application/json");
     if (config.provider == QStringLiteral("deepl") && !config.apiKey.isEmpty())
         request.setRawHeader("Authorization", "DeepL-Auth-Key " + config.apiKey.toUtf8());
+    if (config.provider == QStringLiteral("deeplx") && !config.apiKey.isEmpty())
+        request.setRawHeader("Authorization", "Bearer " + config.apiKey.toUtf8());
     state->transport.start();
     auto* reply = networkAccessManager()->post(request, body);
     state->retainReply(reply);
