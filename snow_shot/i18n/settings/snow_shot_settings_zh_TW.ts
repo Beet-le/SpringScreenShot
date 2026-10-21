@@ -2160,6 +2160,10 @@
             <translation>刪除螢幕錄製暫存檔案？</translation>
         </message>
         <message>
+            <source>Delete text after the cursor</source>
+            <translation>刪除游標後的文字</translation>
+        </message>
+        <message>
             <source>Delete the current recording files when closing an active recording. Stopping recording still saves the output.</source>
             <translation>關閉進行中的錄製時，刪除本次錄製的檔案。停止錄製仍會儲存輸出檔案。</translation>
         </message>
@@ -4630,6 +4634,10 @@
         <message>
             <source>When pinning duplicate content</source>
             <translation>將重複內容固定到螢幕時</translation>
+        </message>
+        <message>
+            <source>While editing text, press Delete to remove selected text or the character after the cursor.</source>
+            <translation>編輯文字時，按 Delete 鍵刪除選取的文字或游標後的字元。</translation>
         </message>
         <message>
             <source>Window Element API</source>

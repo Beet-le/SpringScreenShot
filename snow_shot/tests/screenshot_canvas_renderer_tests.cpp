@@ -1,5 +1,7 @@
 #include "../../test-support/canvas_quick_selection_test_support.h"
 #include "angle_wheel_host_test_support.h"
+#include "canvas_text_editing_preferences_test_support.h"
+#include "../src/presentation/overlay/screenshotoverlaycanvaswidget.h"
 #include "snow_shot/presentation/screenshotoverlayinputhandler.h"
 #include "snow_shot/presentation/screenshotcapturestate.h"
 #include "snow_shot/presentation/screenshotintelligentselectionmodel.h"
@@ -10009,6 +10011,23 @@ int main(int argc, char** argv) {
 
     if (application.arguments().contains(QStringLiteral("--right-quick-selection-only"))) {
         overlayRightQuickSelection();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--delete-text-after-cursor-only"))) {
+        QTemporaryDir directory;
+        auto& storage = snow_shot::storage::ApplicationStorage::instance();
+        require(storage
+                    .initialize({directory.filePath(QStringLiteral("bin")),
+                                 directory.filePath(QStringLiteral("data")), 60000})
+                    .success,
+                "initialize overlay preference test storage");
+        canvas_text_editing_preferences_test::exercise([](auto verify) {
+            SnowCanvasRuntime runtime;
+            NoopOverlayEventSink sink;
+            ScreenshotOverlayWindow overlay(sink, new ScreenshotOverlayCanvasWidget(runtime));
+            verify(*overlay.canvas());
+        });
+        storage.shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--session-input-cleanup-only"))) {

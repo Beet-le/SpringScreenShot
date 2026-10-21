@@ -1750,6 +1750,17 @@ SettingsItemDefinition drawingQuickSelectionItem() {
     };
 }
 
+SettingsItemDefinition drawingDeleteTextAfterCursorItem() {
+    return switchItem(
+        QStringLiteral("drawing.delete-text-after-cursor"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Delete text after the cursor"),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "While editing text, press Delete to remove selected text or the "
+                          "character after the cursor."),
+        QStringLiteral("drawing/delete_text_after_cursor"),
+        SettingsSwitchBinding::DrawingDeleteTextAfterCursor);
+}
+
 SettingsItemDefinition drawingRememberLastUsedToolItem() {
     return switchItem(QStringLiteral("drawing.remember-last-used-tool"),
                       QT_TRANSLATE_NOOP("SettingsCatalog", "Remember last used tool"),
@@ -3430,9 +3441,9 @@ QVector<SettingsPageDefinition> builtInPages() {
                      "SettingsCatalog",
                      "Configure annotation tools and the screenshot annotation toolbar")),
                  SettingsSectionReset::DrawingQuickSelection,
-                 {drawingQuickSelectionItem(), drawingRememberLastUsedToolItem(),
-                  drawingAlwaysShowFirstToolbarGroupButtonItem(), strokeColorPresetsItem(),
-                  fillColorPresetsItem()},
+                 {drawingQuickSelectionItem(), drawingDeleteTextAfterCursorItem(),
+                  drawingRememberLastUsedToolItem(), drawingAlwaysShowFirstToolbarGroupButtonItem(),
+                  strokeColorPresetsItem(), fillColorPresetsItem()},
              },
              {
                  QStringLiteral("drawing"),
@@ -5233,6 +5244,9 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsSwitchBinding::AutoStartAtBoot:
                         expectedKey = QStringLiteral("system/auto_start_at_boot");
+                        break;
+                    case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
+                        expectedKey = QStringLiteral("drawing/delete_text_after_cursor");
                         break;
                     case SettingsSwitchBinding::DrawingRememberLastUsedTool:
                         expectedKey = QStringLiteral("drawing/remember_last_used_tool");

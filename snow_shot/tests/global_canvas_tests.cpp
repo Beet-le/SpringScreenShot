@@ -1,4 +1,5 @@
 #include "angle_wheel_host_test_support.h"
+#include "canvas_text_editing_preferences_test_support.h"
 #include "../../test-support/canvas_quick_selection_test_support.h"
 #include "snow_shot/presentation/globalcanvascontroller.h"
 #include "snow_shot/presentation/crosshaircursor.h"
@@ -1347,6 +1348,19 @@ int main(int argc, char** argv) {
     }
     if (app.arguments().contains(QStringLiteral("--right-quick-selection-only"))) {
         canvasRightQuickSelection(app);
+        storage.shutdown();
+        return 0;
+    }
+    if (app.arguments().contains(QStringLiteral("--delete-text-after-cursor-only"))) {
+        canvas_text_editing_preferences_test::exercise([&](auto verify) {
+            presentation::GlobalCanvasController controller(
+                nullptr,
+                {[&] { return app.primaryScreen(); }, [](QWidget*, bool) { return true; }});
+            controller.activate();
+            require(controller.canvas() != nullptr, "create global canvas for preferences");
+            verify(*controller.canvas());
+            controller.shutdown();
+        });
         storage.shutdown();
         return 0;
     }

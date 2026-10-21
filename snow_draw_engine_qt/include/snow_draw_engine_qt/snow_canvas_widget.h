@@ -155,6 +155,9 @@ class SnowCanvasWidget : public QWidget {
     // selection.
     void clearRenderState();
     [[nodiscard]] bool hasActiveTextEditing() const;
+    // Makes Delete edit the active text draft instead of removing its element.
+    bool deleteTextAfterCursor() const;
+    void setDeleteTextAfterCursor(bool enabled);
     // Limits automatic-width, unrotated text input to this canvas-space area's
     // horizontal edges. Clearing the bounds restores natural-width input.
     std::optional<QRectF> textEditingBounds() const;

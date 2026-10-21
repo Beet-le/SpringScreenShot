@@ -447,6 +447,10 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
+    add_test(NAME snow-canvas-text-delete-input-tests
+        COMMAND snow-canvas-text-draft-tests --delete-text-only -platform offscreen)
+    set_tests_properties(snow-canvas-text-delete-input-tests PROPERTIES LABELS unit TIMEOUT 30)
+
     add_executable(snow-canvas-text-emphasis-tests tests/snow_canvas_text_emphasis_tests.cpp)
     target_include_directories(snow-canvas-text-emphasis-tests PRIVATE
         ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
@@ -488,6 +492,9 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     target_link_libraries(snow-canvas-arrow-text-tests PRIVATE snow_draw_engine_qt_canvas)
     qt_import_plugins(snow-canvas-arrow-text-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
     add_test(NAME snow-canvas-arrow-text-tests COMMAND snow-canvas-arrow-text-tests)
+    add_test(NAME snow-canvas-text-delete-tests
+        COMMAND snow-canvas-arrow-text-tests --delete-text-only -platform offscreen)
+    set_tests_properties(snow-canvas-text-delete-tests PROPERTIES LABELS unit TIMEOUT 60)
     set_tests_properties(snow-canvas-arrow-text-tests PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         LABELS "unit"
@@ -527,6 +534,9 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     target_link_libraries(snow-canvas-shape-text-tests PRIVATE snow_draw_engine_qt_canvas)
     qt_import_plugins(snow-canvas-shape-text-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
     add_test(NAME snow-canvas-shape-text-tests COMMAND snow-canvas-shape-text-tests)
+    add_test(NAME snow-canvas-shape-text-delete-tests
+        COMMAND snow-canvas-shape-text-tests --delete-text-only -platform offscreen)
+    set_tests_properties(snow-canvas-shape-text-delete-tests PROPERTIES LABELS unit TIMEOUT 30)
     set_tests_properties(snow-canvas-shape-text-tests PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         LABELS "unit"

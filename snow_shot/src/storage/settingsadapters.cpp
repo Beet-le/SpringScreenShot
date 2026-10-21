@@ -1195,6 +1195,14 @@ bool DrawingSettings::setQuickSelectionDisabledTools(const QStringList& tools) c
                             stringArray(tools));
 }
 
+bool DrawingSettings::deleteTextAfterCursor() const {
+    return cache().value(QStringLiteral("drawing/delete_text_after_cursor")).toBool();
+}
+
+bool DrawingSettings::setDeleteTextAfterCursor(bool enabled) const {
+    return cache().setValue(QStringLiteral("drawing/delete_text_after_cursor"), enabled);
+}
+
 bool DrawingSettings::rememberLastUsedTool() const {
     return cache().value(QStringLiteral("drawing/remember_last_used_tool")).toBool();
 }

@@ -97,7 +97,7 @@ class SnowCanvasTextEditorSession final {
     bool setCursorFromViewPosition(const QFont& baseFont, const SceneDisplayInfo& sceneInfo,
                                    const QPointF& viewPosition, bool keepSelection = false);
     KeyResult handleKeyPress(QKeyEvent* event, const QFont& baseFont,
-                             const SceneDisplayInfo& sceneInfo);
+                             const SceneDisplayInfo& sceneInfo, bool deleteTextAfterCursor = false);
     bool handleInputMethodEvent(QInputMethodEvent* event, const QFont& baseFont);
     QVariant inputMethodQuery(Qt::InputMethodQuery query, const QFont& baseFont,
                               const SceneDisplayInfo& sceneInfo) const;

@@ -2,6 +2,7 @@
 #include "snow_shot/presentation/imageeditingwindow.h"
 #include "snow_shot/app/supportedpinfiles.h"
 #include "angle_wheel_host_test_support.h"
+#include "canvas_text_editing_preferences_test_support.h"
 #include "../src/app/mcp/mcppinnedstate_p.h"
 #include "../src/app/mcp/mcppinnedworkflowowners_p.h"
 #include "cloud_upload_test_support.h"
@@ -25726,6 +25727,11 @@ int main(int argc, char* argv[]) {
             ScreenshotExportCoordinator::shared().shutdown();
             return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--image-editing-text-preferences-only"))) {
+            runImageEditingTests();
+            ScreenshotExportCoordinator::shared().shutdown();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--image-editing-only"))) {
             runImageEditingTests();
             pinnedAnimationTransformRollback();
@@ -26102,6 +26108,15 @@ int main(int argc, char* argv[]) {
             pinnedRightQuickSelection();
             pinnedRightQuickSelectionPreservesWindowSelection();
             pinnedLinearCreationConsumesRightClick();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--delete-text-after-cursor-only"))) {
+            canvas_text_editing_preferences_test::exercise([](auto verify) {
+                ScreenshotPinnedWindow pin;
+                auto* canvas = pin.findChild<SnowCanvasWidget*>();
+                require(canvas != nullptr, "pinned window creates an annotation canvas");
+                verify(*canvas);
+            });
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--lock-only"))) {

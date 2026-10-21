@@ -12096,6 +12096,29 @@ foreach(_right_selection_host IN ITEMS overlay pinned recording global)
     endif()
 endforeach()
 
+foreach(_text_delete_host IN ITEMS overlay pinned recording global image-editor)
+    set(_text_delete_arguments --delete-text-after-cursor-only)
+    if(_text_delete_host STREQUAL "overlay")
+        set(_text_delete_target snow-shot-screenshot-canvas-renderer-tests)
+    elseif(_text_delete_host STREQUAL "pinned")
+        set(_text_delete_target snow-shot-pinned-window-tests)
+    elseif(_text_delete_host STREQUAL "recording")
+        set(_text_delete_target snow-shot-screen-recording-area-window-tests)
+    elseif(_text_delete_host STREQUAL "global")
+        set(_text_delete_target snow-shot-global-canvas-tests)
+    else()
+        set(_text_delete_target snow-shot-pinned-window-tests)
+        set(_text_delete_arguments --image-editing-text-preferences-only)
+    endif()
+    if(TARGET ${_text_delete_target})
+        add_test(NAME snow-shot-${_text_delete_host}-delete-text-preference-tests
+            COMMAND ${_text_delete_target} ${_text_delete_arguments} -platform offscreen)
+        set_tests_properties(snow-shot-${_text_delete_host}-delete-text-preference-tests PROPERTIES
+            LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE RUN_SERIAL TRUE TIMEOUT 60
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+endforeach()
+
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowShotReleaseOptimization.cmake")
 # Standalone test targets reuse the pinned/controller sources as well as the application.
 get_property(_snow_cloud_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)

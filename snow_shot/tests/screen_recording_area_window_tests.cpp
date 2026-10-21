@@ -1,4 +1,5 @@
 #include "angle_wheel_host_test_support.h"
+#include "canvas_text_editing_preferences_test_support.h"
 #include "../../test-support/canvas_quick_selection_test_support.h"
 #include "physical_key_test_support.h"
 #include "snow_shot/presentation/screenrecordingareawindow.h"
@@ -1736,6 +1737,15 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--right-quick-selection-only"))) {
         recordingRightQuickSelection();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--delete-text-after-cursor-only"))) {
+        canvas_text_editing_preferences_test::exercise([](auto verify) {
+            ScreenRecordingAreaWindow area;
+            area.setInputMode(ScreenRecordingAreaWindow::InputMode::Drawing);
+            verify(*area.canvas());
+        });
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }

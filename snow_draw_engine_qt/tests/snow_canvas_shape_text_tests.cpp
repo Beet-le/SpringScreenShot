@@ -139,6 +139,37 @@ void assertConnectorExport(SnowCanvasRuntime& runtime) {
             "session roundtrip preserves text and connector export");
 }
 
+void enabledDeleteEditsShapeLabels() {
+    for (const bool existing : {false, true}) {
+        SnowCanvasRuntime runtime;
+        SnowCanvasWidget canvas(runtime);
+        canvas.setDeleteTextAfterCursor(true);
+        prepare(canvas, SnowCanvasRectangleShape::Rectangle);
+        selectShape(runtime);
+        const auto point = handle(canvas, runtime);
+        mouse(canvas, QEvent::MouseButtonPress, point, Qt::LeftButton, Qt::LeftButton);
+        mouse(canvas, QEvent::MouseButtonRelease, point, Qt::LeftButton, Qt::NoButton);
+        key(canvas, Qt::Key_A, Qt::NoModifier, QStringLiteral("abc"));
+        if (existing) {
+            key(canvas, Qt::Key_Return, Qt::ControlModifier);
+            const auto textPoint = canvas.canvasToViewTransform().map(
+                center(payload(runtime, QStringLiteral("Text"))));
+            mouse(canvas, QEvent::MouseButtonPress, textPoint, Qt::LeftButton, Qt::LeftButton);
+            mouse(canvas, QEvent::MouseButtonRelease, textPoint, Qt::LeftButton, Qt::NoButton);
+        }
+        const auto owner = payload(runtime, QStringLiteral("Rectangle"));
+        key(canvas, Qt::Key_Home);
+        key(canvas, Qt::Key_Right);
+        key(canvas, Qt::Key_Delete);
+        require(canvas.hasActiveTextEditing(), "Delete retains the bound shape label editor");
+        key(canvas, Qt::Key_Return, Qt::ControlModifier);
+        require(payload(runtime, QStringLiteral("Text")).value(QStringLiteral("text")) ==
+                        QStringLiteral("ac") &&
+                    payload(runtime, QStringLiteral("Rectangle")) == owner,
+                "forward Delete edits the label and preserves its shape and binding");
+    }
+}
+
 void pointerSelectionDisplaysBoundTextHandle() {
     for (const auto kind : {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
                             SnowCanvasRectangleShape::Diamond}) {
@@ -438,6 +469,9 @@ void croppedExportPreservesConnectorToOffscreenLabel() {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    enabledDeleteEditsShapeLabels();
+    if (application.arguments().contains(QStringLiteral("--delete-text-only")))
+        return 0;
     pointerSelectionDisplaysBoundTextHandle();
     clickDragEditAndReuse();
     cancellationAndEmptyCommit();

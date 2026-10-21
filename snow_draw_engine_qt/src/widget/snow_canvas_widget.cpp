@@ -563,6 +563,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool stepSerialNumberFontSize(bool increase);
     bool stepTextFontSize(bool increase);
     CommandKeyResolver commandKeyResolver;
+    bool deleteTextAfterCursor = false;
     bool handleKeyPress(QKeyEvent* event);
     bool handleKeyRelease(QKeyEvent* event);
     bool handleInputMethodEvent(QInputMethodEvent* event);
@@ -4080,7 +4081,7 @@ bool SnowCanvasWidget::Impl::handleKeyPress(QKeyEvent* event) {
     if (textInteraction.isActive()) {
         SnowCanvasWidgetTextInteraction::EditorEventResult result = textInteraction.handleKeyPress(
             event, runtimeBinding.engine(), runtimeBinding.viewportHandle(), hasViewport(),
-            displayState.displayCache());
+            displayState.displayCache(), deleteTextAfterCursor);
         if (result.handled) {
             applyTextEditorEventResult(result);
             return true;
@@ -4131,6 +4132,14 @@ bool SnowCanvasWidget::Impl::handleKeyPress(QKeyEvent* event) {
 
 void SnowCanvasWidget::setCommandKeyResolver(CommandKeyResolver resolver) {
     m_impl->commandKeyResolver = std::move(resolver);
+}
+
+bool SnowCanvasWidget::deleteTextAfterCursor() const {
+    return m_impl->deleteTextAfterCursor;
+}
+
+void SnowCanvasWidget::setDeleteTextAfterCursor(bool enabled) {
+    m_impl->deleteTextAfterCursor = enabled;
 }
 
 void SnowCanvasWidget::keyPressEvent(QKeyEvent* event) {

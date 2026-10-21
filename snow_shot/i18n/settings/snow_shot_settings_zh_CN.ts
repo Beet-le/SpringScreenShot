@@ -2160,6 +2160,10 @@
             <translation>删除屏幕录制临时文件？</translation>
         </message>
         <message>
+            <source>Delete text after the cursor</source>
+            <translation>删除光标后的文字</translation>
+        </message>
+        <message>
             <source>Delete the current recording files when closing an active recording. Stopping recording still saves the output.</source>
             <translation>关闭进行中的录制时，删除本次录制的文件。停止录制仍会保存输出文件。</translation>
         </message>
@@ -4630,6 +4634,10 @@
         <message>
             <source>When pinning duplicate content</source>
             <translation>将重复内容固定到屏幕时</translation>
+        </message>
+        <message>
+            <source>While editing text, press Delete to remove selected text or the character after the cursor.</source>
+            <translation>编辑文字时，按 Delete 键删除选中的文字或光标后的字符。</translation>
         </message>
         <message>
             <source>Window Element API</source>

@@ -2160,6 +2160,10 @@
             <translation>Delete temporary recording files?</translation>
         </message>
         <message>
+            <source>Delete text after the cursor</source>
+            <translation>Delete text after the cursor</translation>
+        </message>
+        <message>
             <source>Delete the current recording files when closing an active recording. Stopping recording still saves the output.</source>
             <translation>Delete the current recording files when closing an active recording. Stopping recording still saves the output.</translation>
         </message>
@@ -4630,6 +4634,10 @@
         <message>
             <source>When pinning duplicate content</source>
             <translation>When pinning duplicate content</translation>
+        </message>
+        <message>
+            <source>While editing text, press Delete to remove selected text or the character after the cursor.</source>
+            <translation>While editing text, press Delete to remove selected text or the character after the cursor.</translation>
         </message>
         <message>
             <source>Window Element API</source>

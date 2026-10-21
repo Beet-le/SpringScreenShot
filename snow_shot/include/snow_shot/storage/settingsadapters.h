@@ -298,6 +298,8 @@ class DrawingSettings final {
   public:
     [[nodiscard]] QStringList quickSelectionDisabledTools() const;
     bool setQuickSelectionDisabledTools(const QStringList& tools) const;
+    [[nodiscard]] bool deleteTextAfterCursor() const;
+    bool setDeleteTextAfterCursor(bool enabled) const;
     [[nodiscard]] bool rememberLastUsedTool() const;
     bool setRememberLastUsedTool(bool enabled) const;
     [[nodiscard]] bool alwaysShowFirstToolbarGroupButton() const;

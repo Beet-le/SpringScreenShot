@@ -1,6 +1,7 @@
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/windowcloseshortcut.h"
 #include "snow_shot/presentation/screenrecordingareawindow.h"
+#include "snow_shot/presentation/canvastexteditingpreferences.h"
 #include "snow_shot/presentation/screenshotstylebinding.h"
 
 #include <numbers>
@@ -107,6 +108,7 @@ ScreenRecordingAreaWindow::ScreenRecordingAreaWindow(QWidget* parent)
           SnowCanvasRuntimeConfig{snow_shot::presentation::screenshotCanvasToolStyleDefaults()})),
       m_canvas(new SnowCanvasWidget(*m_canvasRuntime, this)) {
     snow_shot::presentation::configureCanvasCrosshairCursor(*m_canvas);
+    snow_shot::presentation::bindCanvasTextEditingPreferences(*m_canvas);
 #ifdef Q_OS_MACOS
     m_canvas->setCommandKeyResolver(
         [](const QKeyEvent& event) { return snow_shot::shortcuts::commandKey(event); });
