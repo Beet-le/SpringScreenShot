@@ -4,6 +4,8 @@
 #include "snow_shot/presentation/globalcanvascontroller.h"
 #include "snow_shot/presentation/crosshaircursor.h"
 #include "globalcanvasplatform.h"
+#include "../recording/recordingeffectssource.h"
+#include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/platform/screenshotnative.h"
 #include "snow_shot/platform/physicalcursor.h"
 #include "snow_shot/presentation/screenshotfloatingtoolpalettewindow.h"
@@ -36,6 +38,7 @@
 #include <QWindow>
 #include <QWheelEvent>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 namespace snow_shot::presentation {
@@ -112,6 +115,8 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         registerShortcuts();
         connect(palette, &ScreenshotToolPalette::globalCanvasClickThroughRequested, this,
                 [this]() { toggle(); });
+        connect(palette, &ScreenshotToolPalette::globalCanvasLaserPointerRequested, this,
+                [this]() { setLaserEnabled(!laserEnabled); });
         connect(palette, &ScreenshotToolPalette::globalCanvasExitRequested, this,
                 [this]() { close(); });
         connect(qApp, &QGuiApplication::screenRemoved, this, [this](QScreen* removed) {
@@ -184,6 +189,7 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         activateDrawing();
     }
     ~Session() override {
+        stopLaser();
         cancelColorSampling();
         drawing->setCustomRenderer(nullptr);
     }
@@ -235,6 +241,7 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
             return;
         setGeometry(display->geometry());
         placeToolbar(false);
+        synchronizeLaser();
     }
     void placeToolbar(bool initial) {
         if (!display)
@@ -262,6 +269,147 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         painter.fillRect(context.exposedRegion.boundingRect(), surface);
         painter.restore();
     }
+    QTransform laserTransform(const RecordingEffectsFrame& frame,
+                              const RecordingEffectsFrame::Tile& tile) const {
+        const QSize size = tile.coordinateSize.isEmpty() ? frame.output : tile.coordinateSize;
+        return QTransform::fromScale(static_cast<qreal>(drawing->width()) / size.width(),
+                                     static_cast<qreal>(drawing->height()) / size.height());
+    }
+    QRegion laserRegion(const RecordingEffectsFrame& frame) const {
+        QRegion region;
+        if (frame.output.isEmpty())
+            return region;
+        for (const auto& tile : frame.tiles) {
+            region += laserTransform(frame, tile)
+                          .mapRect(QRectF(tile.rect))
+                          .toAlignedRect()
+                          .adjusted(-1, -1, 1, 1);
+        }
+        return region.intersected(drawing->rect());
+    }
+    void renderAfterCanvas(QPainter& painter, const SnowCanvasRenderContext&) override {
+        if (!laserFrame || laserFrame->output.isEmpty())
+            return;
+        const QTransform transform = painter.transform();
+        for (const auto& tile : laserFrame->tiles) {
+            painter.setTransform(transform);
+            painter.setTransform(laserTransform(*laserFrame, tile), true);
+            painter.drawImage(tile.rect.topLeft(), tile.image);
+        }
+    }
+    void clearLaserFrame() {
+        if (!laserFrame)
+            return;
+        const QRegion damage = laserRegion(*laserFrame);
+        laserFrame.reset();
+        drawing->update(damage);
+    }
+    void stopLaser() {
+        ++laserGeneration;
+        laserRunning = false;
+        if (laserSource)
+            laserSource->stop();
+        clearLaserFrame();
+    }
+    void setLaserEnabled(bool enabled) {
+        laserEnabled = enabled;
+        palette->setGlobalCanvasLaserPointer(laserEnabled);
+        if (enabled)
+            synchronizeLaser();
+        else
+            stopLaser();
+    }
+    void laserFailed(const QString& error) {
+        setLaserEnabled(false);
+        emit owner.errorOccurred(
+            GlobalCanvasController::tr("Could not show the laser pointer: %1").arg(error));
+    }
+    void receiveLaserFrame() {
+        if (!laserRunning)
+            return;
+        auto frame = laserSource->acquire();
+        if (!frame || frame->generation != laserGeneration ||
+            (laserFrame && frame->revision <= laserFrame->revision))
+            return;
+        if (!frame->error.isEmpty()) {
+            laserFailed(frame->error);
+            return;
+        }
+        QRegion damage = laserRegion(*frame);
+        if (laserFrame)
+            damage += laserRegion(*laserFrame);
+        laserFrame = std::move(frame);
+        if (!damage.isEmpty())
+            drawing->update(damage);
+    }
+    void synchronizeLaser() {
+        if (!laserEnabled || !isVisible() || !display)
+            return;
+        const QRect logical(drawing->mapToGlobal(QPoint()), drawing->size());
+#ifdef Q_OS_MACOS
+        const QRect capture = logical;
+        const qreal scale = drawing->devicePixelRatioF();
+#else
+        const QRect capture = ScreenshotGeometryMapper::nativeRectForLogicalRect(
+            logical, display->geometry(),
+            ScreenshotGeometryMapper::physicalRectForScreen(*display));
+        const qreal scale = 1.0;
+#endif
+        if (capture.isEmpty()) {
+            stopLaser();
+            return;
+        }
+        const qreal devicePixelRatio = drawing->devicePixelRatioF();
+        if (laserRunning && laserCapture == capture && laserScale == scale &&
+            laserDevicePixelRatio == devicePixelRatio)
+            return;
+        if (!laserSource)
+            laserSource = owner.m_platform.createEffectsSource();
+        if (!laserSource) {
+            laserFailed(GlobalCanvasController::tr("The laser pointer is unavailable."));
+            return;
+        }
+        ++laserGeneration;
+        clearLaserFrame();
+        laserCapture = capture;
+        laserScale = scale;
+        laserDevicePixelRatio = devicePixelRatio;
+        SnowRecordingEffectsConfig config{};
+        config.version = SNOW_RECORDING_EFFECTS_CONFIG_VERSION;
+        config.struct_size = sizeof(config);
+        config.x = capture.x();
+        config.y = capture.y();
+        config.width = static_cast<uint32_t>(capture.width());
+        config.height = static_cast<uint32_t>(capture.height());
+        config.output_width = static_cast<uint32_t>(qRound(capture.width() * scale));
+        config.output_height = static_cast<uint32_t>(qRound(capture.height() * scale));
+        config.canvas_scale = scale;
+        config.trail_rgba = 0xff0000ff;
+        config.trail_duration_ms = 500;
+        config.generation = laserGeneration;
+        // The native API validates these dimensions even with their effects disabled.
+        config.keyboard_size = 64;
+        config.highlight_radius = 41;
+        QString error;
+        const bool success = laserRunning ? laserSource->configure(config, error)
+                                          : laserSource->start(
+                                                config,
+                                                [this]() {
+                                                    if (!laserNotificationPending.exchange(true)) {
+                                                        QMetaObject::invokeMethod(
+                                                            this,
+                                                            [this]() {
+                                                                laserNotificationPending = false;
+                                                                receiveLaserFrame();
+                                                            },
+                                                            Qt::QueuedConnection);
+                                                    }
+                                                },
+                                                error);
+        laserRunning = success;
+        if (!success)
+            laserFailed(error);
+    }
     void resizeEvent(QResizeEvent* event) override {
         cancelColorSampling();
         QWidget::resizeEvent(event);
@@ -272,8 +420,10 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         drawing->setViewportCamera(origin.x() + width() / (2.0 * zoom),
                                    origin.y() + height() / (2.0 * zoom), zoom);
         cameraInitialized = true;
+        synchronizeLaser();
     }
     void closeEvent(QCloseEvent* event) override {
+        setLaserEnabled(false);
         cancelColorSampling();
         tools->hide();
         QWidget::closeEvent(event);
@@ -285,6 +435,11 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
     }
     bool event(QEvent* event) override {
         const bool result = QWidget::event(event);
+        if (event->type() == QEvent::Hide)
+            stopLaser();
+        else if (event->type() == QEvent::Show || event->type() == QEvent::Move ||
+                 event->type() == QEvent::DevicePixelRatioChange)
+            synchronizeLaser();
         if (event->type() == QEvent::WinIdChange && internalWinId() != 0) {
             // Moving between displays can recreate the native surface. Qt's mouse
             // attribute alone does not preserve native input transparency.
@@ -685,7 +840,19 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
     bool cameraInitialized = false;
     QPointF panPosition;
     std::uint64_t revision = 0;
+    std::unique_ptr<RecordingEffectsSource> laserSource;
+    std::shared_ptr<RecordingEffectsFrame> laserFrame;
+    std::atomic<bool> laserNotificationPending = false;
+    quint64 laserGeneration = 0;
+    QRect laserCapture;
+    qreal laserScale = 1.0;
+    qreal laserDevicePixelRatio = 1.0;
+    bool laserEnabled = false;
+    bool laserRunning = false;
 };
+
+GlobalCanvasController::GlobalCanvasController(QObject* parent)
+    : GlobalCanvasController(parent, Platform{}) {}
 
 GlobalCanvasController::GlobalCanvasController(QObject* parent, Platform platform)
     : QObject(parent), m_platform(std::move(platform)) {
@@ -693,6 +860,8 @@ GlobalCanvasController::GlobalCanvasController(QObject* parent, Platform platfor
         m_platform.pointerScreen = pointerScreen;
     if (!m_platform.setInputTransparent)
         m_platform.setInputTransparent = setGlobalCanvasInputTransparent;
+    if (!m_platform.createEffectsSource)
+        m_platform.createEffectsSource = createNativeRecordingEffectsSource;
     connect(qApp, &QCoreApplication::aboutToQuit, this, &GlobalCanvasController::shutdown);
 }
 GlobalCanvasController::~GlobalCanvasController() = default;

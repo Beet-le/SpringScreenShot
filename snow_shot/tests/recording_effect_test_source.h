@@ -5,6 +5,12 @@ struct RecordingEffectTestState {
     bool active = false;
     int starts = 0;
     int stops = 0;
+    int configurations = 0;
+    int acquisitions = 0;
+    QRect capture;
+    double canvasScale = 0;
+    uint32_t trail = 0;
+    uint32_t click = 0;
     quint64 generation = 0;
     quint64 revision = 0;
     QSize output;
@@ -56,11 +62,17 @@ class RecordingEffectTestSource final : public RecordingEffectsSource {
         return configure(config, error);
     }
     bool configure(const SnowRecordingEffectsConfig& config, QString& error) override {
+        ++state->configurations;
         if (state->fail) {
             error = QStringLiteral("test preview failure");
             return false;
         }
         state->generation = config.generation;
+        state->capture = QRect(config.x, config.y, static_cast<int>(config.width),
+                               static_cast<int>(config.height));
+        state->canvasScale = config.canvas_scale;
+        state->trail = config.trail_rgba;
+        state->click = config.click_rgba;
         state->keyboardSize = config.keyboard_size;
         state->keyboardFontFamily = config.keyboard_font_family_utf8;
         state->keyboardCjkFontFamily = config.keyboard_cjk_font_family_utf8;
@@ -92,6 +104,7 @@ class RecordingEffectTestSource final : public RecordingEffectsSource {
         state->frame.reset();
     }
     std::shared_ptr<RecordingEffectsFrame> acquire() override {
+        ++state->acquisitions;
         return state->frame;
     }
     std::shared_ptr<RecordingEffectTestState> state;

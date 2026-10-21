@@ -2,7 +2,7 @@
 #define SNOW_SHOT_RECORDINGEFFECTPREVIEW_H
 
 #include "snow_draw_engine_qt/snow_canvas_custom_renderer.h"
-#include "snow_recording_effects.h"
+#include "recordingeffectssource.h"
 #include <QColor>
 #include <QImage>
 #include <QObject>
@@ -16,32 +16,6 @@
 class CanvasStatusReadout;
 class RecordingStatusPrompt;
 class ScreenRecordingAreaWindow;
-
-struct RecordingEffectsFrame {
-    quint64 generation = 0;
-    quint64 revision = 0;
-    QSize output;
-    struct Tile {
-        QRect rect;
-        QImage image;
-        QSize coordinateSize;
-    };
-    // Images borrow the native frame. Destroy images before releasing the owner.
-    std::shared_ptr<void> lease;
-    std::vector<Tile> tiles;
-    QString error;
-};
-
-// Injectable observation boundary. A stopped source must join before returning.
-class RecordingEffectsSource {
-  public:
-    virtual ~RecordingEffectsSource() = default;
-    virtual bool start(const SnowRecordingEffectsConfig& config, std::function<void()> notify,
-                       QString& error) = 0;
-    virtual bool configure(const SnowRecordingEffectsConfig& config, QString& error) = 0;
-    virtual void stop() = 0;
-    virtual std::shared_ptr<RecordingEffectsFrame> acquire() = 0;
-};
 
 class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRenderer {
   public:

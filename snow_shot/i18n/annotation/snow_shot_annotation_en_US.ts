@@ -716,6 +716,10 @@
             <translation>LaTeX-Specific Model</translation>
         </message>
         <message>
+            <source>Laser pointer</source>
+            <translation>Laser pointer</translation>
+        </message>
+        <message>
             <source>Layout compaction disabled</source>
             <translation>Layout compaction disabled</translation>
         </message>
@@ -1566,6 +1570,14 @@
         <message>
             <source>Could not change canvas click-through.</source>
             <translation>Could not change canvas click-through.</translation>
+        </message>
+        <message>
+            <source>Could not show the laser pointer: %1</source>
+            <translation>Could not show the laser pointer: %1</translation>
+        </message>
+        <message>
+            <source>The laser pointer is unavailable.</source>
+            <translation>The laser pointer is unavailable.</translation>
         </message>
     </context>
 </TS>

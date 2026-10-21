@@ -46,6 +46,10 @@
 #endif
 
 using namespace snow_shot;
+void canvasLaserPointer(QApplication& app);
+#ifdef Q_OS_WIN
+bool nativeCanvasLaserPointer(QApplication& app);
+#endif
 void require(bool condition, const char* message) {
     if (!condition) {
         std::cerr << message << '\n';
@@ -1317,6 +1321,11 @@ int main(int argc, char** argv) {
     }
 #endif
 #ifdef Q_OS_WIN
+    if (app.arguments().contains(QStringLiteral("--laser-native-only"))) {
+        const bool success = nativeCanvasLaserPointer(app);
+        storage.shutdown();
+        return success ? 0 : 1;
+    }
     if (app.arguments().contains(QStringLiteral("--native-only"))) {
         nativeInput();
         storage.shutdown();
@@ -1338,6 +1347,11 @@ int main(int argc, char** argv) {
     }
     if (app.arguments().contains(QStringLiteral("--click-through-style-only"))) {
         canvasClickThroughButtonStyle(app);
+        storage.shutdown();
+        return 0;
+    }
+    if (app.arguments().contains(QStringLiteral("--laser-pointer-only"))) {
+        canvasLaserPointer(app);
         storage.shutdown();
         return 0;
     }
@@ -1440,6 +1454,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     canvasClickThroughButtonStyle(app);
+    canvasLaserPointer(app);
     bool nativeTransparent = false;
     bool failTransition = false;
     int pointerReads = 0;

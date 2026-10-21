@@ -153,6 +153,11 @@ add_library(snow_shot_canvas_status_readout STATIC
     src/presentation/components/canvasstatusreadout.cpp)
 target_include_directories(snow_shot_canvas_status_readout PUBLIC include)
 target_link_libraries(snow_shot_canvas_status_readout PUBLIC Qt6::Widgets)
+
+add_library(snow_shot_recording_effects_source STATIC
+    src/presentation/recording/recordingeffectssource.cpp
+    src/presentation/recording/recordingeffectssource.h)
+target_link_libraries(snow_shot_recording_effects_source PUBLIC Qt6::Gui snow_recording_effects_c)
 if(APPLE)
     add_library(snow_shot_macos_clipboard STATIC src/platform/macos/imageclipboard.mm)
     target_link_libraries(snow_shot_macos_clipboard PUBLIC Qt6::Gui
@@ -6684,6 +6689,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-global-canvas-tests
         tests/global_canvas_tests.cpp
+        tests/global_canvas_laser_tests.cpp
         src/presentation/services/screenshotcanvascolorsampler.cpp
         src/presentation/services/screenshotcanvascolorsamplerwindow.cpp
         include/snow_shot/presentation/globalcanvascontroller.h
@@ -6750,6 +6756,21 @@ if(SNOW_SHOT_BUILD_TESTS)
             LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 30)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-global-canvas-tests)
+    foreach(_laser_scale IN ITEMS 1 1.25 1.5 2)
+        add_test(NAME snow-shot-global-canvas-laser-${_laser_scale}-tests
+            COMMAND snow-shot-global-canvas-tests --laser-pointer-only -platform offscreen)
+        set_tests_properties(snow-shot-global-canvas-laser-${_laser_scale}-tests PROPERTIES
+            LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 30
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT};QT_SCALE_FACTOR=${_laser_scale}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
+    if(WIN32)
+        add_test(NAME snow-shot-global-canvas-laser-native-tests
+            COMMAND snow-shot-global-canvas-tests --laser-native-only -platform windows)
+        set_tests_properties(snow-shot-global-canvas-laser-native-tests PROPERTIES
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 30
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_test(NAME snow-shot-global-canvas-magnifier-availability-tests
         COMMAND snow-shot-global-canvas-tests --magnifier-availability-only -platform offscreen)
     set_tests_properties(snow-shot-global-canvas-magnifier-availability-tests PROPERTIES
@@ -12586,6 +12607,9 @@ foreach(_snow_target IN LISTS _snow_readout_consumers)
     endif()
     if("${_snow_sources}" MATCHES "(screenshot(pinnedwindow|overlaywindow|recognitionwindow|canvascolorsamplerwindow)|globalcanvascontroller|screenrecordingareawindow)\\.cpp")
         target_link_libraries(${_snow_target} PRIVATE snow_shot_crosshair_cursor)
+    endif()
+    if("${_snow_sources}" MATCHES "(globalcanvascontroller|recordingeffectpreview)\\.cpp")
+        target_link_libraries(${_snow_target} PRIVATE snow_shot_recording_effects_source)
     endif()
 endforeach()
 

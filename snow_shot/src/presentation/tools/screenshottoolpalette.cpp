@@ -4573,6 +4573,12 @@ void ScreenshotToolPalette::setGlobalCanvasClickThrough(bool enabled) {
     }
 }
 
+void ScreenshotToolPalette::setGlobalCanvasLaserPointer(bool enabled) {
+    if (m_globalCanvasLaserPointerButton != nullptr) {
+        m_globalCanvasLaserPointerButton->setChecked(enabled);
+    }
+}
+
 void ScreenshotToolPalette::refreshShortcutTooltips() {
     if (m_globalCanvasExitButton != nullptr) {
         const QString title = tr("Exit");
@@ -6059,6 +6065,7 @@ void ScreenshotToolPalette::applyMainToolbarLayout(bool notify) {
             : nullptr,
         configurableResultActions ? nullptr : m_copyButton,
         configurableConfirm ? nullptr : m_confirmButton,
+        m_globalCanvasLaserPointerButton,
         m_globalCanvasClickThroughButton,
         m_globalCanvasExitButton,
     };
@@ -6713,6 +6720,20 @@ void ScreenshotToolPalette::addMainActionButtons(const Options& options, QBoxLay
     };
 
     if (options.showGlobalCanvasActions) {
+        m_globalCanvasLaserPointerButton =
+            addToolButton(QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Laser pointer"),
+                          custom_outlined_icons::LaserPointer());
+        m_globalCanvasLaserPointerButton->setObjectName(
+            QStringLiteral("globalCanvasLaserPointerButton"));
+        m_globalCanvasLaserPointerButton->setCheckable(true);
+        m_globalCanvasLaserPointerButton->setCheckedUsesActiveStyle(false);
+        connect(m_globalCanvasLaserPointerButton, &adqt::widgets::AdButton::toggled, this,
+                [this](bool enabled) {
+                    setScreenshotToolPaletteButtonActive(m_globalCanvasLaserPointerButton, enabled);
+                });
+        addButton(m_globalCanvasLaserPointerButton);
+        connect(m_globalCanvasLaserPointerButton, &adqt::widgets::AdButton::clicked, this,
+                &ScreenshotToolPalette::globalCanvasLaserPointerRequested);
         m_globalCanvasClickThroughButton =
             addToolButton("Click-through", custom_outlined_icons::Mouse());
         m_globalCanvasClickThroughButton->setObjectName(

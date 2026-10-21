@@ -338,6 +338,7 @@ class ScreenshotToolPalette final : public QWidget,
     void refreshConfirmShortcutHint();
     void refreshShortcutTooltips();
     void setGlobalCanvasClickThrough(bool enabled);
+    void setGlobalCanvasLaserPointer(bool enabled);
     [[nodiscard]] bool canActivateDrawingShortcut(const QString& toolId) const;
     [[nodiscard]] bool canActivateScreenshotShortcut(const QString& actionId);
     [[nodiscard]] bool activateDrawingShortcut(const QString& toolId);
@@ -490,6 +491,7 @@ class ScreenshotToolPalette final : public QWidget,
 
   signals:
     void globalCanvasClickThroughRequested();
+    void globalCanvasLaserPointerRequested();
     void globalCanvasExitRequested();
     void undoRequested();
     void redoRequested();
@@ -1072,6 +1074,7 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdButton* m_copyButton = nullptr;
     adqt::widgets::AdButton* m_confirmButton = nullptr;
     adqt::widgets::AdButton* m_globalCanvasClickThroughButton = nullptr;
+    adqt::widgets::AdButton* m_globalCanvasLaserPointerButton = nullptr;
     adqt::widgets::AdButton* m_globalCanvasExitButton = nullptr;
     QLabel* m_selectionOpacityIcon = nullptr;
     adqt::widgets::AdSlider* m_selectionOpacitySlider = nullptr;

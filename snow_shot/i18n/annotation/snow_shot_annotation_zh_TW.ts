@@ -716,6 +716,10 @@
             <translation>LaTeX 專用模型</translation>
         </message>
         <message>
+            <source>Laser pointer</source>
+            <translation>雷射筆</translation>
+        </message>
+        <message>
             <source>Layout compaction disabled</source>
             <translation>已停用緊湊配置</translation>
         </message>
@@ -1566,6 +1570,14 @@
         <message>
             <source>Could not change canvas click-through.</source>
             <translation>無法切換畫布的滑鼠穿透狀態。</translation>
+        </message>
+        <message>
+            <source>Could not show the laser pointer: %1</source>
+            <translation>無法顯示雷射筆：%1</translation>
+        </message>
+        <message>
+            <source>The laser pointer is unavailable.</source>
+            <translation>雷射筆無法使用。</translation>
         </message>
     </context>
 </TS>
