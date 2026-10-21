@@ -95,6 +95,7 @@ struct ScreenshotRecognitionSessionActions {
     std::function<void(const QString&)> setTextTargetLanguage;
     std::function<void(bool, bool, bool)> setLatexEditingState;
     std::function<void(int, const ScreenshotRecognitionModelState&)> setRecognitionModelState;
+    std::function<QImage()> renderTranslationImage;
 };
 
 class ScreenshotRecognitionSessionController final : public QObject {

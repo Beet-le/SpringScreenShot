@@ -123,6 +123,9 @@ class ScreenshotRecognitionWindow final : public QWidget {
     void refreshOriginalImagePreview();
     void syncOriginalImagePreviewStacking(bool staysOnTop);
     void setOcrCopyDefaultsEnabled(bool enabled);
+    void setTranslationClipboardProvider(std::function<bool()> active,
+                                         std::function<std::unique_ptr<QMimeData>()> provider);
+    [[nodiscard]] QImage translationDocumentImage() const;
     void setTextHighlighting(bool enabled, const QColor& maskColor);
     void setOcrPresentation(
         std::shared_ptr<ScreenshotOcrPresentation> presentation,
@@ -137,7 +140,8 @@ class ScreenshotRecognitionWindow final : public QWidget {
     void clearOcrPresentation();
     [[nodiscard]] std::optional<ScreenshotRecognitionImageSnapshot>
     imageSnapshot(QImage image, const QRectF& canvasRect, QImage filteredImage,
-                  const QRectF& filteredCanvasRect, const ScreenshotResultStyle& style) const;
+                  const QRectF& filteredCanvasRect, const ScreenshotResultStyle& style,
+                  bool includeHiddenContent = false) const;
     [[nodiscard]] QImage printViewportSnapshot(QImage background = {},
                                                const QRectF& canvasRect = {}, QImage filtered = {},
                                                const QRectF& filteredRect = {},
@@ -296,6 +300,8 @@ class ScreenshotRecognitionWindow final : public QWidget {
     ScreenshotOcrTextLayer* m_textLayer = nullptr;
     QWidget* m_textEditorContainer = nullptr;
     QTextEdit* m_textEditor = nullptr;
+    std::function<bool()> m_translationCopyActive;
+    std::function<std::unique_ptr<QMimeData>()> m_translationClipboardProvider;
     std::shared_ptr<QTextDocument> m_textEditorDocumentOwner;
     adqt::widgets::AdSpin* m_textEditorSpin = nullptr;
 #if SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION

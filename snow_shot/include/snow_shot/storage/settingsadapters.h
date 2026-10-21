@@ -423,6 +423,8 @@ class ScreenshotTranslationSettings final {
   public:
     [[nodiscard]] bool originalImageTranslationEnabled() const;
     bool setOriginalImageTranslationEnabled(bool enabled) const;
+    [[nodiscard]] bool copyTranslationResultsAsImage() const;
+    bool setCopyTranslationResultsAsImage(bool enabled) const;
     [[nodiscard]] QString layoutProcessing() const;
     bool setLayoutProcessing(const QString& mode) const;
     [[nodiscard]] ScreenshotTranslationConfiguration configuration() const;

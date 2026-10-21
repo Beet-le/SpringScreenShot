@@ -18,6 +18,7 @@
 #include "snow_shot/presentation/screenshotoverlaywindow.h"
 #include "snow_shot/presentation/screenshotselectionmodel.h"
 #include "snow_shot/presentation/screenshotsourceimagecomposer.h"
+#include "snow_shot/presentation/screenshotcursorimagesource.h"
 #include "snow_shot/presentation/screenshottableeditor.h"
 #include "snow_shot/presentation/screenshottoolbarwindow.h"
 
@@ -290,6 +291,26 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
                         state);
                 }
             },
+            [this]() -> QImage {
+                if (!m_recognitionWindow || m_surfaceKey != currentCacheKey())
+                    return {};
+                auto snapshot = m_recognitionWindow->imageSnapshot(
+                    m_surfaceImage, QRectF(m_context.selection.pixelSelection()), m_filteredImage,
+                    m_filteredCanvasRect, m_context.selection.resultStyle(), true);
+                if (snapshot) {
+                    snapshot->layoutCompaction = m_context.selection.exportLayoutCompaction();
+                    if (snapshot->resultStyle.backgroundOpacityPercent > 0) {
+                        m_context.displaySession.forEachImageSource(
+                            [&](qsizetype, const CapturedDisplayModel& display) {
+                                for (const auto& layer : screenshotDisplayImageLayers(
+                                         display, m_context.displaySession.cursorVisible))
+                                    snapshot->backgroundSources.append(
+                                        {layer.image, layer.destinationCanvasRect});
+                            });
+                    }
+                }
+                return snapshot ? renderScreenshotRecognitionImage(*snapshot) : QImage{};
+            },
         },
         this);
     connect(m_session.get(), &ScreenshotRecognitionSessionController::textEditingChanged, this,
@@ -540,6 +561,10 @@ bool ScreenshotOcrController::copyRecognitionToClipboard(bool endCapture) {
         std::unique_ptr<QMimeData> mimeData =
             m_session->recognitionClipboardMimeData(m_presentation.get());
         if (mimeData == nullptr) {
+            if (m_session->translating())
+                showStatus(QCoreApplication::translate("ScreenshotRecognitionSessionController",
+                                                       "Unable to copy translation results"),
+                           true);
             return false;
         }
         QApplication::clipboard()->setMimeData(mimeData.release(), QClipboard::Clipboard);

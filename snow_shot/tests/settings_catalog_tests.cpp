@@ -602,9 +602,9 @@ void builtInCatalogIsCompleteAndValid() {
                 itemIds.contains(QStringLiteral("screenshot-shortcut.upload_to_cloud")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.upload_to_cloud")),
             "cloud upload must expose its configuration and shortcuts in both local scopes");
-    require(itemIds.size() == 292,
+    require(itemIds.size() == 293,
             qPrintable(QStringLiteral(
-                           "catalog must contain 292 shared settings on every platform; found %1")
+                           "catalog must contain 293 shared settings on every platform; found %1")
                            .arg(itemIds.size())));
     require(itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-closing-window")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-destroying-window")),
@@ -975,6 +975,26 @@ void builtInCatalogIsCompleteAndValid() {
                         ->reset == settings::SettingsSectionReset::Translation &&
                 storage::ConfigurationSchema::defaultValue(translation->configurationKey).toBool(),
             "Translation should expose its own default-on switch and section reset");
+    const auto* copyImage = catalog.item({QStringLiteral("text-recognition-translation"),
+                                          QStringLiteral("translation-settings"),
+                                          QStringLiteral("translation.copy-results-as-image")});
+    require(copyImage &&
+                std::get<settings::SettingsSwitchDefinition>(copyImage->payload).binding ==
+                    settings::SettingsSwitchBinding::CopyTranslationResultsAsImage &&
+                !storage::ConfigurationSchema::defaultValue(copyImage->configurationKey).toBool(),
+            "translation image copy has an independent default-off switch");
+    const auto& translationItems = catalog
+                                       .section(QStringLiteral("text-recognition-translation"),
+                                                QStringLiteral("translation-settings"))
+                                       ->items;
+    const auto originalIndex =
+        std::find_if(translationItems.cbegin(), translationItems.cend(), [](const auto& item) {
+            return item.id == QStringLiteral("translation.original-image");
+        });
+    require(originalIndex != translationItems.cend() &&
+                std::next(originalIndex) != translationItems.cend() &&
+                std::next(originalIndex)->id == copyImage->id,
+            "translation image copy appears immediately below original image translation");
     const auto* layout = catalog.item({QStringLiteral("text-recognition-translation"),
                                        QStringLiteral("translation-settings"),
                                        QStringLiteral("translation.layout-processing")});

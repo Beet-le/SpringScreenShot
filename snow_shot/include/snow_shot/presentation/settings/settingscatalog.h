@@ -160,6 +160,7 @@ enum class SettingsSwitchBinding {
     PinConfirmBeforeClosingWindow,
     PinConfirmBeforeDestroyingWindow,
     OriginalImageTranslation,
+    CopyTranslationResultsAsImage,
     TranslationPageEnabled,
     JumpToTranslationPage,
     StandaloneTranslationWindow,

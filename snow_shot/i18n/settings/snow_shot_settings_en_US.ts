@@ -1896,6 +1896,10 @@
             <translation>Control when the screenshot color picker is visible</translation>
         </message>
         <message>
+            <source>Copy Translation Results as an Image</source>
+            <translation>Copy Translation Results as an Image</translation>
+        </message>
+        <message>
             <source>Copy after text recognition</source>
             <translation>Copy after text recognition</translation>
         </message>
@@ -1958,6 +1962,10 @@
         <message>
             <source>Copy the confirmed screenshot selection to the clipboard</source>
             <translation>Copy the confirmed screenshot selection to the clipboard</translation>
+        </message>
+        <message>
+            <source>Copy the full translation result as an image when no text is selected</source>
+            <translation>Copy the full translation result as an image when no text is selected</translation>
         </message>
         <message>
             <source>Copy to Clipboard</source>

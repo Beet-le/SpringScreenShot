@@ -404,6 +404,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     {QStringLiteral("screenshot_translation/original_image_translation"), true,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("screenshot_translation/copy_translation_results_as_image"), false,
+     ConfigurationValueKind::Boolean},
 #endif
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     {QStringLiteral("screenshot_translation/layout_processing"),

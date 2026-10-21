@@ -272,6 +272,10 @@
             <translation>翻譯服務無法使用</translation>
         </message>
         <message>
+            <source>Unable to copy translation results</source>
+            <translation>無法複製翻譯結果</translation>
+        </message>
+        <message>
             <source>Unable to load Snow Shot vision models</source>
             <translation>無法載入 Snow Shot 視覺模型</translation>
         </message>

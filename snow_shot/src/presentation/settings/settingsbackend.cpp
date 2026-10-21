@@ -973,6 +973,12 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
 #else
         return false;
 #endif
+    case SettingsSwitchBinding::CopyTranslationResultsAsImage:
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+        return storage::ScreenshotTranslationSettings().copyTranslationResultsAsImage();
+#else
+        return false;
+#endif
     case SettingsSwitchBinding::SeparateRecordingAudioTracks:
         return storage::RecordingSettings().separateAudioTracks();
     case SettingsSwitchBinding::LoopAnimatedImages:
@@ -1115,7 +1121,8 @@ bool BuiltInSettingsBackend::switchEnabled(SettingsSwitchBinding binding) const 
         return false;
 #endif
 #if !SNOW_SHOT_ENABLE_TEXT_TRANSLATION
-    if (binding == SettingsSwitchBinding::OriginalImageTranslation)
+    if (binding == SettingsSwitchBinding::OriginalImageTranslation ||
+        binding == SettingsSwitchBinding::CopyTranslationResultsAsImage)
         return false;
 #endif
 #if !SNOW_SHOT_ENABLE_QR_RECOGNITION
@@ -1279,6 +1286,13 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
         return false;
 #endif
     }
+    if (binding == SettingsSwitchBinding::CopyTranslationResultsAsImage) {
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+        return storage::ScreenshotTranslationSettings().setCopyTranslationResultsAsImage(value);
+#else
+        return false;
+#endif
+    }
     if (binding == SettingsSwitchBinding::SeparateRecordingAudioTracks) {
         return storage::RecordingSettings().setSeparateAudioTracks(value);
     }
@@ -1383,6 +1397,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::JumpToTranslationPage:
     case SettingsSwitchBinding::StandaloneTranslationWindow:
     case SettingsSwitchBinding::OriginalImageTranslation:
+    case SettingsSwitchBinding::CopyTranslationResultsAsImage:
     case SettingsSwitchBinding::SeparateRecordingAudioTracks:
     case SettingsSwitchBinding::LoopAnimatedImages:
     case SettingsSwitchBinding::ScreenRecordingCaptureToolbar:

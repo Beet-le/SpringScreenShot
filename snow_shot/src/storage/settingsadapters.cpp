@@ -2216,6 +2216,19 @@ bool ScreenshotTranslationSettings::setOriginalImageTranslationEnabled(bool enab
 #endif
 
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+bool ScreenshotTranslationSettings::copyTranslationResultsAsImage() const {
+    return cache()
+        .value(QStringLiteral("screenshot_translation/copy_translation_results_as_image"))
+        .toBool();
+}
+
+bool ScreenshotTranslationSettings::setCopyTranslationResultsAsImage(bool enabled) const {
+    return cache().setValue(
+        QStringLiteral("screenshot_translation/copy_translation_results_as_image"), enabled);
+}
+#endif
+
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 ScreenshotTranslationConfiguration ScreenshotTranslationSettings::configuration() const {
     return {
         cache().value(QStringLiteral("screenshot_translation/source_language")).toString(),

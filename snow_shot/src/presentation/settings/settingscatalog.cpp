@@ -2018,6 +2018,16 @@ SettingsItemDefinition originalImageTranslationItem() {
         QStringLiteral("screenshot_translation/original_image_translation"),
         SettingsSwitchBinding::OriginalImageTranslation);
 }
+
+SettingsItemDefinition copyTranslationResultsAsImageItem() {
+    return switchItem(
+        QStringLiteral("translation.copy-results-as-image"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Copy Translation Results as an Image"),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "Copy the full translation result as an image when no text is selected"),
+        QStringLiteral("screenshot_translation/copy_translation_results_as_image"),
+        SettingsSwitchBinding::CopyTranslationResultsAsImage);
+}
 #endif
 
 QVector<SettingsOptionDefinition> trayClickActionOptions() {
@@ -3645,6 +3655,7 @@ QVector<SettingsPageDefinition> builtInPages() {
                        settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "%"))}},
                   translationServiceItem(),
                   originalImageTranslationItem(),
+                  copyTranslationResultsAsImageItem(),
                   translationLayoutProcessingItem()},
              },
 #endif
@@ -5177,6 +5188,10 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsSwitchBinding::OriginalImageTranslation:
                         expectedKey =
                             QStringLiteral("screenshot_translation/original_image_translation");
+                        break;
+                    case SettingsSwitchBinding::CopyTranslationResultsAsImage:
+                        expectedKey = QStringLiteral(
+                            "screenshot_translation/copy_translation_results_as_image");
                         break;
                     case SettingsSwitchBinding::SeparateRecordingAudioTracks:
                         expectedKey = QStringLiteral("screen_recording/separate_audio_tracks");

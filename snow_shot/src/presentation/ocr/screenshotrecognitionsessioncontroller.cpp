@@ -2681,6 +2681,33 @@ std::unique_ptr<QMimeData> ScreenshotRecognitionSessionController::recognitionCl
     QString text;
     bool resultAvailable = false;
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+    if (translating()) {
+        const auto entry = m_textCache.constFind(m_translationKey);
+        if (entry == m_textCache.cend())
+            return {};
+        const auto* presentation = displayedPresentation != nullptr
+                                       ? displayedPresentation
+                                       : entry->overlayTranslation.presentation.get();
+        if (originalImageTranslationActive() && presentation && presentation->hasTextSelection()) {
+            mimeData->setText(presentation->selectedText());
+            return mimeData;
+        }
+        if (!originalImageTranslationActive() && content()) {
+            if (auto selected = content()->textSelectionClipboardMimeData())
+                return selected;
+        }
+        if (snow_shot::storage::ScreenshotTranslationSettings().copyTranslationResultsAsImage()) {
+            const QImage image =
+                originalImageTranslationActive()
+                    ? (m_actions.renderTranslationImage ? m_actions.renderTranslationImage()
+                                                        : QImage{})
+                    : (content() ? content()->translationDocumentImage() : QImage{});
+            if (image.isNull())
+                return {};
+            mimeData->setImageData(image);
+            return mimeData;
+        }
+    }
     if (originalImageTranslationActive()) {
         const auto entry = m_textCache.value(m_translationKey);
         const auto* presentation = displayedPresentation != nullptr
@@ -3378,6 +3405,17 @@ void ScreenshotRecognitionSessionController::ensureContent() {
             return;
         m_content = created;
         if (m_content != nullptr) {
+            const QPointer<ScreenshotRecognitionSessionController> session(this);
+            m_content->setTranslationClipboardProvider(
+                [session] { return session && session->translating(); },
+                [session]() -> std::unique_ptr<QMimeData> {
+                    if (!session)
+                        return {};
+                    auto mime = session->recognitionClipboardMimeData();
+                    if (!mime)
+                        session->showStatus(tr("Unable to copy translation results"), true);
+                    return mime;
+                });
             m_content->setShowOriginalImage(m_showOriginalImage);
             if (!notify(&ScreenshotRecognitionSessionController::updateTextHighlighting))
                 return;

@@ -8662,6 +8662,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
 
     add_executable(snow-shot-recognition-session-controller-tests
+        src/presentation/ocr/screenshotrecognitionimage.cpp
         tests/screenshot_recognition_session_controller_tests.cpp
         tests/original_image_translation_tests.cpp
         tests/image_conversion_tests.cpp

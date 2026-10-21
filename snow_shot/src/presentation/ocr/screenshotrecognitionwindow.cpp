@@ -74,6 +74,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -717,11 +718,11 @@ void ScreenshotRecognitionWindow::updateOriginalImagePreview() {
     }
 }
 
-std::optional<ScreenshotRecognitionImageSnapshot>
-ScreenshotRecognitionWindow::imageSnapshot(QImage image, const QRectF& canvasRect,
-                                           QImage filteredImage, const QRectF& filteredCanvasRect,
-                                           const ScreenshotResultStyle& style) const {
-    if (m_showOriginalImage || m_stack->currentWidget() != m_textLayer || image.isNull())
+std::optional<ScreenshotRecognitionImageSnapshot> ScreenshotRecognitionWindow::imageSnapshot(
+    QImage image, const QRectF& canvasRect, QImage filteredImage, const QRectF& filteredCanvasRect,
+    const ScreenshotResultStyle& style, bool includeHiddenContent) const {
+    if ((!includeHiddenContent && m_showOriginalImage) || m_stack->currentWidget() != m_textLayer ||
+        image.isNull())
         return std::nullopt;
     ScreenshotRecognitionImageSnapshot snapshot;
     snapshot.image = std::move(image);
@@ -734,6 +735,37 @@ ScreenshotRecognitionWindow::imageSnapshot(QImage image, const QRectF& canvasRec
     snapshot.textColor = m_textLayer->textColor();
     snapshot.resultStyle = style;
     return snapshot;
+}
+
+void ScreenshotRecognitionWindow::setTranslationClipboardProvider(
+    std::function<bool()> active, std::function<std::unique_ptr<QMimeData>()> provider) {
+    m_translationCopyActive = std::move(active);
+    m_translationClipboardProvider = std::move(provider);
+}
+
+QImage ScreenshotRecognitionWindow::translationDocumentImage() const {
+    if (!m_textEditor || m_textEditor->document()->isEmpty())
+        return {};
+    // Clone the document so layout and painting cannot alter the live editor or its history.
+    const std::unique_ptr<QTextDocument> document(m_textEditor->document()->clone());
+    document->setTextWidth(std::max(1, m_textEditor->viewport()->width()));
+    const QSizeF size = document->documentLayout()->documentSize();
+    const qreal dpr = m_textEditor->devicePixelRatioF();
+    if (!std::isfinite(size.width()) || !std::isfinite(size.height()) || size.width() <= 0 ||
+        size.height() <= 0 || size.width() * dpr > std::numeric_limits<int>::max() ||
+        size.height() * dpr > std::numeric_limits<int>::max())
+        return {};
+    QImage image(QSize(qCeil(size.width() * dpr), qCeil(size.height() * dpr)),
+                 QImage::Format_ARGB32_Premultiplied);
+    if (image.isNull())
+        return {};
+    image.setDevicePixelRatio(dpr);
+    image.fill(m_textEditorContainer->palette().window().color());
+    QPainter painter(&image);
+    QAbstractTextDocumentLayout::PaintContext context;
+    context.palette = m_textEditor->palette();
+    document->documentLayout()->draw(&painter, context);
+    return image;
 }
 
 QImage ScreenshotRecognitionWindow::printViewportSnapshot(QImage background,
@@ -936,6 +968,14 @@ bool ScreenshotRecognitionWindow::textSelectionActive() const {
 }
 
 std::unique_ptr<QMimeData> ScreenshotRecognitionWindow::textSelectionClipboardMimeData() const {
+    if (m_textEditor && m_stack->currentWidget() == m_textEditorContainer) {
+        const auto cursor = m_textEditor->textCursor();
+        if (!cursor.hasSelection())
+            return {};
+        auto mime = std::make_unique<QMimeData>();
+        mime->setText(QTextDocumentFragment(cursor).toPlainText());
+        return mime;
+    }
     if (m_formattedTextLayer && m_stack->currentWidget() == m_formattedTextLayer) {
         const auto cursor = m_formattedTextLayer->textCursor();
         if (!cursor.hasSelection())
@@ -1930,6 +1970,14 @@ bool ScreenshotRecognitionWindow::copyVisibleContentToClipboard() {
         return false;
     }
 
+    if (m_translationCopyActive && m_translationCopyActive() && m_translationClipboardProvider) {
+        auto mime = m_translationClipboardProvider();
+        if (!mime)
+            return false;
+        clipboard->setMimeData(mime.release());
+        return true;
+    }
+
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     if (m_tableEditor != nullptr) {
         return m_tableEditor->copySelectionToClipboard();
@@ -2051,13 +2099,18 @@ void ScreenshotRecognitionWindow::showTextEditorContextMenu(const QPoint& global
 
     const bool hasSelection = m_textEditor->textCursor().hasSelection();
     const bool writable = !m_textEditor->isReadOnly();
-    copy->setEnabled(hasSelection);
+    const bool translationCopy = m_translationCopyActive && m_translationCopyActive();
+    copy->setEnabled(hasSelection || (translationCopy && !m_textEditor->document()->isEmpty()));
     cut->setEnabled(writable && hasSelection);
     paste->setEnabled(writable && m_textEditor->canPaste());
     remove->setEnabled(writable && hasSelection);
     selectAll->setEnabled(!m_textEditor->document()->isEmpty());
 
     connect(copy, &QAction::triggered, m_textEditor, [this]() {
+        if (m_translationCopyActive && m_translationCopyActive()) {
+            static_cast<void>(copyVisibleContentToClipboard());
+            return;
+        }
 #if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
         if (m_latexDocument) {
             static_cast<void>(copyVisibleContentToClipboard());

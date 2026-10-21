@@ -5689,6 +5689,22 @@ void ScreenshotPinnedWindow::configureRecognitionSession() {
                     }
                 }
             },
+            [this]() -> QImage {
+                if (!m_recognitionContent || !m_screenshotRenderer || m_transformedImage.isNull() ||
+                    m_backgroundCanvasRect.isEmpty())
+                    return {};
+                const qreal scale = m_transformedImage.width() / m_backgroundCanvasRect.width();
+                const auto appearance =
+                    pinnedExportAppearance(m_resultStyle, m_opacityPercent, scale);
+                auto snapshot = m_recognitionContent->imageSnapshot(
+                    m_transformedImage, m_backgroundCanvasRect,
+                    m_screenshotRenderer->ocrFilteredImage(),
+                    m_screenshotRenderer->ocrFilteredCanvasRect(), appearance.resultStyle, true);
+                if (!snapshot)
+                    return {};
+                snapshot->outputOpacity = appearance.outputOpacity;
+                return renderScreenshotRecognitionImage(*snapshot);
+            },
         },
         this);
     connect(m_recognitionSession.get(),

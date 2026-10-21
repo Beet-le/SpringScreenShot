@@ -2807,6 +2807,71 @@ void selectionResizeKeepsMouseCaptureWhenContentIsCleared() {
     }
 }
 
+void translationCopyProviderHandlesKeyboardAndContextMenu() {
+    int completed = 0;
+    bool fail = false;
+    QTextDocument document;
+    document.setPlainText(QStringLiteral("Full translated result\n").repeated(50));
+    ScreenshotRecognitionWindowActions actions;
+    actions.handleCopy = [&] { ++completed; };
+    ScreenshotRecognitionWindow window(std::move(actions));
+    auto* screen = QGuiApplication::primaryScreen();
+    require(screen &&
+                window.present({screen, nullptr, QRect(20, 20, 360, 150), QRectF(0, 0, 360, 150)}),
+            "present translation copy window");
+    window.showTextEditor(&document, true, true);
+    QApplication::processEvents();
+    auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor, "translation copy owns a result editor");
+    window.setTranslationClipboardProvider(
+        [] { return true; },
+        [&]() -> std::unique_ptr<QMimeData> {
+            if (fail)
+                return {};
+            if (auto selected = window.textSelectionClipboardMimeData())
+                return selected;
+            auto mime = std::make_unique<QMimeData>();
+            mime->setImageData(window.translationDocumentImage());
+            return mime;
+        });
+    const auto image = window.translationDocumentImage();
+    require(!image.isNull() && image.height() > editor->viewport()->height(),
+            "translation image includes content below the viewport");
+    editor->selectAll();
+    editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->maximum());
+    require(window.translationDocumentImage() == image,
+            "document rendering excludes selection, caret and scrolling decorations");
+    auto cursor = editor->textCursor();
+    cursor.clearSelection();
+    editor->setTextCursor(cursor);
+    inspectContextMenu(*editor->viewport(), editor->viewport()->rect().center(),
+                       [](adqt::widgets::AdContextMenu& menu) {
+                           auto* copy = contextMenuAction(menu, QStringLiteral("Copy"));
+                           require(copy->isEnabled(),
+                                   "unselected translation enables context Copy");
+                           copy->trigger();
+                       });
+    require(QApplication::clipboard()->mimeData()->hasImage() && completed == 0,
+            "context Copy publishes the image without completing the host command");
+    window.activateWindow();
+    editor->setFocus();
+    QApplication::processEvents();
+    require(QApplication::focusWidget() == editor, "keyboard Copy focuses the translation editor");
+    PhysicalKeyEvent copy(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(editor, &copy);
+    PhysicalKeyEvent copyRelease(QEvent::KeyRelease, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(editor, &copyRelease);
+    require(QApplication::clipboard()->mimeData()->hasImage() && completed == 1,
+            "keyboard Copy publishes the image and completes the host command");
+    fail = true;
+    QApplication::clipboard()->setText(QStringLiteral("keep previous clipboard"));
+    PhysicalKeyEvent failedCopy(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(editor, &failedCopy);
+    require(QApplication::clipboard()->text() == QStringLiteral("keep previous clipboard") &&
+                completed == 1,
+            "failed image Copy preserves the clipboard without completing or closing the host");
+}
+
 void recognitionContextMenusUseAntDesignAndCopyLocally() {
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen != nullptr, "context menu tests require a primary screen");
@@ -3811,6 +3876,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--context-menu-only"))) {
+        translationCopyProviderHandlesKeyboardAndContextMenu();
         recognitionContextMenusUseAntDesignAndCopyLocally();
         return 0;
     }

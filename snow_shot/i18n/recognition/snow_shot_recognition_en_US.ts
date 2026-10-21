@@ -272,6 +272,10 @@
             <translation>Translation service is unavailable</translation>
         </message>
         <message>
+            <source>Unable to copy translation results</source>
+            <translation>Unable to copy translation results</translation>
+        </message>
+        <message>
             <source>Unable to load Snow Shot vision models</source>
             <translation>Unable to load Snow Shot vision models</translation>
         </message>

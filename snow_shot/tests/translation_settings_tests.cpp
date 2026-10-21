@@ -693,6 +693,12 @@ int main(int argc, char** argv) {
 
         const auto binding = settings::SettingsSwitchBinding::OriginalImageTranslation;
         const storage::ScreenshotTranslationSettings translation;
+        const auto copyImageBinding =
+            settings::SettingsSwitchBinding::CopyTranslationResultsAsImage;
+        require(backend.switchEnabled(copyImageBinding) && !backend.switchValue(copyImageBinding) &&
+                    backend.applySwitchValue(copyImageBinding, true) &&
+                    translation.copyTranslationResultsAsImage(),
+                "translation image copy defaults off and persists through its switch binding");
         settings::SettingsRuntimeSession session(settings::builtInSettingsRegistry(), backend);
         const auto resident = settings::SettingsSwitchBinding::OcrResidentProcess;
         const auto hot = settings::SettingsSwitchBinding::OcrModelHotStart;
@@ -813,6 +819,8 @@ int main(int argc, char** argv) {
         require(backend.applySelectValue(layoutBinding, QStringLiteral("original")),
                 "set Original layout");
         require(backend.applySwitchValue(binding, false), "disable original-image translation");
+        require(backend.switchEnabled(copyImageBinding),
+                "translation image copy remains available in text mode");
         session.refreshAll();
         require(!session.state(layoutId).enabled &&
                     translation.layoutProcessing() == QStringLiteral("original"),
@@ -821,6 +829,7 @@ int main(int argc, char** argv) {
                 "reject unknown mode");
         require(backend.resetSection(settings::SettingsSectionReset::Translation),
                 "reset translation layout");
+        require(!backend.switchValue(copyImageBinding), "translation reset disables image copying");
         session.refreshAll();
         require(session.state(layoutId).enabled &&
                     translation.layoutProcessing() == QStringLiteral("smart_merge"),

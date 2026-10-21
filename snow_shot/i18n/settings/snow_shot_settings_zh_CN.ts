@@ -1896,6 +1896,10 @@
             <translation>控制截图颜色拾取器何时显示</translation>
         </message>
         <message>
+            <source>Copy Translation Results as an Image</source>
+            <translation>将翻译结果复制为图片</translation>
+        </message>
+        <message>
             <source>Copy after text recognition</source>
             <translation>文字识别后复制</translation>
         </message>
@@ -1958,6 +1962,10 @@
         <message>
             <source>Copy the confirmed screenshot selection to the clipboard</source>
             <translation>将确认的截图选区复制到剪贴板</translation>
+        </message>
+        <message>
+            <source>Copy the full translation result as an image when no text is selected</source>
+            <translation>未选中文本时，将完整翻译结果复制为图片</translation>
         </message>
         <message>
             <source>Copy to Clipboard</source>
