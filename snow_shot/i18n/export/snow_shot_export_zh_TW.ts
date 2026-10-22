@@ -315,6 +315,18 @@
             <translation>壓縮等級</translation>
         </message>
         <message>
+            <source>Continue editing</source>
+            <translation>繼續編輯</translation>
+        </message>
+        <message>
+            <source>Copy image file</source>
+            <translation>複製影像檔案</translation>
+        </message>
+        <message>
+            <source>Copy image path</source>
+            <translation>複製影像路徑</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>刪除</translation>
         </message>
@@ -383,6 +395,10 @@
             <translation>確定</translation>
         </message>
         <message>
+            <source>Open folder</source>
+            <translation>開啟資料夾</translation>
+        </message>
+        <message>
             <source>PDF</source>
             <translation>PDF</translation>
         </message>
@@ -439,6 +455,10 @@
             <translation>儲存路徑</translation>
         </message>
         <message>
+            <source>Saved successfully</source>
+            <translation>儲存成功</translation>
+        </message>
+        <message>
             <source>Select save directory</source>
             <translation>選擇儲存目錄</translation>
         </message>
@@ -449,6 +469,10 @@
         <message>
             <source>Size unit</source>
             <translation>尺寸單位</translation>
+        </message>
+        <message>
+            <source>The clipboard could not be updated: %1</source>
+            <translation>無法更新剪貼簿：%1</translation>
         </message>
         <message>
             <source>The dimensions are not supported by this image format</source>
@@ -463,12 +487,24 @@
             <translation>無法準備匯出：%1</translation>
         </message>
         <message>
+            <source>The folder could not be opened</source>
+            <translation>無法開啟資料夾</translation>
+        </message>
+        <message>
+            <source>The image could not be prepared for the clipboard</source>
+            <translation>無法準備要複製到剪貼簿的影像</translation>
+        </message>
+        <message>
             <source>The image dimensions exceed the export limit</source>
             <translation>影像尺寸超出匯出限制</translation>
         </message>
         <message>
             <source>The save paths could not be stored</source>
             <translation>無法儲存路徑設定</translation>
+        </message>
+        <message>
+            <source>The saved file no longer exists</source>
+            <translation>已儲存的檔案不存在</translation>
         </message>
         <message>
             <source>The screenshot could not be prepared</source>

@@ -927,6 +927,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::ScreenshotSettings().restoreOriginalScreenColors();
     case SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard:
         return storage::ScreenshotSettings().copyImageFileToClipboard();
+    case SettingsSwitchBinding::ScreenshotShowSaveResult:
+        return storage::ScreenshotSettings().showSaveResult();
     case SettingsSwitchBinding::SaveRecognitionResultAsImage:
         return storage::TextRecognitionSettings().saveRecognitionResultAsImage();
     case SettingsSwitchBinding::ShowOriginalImagePreview:
@@ -1108,6 +1110,8 @@ QString BuiltInSettingsBackend::switchHint(SettingsSwitchBinding binding) const 
         .launchHint;
 }
 bool BuiltInSettingsBackend::switchEnabled(SettingsSwitchBinding binding) const {
+    if (binding == SettingsSwitchBinding::ScreenshotShowSaveResult)
+        return storage::ScreenshotSettings().saveAsFileDialog() == QStringLiteral("snow_shot");
     if (app::distribution::isStoreManaged()) {
         if (binding == SettingsSwitchBinding::LaunchAsAdministrator)
             return false;
@@ -1159,6 +1163,8 @@ bool BuiltInSettingsBackend::switchEnabled(SettingsSwitchBinding binding) const 
 }
 
 bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, bool value) {
+    if (binding == SettingsSwitchBinding::ScreenshotShowSaveResult)
+        return switchEnabled(binding) && storage::ScreenshotSettings().setShowSaveResult(value);
     if (binding == SettingsSwitchBinding::OcrResidentProcess ||
         binding == SettingsSwitchBinding::OcrModelHotStart) {
         const auto key = binding == SettingsSwitchBinding::OcrResidentProcess
@@ -1387,6 +1393,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::ScreenshotConfirmBeforeExitingViaShortcut:
     case SettingsSwitchBinding::ScreenshotRestoreOriginalScreenColors:
     case SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard:
+    case SettingsSwitchBinding::ScreenshotShowSaveResult:
     case SettingsSwitchBinding::SaveRecognitionResultAsImage:
     case SettingsSwitchBinding::ShowOriginalImagePreview:
     case SettingsSwitchBinding::ShowTextHighlighting:

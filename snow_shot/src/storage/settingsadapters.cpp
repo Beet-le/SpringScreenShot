@@ -1103,6 +1103,14 @@ bool ScreenshotSettings::setSaveAsFileDialog(const QString& dialog) const {
     return cache().setValue(QStringLiteral("screenshot/save_as_file_dialog"), dialog);
 }
 
+bool ScreenshotSettings::showSaveResult() const {
+    return cache().value(QStringLiteral("screenshot/show_save_result")).toBool();
+}
+
+bool ScreenshotSettings::setShowSaveResult(bool enabled) const {
+    return cache().setValue(QStringLiteral("screenshot/show_save_result"), enabled);
+}
+
 QVector<ScreenshotSavePathShortcut> ScreenshotSettings::savePathShortcuts() const {
     QVector<ScreenshotSavePathShortcut> result;
     for (const auto& value :

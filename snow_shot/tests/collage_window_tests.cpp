@@ -15,9 +15,11 @@
 #include "theme/theme_manager.h"
 #include "widgets/button.h"
 #include "widgets/color_picker.h"
+#include "widgets/input_line_edit.h"
 #include "widgets/input_number.h"
 #include "widgets/message.h"
 #include "widgets/modal.h"
+#include "widgets/result.h"
 #include "widgets/segmented.h"
 #include "pinned_animation_fixtures.h"
 #include "bmp_import_fixtures.h"
@@ -2130,6 +2132,69 @@ void completedFileSaveUsesExistingWriter(const QString& directory) {
         "the existing writer saves full-resolution static alpha pixels before the window closes");
 }
 
+void saveResultDefersCollageCompletion(const QString& directory) {
+    resetSettings();
+    const storage::ScreenshotSettings settings;
+    const auto previousDialog = settings.saveAsFileDialog();
+    const auto previousDirectory = settings.lastManualSaveDirectory();
+    const auto previousFormat = settings.lastManualSaveFormat();
+    const auto previousFormatOptions = settings.manualSaveFormatOptions();
+    const bool previousResult = settings.showSaveResult();
+    const auto restore = qScopeGuard([&] {
+        static_cast<void>(settings.setSaveAsFileDialog(previousDialog));
+        static_cast<void>(settings.setLastManualSaveDirectory(previousDirectory));
+        static_cast<void>(settings.setLastManualSaveState(previousFormat, previousFormatOptions));
+        static_cast<void>(settings.setShowSaveResult(previousResult));
+    });
+    require(settings.setSaveAsFileDialog(QStringLiteral("snow_shot")) &&
+                settings.setShowSaveResult(true) &&
+                settings.setLastManualSaveDirectory(directory) &&
+                settings.setLastManualSaveState(QStringLiteral("png"), {}),
+            "enable the real custom save result for collage exports");
+    for (const bool destroyOnCompletion : {false, true}) {
+        QPointer<CollageWindow> window = new CollageWindow;
+        const auto cleanup = qScopeGuard([&] { delete window.data(); });
+        window->present();
+        window->document()->append(image({40, 30}), QStringLiteral("save result"));
+        int completions = 0;
+        QObject::connect(window, &CollageWindow::exportFinished, qApp, [&](bool success) {
+            require(success, "dismissing a saved collage result reports success");
+            ++completions;
+            if (destroyOnCompletion)
+                delete window.data();
+        });
+        window->save();
+        QPointer<AdModal> dialog;
+        waitUntil(
+            [&] {
+                dialog = window->findChild<AdModal*>(QStringLiteral("screenshotSaveAsFileModal"));
+                return dialog &&
+                       dialog->contentWidget()->property("previewGeneration").toULongLong() > 0;
+            },
+            "collage opens and prepares its real custom save dialog");
+        auto* filename = dialog->contentWidget()->findChild<adqt::widgets::AdLineEdit*>(
+            QStringLiteral("saveFilenameInput"));
+        require(filename, "collage save filename input exists");
+        filename->setText(destroyOnCompletion ? QStringLiteral("collage-result-teardown")
+                                              : QStringLiteral("collage-result"));
+        auto* result = dialog->contentWidget()->findChild<adqt::widgets::AdResult*>(
+            QStringLiteral("saveResult"));
+        dialog->acceptButton()->click();
+        waitUntil([&] { return result && result->isVisible(); }, "collage save shows its result");
+        require(completions == 0 && window->busy() && window->modal()->isOpen() &&
+                    dialog->windowModality() == Qt::WindowModal &&
+                    QFileInfo::exists(QDir::fromNativeSeparators(result->subTitle())),
+                "saved result keeps the collage and its export alive until dismissal");
+        dialog->reject();
+        waitUntil([&] { return completions == 1 && !dialog; },
+                  "result dismissal completes once and releases its dialog");
+        require(destroyOnCompletion ? window.isNull() : !window->modal()->isOpen(),
+                "completion may close or synchronously destroy the collage owner");
+        flushEvents();
+        require(completions == 1, "owner teardown cannot repeat collage completion");
+    }
+}
+
 void destroyedAndClosedWindowsIgnorePendingCallbacks() {
     resetSettings();
     Ports ports;
@@ -2424,6 +2489,7 @@ int main(int argc, char* argv[]) {
     }
     if (arguments.contains(QStringLiteral("--export-feedback-only"))) {
         timed("Export feedback", exportFeedbackUsesMessagesAndBusyButtons);
+        timed("Save result lifetime", [&] { saveResultDefersCollageCompletion(directory.path()); });
         waitUntil([] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 0; },
                   "export feedback tests drain export jobs");
         ScreenshotExportCoordinator::shared().shutdown();
@@ -2490,6 +2556,7 @@ int main(int argc, char* argv[]) {
     timed("Native clipboard limits", nativeClipboardLimitsRejectBeforePreparation);
 #endif
     timed("Completed file save", [&] { completedFileSaveUsesExistingWriter(directory.path()); });
+    timed("Save result lifetime", [&] { saveResultDefersCollageCompletion(directory.path()); });
     timed("Destroyed and closed callback owners", destroyedAndClosedWindowsIgnorePendingCallbacks);
     timed("Native save service",
           [&] { nativeSaveServiceCompletesAndCancelsExactlyOnce(directory.path()); });

@@ -2744,6 +2744,10 @@
             <translation>Keep selection width and height consistent</translation>
         </message>
         <message>
+            <source>Keep the Snow Shot save dialog open after saving to show the result</source>
+            <translation>Keep the Snow Shot save dialog open after saving to show the result</translation>
+        </message>
+        <message>
             <source>Keep the first button of each toolbar group visible instead of the last used button</source>
             <translation>Keep the first button of each toolbar group visible instead of the last used button</translation>
         </message>
@@ -4050,6 +4054,10 @@
         <message>
             <source>Show recording status prompts</source>
             <translation>Show recording status prompts</translation>
+        </message>
+        <message>
+            <source>Show save result</source>
+            <translation>Show save result</translation>
         </message>
         <message>
             <source>Show screenshot guides when a capture starts</source>

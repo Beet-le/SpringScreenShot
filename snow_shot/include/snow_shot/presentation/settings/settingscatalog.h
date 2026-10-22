@@ -148,6 +148,7 @@ enum class SettingsSwitchBinding {
     ScreenshotAutoRecognizeQrCode,
     ScreenshotRestoreOriginalScreenColors,
     ScreenshotCopyImageFileToClipboard,
+    ScreenshotShowSaveResult,
     SaveRecognitionResultAsImage,
     ShowOriginalImagePreview,
     ShowTextHighlighting,

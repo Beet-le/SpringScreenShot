@@ -1687,6 +1687,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("capture_current_monitor"), QStringLiteral("pin_to_screen")}},
     {QStringLiteral("screenshot/copy_image_file_to_clipboard"), false,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("screenshot/show_save_result"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("screenshot/image_save_directory"),
      defaultOutputDirectory(QStandardPaths::PicturesLocation), ConfigurationValueKind::String},
     {QStringLiteral("screenshot/last_manual_save_directory"), QString(),

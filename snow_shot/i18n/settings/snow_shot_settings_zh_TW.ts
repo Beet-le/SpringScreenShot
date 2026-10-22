@@ -2744,6 +2744,10 @@
             <translation>保持選取區寬高一致</translation>
         </message>
         <message>
+            <source>Keep the Snow Shot save dialog open after saving to show the result</source>
+            <translation>儲存後保持 Snow Shot 儲存對話方塊開啟，以顯示儲存結果</translation>
+        </message>
+        <message>
             <source>Keep the first button of each toolbar group visible instead of the last used button</source>
             <translation>工具列的每個群組一律顯示第一個按鈕，而不是上次使用的按鈕</translation>
         </message>
@@ -4050,6 +4054,10 @@
         <message>
             <source>Show recording status prompts</source>
             <translation>顯示錄影狀態提示</translation>
+        </message>
+        <message>
+            <source>Show save result</source>
+            <translation>顯示儲存結果</translation>
         </message>
         <message>
             <source>Show screenshot guides when a capture starts</source>

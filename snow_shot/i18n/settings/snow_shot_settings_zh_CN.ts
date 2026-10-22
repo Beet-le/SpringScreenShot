@@ -2744,6 +2744,10 @@
             <translation>保持选区宽高一致</translation>
         </message>
         <message>
+            <source>Keep the Snow Shot save dialog open after saving to show the result</source>
+            <translation>保存后保持 Snow Shot 保存对话框打开，以显示保存结果</translation>
+        </message>
+        <message>
             <source>Keep the first button of each toolbar group visible instead of the last used button</source>
             <translation>工具栏的每个分组始终显示第一个按钮，而不是上次使用的按钮</translation>
         </message>
@@ -4050,6 +4054,10 @@
         <message>
             <source>Show recording status prompts</source>
             <translation>显示录屏状态提示</translation>
+        </message>
+        <message>
+            <source>Show save result</source>
+            <translation>显示保存结果</translation>
         </message>
         <message>
             <source>Show screenshot guides when a capture starts</source>

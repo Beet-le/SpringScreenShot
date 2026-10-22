@@ -1472,6 +1472,13 @@ QVector<SettingsItemDefinition> screenshotOutputItems() {
         screenshotAutoSaveAfterExecutionItem(),
         screenshotCopyFileItem(),
         screenshotSaveAsFileDialogItem(),
+        switchItem(QStringLiteral("screenshot.show-save-result"),
+                   QT_TRANSLATE_NOOP("SettingsCatalog", "Show save result"),
+                   QT_TRANSLATE_NOOP(
+                       "SettingsCatalog",
+                       "Keep the Snow Shot save dialog open after saving to show the result"),
+                   QStringLiteral("screenshot/show_save_result"),
+                   SettingsSwitchBinding::ScreenshotShowSaveResult),
         directoryPathItem(
             QStringLiteral("screenshot-output.image-save-directory"),
             QT_TRANSLATE_NOOP("SettingsCatalog", "Image save directory"),
@@ -5149,6 +5156,9 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard:
                         expectedKey = QStringLiteral("screenshot/copy_image_file_to_clipboard");
+                        break;
+                    case SettingsSwitchBinding::ScreenshotShowSaveResult:
+                        expectedKey = QStringLiteral("screenshot/show_save_result");
                         break;
                     case SettingsSwitchBinding::SaveRecognitionResultAsImage:
                         expectedKey =

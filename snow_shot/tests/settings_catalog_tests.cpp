@@ -1244,7 +1244,9 @@ void builtInCatalogIsCompleteAndValid() {
             storagePage->sections.at(0).items.at(0).id == autoSaveAfterExecution->id &&
             storagePage->sections.at(0).items.at(1).id == copyImageFile->id &&
             storagePage->sections.at(0).items.at(2).id == saveDialog->id &&
-            storagePage->sections.at(0).items.at(3).id == imageDirectory->id &&
+            storagePage->sections.at(0).items.at(3).id ==
+                QStringLiteral("screenshot.show-save-result") &&
+            storagePage->sections.at(0).items.at(4).id == imageDirectory->id &&
             autoSaveAfterExecution->title.translated() ==
                 QStringLiteral("Auto-save after execution") &&
             autoSaveAfterExecution->description.translated() ==
@@ -1337,9 +1339,9 @@ void builtInCatalogIsCompleteAndValid() {
         catalog.item({QStringLiteral("files-history"), QStringLiteral("screenshots"),
                       QStringLiteral("screenshot-output.image-quality")});
     require(compressionLevel != nullptr && imageQuality != nullptr && pdfPageSize != nullptr &&
-                storagePage->sections.at(0).items.at(5).id == compressionLevel->id &&
-                storagePage->sections.at(0).items.at(6).id == imageQuality->id &&
-                storagePage->sections.at(0).items.at(7).id == pdfPageSize->id,
+                storagePage->sections.at(0).items.at(6).id == compressionLevel->id &&
+                storagePage->sections.at(0).items.at(7).id == imageQuality->id &&
+                storagePage->sections.at(0).items.at(8).id == pdfPageSize->id,
             "compression and quality must follow image format before PDF page size");
     const auto& compression =
         std::get<settings::SettingsSelectDefinition>(compressionLevel->payload);

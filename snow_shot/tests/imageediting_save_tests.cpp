@@ -9,6 +9,7 @@
 #include "widgets/button.h"
 #include "widgets/input_line_edit.h"
 #include "widgets/modal.h"
+#include "widgets/result.h"
 #include "../src/presentation/imageediting/imageeditingexportcontroller.h"
 #include "spreadsheet_open_test_support.h"
 #include "recognition_workbook_test_support.h"
@@ -79,7 +80,7 @@ QFileDialog* systemDialog(ImageEditingWindow& window) {
         QStringLiteral("screenshotManualSaveDialog"));
 }
 
-void saveWorkflow(bool custom, const QTemporaryDir& directory) {
+void saveWorkflow(bool custom, const QTemporaryDir& directory, bool showResult = false) {
     using Axis = ImageEditingDocument::CropAxis;
     ImageEditingWindow window;
     window.present(source());
@@ -116,7 +117,8 @@ void saveWorkflow(bool custom, const QTemporaryDir& directory) {
     const auto expected = window.document()->image();
     const auto checkpoint = window.document()->checkpoint();
     const QString filename =
-        custom ? QStringLiteral("editor-custom") : QStringLiteral("editor-system");
+        showResult ? QStringLiteral("editor-result")
+                   : (custom ? QStringLiteral("editor-custom") : QStringLiteral("editor-system"));
     const auto destination = directory.filePath(filename + QStringLiteral(".png"));
     window.palette()->saveRequested();
     if (custom) {
@@ -138,6 +140,16 @@ void saveWorkflow(bool custom, const QTemporaryDir& directory) {
     }
     require(window.document()->crop(Axis::Columns, 1, 3),
             "image changes while the captured save is pending");
+    if (showResult) {
+        auto* dialog = customDialog(window);
+        auto* result = dialog->contentWidget()->findChild<adqt::widgets::AdResult*>(
+            QStringLiteral("saveResult"));
+        awaitCondition([&] { return result && result->isVisible(); },
+                       "editor save shows its result");
+        require(exports == 1 && dialog->isOpen() && window.modal()->isOpen(),
+                "result view must keep editor export pending and its owner alive");
+        dialog->reject();
+    }
     awaitCondition([&] { return exports == 2; }, "image file save completes once");
     require(succeeded && QFileInfo::exists(destination), "selected save dialog writes an image");
     const auto saved = QImage(destination).convertToFormat(QImage::Format_ARGB32);
@@ -752,17 +764,20 @@ void runImageEditingSaveTests() {
     const auto previousDirectory = settings.lastManualSaveDirectory();
     const auto previousFormat = settings.lastManualSaveFormat();
     const auto previousFormatOptions = settings.manualSaveFormatOptions();
+    const bool previousShowResult = settings.showSaveResult();
     const bool nativeDialogsDisabled = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
     const auto restore = qScopeGuard([&] {
         static_cast<void>(settings.setSaveAsFileDialog(previousDialog));
         static_cast<void>(settings.setLastManualSaveDirectory(previousDirectory));
         static_cast<void>(settings.setLastManualSaveState(previousFormat, previousFormatOptions));
+        static_cast<void>(settings.setShowSaveResult(previousShowResult));
         QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, nativeDialogsDisabled);
     });
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QTemporaryDir directory;
     require(directory.isValid() && settings.setLastManualSaveDirectory(directory.path()) &&
-                settings.setLastManualSaveFormat(QStringLiteral("png")),
+                settings.setLastManualSaveFormat(QStringLiteral("png")) &&
+                settings.setShowSaveResult(false),
             "configure isolated image save destinations");
     for (const bool custom : {false, true}) {
         require(settings.setSaveAsFileDialog(custom ? QStringLiteral("snow_shot")
@@ -771,6 +786,11 @@ void runImageEditingSaveTests() {
         saveWorkflow(custom, directory);
         shutdownCancelsSave(custom);
     }
+    require(settings.setSaveAsFileDialog(QStringLiteral("snow_shot")) &&
+                settings.setShowSaveResult(true),
+            "enable editor save result");
+    saveWorkflow(true, directory, true);
+    require(settings.setShowSaveResult(false), "restore save result before other save tests");
     exportCompletionMayDestroyEditor();
     clipboardPublicationMayDestroyEditor();
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION

@@ -3530,6 +3530,8 @@ void rejectedCalculationRetries(QWidget& owner, const QTemporaryDir& temp) {
 }
 } // namespace
 
+void runScreenshotSaveResultTests();
+
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
@@ -3541,6 +3543,12 @@ int main(int argc, char* argv[]) {
                     .initialize({temp.filePath("app"), temp.filePath("data"), 60000})
                     .success,
                 "test storage initialization failed");
+        if (app.arguments().contains(QStringLiteral("--save-result-only"))) {
+            runScreenshotSaveResultTests();
+            ScreenshotExportCoordinator::shared().shutdown();
+            storage::ApplicationStorage::instance().shutdown();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--native-detail-transparency-only"))) {
             canvasNativeDetailPreservesTransparency();
             ScreenshotExportCoordinator::shared().shutdown();

@@ -1286,6 +1286,10 @@ set(SNOW_SHOT_COLLAGE_EXPORT_TEST_SOURCES
     include/snow_shot/presentation/screenshotsavepreviewcanvas.h
     src/presentation/services/screenshotmanualsave.cpp
     src/presentation/services/screenshotsaveasfiledialog.cpp
+    src/presentation/services/screenshotsavefooter.h
+    src/presentation/services/screenshotsavefooter.cpp
+    src/presentation/services/screenshotsaveresult.h
+    src/presentation/services/screenshotsaveresult.cpp
     src/presentation/services/screenshotsaveexportpipeline.cpp
     src/presentation/services/screenshotsavepreviewcanvas.cpp
     src/presentation/services/screenshotclipboardservice.cpp
@@ -1990,6 +1994,10 @@ set(PROJECT_CXX_SOURCES
     src/presentation/selection/screenshotselectionresizemodalcontent.cpp
     src/presentation/selection/screenshotselectionresizeworkflow.cpp
     src/presentation/services/screenshotsaveasfiledialog.cpp
+    src/presentation/services/screenshotsavefooter.h
+    src/presentation/services/screenshotsavefooter.cpp
+    src/presentation/services/screenshotsaveresult.h
+    src/presentation/services/screenshotsaveresult.cpp
     src/presentation/services/screenshotsaveexportpipeline.cpp
     include/snow_shot/presentation/screenshotsavepreviewcanvas.h
     src/presentation/services/screenshotsavepreviewcanvas.cpp
@@ -5003,6 +5011,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/components/pathinput.cpp
         include/snow_shot/presentation/screenshotsavepreviewcanvas.h
         src/presentation/services/screenshotsaveasfiledialog.cpp
+        src/presentation/services/screenshotsavefooter.h
+        src/presentation/services/screenshotsavefooter.cpp
+        src/presentation/services/screenshotsaveresult.h
+        src/presentation/services/screenshotsaveresult.cpp
         src/presentation/services/screenshotsaveexportpipeline.cpp
         src/presentation/services/screenshotsavepreviewcanvas.cpp
         src/platform/physicalcursor.cpp
@@ -5107,6 +5119,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_compile_options(snow-shot-pinned-window-tests PRIVATE /bigobj)
     endif()
     target_link_libraries(snow-shot-pinned-window-tests PRIVATE
+        snow_shot_file_manager
         snow_stitch_images_c
         snow_shot_diagnostics
         MINIZIP::minizip-ng
@@ -6020,8 +6033,13 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/ocr/screenshotocrpresentation.cpp
         src/presentation/ocr/screenshotocrtextlayout.cpp
         tests/screenshot_export_dialog_workflow_tests.cpp
+        tests/screenshot_save_result_tests.cpp
         include/snow_shot/presentation/screenshotsavepreviewcanvas.h
         src/presentation/services/screenshotsaveasfiledialog.cpp
+        src/presentation/services/screenshotsavefooter.h
+        src/presentation/services/screenshotsavefooter.cpp
+        src/presentation/services/screenshotsaveresult.h
+        src/presentation/services/screenshotsaveresult.cpp
         src/presentation/services/screenshotsaveexportpipeline.cpp
         src/presentation/services/screenshotsavepreviewcanvas.cpp
         src/presentation/overlay/screenshotselectionshadowrenderer.cpp
@@ -6064,6 +6082,24 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-export-dialog-workflow-tests
         COMMAND snow-shot-export-dialog-workflow-tests)
+    # Keep a realistic desktop resolution when scaling the offscreen screen to 200%.
+    file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/save-result-screen.json"
+        CONTENT "{\"screens\":[{\"name\":\"Save result desktop\",\"width\":1920,\"height\":1080,\"logicalDpi\":96,\"logicalBaseDpi\":96,\"dpr\":1}]}\n")
+    foreach(_snow_save_result_dpr IN ITEMS 1 2)
+        set(_snow_save_result_test "snow-shot-save-result-${_snow_save_result_dpr}-tests")
+        add_test(NAME ${_snow_save_result_test}
+            COMMAND snow-shot-export-dialog-workflow-tests --save-result-only
+                -platform offscreen:configfile=save-result-screen.json)
+        set_tests_properties(${_snow_save_result_test} PROPERTIES
+            LABELS unit RUN_SERIAL TRUE TIMEOUT 90
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+            ENVIRONMENT "QT_SCALE_FACTOR=${_snow_save_result_dpr};${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        if(WIN32)
+            set_property(TEST ${_snow_save_result_test} APPEND PROPERTY
+                ENVIRONMENT "QT_QPA_FONTDIR=$ENV{SystemRoot}/Fonts")
+        endif()
+    endforeach()
     add_test(NAME snow-shot-export-dialog-shortcut-tests
         COMMAND snow-shot-export-dialog-workflow-tests --shortcuts)
     add_test(NAME snow-shot-export-dialog-time-variables-tests
@@ -9878,6 +9914,10 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         src/presentation/components/pathinput.cpp
         include/snow_shot/presentation/screenshotsavepreviewcanvas.h
         src/presentation/services/screenshotsaveasfiledialog.cpp
+        src/presentation/services/screenshotsavefooter.h
+        src/presentation/services/screenshotsavefooter.cpp
+        src/presentation/services/screenshotsaveresult.h
+        src/presentation/services/screenshotsaveresult.cpp
         src/presentation/services/screenshotsaveexportpipeline.cpp
         src/presentation/services/screenshotsavepreviewcanvas.cpp
         src/platform/physicalcursor.cpp
@@ -9969,6 +10009,7 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         "${CMAKE_CURRENT_SOURCE_DIR}/../snow_draw_engine_qt/crates/snow-draw-engine-c/include"
     )
     target_link_libraries(snow-shot-file-pin-batch-performance-benchmark PRIVATE
+        snow_shot_file_manager
         MINIZIP::minizip-ng
         snow_shot_animation_playback
         ${SNOW_SELECTED_FILES_LIBRARIES}

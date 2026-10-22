@@ -278,6 +278,8 @@ class ScreenshotSettings final {
     bool setLastManualSaveFormat(const QString& format) const;
     [[nodiscard]] QString saveAsFileDialog() const;
     bool setSaveAsFileDialog(const QString& dialog) const;
+    [[nodiscard]] bool showSaveResult() const;
+    bool setShowSaveResult(bool enabled) const;
     [[nodiscard]] QVector<ScreenshotSavePathShortcut> savePathShortcuts() const;
     bool setSavePathShortcuts(const QVector<ScreenshotSavePathShortcut>& shortcuts) const;
     [[nodiscard]] QString pdfPageSize() const;
