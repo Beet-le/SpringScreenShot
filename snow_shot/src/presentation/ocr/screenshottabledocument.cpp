@@ -535,7 +535,13 @@ ScreenshotTableDocument::toClipboardMimeData(const ScreenshotTableRange& source)
             }
         }
     }
-    mimeData->setHtml(spreadsheet.toHtml(range));
+    // Spreadsheet HTML importers need document context around the table. A bare
+    // fragment can make the Windows CF_HTML transport header appear as cell text.
+    // Qt supplies that native header and calculates its UTF-8 byte offsets.
+    mimeData->setHtml(QStringLiteral("<html><head><meta charset=\"utf-8\"></head><body>"
+                                     "<!--StartFragment-->") +
+                      spreadsheet.toHtml(range) +
+                      QStringLiteral("<!--EndFragment--></body></html>"));
     mimeData->setText(spreadsheet.toPlainText(range));
     return mimeData;
 }

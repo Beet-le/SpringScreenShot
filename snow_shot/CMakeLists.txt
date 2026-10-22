@@ -8619,6 +8619,14 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
+    if(WIN32)
+        target_link_libraries(snow-shot-ocr-presentation-tests PRIVATE ole32 user32)
+        add_test(NAME snow-shot-table-clipboard-native-tests
+            COMMAND snow-shot-ocr-presentation-tests --native-table-clipboard -platform windows)
+        set_tests_properties(snow-shot-table-clipboard-native-tests PROPERTIES
+            LABELS "unit;windows" RUN_SERIAL TRUE TIMEOUT 30
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
 
     add_executable(snow-shot-recognition-window-tests
         tests/screenshot_recognition_window_tests.cpp
