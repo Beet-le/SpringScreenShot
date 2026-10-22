@@ -676,7 +676,7 @@ if("snow-shot-minimal" IN_LIST FEATURES)
         " --enable-muxer=mp4,gif,apng,webp"
         " --enable-demuxer=matroska,mov,gif,apng,webp,webp_anim"
         " --enable-parser=h264,hevc,aac,gif"
-        " --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc"
+        " --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc,vp9_superframe"
         " --enable-protocol=file"
         " --enable-filter=abuffer,abuffersink,atempo"
         " --enable-hwaccel=h264_d3d11va,h264_d3d11va2,h264_dxva2,hevc_d3d11va,hevc_d3d11va2,hevc_dxva2"

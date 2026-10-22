@@ -1870,6 +1870,15 @@ SettingsItemDefinition showOriginalImagePreviewItem() {
         SettingsSwitchBinding::ShowOriginalImagePreview);
 }
 
+SettingsItemDefinition dailyUsageUploadItem() {
+    return switchItem(
+        QStringLiteral("connections.daily-usage-upload"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Upload daily usage summary"),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "Send an anonymous daily count of feature usage to the server."),
+        QStringLiteral("telemetry/daily_usage_upload"), SettingsSwitchBinding::DailyUsageUpload);
+}
+
 QVector<SettingsOptionDefinition> ocrSelectOptions(const QVector<OcrTextOption>& options) {
     QVector<SettingsOptionDefinition> result;
     result.reserve(options.size());
@@ -4050,7 +4059,7 @@ QVector<SettingsPageDefinition> builtInPages() {
                  settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
                                                 "Configure proxy use for network requests")),
                  SettingsSectionReset::Network,
-                 {proxyItem()},
+                 {proxyItem(), dailyUsageUploadItem()},
              },
              {
                  QStringLiteral("mcp"),
@@ -5215,6 +5224,9 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton:
                         expectedKey =
                             QStringLiteral("drawing/always_show_first_toolbar_group_button");
+                        break;
+                    case SettingsSwitchBinding::DailyUsageUpload:
+                        expectedKey = QStringLiteral("telemetry/daily_usage_upload");
                         break;
                     }
                     if (itemDefinition.configurationKey != expectedKey || schemaEntry == nullptr ||

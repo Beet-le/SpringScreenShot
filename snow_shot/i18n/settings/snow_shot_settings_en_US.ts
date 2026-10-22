@@ -3812,6 +3812,10 @@
             <translation>Selection, capture guides and annotation tools</translation>
         </message>
         <message>
+            <source>Send an anonymous daily count of feature usage to the server.</source>
+            <translation>Send an anonymous daily count of feature usage to the server.</translation>
+        </message>
+        <message>
             <source>Serial number</source>
             <translation>Serial number</translation>
         </message>
@@ -4518,6 +4522,10 @@
         <message>
             <source>Updates</source>
             <translation>Updates</translation>
+        </message>
+        <message>
+            <source>Upload daily usage summary</source>
+            <translation>Upload daily usage summary</translation>
         </message>
         <message>
             <source>Upload to Cloud</source>

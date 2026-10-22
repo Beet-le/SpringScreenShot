@@ -344,6 +344,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("none"), QStringLiteral("system")}},
+    {QStringLiteral("telemetry/daily_usage_upload"), true, ConfigurationValueKind::Boolean},
     {QStringLiteral("text_recognition/resident_process"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("text_recognition/model_hot_start"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("text_recognition/model_type"),
@@ -438,7 +439,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
 #endif
     {QStringLiteral("text_recognition/save_recognition_result_as_image"), true,
      ConfigurationValueKind::Boolean},
-    {QStringLiteral("text_recognition/show_original_image_preview"), true,
+    {QStringLiteral("text_recognition/show_original_image_preview"), false,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("text_recognition/default_formatting"), QStringLiteral("none"),
      ConfigurationValueKind::String, std::nullopt, ocrTextOptionValues(ocrFormattingOptions())},

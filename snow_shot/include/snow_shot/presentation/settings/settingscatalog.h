@@ -177,6 +177,7 @@ enum class SettingsSwitchBinding {
     LaunchAsAdministrator,
     DrawingRememberLastUsedTool,
     DrawingAlwaysShowFirstToolbarGroupButton,
+    DailyUsageUpload,
 };
 
 struct SettingsSwitchDefinition {

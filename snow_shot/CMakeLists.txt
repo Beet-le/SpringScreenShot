@@ -1857,6 +1857,7 @@ set(PROJECT_CXX_SOURCES
     src/presentation/capture/directcapturehistory.cpp
     src/presentation/capture/camerashuttersound.cpp
     src/app/applicationcontroller.cpp
+    src/app/usagereportservice.cpp
     src/app/updateconfirmationdialog.cpp
     src/app/mcp/screenshotmcpsession.cpp
     src/app/mcp/screenshotmcpserver.cpp
@@ -3048,6 +3049,17 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
+
+    add_executable(snow-shot-usage-report-tests
+        tests/usage_report_tests.cpp
+        src/app/usagereportservice.cpp
+    )
+    target_include_directories(snow-shot-usage-report-tests PRIVATE include)
+    target_link_libraries(snow-shot-usage-report-tests PRIVATE
+        snow_shot_storage snow_shot_diagnostics Qt6::Core)
+    add_test(NAME snow-shot-usage-report-tests COMMAND snow-shot-usage-report-tests)
+    set_tests_properties(snow-shot-usage-report-tests PROPERTIES LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
     add_executable(snow-shot-main-window-skin-codec-tests tests/main_window_skin_codec_tests.cpp)
     target_link_libraries(snow-shot-main-window-skin-codec-tests PRIVATE snow_shot_image_codec)

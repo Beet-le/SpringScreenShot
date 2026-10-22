@@ -447,48 +447,48 @@ void originalImagePreviewDefaultsPersistsAndResets() {
     constexpr auto binding = settings::SettingsSwitchBinding::ShowOriginalImagePreview;
     const QString key = QStringLiteral("text_recognition/show_original_image_preview");
     const QString itemId = QStringLiteral("text-recognition.show-original-image-preview");
-    require(storage::ConfigurationSchema::defaultValue(key).toBool() &&
-                backend.switchEnabled(binding) && backend.switchValue(binding) &&
-                recognition.showOriginalImagePreview(),
-            "original image preview must default on through schema, backend and typed settings");
+    require(!storage::ConfigurationSchema::defaultValue(key).toBool() &&
+                backend.switchEnabled(binding) && !backend.switchValue(binding) &&
+                !recognition.showOriginalImagePreview(),
+            "original image preview must default off through schema, backend and typed settings");
     settings::SettingsRuntimeSession session(settings::builtInSettingsRegistry(), backend);
-    require(session.state(itemId).acceptedValue.toBool() && session.state(itemId).enabled,
+    require(!session.state(itemId).acceptedValue.toBool() && session.state(itemId).enabled,
             "original image preview is an enabled function settings switch");
-    require(session.submitDraft(itemId, false) && !backend.switchValue(binding) &&
-                !recognition.showOriginalImagePreview() &&
+    require(session.submitDraft(itemId, true) && backend.switchValue(binding) &&
+                recognition.showOriginalImagePreview() &&
                 applicationStorage.configuration().flushNow().success,
-            "the preview switch must persist a disabled value through the runtime session");
+            "the preview switch must persist an enabled value through the runtime session");
     storage::ConfigurationStore reloaded(
         QDir(applicationStorage.configurationDirectory()).filePath(QStringLiteral("config.json")),
         true, true, 60000);
-    require(!reloaded.value(key).toBool(), "disabled preview survives configuration reload");
+    require(reloaded.value(key).toBool(), "enabled preview survives configuration reload");
     const QString archivePath =
         QDir(applicationStorage.configurationDirectory()).filePath(QStringLiteral("preview.zip"));
     require(storage::ConfigurationArchive::write(
-                archivePath, {{key, false}}, storage::ConfigurationStore::currentSchemaVersion())
+                archivePath, {{key, true}}, storage::ConfigurationStore::currentSchemaVersion())
                 .isEmpty(),
             "the preview preference must be exportable in configuration archives");
     const auto imported = storage::ConfigurationArchive::read(archivePath);
     require(imported.isValid() && imported.values.contains(key) &&
-                !imported.values.value(key).toBool() &&
+                imported.values.value(key).toBool() &&
                 reloaded.applySnapshot(imported.values, imported.schemaVersion) &&
-                !reloaded.value(key).toBool(),
-            "imported configuration restores the disabled preview preference");
+                reloaded.value(key).toBool(),
+            "imported configuration restores the enabled preview preference");
     require(reloaded.applySnapshot({{QStringLiteral("text_recognition/default_formatting"),
                                      QStringLiteral("keep")}}) &&
-                reloaded.value(key).toBool(),
-            "older configuration snapshots missing the preference use the enabled default");
+                !reloaded.value(key).toBool(),
+            "older configuration snapshots missing the preference use the disabled default");
     require(!applicationStorage.configuration().setValue(key, QStringLiteral("false")) &&
                 !recognition.showOriginalImagePreview(),
             "the preview setting must reject nonboolean writes without changing the preference");
     require(session.reset(settings::SettingsSectionReset::TextRecognitionBehavior) &&
-                backend.switchValue(binding) && recognition.showOriginalImagePreview(),
-            "resetting Text Recognition behavior restores the enabled preview default");
-    require(recognition.setShowOriginalImagePreview(false), "typed preview setter disables");
+                !backend.switchValue(binding) && !recognition.showOriginalImagePreview(),
+            "resetting Text Recognition behavior restores the disabled preview default");
+    require(recognition.setShowOriginalImagePreview(true), "typed preview setter enables");
     session.refreshAll();
-    require(!session.state(itemId).acceptedValue.toBool(),
+    require(session.state(itemId).acceptedValue.toBool(),
             "externally changed preview preference refreshes the settings switch");
-    require(recognition.setShowOriginalImagePreview(true), "restore enabled preview default");
+    require(recognition.setShowOriginalImagePreview(false), "restore disabled preview default");
 }
 
 void textDetectionProcessingDefaultsPersistsAndResets() {

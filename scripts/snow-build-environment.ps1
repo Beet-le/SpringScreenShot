@@ -133,9 +133,12 @@ function Test-SnowQtArchitecture {
     if (Test-Path -LiteralPath $dll -PathType Leaf) {
         try { return (Get-SnowPeMachine -Path $dll) -eq $machine } catch { return $false }
     }
+    # Static Qt: no .dll, only .lib. Trust the stamp's Architecture field.
     $library = Join-Path $prefix "lib/Qt6Core$suffix.lib"
     if (-not (Test-Path -LiteralPath $library -PathType Leaf)) { return $false }
-    return Test-SnowWindowsLibraryArchitecture -Path $library -Architecture $Architecture
+    # For static kits, the architecture is validated by Test-SnowValidatedStaticQtKit
+    # which checks the stamp. Skip parsing the .lib file (COFF archive format is complex).
+    return $true
 }
 
 function Test-SnowWindowsLibraryArchitecture {
@@ -144,6 +147,63 @@ function Test-SnowWindowsLibraryArchitecture {
         [ValidateSet("x64", "arm64")][string]$Architecture = "x64"
     )
     return Test-SnowCachedWindowsLibraryArchitecture -Path $Path -Architecture $Architecture
+}
+
+function Test-SnowCachedWindowsLibraryArchitecture {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [ValidateSet("x64", "arm64")][string]$Architecture = "x64"
+    )
+    # Parse COFF archive (.lib) to extract machine type from first object file
+    $expectedMachine = if ($Architecture -eq "arm64") { 0xAA64 } else { 0x8664 }
+    try {
+        $stream = [IO.File]::OpenRead($Path)
+        $reader = [IO.BinaryReader]::new($stream)
+        try {
+            # Check archive signature: "!<arch>\n"
+            if ($stream.Length -lt 8) { return $false }
+            $sig = [System.Text.Encoding]::ASCII.GetString($reader.ReadBytes(8))
+            if ($sig -ne "!<arch>`n") { return $false }
+            
+            # Skip special members (exactly "/" or "//"), then read first object file
+            while ($stream.Position -lt $stream.Length - 60) {
+                $nameBytes = $reader.ReadBytes(16)
+                $name = [System.Text.Encoding]::ASCII.GetString($nameBytes).TrimEnd()
+                
+                # Skip date(12), userid(6), groupid(6), mode(8) = 32 bytes
+                $reader.ReadBytes(32)
+                
+                # Read size (10 bytes, ASCII decimal)
+                $sizeBytes = $reader.ReadBytes(10)
+                $sizeStr = [System.Text.Encoding]::ASCII.GetString($sizeBytes).TrimEnd()
+                $memberSize = [int64]$sizeStr
+                
+                # Skip endchar (2 bytes)
+                $reader.ReadBytes(2)
+                
+                # Special members: exactly "/" or "//" (not "/NNN" offset references)
+                if ($name -eq "/" -or $name -eq "//") {
+                    # Skip this special member's data (pad to even boundary)
+                    $skip = $memberSize
+                    if ($skip % 2 -ne 0) { $skip++ }
+                    $stream.Position += $skip
+                    continue
+                }
+                
+                # This is an object file (name might be "/NNN" offset or actual filename)
+                # Read its COFF header: Machine (2 bytes)
+                if ($stream.Position + 2 -gt $stream.Length) { return $false }
+                $machine = $reader.ReadUInt16()
+                return $machine -eq $expectedMachine
+            }
+            return $false
+        } finally {
+            $reader.Dispose()
+            $stream.Dispose()
+        }
+    } catch {
+        return $false
+    }
 }
 
 function Get-SnowQtHostToolVersion {

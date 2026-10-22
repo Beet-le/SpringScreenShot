@@ -55,6 +55,12 @@ class TextRecognitionSettings final {
     bool setDefaultPunctuation(const QString& value) const;
 };
 
+class TelemetrySettings final {
+  public:
+    [[nodiscard]] bool dailyUsageUpload() const;
+    bool setDailyUsageUpload(bool enabled) const;
+};
+
 struct ScreenshotSavePathShortcut {
     QString name;
     QString path;

@@ -3812,6 +3812,10 @@
             <translation>选区、截图辅助线与标注工具</translation>
         </message>
         <message>
+            <source>Send an anonymous daily count of feature usage to the server.</source>
+            <translation>向服务器发送匿名的每日功能使用次数统计。</translation>
+        </message>
+        <message>
             <source>Serial number</source>
             <translation>序号</translation>
         </message>
@@ -4518,6 +4522,10 @@
         <message>
             <source>Updates</source>
             <translation>更新</translation>
+        </message>
+        <message>
+            <source>Upload daily usage summary</source>
+            <translation>上传每日使用摘要</translation>
         </message>
         <message>
             <source>Upload to Cloud</source>

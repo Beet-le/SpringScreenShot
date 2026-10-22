@@ -12,6 +12,7 @@
 #include "snow_shot/app/featureavailability.h"
 #include "snow_shot/app/applicationinputguard.h"
 #include "snow_shot/app/launchcommands.h"
+#include "snow_shot/app/usagereportservice.h"
 #include "snow_shot/presentation/apppermissionservice.h"
 #ifdef Q_OS_MACOS
 #include "snow_shot/platform/macos/applicationactivation.h"
@@ -359,6 +360,9 @@ class ApplicationController::Impl {
         ocrRecognition = std::make_unique<ScreenshotOcrRecognitionService>(ocrOptions, &q);
         auto& configuration = applicationStorage.configuration();
         updates = new update::UpdateService(update::defaultUpdateServiceOptions(), &app);
+#ifdef Q_OS_WIN
+        usageReport = new UsageReportService(UsageReportService::Options{}, &app);
+#endif
         updates->setProgressAppearance(
             presentation::styles::ThemeManager::instance().updateProgressAppearance());
         QObject::connect(
@@ -1456,6 +1460,10 @@ class ApplicationController::Impl {
         }
         started = true;
         updates->start();
+#ifdef Q_OS_WIN
+        if (usageReport != nullptr)
+            usageReport->start();
+#endif
 
 #ifdef Q_OS_MACOS
         permissions.setMicrophoneEnabled(storage::RecordingSettings().microphoneEnabled());
@@ -2216,6 +2224,7 @@ class ApplicationController::Impl {
     std::unique_ptr<StoreUpdateLifecycle> storeLifecycle;
     update::UpdateService* updates = nullptr;
 #ifdef Q_OS_WIN
+    UsageReportService* usageReport = nullptr;
     QStringList deferredShellFilePaths;
     bool deferredShellForeground = false;
     QStringList deferredStorageShellFilePaths;
@@ -2299,4 +2308,3 @@ void ApplicationController::restorePinnedWindows() {
     m_impl->restorePinnedWindows();
 }
 } // namespace snow_shot::app
-

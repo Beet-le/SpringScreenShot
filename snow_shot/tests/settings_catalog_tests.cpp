@@ -957,9 +957,9 @@ void builtInCatalogIsCompleteAndValid() {
                     QStringLiteral("text_recognition/show_original_image_preview") &&
                 std::get<settings::SettingsSwitchDefinition>(recognitionPreview.payload).binding ==
                     settings::SettingsSwitchBinding::ShowOriginalImagePreview &&
-                storage::ConfigurationSchema::defaultValue(recognitionPreview.configurationKey)
-                    .toBool(),
-            "original image preview belongs to recognition behavior and defaults on");
+                !storage::ConfigurationSchema::defaultValue(recognitionPreview.configurationKey)
+                     .toBool(),
+            "original image preview belongs to recognition behavior and defaults off");
     ocrDefaultOptionsShareToolbarSource(catalog);
     const auto* translation = catalog.item({QStringLiteral("text-recognition-translation"),
                                             QStringLiteral("translation-settings"),
