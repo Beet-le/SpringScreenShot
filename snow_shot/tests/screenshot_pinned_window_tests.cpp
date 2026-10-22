@@ -181,6 +181,9 @@
 #include <vector>
 #include <qpa/qplatformscreen.h>
 #include <qpa/qwindowsysteminterface.h>
+#ifdef Q_OS_MACOS
+#include <private/qwindow_p.h>
+#endif
 
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include <qt_windows.h>
@@ -19599,6 +19602,73 @@ void pinnedOddPixelExtentRemainsSharp() {
 }
 
 #ifdef Q_OS_MACOS
+void pinnedSafeAreaChangesPreserveContentAlignment() {
+    class SafeAreaWindow final : public QPlatformWindow {
+      public:
+        explicit SafeAreaWindow(QWindow* window) : QPlatformWindow(window) {}
+        QMargins safeAreaMargins() const override {
+            return margins;
+        }
+        QMargins margins;
+    };
+
+    for (const bool prewarmed : {false, true}) {
+        QScreen* screen = QGuiApplication::primaryScreen();
+        ScreenshotPinnedWindow window;
+        window.setAttribute(Qt::WA_DeleteOnClose, false);
+        if (prewarmed)
+            require(window.prewarm(screen), "safe-area fixture must prewarm its pin shell");
+        const QSize extent(321, 181);
+        const QImage source = pinnedPixelPattern(extent);
+        ScreenshotPinnedWindow::Config config;
+        config.screen = screen;
+        config.placement = {screen->name(), screen->serialNumber(), QPointF(120, 120), extent};
+        config.canvasSourceRect = QRectF(QPointF(), QSizeF(extent));
+        config.imageSource = ScreenshotImageSource::fromImage(source, config.canvasSourceRect);
+        config.automaticTextRecognition = false;
+        require(window.present(config), "safe-area fixture must present its pin");
+        waitForUi(30);
+        window.hide();
+        auto* canvas = window.findChild<SnowCanvasWidget*>();
+        auto* border = window.findChild<QWidget*>(QStringLiteral("screenshotPinnedBorder"));
+        require(canvas && border && window.layout(), "safe-area pin must own canvas and border");
+
+        // Supply the platform-reported inset without depending on a notched display.
+        // Keep the pin hidden and do not dispatch queued events while substituting
+        // the handle: only synchronous safe-area queries and layout run here.
+        {
+            SafeAreaWindow platform(window.windowHandle());
+            const QScopedValueRollback<QPlatformWindow*> handle(
+                QWindowPrivate::get(window.windowHandle())->platformWindow, &platform);
+            for (const QMargins margins :
+                 {QMargins(), QMargins(0, 10, 0, 0), QMargins(0, 32, 0, 0), QMargins(0, 10, 0, 0),
+                  QMargins(), QMargins(7, 32, 9, 5), QMargins()}) {
+                platform.margins = margins;
+                require(margins.isNull() == window.windowHandle()->safeAreaMargins().isNull(),
+                        "safe-area fixture must expose the platform inset to Qt");
+                QEvent change(QEvent::SafeAreaMarginsChange);
+                QCoreApplication::sendEvent(window.windowHandle(), &change);
+                window.layout()->activate();
+                if (window.contentsRect() != window.rect() || canvas->geometry() != window.rect() ||
+                    border->geometry() != window.rect()) {
+                    throw std::runtime_error(
+                        QStringLiteral("safe-area inset %1 must not shift pin content: "
+                                       "canvas=%2,%3 %4x%5 window=%6x%7")
+                            .arg(margins.top())
+                            .arg(canvas->x())
+                            .arg(canvas->y())
+                            .arg(canvas->width())
+                            .arg(canvas->height())
+                            .arg(window.width())
+                            .arg(window.height())
+                            .toStdString());
+                }
+            }
+        }
+        window.close();
+    }
+}
+
 void pinnedCreationCommitsHiddenGeometry() {
     for (QScreen* screen : QGuiApplication::screens()) {
         for (bool prewarmed : {false, true}) {
@@ -26563,6 +26633,10 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 #ifdef Q_OS_MACOS
+        if (app.arguments().contains(QStringLiteral("--safe-area-only"))) {
+            pinnedSafeAreaChangesPreserveContentAlignment();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--creation-only"))) {
             pinnedCreationCommitsHiddenGeometry();
             return 0;

@@ -6810,6 +6810,13 @@ if(SNOW_SHOT_BUILD_TESTS)
             COMMAND snow-shot-global-canvas-tests --platform-only -platform offscreen)
         set_tests_properties(snow-shot-global-canvas-platform-tests PROPERTIES
             LABELS "unit;macos" TIMEOUT 30)
+        foreach(_safe_area_scale IN ITEMS 1 2)
+            add_test(NAME snow-shot-global-canvas-safe-area-${_safe_area_scale}-tests
+                COMMAND snow-shot-global-canvas-tests --safe-area-only -platform offscreen)
+            set_tests_properties(snow-shot-global-canvas-safe-area-${_safe_area_scale}-tests PROPERTIES
+                LABELS "unit;macos" SNOW_TEST_CROSS_PLATFORM TRUE RUN_SERIAL TRUE TIMEOUT 30
+                ENVIRONMENT "QT_SCALE_FACTOR=${_safe_area_scale}")
+        endforeach()
         add_test(NAME snow-shot-global-canvas-native-tests
             COMMAND snow-shot-global-canvas-tests --native-only -platform cocoa)
         set_tests_properties(snow-shot-global-canvas-native-tests PROPERTIES
@@ -8533,6 +8540,14 @@ if(SNOW_SHOT_BUILD_TESTS)
     if(APPLE)
         target_sources(snow-shot-screen-recording-area-window-tests PRIVATE
             ../cmake/test-support/macos_native_input.mm)
+        target_link_libraries(snow-shot-screen-recording-area-window-tests PRIVATE Qt6::GuiPrivate)
+        foreach(_safe_area_scale IN ITEMS 1 2)
+            add_test(NAME snow-shot-recording-safe-area-${_safe_area_scale}-tests
+                COMMAND snow-shot-screen-recording-area-window-tests --safe-area-only -platform offscreen)
+            set_tests_properties(snow-shot-recording-safe-area-${_safe_area_scale}-tests PROPERTIES
+                LABELS "unit;macos" SNOW_TEST_CROSS_PLATFORM TRUE RUN_SERIAL TRUE TIMEOUT 30
+                ENVIRONMENT "QT_SCALE_FACTOR=${_safe_area_scale}")
+        endforeach()
         target_include_directories(snow-shot-screen-recording-area-window-tests PRIVATE
             ../cmake/test-support)
         add_test(NAME snow-shot-macos-recording-border-input-tests
@@ -11206,6 +11221,14 @@ if(WIN32 AND SNOW_SHOT_BUILD_TESTS)
 endif()
 
 if(APPLE AND SNOW_SHOT_BUILD_TESTS)
+    add_test(NAME snow-shot-pinned-safe-area-tests
+        COMMAND snow-shot-pinned-window-tests --safe-area-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-safe-area-tests PROPERTIES
+        LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE RUN_SERIAL TRUE)
+    add_test(NAME snow-shot-pinned-retina-safe-area-tests
+        COMMAND snow-shot-pinned-window-tests --safe-area-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-retina-safe-area-tests PROPERTIES
+        LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE ENVIRONMENT "QT_SCALE_FACTOR=2" RUN_SERIAL TRUE)
     add_test(NAME snow-shot-pinned-pixel-alignment-tests
         COMMAND snow-shot-pinned-window-tests --pixel-alignment-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-pixel-alignment-tests PROPERTIES

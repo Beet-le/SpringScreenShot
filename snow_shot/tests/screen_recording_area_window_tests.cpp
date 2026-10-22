@@ -42,6 +42,7 @@
 #include <QScopeGuard>
 #ifdef Q_OS_MACOS
 #include "macos_native_input.h"
+#include "safe_area_test_support.h"
 #include <stdexcept>
 #endif
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
@@ -572,6 +573,42 @@ void logicalRegionDragAndResize() {
     require(area.canvas()->cursor() ==
                 snow_shot::presentation::crosshairCursor(area.canvas()->devicePixelRatioF()),
             "leaving region editing must release the host cursor to the drawing tool");
+}
+#endif
+
+#ifdef Q_OS_MACOS
+void recordingSafeAreaChangesPreserveCaptureGeometry() {
+    const QRect display = QGuiApplication::primaryScreen()->geometry();
+    for (const QRect region :
+         {display, QRect(display.topLeft() - QPoint(20, 10), QSize(321, 181))}) {
+        for (const bool trimming : {false, true}) {
+            ScreenRecordingAreaWindow area;
+            area.setRecordingRegion(region);
+            area.setInputMode(ScreenRecordingAreaWindow::InputMode::Drawing);
+            area.show();
+            QCoreApplication::processEvents();
+            area.setTrimming(trimming);
+            const QRect geometry = area.geometry();
+            const QRect canvasGeometry = area.canvasGeometry();
+            const QTransform camera = area.canvas()->canvasToViewTransform();
+            const QRegion inputRegion = ScreenRecordingAreaWindowTestAccess::inputRegion(area);
+            int regionChanges = 0;
+            QObject::connect(&area, &ScreenRecordingAreaWindow::recordingRegionChanged, &area,
+                             [&](const QRect&) { ++regionChanges; });
+            safe_area_tests::exercise(*area.windowHandle(), [&](QMargins margins) {
+                require(area.windowHandle()->safeAreaMargins() == margins,
+                        "recording fixture must expose logical safe-area margins");
+                require(area.geometry() == geometry && area.canvasGeometry() == canvasGeometry &&
+                            area.canvas()->geometry() == canvasGeometry,
+                        "safe-area changes must retain recording canvas and border alignment");
+                require(area.recordingRegion() == region && regionChanges == 0,
+                        "safe-area changes must not crop or move the recording region");
+                require(area.canvas()->canvasToViewTransform() == camera &&
+                            ScreenRecordingAreaWindowTestAccess::inputRegion(area) == inputRegion,
+                        "safe-area changes must preserve annotation and input coordinates");
+            });
+        }
+    }
 }
 #endif
 
@@ -2186,6 +2223,11 @@ int main(int argc, char** argv) {
     }
 #endif
 #ifdef Q_OS_MACOS
+    if (application.arguments().contains(QStringLiteral("--safe-area-only"))) {
+        recordingSafeAreaChangesPreserveCaptureGeometry();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--native-border-input-only"))) {
         int result = 0;
         if (!macCanPostMouseEvents()) {

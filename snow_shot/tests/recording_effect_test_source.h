@@ -88,7 +88,8 @@ class RecordingEffectTestSource final : public RecordingEffectsSource {
         state->webcam = config.webcam_source;
         state->webcamSize = config.webcam_size;
         state->webcamShape = config.webcam_shape;
-        state->webcamOffset = QPoint(config.webcam_offset_left, config.webcam_offset_bottom);
+        state->webcamOffset = QPoint(static_cast<int>(config.webcam_offset_left),
+                                     static_cast<int>(config.webcam_offset_bottom));
         state->output = QSize(qRound(config.width * config.canvas_scale),
                               qRound(config.height * config.canvas_scale));
         if (state->autoPublish)

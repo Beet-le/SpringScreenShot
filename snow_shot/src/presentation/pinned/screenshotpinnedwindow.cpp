@@ -1183,6 +1183,9 @@ ScreenshotPinnedWindow::ScreenshotPinnedWindow(QWidget* parent)
     };
     livePinnedWindows().push_back(QPointer<ScreenshotPinnedWindow>(this));
     setWindowFlags(Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint);
+    // Pins may overlap the macOS menu bar and notch band. Keep the layout-managed
+    // canvas aligned with the full-window border and image coordinates there.
+    setAttribute(Qt::WA_ContentsMarginsRespectsSafeArea, false);
     setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setAttribute(Qt::WA_NoSystemBackground, true);

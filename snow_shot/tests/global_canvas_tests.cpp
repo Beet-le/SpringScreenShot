@@ -40,6 +40,7 @@
 #include <QWheelEvent>
 #ifdef Q_OS_MACOS
 #include "../src/platform/macos/capturewindowlayers_p.h"
+#include "safe_area_test_support.h"
 #endif
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
@@ -1290,6 +1291,46 @@ void canvasClickThroughButtonStyle(QApplication& app) {
     controller.shutdown();
 }
 
+#ifdef Q_OS_MACOS
+void canvasSafeAreaChangesPreserveDrawing(QApplication& app) {
+    presentation::GlobalCanvasController controller(
+        nullptr, {[&]() { return app.primaryScreen(); }, [](QWidget*, bool) { return true; }});
+    controller.activate();
+    app.processEvents();
+    auto* window = controller.window();
+    auto* canvas = controller.canvas();
+    canvas->setViewportCamera(237, 159, 1.5);
+    const QTransform camera = canvas->canvasToViewTransform();
+    const QRect geometry = window->geometry();
+    const QCursor idleCursor = canvas->cursor();
+    adqt::widgets::AdColorPicker picker;
+    controller.toolbar()->palette()->canvasColorSamplingRequested(&picker);
+    const QCursor samplingCursor = canvas->cursor();
+    require(samplingCursor.shape() == Qt::BitmapCursor || samplingCursor.shape() == Qt::CrossCursor,
+            "safe-area fixture must start canvas color sampling");
+    safe_area_tests::exercise(*window->windowHandle(), [&](QMargins margins) {
+        require(window->windowHandle()->safeAreaMargins() == margins,
+                "canvas fixture must expose logical safe-area margins");
+        require(window->geometry() == geometry && canvas->geometry() == window->rect(),
+                "safe-area changes must retain the full-screen drawing surface");
+        require(canvas->cursor() == samplingCursor,
+                "safe-area notifications must not cancel color sampling on an unchanged canvas");
+        require(canvas->canvasToViewTransform() == camera,
+                "safe-area changes must preserve the canvas camera and coordinate mapping");
+    });
+    window->resize(window->size() + QSize(20, 30));
+    require(canvas->geometry() == window->rect() && canvas->cursor() == idleCursor,
+            "a real canvas resize must still resize the drawing surface and cancel sampling");
+    const QPointF landmark(17, 19);
+    require(
+        (canvas->canvasToViewTransform().map(landmark) - camera.map(landmark)).manhattanLength() <
+                0.001 &&
+            qAbs(canvas->canvasToViewTransform().m11() - camera.m11()) < 0.001,
+        "a real canvas resize must preserve pan and zoom");
+    controller.shutdown();
+}
+#endif
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
@@ -1314,6 +1355,11 @@ int main(int argc, char** argv) {
                 .success,
             "initialize storage");
 #ifdef Q_OS_MACOS
+    if (app.arguments().contains(QStringLiteral("--safe-area-only"))) {
+        canvasSafeAreaChangesPreserveDrawing(app);
+        storage.shutdown();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--native-only"))) {
         nativeCanvasLifecycle();
         storage.shutdown();

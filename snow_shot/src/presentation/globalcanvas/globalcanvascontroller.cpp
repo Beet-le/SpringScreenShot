@@ -411,8 +411,12 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
             laserFailed(error);
     }
     void resizeEvent(QResizeEvent* event) override {
-        cancelColorSampling();
         QWidget::resizeEvent(event);
+        // Qt also sends resize events for safe-area margin changes. Only an
+        // actual drawing-surface change invalidates sampling and the camera.
+        if (cameraInitialized && drawing->geometry() == rect())
+            return;
+        cancelColorSampling();
         const QTransform transform = drawing->canvasToViewTransform();
         const QPointF origin = cameraInitialized ? transform.inverted().map(QPointF()) : QPointF();
         const double zoom = cameraInitialized ? transform.m11() : 1.0;

@@ -155,8 +155,9 @@ class Server final : public QObject {
                 "translation uses the existing chat endpoint");
             streams.push_back(
                 {socket, QJsonDocument::fromJson(bytes.mid(end + 4)).object(), bytes.left(end)});
-            const auto rejection =
-                streamRejection ? streamRejection(streams.size() - 1) : QByteArray{};
+            const auto rejection = streamRejection
+                                       ? streamRejection(static_cast<int>(streams.size() - 1))
+                                       : QByteArray{};
             if (!rejection.isEmpty()) {
                 socket->write(rejection);
                 socket->disconnectFromHost();
