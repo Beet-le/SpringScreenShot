@@ -938,6 +938,8 @@ set(SNOW_SHOT_SETTINGS_SOURCES
     src/presentation/components/pagecontainerwidget.cpp
     src/presentation/components/sectionheaderwidget.cpp
     src/presentation/components/screenshothistorypagewidget.cpp
+    include/snow_shot/presentation/components/historyentrycard.h
+    src/presentation/components/historyentrycard.cpp
     include/snow_shot/presentation/components/historyselectionbar.h
     include/snow_shot/presentation/components/historypagecommon.h
     src/presentation/components/historypagecommon.cpp
@@ -2728,6 +2730,8 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-screenshot-history-page-loading-tests
         COMMAND snow-shot-screenshot-history-page-tests --loading-only)
+    add_test(NAME snow-shot-history-entry-layout-tests
+        COMMAND snow-shot-screenshot-history-page-tests --entry-layout-only -platform offscreen)
     set_tests_properties(snow-shot-screenshot-history-page-tests
         snow-shot-screenshot-history-page-loading-tests PROPERTIES
         ENVIRONMENT
@@ -2735,6 +2739,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
+    set_tests_properties(snow-shot-history-entry-layout-tests PROPERTIES LABELS unit
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-screenshot-history-context-menu-tests
         COMMAND snow-shot-screenshot-history-page-tests --context-menu-only -platform offscreen)
     set_tests_properties(snow-shot-screenshot-history-context-menu-tests PROPERTIES

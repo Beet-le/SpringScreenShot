@@ -13,9 +13,11 @@
 #include <optional>
 
 class QBoxLayout;
-class QFrame;
 class QLabel;
 class QVBoxLayout;
+namespace snow_shot::presentation::components {
+class HistoryEntryCard;
+} // namespace snow_shot::presentation::components
 namespace adqt::widgets {
 class AdButton;
 class AdImageViewer;
@@ -84,7 +86,6 @@ class PinnedWindowManagementPageWidget final : public QWidget {
     void rebuildFilteredRecords(bool resetPage);
     void rebuildEntries();
     void rebuildPreview();
-    void updateResponsiveLayout();
     void updateHeader();
     void updateSelectionBar();
     void clearSelection();
@@ -122,7 +123,7 @@ class PinnedWindowManagementPageWidget final : public QWidget {
     QVector<snow_shot::storage::PinnedWindowSummary> m_records;
     QVector<snow_shot::storage::PinnedWindowSummary> m_filteredRecords;
     QVector<QString> m_pageIds;
-    QHash<QString, QPointer<QFrame>> m_entryRows;
+    QHash<QString, QPointer<snow_shot::presentation::components::HistoryEntryCard>> m_entryRows;
     QHash<QString, quint64> m_entryPreviewRevisions;
     QSet<QString> m_selected;
     snow_shot::presentation::styles::ThemeColorScheme m_scheme;

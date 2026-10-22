@@ -200,17 +200,17 @@ void pinnedThemeChangesDoNotRestyleTwice(const QVector<storage::PinnedWindowSumm
     page.resize(980, 640);
     page.show();
     QCoreApplication::processEvents();
-    auto* row = page.findChild<QFrame*>(QStringLiteral("pinnedManagementRecord"));
-    require(row != nullptr, "the pinned theme regression needs a seeded row");
+    auto* badge = page.findChild<QLabel*>(QStringLiteral("pinnedManagementSourceBadge"));
+    require(badge != nullptr, "the pinned theme regression needs a seeded source badge");
     StyleChangeRecorder recorder;
-    row->installEventFilter(&recorder);
+    badge->installEventFilter(&recorder);
     for (const auto appearance : {presentation::styles::ThemeAppearance::Dark,
                                   presentation::styles::ThemeAppearance::Light}) {
-        const QString previous = row->styleSheet();
+        const QString previous = badge->styleSheet();
         recorder.styles.clear();
         themeManager.setThemeAppearance(appearance);
         require(recorder.styles.size() == 1 && recorder.styles.first() != previous,
-                "an unskinned pinned theme change must apply each row background exactly once");
+                "an unskinned pinned theme change must apply each source badge exactly once");
     }
     QWidget unrelated;
     adqt::theme::ThemeOverride overrideValue;
@@ -219,7 +219,8 @@ void pinnedThemeChangesDoNotRestyleTwice(const QVector<storage::PinnedWindowSumm
     recorder.styles.clear();
     controlTheme.setScopeOverride(&unrelated, overrideValue);
     controlTheme.clearScopeOverride(&unrelated);
-    require(recorder.styles.isEmpty(), "an unrelated skin must not restyle unskinned pinned rows");
+    require(recorder.styles.isEmpty(),
+            "an unrelated skin must not restyle unskinned pinned source badges");
 }
 
 void pinnedRowsRespectSkinMask(const QVector<storage::PinnedWindowSummary>& records) {

@@ -45,6 +45,7 @@
 #include <QUuid>
 #include <QLabel>
 #include <QLayout>
+#include <QBoxLayout>
 #include <QKeyEvent>
 #include <QTemporaryDir>
 #include <QTranslator>
@@ -846,6 +847,122 @@ void pageTextAndEmptyStateMatchPinnedWindowManagement() {
                     label->font().weight() == QFont::Normal &&
                     label->palette().color(QPalette::WindowText) == scheme.map.colorTextSecondary,
                 "both page subtitles and selection summaries must use the same theme text style");
+        }
+    }
+}
+
+class PinnedLayoutDataSource final : public PinnedWindowManagementDataSource {
+  public:
+    storage::PinnedWindowSummary record;
+
+    QVector<storage::PinnedWindowSummary> records() const override {
+        return {record};
+    }
+    QVector<storage::PinnedWindowGroup> groups() const override {
+        return {};
+    }
+    std::optional<quint64> previewRevision(const QString&) const override {
+        return 1;
+    }
+    void requestPreview(const QString& id, quint64 request, const QSize&) override {
+        QImage image(120, 60, QImage::Format_RGB32);
+        image.fill(Qt::green);
+        emit previewReady(id, request, image, image.size());
+    }
+    void requestFullImage(const QString&, quint64) override {}
+    void showRecord(const QString&) override {}
+    void removeRecords(const QVector<QString>&) override {}
+};
+
+void entryLayoutsMatchAcrossManagementPages() {
+    auto& themeManager = snow_shot::presentation::styles::ThemeManager::instance();
+    const auto originalThemeMode = themeManager.themeMode();
+    const auto restoreTheme = qScopeGuard([&] { themeManager.setThemeMode(originalThemeMode); });
+    MutableHistoryDataSource historySource;
+    auto records = historyRecords(1);
+    records[0].createdUtc =
+        QDateTime::fromString(QStringLiteral("2026-10-22T10:00:00Z"), Qt::ISODate);
+    historySource.setRecords(records);
+    PinnedLayoutDataSource pinnedSource;
+    pinnedSource.record.id = QStringLiteral("layout-pin");
+    pinnedSource.record.createdUtc = historySource.records().first().createdUtc;
+    ScreenshotHistoryPageWidget historyPage(&historySource, nullptr);
+    PinnedWindowManagementPageWidget pinnedPage(&pinnedSource, nullptr);
+    historyPage.show();
+    pinnedPage.show();
+    historyPage.setActive(true);
+
+    for (const auto appearance : {snow_shot::presentation::styles::ThemeAppearance::Light,
+                                  snow_shot::presentation::styles::ThemeAppearance::Dark}) {
+        themeManager.setThemeAppearance(appearance);
+        snow_shot::presentation::styles::ThemeStyleConfig config;
+        config.appearance = appearance;
+        config.lineWidth =
+            appearance == snow_shot::presentation::styles::ThemeAppearance::Dark ? 3 : 1;
+        const auto scheme = snow_shot::presentation::styles::generateThemeColorScheme(config);
+        historyPage.applyTheme(scheme);
+        pinnedPage.applyTheme(scheme);
+        for (const int width : {980, 608, 607, 500, 980}) {
+            historyPage.resize(width, 720);
+            pinnedPage.resize(width, 720);
+            flushEvents();
+            flushEvents();
+            auto* history =
+                historyPage.findChild<QFrame*>(QStringLiteral("screenshotHistoryEntry-record-0"));
+            auto* pinned = pinnedPage.findChild<QFrame*>(QStringLiteral("pinnedManagementRecord"));
+            require(history && pinned, "both management pages expose a seeded entry");
+            auto* historyLayout = dynamic_cast<QBoxLayout*>(history->layout());
+            auto* pinnedLayout = dynamic_cast<QBoxLayout*>(pinned->layout());
+            require(historyLayout && pinnedLayout &&
+                        historyLayout->contentsMargins() == QMargins(18, 16, 18, 16) &&
+                        pinnedLayout->contentsMargins() == historyLayout->contentsMargins() &&
+                        pinnedLayout->spacing() == historyLayout->spacing(),
+                    "both entry layouts use Screenshot History padding and spacing");
+            require(pinned->contentsRect() == history->contentsRect() &&
+                        pinnedLayout->direction() == historyLayout->direction(),
+                    "entry borders preserve equal content insets and responsive geometry");
+            const auto relativeRect = [](QWidget* child, QWidget* row) {
+                return QRect(child->mapTo(row, QPoint()), child->size());
+            };
+            auto* historyDate = history->findChild<adqt::widgets::AdCheckbox*>();
+            auto* pinnedDate = pinned->findChild<adqt::widgets::AdCheckbox*>();
+            require(relativeRect(pinnedDate, pinned) == relativeRect(historyDate, history),
+                    "timestamps use identical alignment and leave no stretched checkbox area");
+            for (const auto& names :
+                 {std::pair{"screenshotHistorySourceBadge", "pinnedManagementSourceBadge"},
+                  std::pair{"screenshotHistoryEntrySummary", "pinnedManagementGroup"},
+                  std::pair{"screenshotHistoryEntryMetadata", "pinnedManagementStatus"},
+                  std::pair{"screenshotHistoryEntryEdit", "pinnedManagementEntryShow"}}) {
+                auto* historyControl =
+                    history->findChild<QWidget*>(QString::fromLatin1(names.first));
+                auto* pinnedControl =
+                    pinned->findChild<QWidget*>(QString::fromLatin1(names.second));
+                require(
+                    historyControl && pinnedControl &&
+                        relativeRect(pinnedControl, pinned).topLeft() ==
+                            relativeRect(historyControl, history).topLeft() &&
+                        pinnedControl->height() == historyControl->height(),
+                    "badges, descriptions, and actions share entry padding and vertical spacing");
+            }
+            auto* historyPreview =
+                history->findChild<QWidget*>(QStringLiteral("screenshotHistoryImageCarousel"));
+            auto* pinnedPreview =
+                pinned->findChild<QWidget*>(QStringLiteral("pinnedManagementPreview"));
+            require(historyPreview && pinnedPreview &&
+                        relativeRect(pinnedPreview, pinned) ==
+                            relativeRect(historyPreview, history),
+                    "previews share size and placement when narrowing and widening the pages");
+            const QString reviewDirectory = qEnvironmentVariable("SNOW_HISTORY_LAYOUT_REVIEW_DIR");
+            if (!reviewDirectory.isEmpty()) {
+                require(QDir().mkpath(reviewDirectory), "create history layout review directory");
+                const QString suffix =
+                    QStringLiteral("%1-%2.png").arg(static_cast<int>(appearance)).arg(width);
+                require(history->grab().save(
+                            QDir(reviewDirectory).filePath(QStringLiteral("history-") + suffix)) &&
+                            pinned->grab().save(
+                                QDir(reviewDirectory).filePath(QStringLiteral("pinned-") + suffix)),
+                        "save both entry layouts for visual review");
+            }
         }
     }
 }
@@ -1672,6 +1789,12 @@ int main(int argc, char** argv) {
                 .initialize({temporary.path(), temporary.path(), 8000})
                 .success,
             "isolated application storage must initialize");
+    if (application.arguments().contains(QStringLiteral("--entry-layout-only"))) {
+        entryLayoutsMatchAcrossManagementPages();
+        storage::ApplicationStorage::instance().shutdown();
+        QCoreApplication::removeTranslator(&englishTranslator);
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--clipboard-only"))) {
         historyCopiesPreservePositionAndAppearance();
         storage::ApplicationStorage::instance().shutdown();
@@ -1701,6 +1824,7 @@ int main(int argc, char** argv) {
     continuousHistoryPreview();
     emptyStateRemainsVisibleAfterFilteringEmptyHistory();
     pageTextAndEmptyStateMatchPinnedWindowManagement();
+    entryLayoutsMatchAcrossManagementPages();
     if (application.arguments().contains(QStringLiteral("--loading-only"))) {
         entriesUseBordersAndSupportCrossPageSelection();
         storage::ApplicationStorage::instance().shutdown();

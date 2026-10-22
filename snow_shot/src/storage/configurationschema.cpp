@@ -1519,7 +1519,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("pin_to_screen/automatic_text_recognition"), !app::edition::isMini,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("pin_to_screen/text_selection_on_recognition_results"),
-     QStringLiteral("only_when_displayed"),
+     QStringLiteral("always"),
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("only_when_displayed"), QStringLiteral("always")}},

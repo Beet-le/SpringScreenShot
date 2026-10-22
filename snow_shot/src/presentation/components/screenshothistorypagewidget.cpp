@@ -9,6 +9,7 @@
 #include "snow_shot/presentation/components/emptystateicon.h"
 #include "snow_shot/presentation/components/historyselectionbar.h"
 #include "snow_shot/presentation/components/historypagecommon.h"
+#include "snow_shot/presentation/components/historyentrycard.h"
 #include "snow_shot/presentation/components/thumbnailcache.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/components/pagecontainerwidget.h"
@@ -29,7 +30,6 @@
 #include "widgets/carousel.h"
 #include "widgets/checkbox.h"
 #include "widgets/date_picker.h"
-#include "widgets/detail/button_rendering.h"
 #include "widgets/image.h"
 #include "widgets/pagination.h"
 #include "widgets/context_menu.h"
@@ -52,7 +52,6 @@
 #include <QLabel>
 #include <QSignalBlocker>
 #include <QStandardPaths>
-#include <QPainter>
 #include <QPalette>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -80,9 +79,8 @@ namespace thumbnail_cache = snow_shot::presentation::components::thumbnail_cache
 namespace custom_outlined_icons = snow_shot::presentation::icons::custom::outlined;
 namespace storage = snow_shot::storage;
 namespace styles = snow_shot::presentation::styles;
+using snow_shot::presentation::components::HistoryEntryCard;
 
-constexpr int kHistoryPreviewWidth = 260;
-constexpr int kHistoryPreviewHeight = 156;
 // Reserve the empty-state stack before its first layout measurement is available.
 constexpr int kEmptyStateBaselineHeight = 260;
 
@@ -737,7 +735,7 @@ void shutdownScreenshotHistoryTasks() {
 
 namespace {
 
-class HistoryEntryWidget final : public QFrame {
+class HistoryEntryWidget final : public HistoryEntryCard {
     Q_DECLARE_TR_FUNCTIONS(HistoryEntryWidget)
 
   public:
@@ -752,7 +750,7 @@ class HistoryEntryWidget final : public QFrame {
                        std::function<void()> imageEditingRequested,
                        std::function<void()> revealRequested, std::function<void()> deleteRequested,
                        QWidget* parent = nullptr)
-        : QFrame(parent), m_record(record), m_assets(assets),
+        : HistoryEntryCard(parent), m_record(record), m_assets(assets),
           m_selectionChanged(std::move(selectionChanged)),
           m_editRequested(std::move(editRequested)), m_copyRequested(std::move(copyRequested)),
           m_pinRequested(std::move(pinRequested)), m_stitchRequested(std::move(stitchRequested)),
@@ -761,85 +759,55 @@ class HistoryEntryWidget final : public QFrame {
           m_revealRequested(std::move(revealRequested)),
           m_deleteRequested(std::move(deleteRequested)) {
         setObjectName(QStringLiteral("screenshotHistoryEntry-%1").arg(record.id));
-        setFrameShape(QFrame::NoFrame);
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-
-        m_layout = new QBoxLayout(QBoxLayout::LeftToRight, this);
-        m_layout->setContentsMargins(18, 16, 18, 16);
-        m_layout->setSpacing(18);
-
-        auto* details = new QWidget(this);
-        details->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        auto* detailsLayout = new QVBoxLayout(details);
-        detailsLayout->setContentsMargins(0, 0, 0, 0);
-        detailsLayout->setSpacing(9);
-
-        auto* topRow = new QHBoxLayout;
-        topRow->setContentsMargins(0, 0, 0, 0);
-        topRow->setSpacing(8);
-        m_selectionCheckbox = new adqt::widgets::AdCheckbox(
-            record.createdUtc.toLocalTime().toString(QStringLiteral("yyyy-MM-dd  HH:mm:ss")),
-            details);
+        auto* details = detailsWidget();
+        m_selectionCheckbox = selectionCheckbox();
+        m_selectionCheckbox->setText(
+            record.createdUtc.toLocalTime().toString(QStringLiteral("yyyy-MM-dd  HH:mm:ss")));
         m_selectionCheckbox->setObjectName(QStringLiteral("screenshotHistoryEntrySelection"));
         m_selectionCheckbox->setChecked(selected);
-        topRow->addWidget(m_selectionCheckbox, 0, Qt::AlignVCenter);
-        topRow->addStretch(1);
-        m_sourceLabel = new QLabel(details);
+        m_sourceLabel = sourceLabel();
         m_sourceLabel->setObjectName(QStringLiteral("screenshotHistorySourceBadge"));
-        detailsLayout->addLayout(topRow);
-        detailsLayout->addWidget(m_sourceLabel, 0, Qt::AlignLeft);
 
         const QRect selection = record.selection.rectangle;
-        m_summaryLabel = new QLabel(HistoryEntryWidget::tr("%1 x %2 px  ·  %3 display(s)")
-                                        .arg(selection.width())
-                                        .arg(selection.height())
-                                        .arg(record.displays.size()),
-                                    details);
-        m_summaryLabel->setObjectName(QStringLiteral("screenshotHistoryEntrySummary"));
-        detailsLayout->addWidget(m_summaryLabel);
+        auto* summary = summaryLabel();
+        summary->setText(HistoryEntryWidget::tr("%1 x %2 px  ·  %3 display(s)")
+                             .arg(selection.width())
+                             .arg(selection.height())
+                             .arg(record.displays.size()));
+        summary->setObjectName(QStringLiteral("screenshotHistoryEntrySummary"));
+        auto* metadata = metadataLabel();
+        metadata->setText(HistoryEntryWidget::tr("Position %1, %2  ·  %3")
+                              .arg(selection.x())
+                              .arg(selection.y())
+                              .arg(formattedBytes(record.totalBytes)));
+        metadata->setObjectName(QStringLiteral("screenshotHistoryEntryMetadata"));
 
-        m_metaLabel = new QLabel(HistoryEntryWidget::tr("Position %1, %2  ·  %3")
-                                     .arg(selection.x())
-                                     .arg(selection.y())
-                                     .arg(formattedBytes(record.totalBytes)),
-                                 details);
-        m_metaLabel->setObjectName(QStringLiteral("screenshotHistoryEntryMetadata"));
-        detailsLayout->addWidget(m_metaLabel);
-        detailsLayout->addStretch(1);
-
-        auto* actions = new QHBoxLayout;
-        actions->setContentsMargins(0, 0, 0, 0);
-        actions->setSpacing(6);
         m_editButton = new adqt::widgets::AdButton(details);
         m_editButton->setObjectName(QStringLiteral("screenshotHistoryEntryEdit"));
         m_editButton->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Text);
         m_editButton->setAccentRole(adqt::widgets::AdButton::AccentRole::Primary);
         m_editButton->setIconRef(outlined_icons::Edit());
-        actions->addWidget(m_editButton, 0);
+        addAction(m_editButton);
         m_copyButton = new adqt::widgets::AdButton(details);
         m_copyButton->setObjectName(QStringLiteral("screenshotHistoryEntryCopy"));
         m_copyButton->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Text);
         m_copyButton->setAccentRole(adqt::widgets::AdButton::AccentRole::Primary);
         m_copyButton->setIconRef(outlined_icons::Copy());
         m_copyButton->setVisible(record.result.has_value());
-        actions->addWidget(m_copyButton, 0);
+        addAction(m_copyButton);
         m_moreButton = new adqt::widgets::AdButton(details);
         m_moreButton->setObjectName(QStringLiteral("screenshotHistoryEntryMore"));
         m_moreButton->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Text);
         m_moreButton->setAccentRole(adqt::widgets::AdButton::AccentRole::Primary);
         m_moreButton->setIconRef(outlined_icons::Ellipsis());
-        actions->addWidget(m_moreButton, 0);
-        actions->addStretch(1);
+        addAction(m_moreButton);
         new snow_shot::presentation::ActionPopupMenu(
             m_moreButton, [this] { return createMoreMenu(); },
             snow_shot::presentation::ActionPopupMenu::Placement::BottomLeft,
             snow_shot::presentation::ActionPopupMenu::Surface::Widget);
-        detailsLayout->addLayout(actions);
-        m_layout->addWidget(details, 1);
 
         m_carousel = new adqt::widgets::AdCarousel(this);
         m_carousel->setObjectName(QStringLiteral("screenshotHistoryImageCarousel"));
-        m_carousel->setFixedSize(kHistoryPreviewWidth, kHistoryPreviewHeight);
         m_carousel->setEffect(adqt::widgets::AdCarousel::Effect::Fade);
         m_carousel->setAutoplay(false);
         m_carousel->setDraggable(true);
@@ -886,7 +854,7 @@ class HistoryEntryWidget final : public QFrame {
                          : QStringLiteral("display:") +
                                assets->displays[index - (assets->result ? 1 : 0)].stableId);
             image->setProperty("historyPreviewSource", previewSource);
-            image->setPreferredImageSize(QSize(kHistoryPreviewWidth, kHistoryPreviewHeight));
+            image->setPreferredImageSize(QSize(kPreviewWidth, kPreviewHeight));
             image->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
             image->setAltText(previewItems[index].altText);
             image->setSource(previewItems[index].source);
@@ -905,7 +873,7 @@ class HistoryEntryWidget final : public QFrame {
         m_carousel->setArrowsVisible(multiple);
         m_carousel->setDotsVisible(multiple);
         m_carousel->setInfinite(multiple);
-        m_layout->addWidget(m_carousel, 0, Qt::AlignCenter);
+        setPreviewWidget(m_carousel);
 
         m_deleteConfirmation = new adqt::widgets::AdPopconfirm(this);
         m_deleteConfirmation->setObjectName(QStringLiteral("screenshotHistoryEntryDeleteConfirm"));
@@ -940,7 +908,6 @@ class HistoryEntryWidget final : public QFrame {
         });
 
         retranslateUi();
-        updateResponsiveLayout();
     }
 
     bool matchesRecord(const storage::CaptureHistoryRecord& record) const {
@@ -963,40 +930,6 @@ class HistoryEntryWidget final : public QFrame {
         if (m_copyButton != nullptr) {
             m_copyButton->setEnabled(enabled);
         }
-    }
-
-    void applyTheme(const styles::ThemeColorScheme& scheme) {
-        m_scheme = scheme;
-        QPalette primary = m_selectionCheckbox->palette();
-        primary.setColor(QPalette::WindowText, scheme.map.colorText);
-        m_selectionCheckbox->setPalette(primary);
-        QFont dateFont = m_selectionCheckbox->font();
-        dateFont.setPixelSize(scheme.metricAlias.fontSizeLG);
-        dateFont.setWeight(QFont::DemiBold);
-        m_selectionCheckbox->setFont(dateFont);
-
-        for (QLabel* label : {m_sourceLabel, m_summaryLabel, m_metaLabel}) {
-            history_page::applyEntryDescriptionFont(label, scheme);
-        }
-        QPalette secondary = m_summaryLabel->palette();
-        secondary.setColor(QPalette::WindowText, scheme.map.colorTextSecondary);
-        m_summaryLabel->setPalette(secondary);
-        QPalette tertiary = m_metaLabel->palette();
-        tertiary.setColor(QPalette::WindowText, scheme.map.colorTextTertiary);
-        m_metaLabel->setPalette(tertiary);
-        updateBackgroundStyle();
-    }
-
-    void updateBackgroundStyle() {
-        const auto& scheme = m_scheme;
-        m_sourceLabel->setStyleSheet(
-            QStringLiteral("QLabel { color: %1; background: %2; border: 1px solid %3; "
-                           "border-radius: 4px; padding: 2px 7px; }")
-                .arg(scheme.map.colorPrimaryText.name(),
-                     styles::mainWindowBackgroundColor(m_sourceLabel, scheme.map.colorPrimaryBg)
-                         .name(QColor::HexArgb),
-                     scheme.map.colorPrimaryBorder.name()));
-        update();
     }
 
     void retranslateUi() {
@@ -1072,34 +1005,6 @@ class HistoryEntryWidget final : public QFrame {
         if (event != nullptr && event->type() == QEvent::LanguageChange) {
             retranslateUi();
         }
-    }
-
-    void resizeEvent(QResizeEvent* event) override {
-        QFrame::resizeEvent(event);
-        updateResponsiveLayout();
-    }
-
-    void paintEvent(QPaintEvent* event) override {
-        Q_UNUSED(event)
-
-        const qreal borderWidth = std::max<qreal>(1.0, m_scheme.metricAlias.lineWidth);
-        const QRectF shapeRect =
-            adqt::widgets::detail::joinedButtonBorderRect(rect(), borderWidth, false, false);
-        if (shapeRect.isEmpty()) {
-            return;
-        }
-
-        const qreal radius = m_scheme.metricAlias.borderRadius;
-        const QPainterPath shapePath =
-            adqt::widgets::detail::roundedButtonPath(shapeRect, radius, radius, radius, radius);
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.fillPath(shapePath,
-                         styles::mainWindowBackgroundColor(this, m_scheme.map.colorBgContainer));
-        painter.setPen(adqt::widgets::detail::makeButtonBorderPen(m_scheme.map.colorBorderSecondary,
-                                                                  borderWidth, Qt::SolidLine));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawPath(shapePath);
     }
 
   private:
@@ -1195,14 +1100,6 @@ class HistoryEntryWidget final : public QFrame {
         return menu;
     }
 
-    void updateResponsiveLayout() {
-        const int availableWidth = parentWidget() != nullptr ? parentWidget()->width() : width();
-        const bool wide = availableWidth >= history_page::kWideEntryBreakpoint;
-        m_layout->setDirection(wide ? QBoxLayout::LeftToRight : QBoxLayout::TopToBottom);
-        setMinimumHeight(wide ? kHistoryPreviewHeight + 32 : kHistoryPreviewHeight + 190);
-        m_carousel->setFixedWidth(wide ? kHistoryPreviewWidth : std::max(220, availableWidth - 36));
-    }
-
     storage::CaptureHistoryRecord m_record;
     std::optional<storage::CaptureHistoryAssetSet> m_assets;
     std::function<void(bool)> m_selectionChanged;
@@ -1215,11 +1112,8 @@ class HistoryEntryWidget final : public QFrame {
     QPointer<QAction> m_imageEditingAction;
     std::function<void()> m_revealRequested;
     std::function<void()> m_deleteRequested;
-    QBoxLayout* m_layout = nullptr;
     adqt::widgets::AdCheckbox* m_selectionCheckbox = nullptr;
     QLabel* m_sourceLabel = nullptr;
-    QLabel* m_summaryLabel = nullptr;
-    QLabel* m_metaLabel = nullptr;
     adqt::widgets::AdButton* m_editButton = nullptr;
     adqt::widgets::AdButton* m_copyButton = nullptr;
     adqt::widgets::AdButton* m_moreButton = nullptr;
@@ -1232,7 +1126,6 @@ class HistoryEntryWidget final : public QFrame {
     adqt::widgets::AdPopconfirm* m_deleteConfirmation = nullptr;
     adqt::widgets::AdCarousel* m_carousel = nullptr;
     QLabel* m_previewPlaceholder = nullptr;
-    styles::ThemeColorScheme m_scheme;
 };
 } // namespace
 
@@ -1688,9 +1581,7 @@ void ScreenshotHistoryPageWidget::rebuildEntries() {
             }
         }
         const int responsiveEntryMinimumHeight =
-            m_entriesHost->width() >= history_page::kWideEntryBreakpoint
-                ? kHistoryPreviewHeight + 32
-                : kHistoryPreviewHeight + 190;
+            HistoryEntryCard::minimumHeightForWidth(m_entriesHost->width());
         m_entriesHost->setMinimumHeight(
             std::max(m_emptyStateMinimumHeight, responsiveEntryMinimumHeight));
         updateSelectionBar();
@@ -1700,8 +1591,7 @@ void ScreenshotHistoryPageWidget::rebuildEntries() {
 
     clearLayoutItems(m_entriesLayout);
     const int responsiveEntryMinimumHeight =
-        m_entriesHost->width() >= history_page::kWideEntryBreakpoint ? kHistoryPreviewHeight + 32
-                                                                     : kHistoryPreviewHeight + 190;
+        HistoryEntryCard::minimumHeightForWidth(m_entriesHost->width());
     m_entriesHost->setMinimumHeight(
         std::max(m_emptyStateMinimumHeight, responsiveEntryMinimumHeight));
     for (int index = firstIndex; index < lastIndex; ++index) {
@@ -1824,8 +1714,7 @@ void ScreenshotHistoryPageWidget::updateEmptyStateMinimumHeight() {
     }
     m_entriesLayout->activate();
     const int responsiveEntryMinimumHeight =
-        m_entriesHost->width() >= history_page::kWideEntryBreakpoint ? kHistoryPreviewHeight + 32
-                                                                     : kHistoryPreviewHeight + 190;
+        HistoryEntryCard::minimumHeightForWidth(m_entriesHost->width());
     m_emptyStateMinimumHeight =
         std::max({kEmptyStateBaselineHeight, m_entriesLayout->sizeHint().height(),
                   responsiveEntryMinimumHeight});
