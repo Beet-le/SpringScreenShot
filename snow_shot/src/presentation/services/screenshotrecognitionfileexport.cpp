@@ -158,18 +158,11 @@ QByteArray tableWorkbook(const ScreenshotTableDocument& document,
         !addXml("xl/styles.xml", u"styleSheet", spreadsheetNamespace, [](QXmlStreamWriter& xml) {
             xml.writeStartElement(u"fonts");
             xml.writeAttribute(u"count", u"2");
-            // Column widths use the Normal font's maximum digit width: Calibri 11 is
-            // 7 pixels at 96 DPI. Declare it explicitly so viewer defaults cannot change it.
-            for (bool bold : {false, true}) {
-                xml.writeStartElement(u"font");
-                if (bold)
-                    xml.writeEmptyElement(u"b");
-                xml.writeEmptyElement(u"sz");
-                xml.writeAttribute(u"val", u"11");
-                xml.writeEmptyElement(u"name");
-                xml.writeAttribute(u"val", u"Calibri");
-                xml.writeEndElement();
-            }
+            // Preserve viewer-selected fonts; column sizing must not change cell typography.
+            xml.writeEmptyElement(u"font");
+            xml.writeStartElement(u"font");
+            xml.writeEmptyElement(u"b");
+            xml.writeEndElement();
             xml.writeEndElement();
             xml.writeStartElement(u"fills");
             xml.writeAttribute(u"count", u"2");
@@ -234,6 +227,8 @@ QByteArray tableWorkbook(const ScreenshotTableDocument& document,
                             // OOXML stores the padded width in 1/256 digit-width units.
                             // QTableView widths already include padding; use logical pixels,
                             // without multiplying by the screen's device pixel ratio.
+                            // Use a 7-pixel reference digit width without forcing a cell font.
+                            // The viewer's default font can affect the final rendered width.
                             const double width =
                                 std::min(255.0, std::floor(pixels * 256.0 / 7.0) / 256.0);
                             xml.writeEmptyElement(u"col");

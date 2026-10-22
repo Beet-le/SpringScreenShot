@@ -177,13 +177,41 @@ void temporaryWorkbooksOpenOnlyAfterSavingAndSurviveSuccess() {
             "missing results and failed exports leave no temporary artifacts");
 }
 
+void requireDefaultWorkbookFonts(const QMap<QString, QByteArray>& package) {
+    QXmlStreamReader xml(package.value(QStringLiteral("xl/styles.xml")));
+    int fonts = 0;
+    int boldFonts = 0;
+    bool inFont = false;
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (xml.isEndElement() && xml.name() == u"font")
+            inFont = false;
+        if (!xml.isStartElement())
+            continue;
+        if (xml.name() == u"font") {
+            inFont = true;
+            ++fonts;
+        }
+        if (inFont) {
+            require(xml.name() != u"name" && xml.name() != u"sz" && xml.name() != u"scheme",
+                    "saving column widths must not override the spreadsheet's default font");
+            if (xml.name() == u"b")
+                ++boldFonts;
+        }
+    }
+    require(!xml.hasError() && fonts == 2 && boldFonts == 1,
+            "default workbook fonts must retain normal cells and bold headers");
+}
+
 void workbookPreservesColumnWidths() {
     QTemporaryDir directory;
     require(directory.isValid(), "column width export fixture directory");
     auto snapshot = tableSnapshot();
     snapshot.tableColumnWidths = {92, 203, 350};
     const auto verify = [&](const QString& path) {
-        const auto sheet = recognition_workbook_test::sheet(recognition_workbook_test::parts(path));
+        const auto package = recognition_workbook_test::parts(path);
+        requireDefaultWorkbookFonts(package);
+        const auto sheet = recognition_workbook_test::sheet(package);
         require(sheet.columnWidths.size() == 3 && sheet.columnWidths.value(1) == 13.140625 &&
                     sheet.columnWidths.value(2) == 29.0 && sheet.columnWidths.value(3) == 50.0,
                 "each column must retain its displayed width, including columns in merged cells");
@@ -210,6 +238,7 @@ void workbookPreservesColumnWidths() {
                 recognition_workbook_test::sheet(recognition_workbook_test::parts(headless.path))
                     .columnWidths.isEmpty(),
             "headless snapshots without layout keep the workbook's default widths");
+    requireDefaultWorkbookFonts(recognition_workbook_test::parts(headless.path));
 }
 
 void workbookSaveHandlesCollisionsOverwriteAndFailures() {
