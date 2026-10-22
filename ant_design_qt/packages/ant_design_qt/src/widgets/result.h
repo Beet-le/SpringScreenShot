@@ -6,6 +6,7 @@
 #include <QMargins>
 #include <QWidget>
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 
@@ -133,11 +134,11 @@ class AdResult final : public QWidget {
   std::unique_ptr<Private> d_;
   void refreshAppearance();
   void refreshContent();
-  void setSlot(int index, QWidget* widget);
-  QWidget* releaseSlot(int index);
-  QWidget* takeSlot(int index);
-  void notifySlot(int index, QWidget* widget);
-  void queueSlotCleared(int index, quint64 revision);
+  void setSlot(std::size_t index, QWidget* widget);
+  QWidget* releaseSlot(std::size_t index);
+  QWidget* takeSlot(std::size_t index);
+  void notifySlot(std::size_t index, QWidget* widget);
+  void queueSlotCleared(std::size_t index, quint64 revision);
 };
 
 }  // namespace adqt::widgets

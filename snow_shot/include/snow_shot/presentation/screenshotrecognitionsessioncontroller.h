@@ -96,7 +96,8 @@ struct ScreenshotRecognitionSessionActions {
     std::function<void(bool, bool, bool)> setLatexEditingState;
     std::function<void(int, const ScreenshotRecognitionModelState&)> setRecognitionModelState;
     std::function<QImage()> renderTranslationImage;
-    std::function<bool(const QUrl&)> openSpreadsheetUrl;
+    // An empty override opens the workbook with the system's default application.
+    std::function<bool(const QUrl&)> openSpreadsheetUrl{};
 };
 
 class ScreenshotRecognitionSessionController final : public QObject {

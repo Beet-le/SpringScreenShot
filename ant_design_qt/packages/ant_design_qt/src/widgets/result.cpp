@@ -289,7 +289,7 @@ AdResult::AdResult(QWidget* parent) : QWidget(parent), d_(std::make_unique<Priva
   const std::array<QString, SlotCount> names = {QStringLiteral("icon"), QStringLiteral("title"),
                                                 QStringLiteral("subtitle"), QStringLiteral("extra"),
                                                 QStringLiteral("body")};
-  for (int index = 0; index < SlotCount; ++index) {
+  for (std::size_t index = 0; index < SlotCount; ++index) {
     auto& slot = d_->hosted[index];
     slot.host = new ResultSurface(this);
     slot.host->setObjectName(QStringLiteral("adqt-result-%1-host").arg(names[index]));
@@ -388,7 +388,7 @@ QWidget* AdResult::contentWidget() const { return d_->hosted[Body].custom; }
 void AdResult::setContentWidget(QWidget* widget) { setSlot(Body, widget); }
 QWidget* AdResult::takeContentWidget() { return takeSlot(Body); }
 
-void AdResult::notifySlot(int index, QWidget* widget) {
+void AdResult::notifySlot(std::size_t index, QWidget* widget) {
   switch (index) {
     case Icon:
       emit iconWidgetChanged(widget);
@@ -412,7 +412,7 @@ void AdResult::notifySlot(int index, QWidget* widget) {
   }
 }
 
-void AdResult::queueSlotCleared(int index, quint64 revision) {
+void AdResult::queueSlotCleared(std::size_t index, quint64 revision) {
   // Native destruction and reparenting still use the old widget hierarchy
   // after sending their event/signal. User callbacks may delete the Result,
   // so dispatch only after that operation has completed, and discard changes
@@ -426,10 +426,10 @@ void AdResult::queueSlotCleared(int index, quint64 revision) {
       Qt::QueuedConnection);
 }
 
-void AdResult::setSlot(int index, QWidget* widget) {
+void AdResult::setSlot(std::size_t index, QWidget* widget) {
   auto& slot = d_->hosted[index];
   if (slot.custom == widget) return;
-  int movedFrom = -1;
+  std::size_t movedFrom = SlotCount;
   if (widget) {
     // Reject cycles and our own implementation widgets. Descendants of a
     // custom slot can be promoted after detaching, before deleting its parent.
@@ -437,7 +437,7 @@ void AdResult::setSlot(int index, QWidget* widget) {
     for (const auto& existing : d_->hosted)
       if (widget == existing.host) return;
     if (widget == d_->artwork || widget == d_->titleLabel || widget == d_->subTitleLabel) return;
-    for (int other = 0; other < SlotCount; ++other)
+    for (std::size_t other = 0; other < SlotCount; ++other)
       if (d_->hosted[other].custom == widget) {
         releaseSlot(other);
         movedFrom = other;
@@ -464,7 +464,7 @@ void AdResult::setSlot(int index, QWidget* widget) {
   }
   refreshContent();
   if (widget) widget->show();
-  if (movedFrom >= 0) {
+  if (movedFrom < SlotCount) {
     QPointer<AdResult> guard(this);
     notifySlot(movedFrom, nullptr);
     if (!guard) return;
@@ -473,7 +473,7 @@ void AdResult::setSlot(int index, QWidget* widget) {
   notifySlot(index, widget);
 }
 
-QWidget* AdResult::releaseSlot(int index) {
+QWidget* AdResult::releaseSlot(std::size_t index) {
   auto& slot = d_->hosted[index];
   QWidget* widget = slot.custom;
   if (!widget) return nullptr;
@@ -488,7 +488,7 @@ QWidget* AdResult::releaseSlot(int index) {
   return widget;
 }
 
-QWidget* AdResult::takeSlot(int index) {
+QWidget* AdResult::takeSlot(std::size_t index) {
   QWidget* widget = releaseSlot(index);
   if (!widget) return nullptr;
   refreshContent();
@@ -558,7 +558,7 @@ void AdResult::refreshAppearance() {
   d_->subTitleLabel->configure(d_->subTitle, subtitleFont, subtitleSize * v.lineHeight);
   const std::array<SemanticSlotStyle, SlotCount> styles = {
       semantic.icon, semantic.title, semantic.subTitle, semantic.extra, semantic.body};
-  for (int index = 0; index < SlotCount; ++index) {
+  for (std::size_t index = 0; index < SlotCount; ++index) {
     auto& slot = d_->hosted[index];
     slot.host->background = styles[index].backgroundColor.value_or(QColor());
     if (index == Body && !styles[index].backgroundColor) slot.host->background = v.colorFillAlter;
@@ -651,7 +651,7 @@ bool AdResult::event(QEvent* event) {
 }
 bool AdResult::eventFilter(QObject* watched, QEvent* event) {
   if (event->type() == QEvent::ParentChange) {
-    for (int index = 0; index < SlotCount; ++index) {
+    for (std::size_t index = 0; index < SlotCount; ++index) {
       auto& slot = d_->hosted[index];
       if (slot.custom == watched && slot.custom->parentWidget() != slot.host) {
         disconnect(slot.destroyed);

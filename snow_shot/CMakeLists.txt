@@ -6901,6 +6901,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_test(NAME snow-shot-global-canvas-click-through-opacity-tests
+        COMMAND snow-shot-global-canvas-tests --click-through-opacity-only -platform offscreen)
+    set_tests_properties(snow-shot-global-canvas-click-through-opacity-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-global-canvas-click-through-style-tests
         COMMAND snow-shot-global-canvas-tests --click-through-style-only -platform offscreen)
     set_tests_properties(snow-shot-global-canvas-click-through-style-tests PROPERTIES

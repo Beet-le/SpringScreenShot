@@ -15,10 +15,12 @@
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
 #include "widgets/button.h"
 #include "widgets/color_picker.h"
+#include "widgets/popover.h"
 #include "widgets/select.h"
 #include "widgets/slider.h"
 #include "theme/theme_manager.h"
 #include <QApplication>
+#include <QCursor>
 #include <QDir>
 #include <QLineEdit>
 #include <QFontDatabase>
@@ -29,6 +31,7 @@
 #include <QScreen>
 #include <QScopeGuard>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QTranslator>
 #include <qpa/qplatformscreen.h>
 #include <qpa/qwindowsysteminterface.h>
@@ -1206,6 +1209,108 @@ void angleCanvasWheel(QApplication& app) {
     controller.shutdown();
 }
 
+void canvasClickThroughToolbarOpacity(QApplication& app) {
+    const QPoint originalCursor = QCursor::pos();
+    const auto restoreCursor = qScopeGuard([&]() { QCursor::setPos(originalCursor); });
+    bool failTransition = false;
+    presentation::GlobalCanvasController controller(
+        nullptr,
+        {[&]() { return app.primaryScreen(); }, [&](QWidget*, bool) { return !failTransition; }});
+    controller.activate();
+    app.processEvents();
+    auto* toolbar = controller.toolbar();
+    auto* toggle = toolbar->palette()->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("globalCanvasClickThroughButton"));
+    auto* timer =
+        controller.window()->findChild<QTimer*>(QStringLiteral("globalCanvasToolbarOpacityTimer"));
+    require(toggle && timer, "opacity fixture requires the click-through button and hover timer");
+    const QPoint inside = toggle->mapToGlobal(toggle->rect().center());
+    const QPoint outside = toolbar->geometry().topLeft() - QPoint(20, 20);
+    const auto hover = [&](const QPoint& position) {
+        QCursor::setPos(position);
+        require(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection),
+                "toolbar opacity refresh must be deterministic");
+    };
+    const auto requireOpacity = [&](qreal opacity, const char* message) {
+        require(qAbs(toolbar->windowOpacity() - opacity) < 0.01, message);
+        require(controller.window()->windowOpacity() == 1.0,
+                "toolbar fading must preserve the canvas and annotation opacity");
+    };
+    hover(outside);
+    require(!timer->isActive(), "drawing mode does not poll for toolbar hover");
+    requireOpacity(1.0, "drawing toolbar remains opaque away from the pointer");
+    failTransition = true;
+    toggle->click();
+    require(!controller.clickThrough() && !timer->isActive(),
+            "failed click-through entry does not enable toolbar fading");
+    requireOpacity(1.0, "failed click-through entry preserves toolbar opacity");
+    failTransition = false;
+    toggle->click();
+    require(controller.clickThrough() && timer->isActive(),
+            "click-through starts watching hover even without a canvas mouse event");
+    requireOpacity(0.32, "click-through immediately fades a toolbar outside the pointer");
+    hover(inside);
+    requireOpacity(1.0, "entering the click-through toolbar restores full opacity");
+    require(!toolbar->testAttribute(Qt::WA_TransparentForMouseEvents),
+            "the faded toolbar must retain its input controls");
+    hover(outside);
+    requireOpacity(0.32, "leaving the click-through toolbar makes it semi-transparent");
+    // The fixed native frame includes unused transparent space around the rows.
+    const QPoint unused = toolbar->mapToGlobal(QPoint(0, 0));
+    require(!toolbar->containsInteractiveGlobalPoint(unused),
+            "opacity fixture requires unused toolbar frame space");
+    hover(unused);
+    requireOpacity(0.32, "unused toolbar frame space must not count as hovering controls");
+    toolbar->palette()->freeDrawRequested();
+    app.processEvents();
+    auto* style = toolbar->palette()->stylePanel();
+    require(style && style->isVisible(), "opacity fixture requires a visible style row");
+    hover(style->mapToGlobal(style->rect().center()));
+    requireOpacity(1.0, "hovering the secondary style toolbar restores full opacity");
+    {
+        adqt::widgets::AdPopover popover(toolbar);
+        popover.setSourceWidget(toggle);
+        auto* content = new QWidget;
+        content->setFixedSize(160, 80);
+        popover.setContentWidget(content);
+        popover.show();
+        app.processEvents();
+        auto* surface = popover.surfaceWidget();
+        require(surface && surface->isVisible(), "opacity fixture opens an owned toolbar popup");
+        hover(surface->mapToGlobal(surface->rect().center()));
+        requireOpacity(1.0, "hovering an owned popup keeps its toolbar fully opaque");
+        popover.hide();
+    }
+    hover(outside);
+    failTransition = true;
+    controller.activate();
+    require(controller.clickThrough() && timer->isActive(),
+            "failed click-through exit retains hover tracking");
+    requireOpacity(0.32, "failed click-through exit preserves the faded toolbar");
+    hover(inside);
+    requireOpacity(1.0, "hover still restores opacity after a failed mode transition");
+    hover(outside);
+    toolbar->hide();
+    require(!timer->isActive(), "a hidden toolbar stops polling for hover");
+    toolbar->show();
+    require(timer->isActive(), "showing the click-through toolbar resumes hover tracking");
+    requireOpacity(0.32, "showing the toolbar refreshes its opacity from the current pointer");
+    failTransition = false;
+    controller.activate();
+    require(!controller.clickThrough() && !timer->isActive(),
+            "exiting click-through stops hover polling");
+    requireOpacity(1.0, "exiting click-through restores full opacity outside the toolbar");
+    hover(inside);
+    toggle->click();
+    require(controller.clickThrough() && timer->isActive(), "re-enter click-through while hovered");
+    requireOpacity(1.0, "enabling click-through under the pointer keeps the toolbar opaque");
+    controller.shutdown();
+    controller.activate();
+    require(controller.toolbar()->windowOpacity() == 1.0 && !controller.clickThrough(),
+            "a new canvas session starts with an opaque toolbar");
+    controller.shutdown();
+}
+
 void canvasClickThroughButtonStyle(QApplication& app) {
     using adqt::widgets::AdButton;
     using presentation::styles::ThemeMode;
@@ -1388,6 +1493,11 @@ int main(int argc, char** argv) {
         require(canvas->cursor() == presentation::crosshairCursor(canvas->devicePixelRatioF()),
                 "global annotation tools must use Snow Shot's crosshair");
         controller.shutdown();
+        storage.shutdown();
+        return 0;
+    }
+    if (app.arguments().contains(QStringLiteral("--click-through-opacity-only"))) {
+        canvasClickThroughToolbarOpacity(app);
         storage.shutdown();
         return 0;
     }

@@ -106,6 +106,10 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         tools->setObjectName(QStringLiteral("globalCanvasToolbar"));
         tools->setTransientOwnerWindow(this);
         tools->setStyleToolbarAboveMain(false);
+        tools->installEventFilter(this);
+        toolbarOpacityTimer.setObjectName(QStringLiteral("globalCanvasToolbarOpacityTimer"));
+        toolbarOpacityTimer.setInterval(50);
+        connect(&toolbarOpacityTimer, &QTimer::timeout, this, [this]() { updateToolbarOpacity(); });
         palette = tools->palette();
         applyScreenshotCanvasToolStyles(*drawing, screenshotCanvasToolStyleDefaults());
         new ScreenshotStyleBinding(*palette, *drawing, this);
@@ -189,6 +193,7 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         activateDrawing();
     }
     ~Session() override {
+        tools->removeEventFilter(this);
         stopLaser();
         cancelColorSampling();
         drawing->setCustomRenderer(nullptr);
@@ -221,8 +226,23 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         if (transparent)
             drawing->clearFocus();
         palette->setGlobalCanvasClickThrough(transparent);
+        if (transparent && tools->isVisible())
+            toolbarOpacityTimer.start();
+        else
+            toolbarOpacityTimer.stop();
+        updateToolbarOpacity();
         drawing->update();
         activateDrawing();
+    }
+    void updateToolbarOpacity() {
+        // Poll only in click-through mode: the pointer can move into another
+        // application without delivering mouse events to the canvas.
+        const QPoint position =
+            platform::PhysicalCursor().logicalPosition().value_or(QCursor::pos()).toPoint();
+        const qreal opacity =
+            !transparent || tools->containsInteractiveGlobalPoint(position) ? 1.0 : 0.32;
+        if (qAbs(tools->windowOpacity() - opacity) > 0.01)
+            tools->setWindowOpacity(opacity);
     }
     void setDisplay(QScreen* screen) {
         if (display)
@@ -456,6 +476,15 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         return result;
     }
     bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == tools.get()) {
+            if (event->type() == QEvent::Hide) {
+                toolbarOpacityTimer.stop();
+            } else if (event->type() == QEvent::Show) {
+                if (transparent)
+                    toolbarOpacityTimer.start();
+                updateToolbarOpacity();
+            }
+        }
         if (watched == drawing.get() &&
             (event->type() == QEvent::TabletPress || event->type() == QEvent::TabletMove ||
              event->type() == QEvent::TabletRelease)) {
@@ -832,6 +861,7 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
     std::unique_ptr<SnowCanvasWidget> drawing;
     WheelStepAccumulator angleWheelSteps;
     std::unique_ptr<ScreenshotFloatingToolPaletteWindow> tools;
+    QTimer toolbarOpacityTimer{this};
     WindowShortcutManager shortcuts;
     QHash<QString, WindowShortcutManager::BindingHandle> drawingBindings;
     ScreenshotToolPalette* palette = nullptr;
