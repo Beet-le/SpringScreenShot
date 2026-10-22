@@ -155,6 +155,7 @@ qt_add_translations(
     TS_FILES ${ADQT_TS_FILES}
     SOURCE_TARGETS ant_design_qt
     SOURCES examples/theme-demo/progress_docs_page.cpp examples/theme-demo/progress_docs_page.h
+        examples/theme-demo/result_docs_page.cpp examples/theme-demo/result_docs_page.h
     RESOURCE_PREFIX "/ant_design_qt/i18n"
     LUPDATE_TARGET ant_design_qt_update_translations
     LUPDATE_OPTIONS -no-obsolete
@@ -443,6 +444,28 @@ if(ADQT_BUILD_TESTS)
     endif()
     add_test(NAME adqt-progress-tests COMMAND adqt-progress-tests)
     set_tests_properties(adqt-progress-tests PROPERTIES
+        LABELS "unit" ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
+    add_executable(adqt-result-tests packages/ant_design_qt/tests/result_tests.cpp)
+    target_link_libraries(adqt-result-tests PRIVATE adqt::widgets Qt6::Widgets)
+    if(TARGET Qt6::QOffscreenIntegrationPlugin)
+        qt_import_plugins(adqt-result-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    endif()
+    add_test(NAME adqt-result-tests COMMAND adqt-result-tests)
+    set_tests_properties(adqt-result-tests PROPERTIES
+        LABELS "unit" ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
+    add_executable(adqt-result-demo-tests tests/result_demo_tests.cpp
+        examples/theme-demo/result_docs_page.cpp examples/theme-demo/result_docs_page.h
+        examples/theme-demo/icon_theme_adapter.cpp)
+    target_include_directories(adqt-result-demo-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/examples/theme-demo")
+    target_link_libraries(adqt-result-demo-tests PRIVATE adqt::widgets Qt6::Widgets)
+    if(TARGET Qt6::QOffscreenIntegrationPlugin)
+        qt_import_plugins(adqt-result-demo-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    endif()
+    add_test(NAME adqt-result-demo-tests COMMAND adqt-result-demo-tests)
+    set_tests_properties(adqt-result-demo-tests PROPERTIES
         LABELS "unit" ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 
     add_executable(adqt-progress-demo-tests tests/progress_demo_tests.cpp
@@ -772,6 +795,17 @@ if(ADQT_BUILD_BENCHMARKS)
     endif()
     add_test(NAME adqt-progress-benchmark COMMAND adqt-progress-benchmark)
     set_tests_properties(adqt-progress-benchmark PROPERTIES
+        LABELS "benchmark" ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+    add_executable(adqt-result-performance-benchmark tests/result_performance_benchmark.cpp)
+    target_link_libraries(adqt-result-performance-benchmark PRIVATE adqt::widgets Qt6::Widgets)
+    target_compile_definitions(adqt-result-performance-benchmark PRIVATE
+        "$<$<CONFIG:Release>:ADQT_RESULT_BENCHMARK_RELEASE>")
+    if(TARGET Qt6::QOffscreenIntegrationPlugin)
+        qt_import_plugins(adqt-result-performance-benchmark INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    endif()
+    add_test(NAME adqt-result-performance-benchmark COMMAND adqt-result-performance-benchmark
+        CONFIGURATIONS Release)
+    set_tests_properties(adqt-result-performance-benchmark PROPERTIES
         LABELS "benchmark" ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
     add_executable(adqt-date-picker-perf tools/date-picker-perf/main.cpp)
     target_link_libraries(adqt-date-picker-perf PRIVATE adqt::widgets Qt6::Widgets)
