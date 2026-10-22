@@ -543,9 +543,7 @@ struct PinnedExportAppearance final {
 PinnedExportAppearance pinnedExportAppearance(const ScreenshotResultStyle& sourceStyle,
                                               int opacityPercent, qreal renderScale) {
     PinnedExportAppearance appearance;
-    appearance.resultStyle = sourceStyle;
-    appearance.resultStyle.cornerRadius = qRound(appearance.resultStyle.cornerRadius * renderScale);
-    appearance.resultStyle.shadowWidth = qRound(appearance.resultStyle.shadowWidth * renderScale);
+    appearance.resultStyle = ScreenshotResultCompositor::scaledStyle(sourceStyle, renderScale);
     appearance.outputOpacity = qBound(0, opacityPercent, 100) / 100.0;
     return appearance;
 }
@@ -2084,7 +2082,8 @@ void ScreenshotPinnedWindow::restorePersistentState(const Config& config) {
         m_borderAppearance && m_borderAppearance->region &&
         (m_borderAppearance->region->custom() || m_borderAppearance->region->rectCount() != 1);
     const bool allowsDefaultDecoration =
-        compoundSelection || !m_borderAppearance || !m_borderAppearance->hasShadow;
+        compoundSelection || !m_borderAppearance ||
+        (!m_borderAppearance->hasShadow && !m_borderAppearance->hasBorder);
     const snow_shot::storage::PinToScreenSettings settings;
     m_showBorder = config.initialBorderVisible.value_or(settings.showBorderByDefault() &&
                                                         allowsDefaultDecoration);
@@ -2578,7 +2577,7 @@ bool ScreenshotPinnedWindow::present(const Config& requestedConfig,
             const qreal scaleY = m_canvasSourceRect.height() / m_originalImage.height();
             m_backgroundCanvasRect.setSize(
                 QSizeF(m_transformedImage.width() * scaleX, m_transformedImage.height() * scaleY));
-            const qreal effect = m_resultStyle.shadowWidth;
+            const qreal effect = m_resultStyle.effectWidth();
             m_resultSurfaceCanvasRect =
                 m_backgroundCanvasRect.adjusted(-effect, -effect, effect, effect);
         } else {
@@ -5711,7 +5710,7 @@ void ScreenshotPinnedWindow::configureRecognitionSession() {
                 auto snapshot = m_recognitionContent->imageSnapshot(
                     m_transformedImage, m_backgroundCanvasRect,
                     m_screenshotRenderer->ocrFilteredImage(),
-                    m_screenshotRenderer->ocrFilteredCanvasRect(), appearance.resultStyle, true);
+                    m_screenshotRenderer->ocrFilteredCanvasRect(), m_resultStyle, true);
                 if (!snapshot)
                     return {};
                 snapshot->outputOpacity = appearance.outputOpacity;
@@ -6149,7 +6148,7 @@ ScreenshotPinnedWindow::viewportArtifact(bool applyWindowOpacity) {
     clipboardAppearance.checkerboardEnabled = m_checkerboardEnabled.value_or(false);
     clipboardAppearance.showBorder = m_showBorder;
     clipboardAppearance.showShadow = m_showShadow;
-    if (appearance.resultStyle.cornerRadius > 0 || appearance.resultStyle.shadowWidth > 0 ||
+    if (appearance.resultStyle.cornerRadius > 0 || appearance.resultStyle.effectWidth() > 0 ||
         appearance.resultStyle.region) {
         clipboardAppearance.borderAppearance =
             screenshotSelectionBorderAppearance(contentPixelSize, appearance.resultStyle);
@@ -6497,7 +6496,7 @@ ScreenshotPinnedImageSnapshot ScreenshotPinnedWindow::processedImageSnapshot(boo
         m_screenshotRenderer) {
         auto recognized = m_recognitionContent->imageSnapshot(
             m_transformedImage, backgroundRect, m_screenshotRenderer->ocrFilteredImage(),
-            m_screenshotRenderer->ocrFilteredCanvasRect(), appearance.resultStyle);
+            m_screenshotRenderer->ocrFilteredCanvasRect(), m_resultStyle);
         if (recognized) {
             recognized->outputOpacity = appearance.outputOpacity;
             snapshot.source = ScreenshotExportSource::fromRecognitionImage(std::move(*recognized));
@@ -6554,7 +6553,7 @@ std::shared_ptr<ScreenshotExportArtifact> ScreenshotPinnedWindow::fileSaveArtifa
         m_recognitionContent != nullptr && m_screenshotRenderer != nullptr) {
         auto snapshot = m_recognitionContent->imageSnapshot(
             m_transformedImage, m_backgroundCanvasRect, m_screenshotRenderer->ocrFilteredImage(),
-            m_screenshotRenderer->ocrFilteredCanvasRect(), appearance.resultStyle);
+            m_screenshotRenderer->ocrFilteredCanvasRect(), m_resultStyle);
         if (snapshot) {
             snapshot->outputOpacity = appearance.outputOpacity;
             return std::make_shared<ScreenshotExportArtifact>(
@@ -7643,7 +7642,7 @@ void ScreenshotPinnedWindow::commitPreparedAnimationTransform(const QTransform& 
     const qreal scaleY = m_canvasSourceRect.height() / m_originalImage.height();
     m_backgroundCanvasRect.setSize(
         QSizeF(transformed.width() * scaleX, transformed.height() * scaleY));
-    const qreal effect = m_resultStyle.shadowWidth;
+    const qreal effect = m_resultStyle.effectWidth();
     m_resultSurfaceCanvasRect = m_backgroundCanvasRect.adjusted(-effect, -effect, effect, effect);
     m_imageTransform = transform;
     if (!m_animationPlayback->adoptPreparedTransform(
@@ -7714,7 +7713,7 @@ void ScreenshotPinnedWindow::rebuildTransformedImage() {
     m_backgroundCanvasRect =
         QRectF(m_canvasSourceRect.topLeft(),
                QSizeF(m_transformedImage.width() * scaleX, m_transformedImage.height() * scaleY));
-    const qreal effect = m_resultStyle.shadowWidth;
+    const qreal effect = m_resultStyle.effectWidth();
     m_resultSurfaceCanvasRect = m_backgroundCanvasRect.adjusted(-effect, -effect, effect, effect);
     m_screenshotRenderer->setImage(m_transformedImage, m_backgroundCanvasRect);
     m_screenshotRenderer->setPinnedResultSurface(m_backgroundCanvasRect, m_resultSurfaceCanvasRect,
@@ -10092,7 +10091,7 @@ snow_shot::presentation::ImageEditingSource ScreenshotPinnedWindow::imageEditing
         m_transformedImage.isNull() ? m_originalPixelSize : m_transformedImage.size();
     source.canvasRect = m_animationTransformSnapshot ? m_animationTransformSnapshot->backgroundRect
                                                      : m_backgroundCanvasRect;
-    if (m_resultStyle.region || m_resultStyle.cornerRadius != 0 || m_resultStyle.shadowWidth != 0)
+    if (m_resultStyle.region || m_resultStyle.cornerRadius != 0 || m_resultStyle.effectWidth() != 0)
         source.resultStyle = m_resultStyle;
     if (source.image.isNull() && source.layeredImage.isLayered()) {
         qreal scale = 1;

@@ -522,15 +522,23 @@ void pinnedAppearanceSurvivesEditing() {
     record.canvasSession = runtime.serializeDocumentSession();
     record.originalFileName = QStringLiteral("styled-pin.png");
     const auto preparation = captureScreenshotPinnedTextPreparation();
-    for (int variant = 0; variant < 3; ++variant) {
+    for (int variant = 0; variant < 4; ++variant) {
         ScreenshotResultStyle style;
         if (variant == 0)
             style.cornerRadius = 5;
         else if (variant == 1) {
             style.shadowWidth = 3;
             style.shadowColor = QColor(0, 0, 0, 180);
-        } else
-            style.region = QRegion(0, 0, 96, 64).subtracted(QRect(32, 20, 18, 16));
+        } else {
+            // Persisted and live styles use canvas units, even when the image
+            // has two source pixels per canvas unit.
+            style.region = QRegion(0, 0, 48, 32).subtracted(QRect(16, 10, 9, 8));
+            if (variant == 3) {
+                style.borderType = ScreenshotSelectionBorderType::Border;
+                style.borderWidth = 3;
+                style.shadowWidth = 11;
+            }
+        }
         record.resultStyle = encodeScreenshotResultStyle(style);
         const auto imported = readImageEditingPinned(record, preparation);
         require(imported.error.isEmpty() && imported.resultStyle.has_value(),
@@ -538,6 +546,9 @@ void pinnedAppearanceSurvivesEditing() {
         auto expectedStyle = style;
         expectedStyle.cornerRadius *= 2;
         expectedStyle.shadowWidth *= 2;
+        expectedStyle.borderWidth *= 2;
+        if (style.region)
+            expectedStyle.region = QRegion(0, 0, 96, 64).subtracted(QRect(32, 20, 18, 16));
         const auto content = runtime.renderToImage(record.contentCanvasRect, record.image.size(),
                                                    {{record.image, record.contentCanvasRect}});
         const auto expected = ScreenshotResultCompositor::compose(content, expectedStyle);
@@ -550,9 +561,11 @@ void pinnedAppearanceSurvivesEditing() {
         requirePixels(flattened.image, expected, "closed pin retains its mask and effect pixels");
         requirePixels(exportSource(flattened), expected,
                       "styled pin editor export does not duplicate annotations or effects");
-        if (variant == 2)
-            require(flattened.image.pixelColor(40, 28).alpha() == 0,
+        if (variant >= 2) {
+            const int padding = expectedStyle.effectWidth();
+            require(flattened.image.pixelColor(40 + padding, 28 + padding).alpha() == 0,
                     "excluded pin pixels remain excluded when opening the editor");
+        }
     }
     record.resultStyle.clear();
     const auto plain = readImageEditingPinned(record, preparation);

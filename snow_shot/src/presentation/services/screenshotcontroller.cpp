@@ -586,9 +586,9 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void beginCanvasColorSampling(adqt::widgets::AdColorPicker* picker) override;
     void adjustSelectionFromToolbar(int minDx, int minDy, int maxDx, int maxDy) override;
     void setSelectionCornerRadiusFromToolbar(int radius) override;
-    void setSelectionShadowWidthFromToolbar(int shadowWidth) override;
-    void adjustSelectionEffectsFromWheel(int radiusDelta, int shadowDelta) override {
-        m_selectionEditWorkflow->adjustSelectionEffectsFromWheel(radiusDelta, shadowDelta);
+    void setSelectionEffectWidthFromToolbar(int effectWidth) override;
+    void adjustSelectionEffectsFromWheel(int radiusDelta, int effectDelta) override {
+        m_selectionEditWorkflow->adjustSelectionEffectsFromWheel(radiusDelta, effectDelta);
     }
     void setSelectionToolbarHovered(bool hovered) override;
     void setSelectionToolbarPopupVisible(bool visible) override;
@@ -1481,8 +1481,8 @@ void ScreenshotController::Impl::createSelectionWorkflows() {
                 },
                 [this]() { m_presentationServices->requestSelectionEffectPresentation(); },
             },
-            [this](int cornerRadius, int shadowWidth, const QColor& shadowColor) {
-                m_selectionSettings->setSelectionEffects(cornerRadius, shadowWidth, shadowColor);
+            [this](const ScreenshotSelectionParams& params) {
+                m_selectionSettings->setSelectionEffects(params);
             },
             [this](ScreenshotSelectionAspectRatioPreset preset, bool locked) {
                 m_selectionSettings->setAspectRatioPreference(preset, locked);
@@ -1731,6 +1731,9 @@ void ScreenshotController::Impl::createCaptureWorkflow() {
                 static_cast<void>(m_selection.setCornerRadius(m_selectionSettings->cornerRadius()));
                 static_cast<void>(m_selection.setShadowWidth(m_selectionSettings->shadowWidth()));
                 m_selection.setShadowColor(m_selectionSettings->shadowColor());
+                m_selection.setBorderType(m_selectionSettings->borderType());
+                m_selection.setBorderWidth(m_selectionSettings->borderWidth());
+                m_selection.setBorderColor(m_selectionSettings->borderColor());
                 static_cast<void>(m_selection.setAspectRatioPreset(
                     m_selectionSettings->aspectRatioPreset(), {},
                     snow_shot::presentation::kScreenshotSelectionMinimumSize));
@@ -5791,8 +5794,8 @@ void ScreenshotController::Impl::setSelectionCornerRadiusFromToolbar(int radius)
     m_selectionEditWorkflow->setSelectionCornerRadiusFromToolbar(radius);
 }
 
-void ScreenshotController::Impl::setSelectionShadowWidthFromToolbar(int shadowWidth) {
-    m_selectionEditWorkflow->setSelectionShadowWidthFromToolbar(shadowWidth);
+void ScreenshotController::Impl::setSelectionEffectWidthFromToolbar(int effectWidth) {
+    m_selectionEditWorkflow->setSelectionEffectWidthFromToolbar(effectWidth);
 }
 
 void ScreenshotController::Impl::endGlobalMouseDrag() {
@@ -6844,43 +6847,37 @@ QJsonObject ScreenshotController::mcpState() const {
                                           : !ready ? QStringLiteral("capture_not_ready")
                                                    : QStringLiteral("invalid_state")}});
     }
-    return {
-        {QStringLiteral("capture_phase"), phase},
-        {QStringLiteral("canvas_bounds"), mcpRect(s.m_geometry.canvasBounds())},
-        {QStringLiteral("selection"),
-         QJsonObject{
-             {QStringLiteral("bounds"), mcpRect(s.m_selection.normalizedSelection())},
-             {QStringLiteral("type"), screenshotRegionTypeId(s.m_selection.regionType())},
-             {QStringLiteral("region"), s.m_selection.selectionRegion().toJson()},
-             {QStringLiteral("corner_radius"), s.m_selection.cornerRadius()},
-             {QStringLiteral("shadow_width"), s.m_selection.shadowWidth()},
-             {QStringLiteral("shadow_color"),
-              QJsonArray{s.m_selection.shadowColor().red(), s.m_selection.shadowColor().green(),
-                         s.m_selection.shadowColor().blue(), s.m_selection.shadowColor().alpha()}},
-             {QStringLiteral("aspect_ratio_locked"), s.m_selection.aspectRatioLocked()}}},
-        {QStringLiteral("active_tool"), tool},
-        {QStringLiteral("capture_epoch"), static_cast<qint64>(s.m_captureEpoch)},
-        {QStringLiteral("selected_element_ids"), selected},
-        {QStringLiteral("styles"), styleState},
-        {QStringLiteral("available_actions"), actions},
-        {QStringLiteral("scrolling"), s.m_scrollingCaptureController
-                                          ? s.m_scrollingCaptureController->state()
-                                          : QJsonObject{{QStringLiteral("active"), false}}},
-        {QStringLiteral("can_undo"), s.m_canvasRuntime.canUndo()},
-        {QStringLiteral("can_redo"), s.m_canvasRuntime.canRedo()},
-        {QStringLiteral("document_revision"),
-         static_cast<qint64>(s.m_canvasRuntime.documentRevision())},
-        {QStringLiteral("displays"), displays},
-        {QStringLiteral("platform"), QSysInfo::productType()},
-        {QStringLiteral("coordinate_space"), QStringLiteral("canvas_half_open")},
-        {QStringLiteral("capture_cursor"), s.m_displaySession.cursorVisible},
-        {QStringLiteral("show_cursor"), s.m_displaySession.cursorVisible},
-        {QStringLiteral("cursor_available"), s.m_displaySession.cursorAvailable},
-        {QStringLiteral("restore_original_screen_colors"),
-         s.m_captureState.restoreOriginalScreenColors},
-        {QStringLiteral("presentation"), s.m_captureState.presentationSuppressed
-                                             ? QStringLiteral("silent")
-                                             : QStringLiteral("visible")}};
+    auto selectionState = snow_shot::app::mcp::selectionStyleState(s.m_selection);
+    selectionState.insert(QStringLiteral("bounds"), mcpRect(s.m_selection.normalizedSelection()));
+    selectionState.insert(QStringLiteral("type"),
+                          screenshotRegionTypeId(s.m_selection.regionType()));
+    selectionState.insert(QStringLiteral("region"), s.m_selection.selectionRegion().toJson());
+    return {{QStringLiteral("capture_phase"), phase},
+            {QStringLiteral("canvas_bounds"), mcpRect(s.m_geometry.canvasBounds())},
+            {QStringLiteral("selection"), selectionState},
+            {QStringLiteral("active_tool"), tool},
+            {QStringLiteral("capture_epoch"), static_cast<qint64>(s.m_captureEpoch)},
+            {QStringLiteral("selected_element_ids"), selected},
+            {QStringLiteral("styles"), styleState},
+            {QStringLiteral("available_actions"), actions},
+            {QStringLiteral("scrolling"), s.m_scrollingCaptureController
+                                              ? s.m_scrollingCaptureController->state()
+                                              : QJsonObject{{QStringLiteral("active"), false}}},
+            {QStringLiteral("can_undo"), s.m_canvasRuntime.canUndo()},
+            {QStringLiteral("can_redo"), s.m_canvasRuntime.canRedo()},
+            {QStringLiteral("document_revision"),
+             static_cast<qint64>(s.m_canvasRuntime.documentRevision())},
+            {QStringLiteral("displays"), displays},
+            {QStringLiteral("platform"), QSysInfo::productType()},
+            {QStringLiteral("coordinate_space"), QStringLiteral("canvas_half_open")},
+            {QStringLiteral("capture_cursor"), s.m_displaySession.cursorVisible},
+            {QStringLiteral("show_cursor"), s.m_displaySession.cursorVisible},
+            {QStringLiteral("cursor_available"), s.m_displaySession.cursorAvailable},
+            {QStringLiteral("restore_original_screen_colors"),
+             s.m_captureState.restoreOriginalScreenColors},
+            {QStringLiteral("presentation"), s.m_captureState.presentationSuppressed
+                                                 ? QStringLiteral("silent")
+                                                 : QStringLiteral("visible")}};
 }
 bool ScreenshotController::mcpBegin(const QJsonObject& options, QString* error) {
     Q_ASSERT(QThread::currentThread() == thread());
@@ -7211,17 +7208,9 @@ bool ScreenshotController::mcpPinDocument(ScreenshotHistoryEntry entry, QImage b
     if (!screen)
         return false;
     const auto& selection = entry.selection;
-    ScreenshotResultStyle style{selection.radius, selection.shadowWidth, selection.shadowColor,
-                                selection.region};
-    style.backgroundOpacityPercent = selection.backgroundOpacityPercent;
-    if (style.region)
-        style.region = style.region->translated(-selection.selection.topLeft());
-    const auto plan =
-        selection.layoutCompaction.enabled && style.region
-            ? screenshotLayoutCompactionPlan(
-                  *style.region, selection.selection.size(), 1, selection.layoutCompaction,
-                  ScreenshotResultCompositor::normalizedStyle(style).shadowWidth)
-            : nullptr;
+    const auto style = selection.resultStyle();
+    const auto plan = ScreenshotResultCompositor::layoutCompactionForContent(
+        selection.selection.size(), style, selection.layoutCompaction);
     if ((plan && plan->changed) || style.backgroundOpacityPercent > 0) {
         // The document worker has already composed this raster. Preserve its
         // outline and start fresh recognition in the compacted image coordinates.

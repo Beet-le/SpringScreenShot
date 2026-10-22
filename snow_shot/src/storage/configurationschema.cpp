@@ -1621,6 +1621,15 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationIntegerRange{0, ScreenshotLayoutCompaction::maximumSpacing, 1}},
     {QStringLiteral("screenshot_selection/corner_radius"), 0, ConfigurationValueKind::Integer,
      ConfigurationIntegerRange{0, 256, 1}},
+    {QStringLiteral("screenshot_selection/border_type"),
+     QStringLiteral("shadow"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("shadow"), QStringLiteral("border")}},
+    {QStringLiteral("screenshot_selection/border_width"), 0, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{0, 64, 1}},
+    {QStringLiteral("screenshot_selection/border_color"), QStringLiteral("#FFFFFFFF"),
+     ConfigurationValueKind::String},
     {QStringLiteral("screenshot_selection/shadow_width"), 0, ConfigurationValueKind::Integer,
      ConfigurationIntegerRange{0, 64, 1}},
     {QStringLiteral("screenshot_selection/shadow_color"), QStringLiteral("#333333FF"),
@@ -2158,6 +2167,7 @@ bool isRgbaColorKey(const QString& key) {
     return key == QStringLiteral("collage/background_color") ||
            key == QStringLiteral("interface/theme_primary_color") ||
            key == QStringLiteral("screenshot_selection/shadow_color") ||
+           key == QStringLiteral("screenshot_selection/border_color") ||
            key == QStringLiteral("screenshot_ui/selection_border_color") ||
            key == QStringLiteral("screenshot_ui/selection_mask_color") ||
            key == QStringLiteral("screenshot_ui/cursor_guide_line_color") ||

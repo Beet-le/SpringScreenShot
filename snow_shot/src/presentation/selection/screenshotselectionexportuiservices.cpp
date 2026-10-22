@@ -1049,8 +1049,10 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImageOnCanvas(
     config.recognitionProvider = m_recognitionProvider;
     if (document != nullptr) {
         const auto& selection = document->selection;
-        config.resultStyle = {selection.radius, selection.shadowWidth, selection.shadowColor,
-                              selection.region};
+        config.resultStyle = selection.resultStyle();
+        config.borderAppearance =
+            screenshotSelectionBorderAppearance(selection.selection.size(), config.resultStyle);
+        config.checkerboardEnabled = screenshotSelectionNeedsCheckerboard(config.borderAppearance);
         const auto layout = ScreenshotResultCompositor::layoutForContent(selection.selection.size(),
                                                                          config.resultStyle);
         config.surfaceCanvasRect =

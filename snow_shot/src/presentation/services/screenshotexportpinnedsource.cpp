@@ -3,6 +3,7 @@
 
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
+#include "snow_shot/presentation/screenshotselectioncomposition.h"
 #include "snow_shot/image/screenshotlayoutcompaction.h"
 
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
@@ -86,6 +87,17 @@ QImage renderPinnedViewport(const ScreenshotPinnedViewportExportSource& source,
         }
         if (cancellation.isCancellationRequested())
             return {};
+        if (source.resultStyle.region) {
+            auto result = ScreenshotResultCompositor::compose(background, source.resultStyle);
+            const auto layout = ScreenshotResultCompositor::layoutForContent(
+                source.contentPixelSize, source.resultStyle);
+            result = renderScreenshotSelectionAnnotations(runtime, source.backgroundCanvasRect,
+                                                          source.contentPixelSize, sources,
+                                                          std::move(result), layout);
+            return cancellation.isCancellationRequested()
+                       ? QImage{}
+                       : ScreenshotResultCompositor::compose(result, {}, 1.0, source.outputOpacity);
+        }
         content = runtime.renderToImage(source.backgroundCanvasRect, source.contentPixelSize,
                                         sources, background);
     }

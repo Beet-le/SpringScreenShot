@@ -244,6 +244,7 @@ struct Document {
                 {QStringLiteral("canvas_bounds"), rectangle(canvasBounds)},
                 {QStringLiteral("selection"), selection.selectionRegion().toJson()},
                 {QStringLiteral("selection_bounds"), rectangle(selection.normalizedSelection())},
+                {QStringLiteral("selection_style"), selectionStyleState(selection)},
                 {QStringLiteral("can_undo"), runtime.canUndo()},
                 {QStringLiteral("can_redo"), runtime.canRedo()},
                 {QStringLiteral("selected_element_ids"), runtime.selectedElementIds()},
@@ -258,13 +259,8 @@ using LayoutPlan = std::shared_ptr<const ScreenshotLayoutCompactionPlan>;
 
 LayoutPlan documentLayoutPlan(const Document& document, const QSize& size, qreal scale,
                               ScreenshotLayoutCompaction compaction) {
-    auto style = document.selection.resultStyle();
-    style.shadowWidth = qRound(style.shadowWidth * scale);
-    return compaction.enabled && style.region
-               ? screenshotLayoutCompactionPlan(
-                     *style.region, size, style.regionScale * scale, compaction,
-                     ScreenshotResultCompositor::normalizedStyle(style).shadowWidth)
-               : nullptr;
+    return ScreenshotResultCompositor::layoutCompactionForContent(
+        size, document.selection.resultStyle(), compaction, scale);
 }
 
 QImage renderDocumentResult(Document& document, const QSize& size, qreal scale,
@@ -275,9 +271,7 @@ QImage renderDocumentResult(Document& document, const QSize& size, qreal scale,
     auto style = document.selection.resultStyle();
     if (!includeBackground)
         style.backgroundOpacityPercent = 0;
-    style.regionScale *= scale;
-    style.cornerRadius = qRound(style.cornerRadius * scale);
-    style.shadowWidth = qRound(style.shadowWidth * scale);
+    style = ScreenshotResultCompositor::scaledStyle(style, scale);
     if (plan && plan->changed)
         style = compactedScreenshotResultStyle(style, *plan);
     if (style.region && document.runtime.hasDocumentContent())
@@ -985,43 +979,9 @@ class DocumentWorker final : public QObject {
         }
         if (method == QStringLiteral("snow_shot_document_set_selection_style")) {
             auto candidate = document.selection;
-            for (const auto& key :
-                 {QStringLiteral("corner_radius"), QStringLiteral("shadow_width")}) {
-                if (!params.contains(key))
-                    continue;
-                const auto value = params.value(key);
-                const double number = value.toDouble(-1);
-                if (!value.isDouble() || !std::isfinite(number) || number < 0 || number > 8192 ||
-                    std::floor(number) != number)
-                    return {failure(request, QStringLiteral("invalid_parameters"), key), {}};
-                if (key == QStringLiteral("corner_radius"))
-                    static_cast<void>(candidate.setCornerRadius(static_cast<int>(number)));
-                else
-                    static_cast<void>(candidate.setShadowWidth(static_cast<int>(number)));
-            }
-            if (params.contains(QStringLiteral("shadow_color"))) {
-                const auto color = params.value(QStringLiteral("shadow_color")).toArray();
-                if (color.size() != 4)
-                    return {failure(request, QStringLiteral("invalid_parameters"),
-                                    QStringLiteral("shadow_color")),
-                            {}};
-                for (const auto& value : color)
-                    if (!value.isDouble() || value.toDouble(-1) < 0 || value.toDouble(256) > 255 ||
-                        std::floor(value.toDouble()) != value.toDouble())
-                        return {failure(request, QStringLiteral("invalid_parameters"),
-                                        QStringLiteral("shadow_color")),
-                                {}};
-                candidate.setShadowColor(
-                    QColor(color[0].toInt(), color[1].toInt(), color[2].toInt(), color[3].toInt()));
-            }
-            if (params.contains(QStringLiteral("aspect_ratio_locked"))) {
-                if (!params.value(QStringLiteral("aspect_ratio_locked")).isBool())
-                    return {failure(request, QStringLiteral("invalid_parameters"),
-                                    QStringLiteral("aspect_ratio_locked")),
-                            {}};
-                static_cast<void>(candidate.setAspectRatioLockEnabled(
-                    params.value(QStringLiteral("aspect_ratio_locked")).toBool(), 1));
-            }
+            QString field;
+            if (!applySelectionStyle(candidate, params, &field))
+                return {failure(request, QStringLiteral("invalid_parameters"), field), {}};
             if (candidate.params(document.canvasBounds.toAlignedRect()) !=
                 document.selection.params(document.canvasBounds.toAlignedRect())) {
                 document.selection = std::move(candidate);

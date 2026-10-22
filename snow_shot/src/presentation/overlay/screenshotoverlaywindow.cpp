@@ -230,8 +230,8 @@ void ScreenshotOverlayWindow::setScreenshotSelection(const QRectF& selection, bo
     state.present = normalizedSelection.isValid() && !normalizedSelection.isEmpty();
     state.handlesVisible = handlesVisible;
     state.cornerRadius = cornerRadius;
-    state.shadowWidth = shadowWidth;
-    state.shadowColor = shadowColor;
+    state.effectWidth = shadowWidth;
+    state.effectColor = shadowColor;
     state.toolbarHovered = selectionToolbarHovered;
     setScreenshotSelectionState(state);
 }

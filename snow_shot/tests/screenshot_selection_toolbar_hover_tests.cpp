@@ -75,7 +75,7 @@ class NoOpSelectionToolbarCommands final : public ScreenshotSelectionToolbarComm
     void setSelectionCornerRadiusFromToolbar(int) override {
         ++interactionCount;
     }
-    void setSelectionShadowWidthFromToolbar(int) override {
+    void setSelectionEffectWidthFromToolbar(int) override {
         ++interactionCount;
     }
     void setSelectionToolbarHovered(bool hovered) override {

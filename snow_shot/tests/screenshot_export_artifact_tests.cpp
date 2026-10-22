@@ -2666,6 +2666,66 @@ void pinnedViewportSourceRendersExpectedPixels() {
             "pinned viewport artifact did not return the rendered pixels");
 }
 
+void pinnedRegionExportPreservesGapAnnotations() {
+    SnowCanvasRuntime runtime;
+    require(
+        !runtime
+             .applyAnnotationTransaction(
+                 R"({"version":1,"operations":[{"type":"rectangle","bounds":[80,-35,160,10],"style":{"fill":[230,30,70,128],"stroke":[0,0,0,0]}}]})")
+             .isEmpty(),
+        "create the pinned export gap annotation");
+    QImage background(120, 80, QImage::Format_ARGB32_Premultiplied);
+    background.fill(Qt::blue);
+    for (const auto type :
+         {ScreenshotSelectionBorderType::Border, ScreenshotSelectionBorderType::Shadow}) {
+        for (const qreal scale : {1.0, 1.5}) {
+            for (const qreal opacity : {1.0, 0.5}) {
+                ScreenshotResultStyle style;
+                style.borderType = type;
+                style.borderWidth = 4;
+                style.shadowWidth = 4;
+                style.region = QRegion(0, 0, 40, 80) + QRect(80, 0, 40, 80);
+                style = ScreenshotResultCompositor::scaledStyle(style, scale);
+                const QSize pixels(qRound(120 * scale), qRound(80 * scale));
+                ScreenshotExportArtifact artifact(
+                    ScreenshotExportSource::fromPinnedViewport({runtime.serializeDocumentSession(),
+                                                                background,
+                                                                QRectF(100, -70, 120, 80),
+                                                                pixels,
+                                                                style,
+                                                                {},
+                                                                opacity}));
+                QObject receiver;
+                QImage rendered;
+                require(artifact.requestImage(&receiver,
+                                              [&](ScreenshotExportImageResult result) {
+                                                  require(result.succeeded(),
+                                                          "render the shaped document pin export");
+                                                  rendered = std::move(result.image);
+                                              }),
+                        "schedule the shaped document pin export");
+                processUntil([&] { return !rendered.isNull(); });
+                const int padding = style.effectWidth();
+                const auto pixel = [&](int x, int y) {
+                    return rendered.pixelColor(padding + qRound(x * scale),
+                                               padding + qRound(y * scale));
+                };
+                const auto annotation = pixel(60, 40);
+                // Premultiplied 8-bit channels lose at most two levels when faded to alpha 64.
+                require(qAbs(annotation.alpha() - qRound(128 * opacity)) <= 1 &&
+                            qAbs(annotation.red() - 230) <= 2 &&
+                            qAbs(annotation.green() - 30) <= 2 && qAbs(annotation.blue() - 70) <= 2,
+                        "pinned exports preserve gap annotations and apply opacity once");
+                const auto capture = pixel(20, 50);
+                require(pixel(60, 28).alpha() == 0 && capture.blue() == 255 && capture.red() == 0 &&
+                            capture.green() == 0 &&
+                            qAbs(capture.alpha() - qRound(255 * opacity)) <= 1,
+                        "pinned exports scale selection masks and offset capture pixels");
+            }
+        }
+    }
+}
+
 void pinnedViewportRenderingReleasesCompositorCaches() {
     struct Observation {
         uchar* pixels = nullptr;
@@ -3177,6 +3237,7 @@ int main(int argc, char** argv) {
         }
         diagnostics.shutdown();
         if (application.arguments().contains(QStringLiteral("--print-snapshots-only"))) {
+            pinnedRegionExportPreservesGapAnnotations();
             pinnedViewportSourceRendersExpectedPixels();
             emptyPinnedSourceMatchesCanvasProjection();
             pinnedViewportExportsReleaseImportedSnapshots();
@@ -3271,6 +3332,7 @@ int main(int argc, char** argv) {
         cancellationSuppressesPendingCallbacks();
         cancelledEncodersRetainEveryConsumerLease();
         pinnedViewportSourceRendersExpectedPixels();
+        pinnedRegionExportPreservesGapAnnotations();
         emptyPinnedSourceMatchesCanvasProjection();
         pinnedViewportExportsReleaseImportedSnapshots();
     } catch (const std::exception& error) {

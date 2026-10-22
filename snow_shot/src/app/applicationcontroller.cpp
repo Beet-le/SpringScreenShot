@@ -1390,6 +1390,9 @@ class ApplicationController::Impl {
                                                                  false,
                                                                  false,
                                                                  style->region};
+                    result.selection->borderType = style->borderType;
+                    result.selection->borderWidth = style->borderWidth;
+                    result.selection->borderColor = style->borderColor;
                     result.documentSession = record->canvasSession;
                     if (!livePinTool.isEmpty())
                         result.tool = livePinTool;
@@ -1430,6 +1433,9 @@ class ApplicationController::Impl {
                         selected.shadowWidth,     selected.shadowColor,
                         selected.lockAspectRatio, selected.lockDragAspectRatio,
                         selected.region};
+                    result.selection->borderType = selected.borderType;
+                    result.selection->borderWidth = selected.borderWidth;
+                    result.selection->borderColor = selected.borderColor;
                     for (qsizetype index = 0;
                          index < payload->displayImages.size() && index < record.displays.size();
                          ++index) {

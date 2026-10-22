@@ -5343,7 +5343,7 @@ void rejectedGlobalScreenshotShortcutsPreserveSession() {
                 ScreenshotInteractionState::EffectGesture gesture;
                 gesture.handle = reason == Rejection::CornerRadiusDrag
                                      ? ScreenshotSelectionEffectHandle::TopLeft
-                                     : ScreenshotSelectionEffectHandle::Shadow;
+                                     : ScreenshotSelectionEffectHandle::Width;
                 gesture.rollback = [&] { ++rollbacks; };
                 require(interaction.beginEffectDrag(std::move(gesture)),
                         "start global shortcut effect drag");

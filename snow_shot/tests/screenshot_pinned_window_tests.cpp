@@ -20,6 +20,7 @@
 #include "../../test-support/virtualmemory.h"
 #include "../../test-support/memorysnapshot.h"
 #include "snow_shot/presentation/screenshotselectionpin.h"
+#include "snow_shot/presentation/screenshothistorytypes.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "snow_shot/presentation/pinnedgeometry.h"
 #include "snow_shot/platform/physicalcursor.h"
@@ -12595,6 +12596,106 @@ void pinnedCompoundSelectionOffscreen(bool curved = false) {
     window.close();
 }
 
+void pinnedDocumentSelectionUsesLocalCaptureGeometry() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    IsolatedPinnedStorage storage;
+    require(snow_shot::storage::PinToScreenSettings().setAutomaticTextRecognition(false),
+            "disable recognition for document pin fixtures");
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "document pin fixture needs a screen");
+    ScreenshotSelectionExportUiServices services;
+    for (const QPoint origin : {QPoint(100, -70), QPoint(-80, 25)}) {
+        for (const bool curved : {false, true}) {
+            SnowCanvasRuntime runtime;
+            const auto annotation =
+                QStringLiteral(
+                    R"({"version":1,"operations":[{"type":"rectangle","bounds":[%1,%2,160,10],"style":{"fill":[255,0,255,255],"stroke":[0,0,0,0]}}]})")
+                    .arg(origin.x() - 20)
+                    .arg(origin.y() + 35)
+                    .toUtf8();
+            require(!runtime.applyAnnotationTransaction(annotation).isEmpty(),
+                    "create editable annotations in the selection gap");
+            ScreenshotHistoryEntry entry;
+            entry.selection.selection = QRect(origin, QSize(120, 80));
+            ScreenshotRegionGeometry local(QRegion(0, 0, 40, 80) + QRect(80, 0, 40, 80));
+            if (curved) {
+                QPainterPath ellipse;
+                ellipse.addEllipse(QRectF(0, 0, 120, 80));
+                local = ScreenshotRegionGeometry::fromPath(ellipse, ScreenshotRegionType::Curve)
+                            .subtracted(QRect(40, 20, 40, 40));
+            }
+            entry.selection.region = local.translated(origin);
+            entry.selection.borderType = ScreenshotSelectionBorderType::Border;
+            entry.selection.borderWidth = 4;
+            entry.selection.shadowWidth = 13;
+            entry.documentSession = runtime.serializeDocumentSession();
+            QImage background(120, 80, QImage::Format_ARGB32_Premultiplied);
+            background.fill(Qt::blue);
+            bool completed = false;
+            require(services.presentPinnedDocument(
+                        background, screen,
+                        physicalPinGeometry(*screen, QPoint(100, 100), QSize(128, 88)), entry,
+                        [&](bool ok, QImage) {
+                            require(ok, "present an editable shaped document pin");
+                            completed = true;
+                        }),
+                    "start the document pin handoff");
+            QElapsedTimer timer;
+            timer.start();
+            while (!completed && timer.elapsed() < 5000)
+                waitForUi(5);
+            require(completed, "document pin handoff completes");
+            auto windows = topLevelPinnedWindows();
+            windows.erase(
+                std::remove_if(windows.begin(), windows.end(),
+                               [](const auto* candidate) { return !candidate->isVisible(); }),
+                windows.end());
+            require(windows.size() == 1, "document pin handoff creates one window");
+            auto* window = windows.first();
+            const auto snapshot = window->persistenceSnapshot();
+            const auto style = decodeScreenshotResultStyle(snapshot.resultStyle);
+            require(style && style->region == local && style->borderWidth == 4 &&
+                        style->shadowWidth == 13 && snapshot.borderAppearance &&
+                        snapshot.borderAppearance->hasBorder,
+                    "document pins persist crop-relative geometry and active effect metadata");
+            for (const int scale : {100, 150}) {
+                Access::scaleBorderFixture(*window, scale);
+                auto* canvas = window->findChild<SnowCanvasWidget*>();
+                require(canvas != nullptr, "document pin owns a canvas");
+                const auto image = renderWholeWidget(*canvas);
+                for (const auto& [point, expected] :
+                     {std::pair{QPointF(origin + QPoint(60, 40)), QColor(Qt::magenta)},
+                      std::pair{QPointF(origin + QPoint(20, 50)), QColor(Qt::blue)}}) {
+                    const auto pixel = canvas->canvasToViewTransform().map(point).toPoint();
+                    requireColorNear(image.pixelColor(pixel), expected, 0,
+                                     "document pins retain gap annotations and selected captures");
+                }
+                QImage exported;
+                auto artifact = Access::viewportExport(*window);
+                require(artifact && artifact->requestImage(
+                                        window,
+                                        [&](ScreenshotExportImageResult result) {
+                                            require(result.succeeded(),
+                                                    "export the editable document pin viewport");
+                                            exported = std::move(result.image);
+                                        }),
+                        "schedule the editable document pin viewport export");
+                timer.restart();
+                while (exported.isNull() && timer.elapsed() < 5000)
+                    waitForUi(5);
+                require(
+                    !exported.isNull() &&
+                        exported.pixelColor(64 * scale / 100, 44 * scale / 100) ==
+                            QColor(Qt::magenta) &&
+                        exported.pixelColor(24 * scale / 100, 54 * scale / 100) == QColor(Qt::blue),
+                    "viewport exports scale capture geometry and retain editable gap annotations");
+            }
+            window->close();
+            waitForUi(20);
+        }
+    }
+}
+
 void pinnedAnnotationsIgnoreSelectionShape() {
     using Access = ScreenshotPinnedWindowTestAccess;
     IsolatedPinnedStorage storage;
@@ -12958,6 +13059,41 @@ void pinnedSelectionBorderOffscreen() {
     using Access = ScreenshotPinnedWindowTestAccess;
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen != nullptr, "selection border needs a screen");
+    for (bool compound : {false, true}) {
+        for (int width : {0, 6}) {
+            ScreenshotResultStyle style;
+            style.borderType = ScreenshotSelectionBorderType::Border;
+            style.borderWidth = width;
+            style.shadowWidth = 12; // Inactive settings must not suppress decorations.
+            if (compound)
+                style.region = QRegion(QRect(0, 0, 50, 100)).united(QRect(70, 0, 30, 100));
+            auto config = clickThroughTestConfig(*screen);
+            config.borderAppearance = screenshotSelectionBorderAppearance(QSize(100, 100), style);
+            require(config.borderAppearance->hasBorder == (width > 0) &&
+                        !config.borderAppearance->hasShadow,
+                    "pin appearance records only the active nonzero effect");
+            ScreenshotPinnedWindow window;
+            Access::prepareReplacement(window, config);
+            require(
+                window.persistenceSnapshot().showBorder == (compound || width == 0),
+                "baked borders suppress default pin borders with the existing compound exception");
+            ScreenshotClipboardAppearance clipboard;
+            clipboard.rasterSize = config.borderAppearance->sourceSize;
+            clipboard.borderAppearance = config.borderAppearance;
+            const auto restored =
+                decodeScreenshotClipboardAppearance(encodeScreenshotClipboardAppearance(clipboard));
+            require(restored && restored->borderAppearance == config.borderAppearance,
+                    "clipboard preserves border presence metadata");
+            config.initialBorderVisible = true;
+            config.initialShadowVisible = true;
+            Access::prepareReplacement(window, config);
+            require(window.persistenceSnapshot().showBorder &&
+                        window.persistenceSnapshot().showShadow,
+                    "explicit pin decoration preferences override baked border suppression");
+            window.close();
+        }
+    }
+
     const QColor borderColor(219, 219, 219);
     const auto checkerColor = [](const QColor& color) {
         return color == QColor(Qt::white) || color == QColor(0xf0, 0xf0, 0xf0);
@@ -14219,7 +14355,7 @@ void pinnedDrawingExitReleasesRendererCaches() {
     state.bounds = contour.boundingRect();
     state.present = true;
     state.cornerRadius = 12;
-    state.shadowWidth = 8;
+    state.effectWidth = 8;
     renderer.applySelectionState(state);
     QImage frame(320, 240, QImage::Format_ARGB32_Premultiplied);
     frame.fill(Qt::transparent);
@@ -15520,6 +15656,52 @@ void pinnedOcrHighlightingFollowsVisibleResultsWithoutRebuildingLabels() {
     Access::refreshRecognitionGeometry(window);
     require(verifyTransformedMask() != zoomed,
             "rotation refreshes the cached clear text regions at their new viewport positions");
+}
+
+void pinnedRecognitionEffectsScaleOnce() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const snow_shot::storage::TextRecognitionSettings settings;
+    const bool previous = settings.saveRecognitionResultAsImage();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(settings.setSaveRecognitionResultAsImage(previous)); });
+    require(settings.setSaveRecognitionResultAsImage(true), "enable recognition image export");
+    for (const auto type :
+         {ScreenshotSelectionBorderType::Border, ScreenshotSelectionBorderType::Shadow}) {
+        for (const bool shaped : {false, true}) {
+            auto config = cachedOcrPinConfig(nullptr);
+            config.imageSource = ScreenshotImageSource::fromImage(
+                config.imageSource.materializedImage.scaled(640, 360), config.canvasSourceRect);
+            config.resultStyle = {16, 48, Qt::black};
+            config.resultStyle.borderType = type;
+            config.resultStyle.borderWidth = 48;
+            if (shaped)
+                config.resultStyle.region =
+                    QRegion(0, 0, 320, 180).subtracted(QRect(120, 70, 160, 100));
+            ScreenshotPinnedWindow window;
+            Access::restoreOffscreen(window, config);
+            Access::recognitionOffscreen(window, config);
+            QImage rendered;
+            auto artifact = Access::fileSave(window);
+            require(artifact && artifact->requestImage(
+                                    &window,
+                                    [&](ScreenshotExportImageResult result) {
+                                        require(result.succeeded(),
+                                                "render the styled pinned recognition snapshot");
+                                        rendered = std::move(result.image);
+                                    }),
+                    "schedule the styled pinned recognition snapshot");
+            QElapsedTimer timer;
+            timer.start();
+            while (rendered.isNull() && timer.elapsed() < 10000)
+                waitForUi(5);
+            require(rendered.size() == QSize(832, 552),
+                    "pinned recognition applies the 2x backing scale to effects exactly once");
+            if (shaped)
+                require(rendered.pixelColor(96 + 400, 96 + 240).alpha() == 0,
+                        "pinned recognition scales selection geometry exactly once");
+            window.close();
+        }
+    }
 }
 
 void pinnedRecognitionSaveSnapshotsAndRoutesOffscreen() {
@@ -26789,6 +26971,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--selection-annotations-only"))) {
+            pinnedDocumentSelectionUsesLocalCaptureGeometry();
             pinnedAnnotationsIgnoreSelectionShape();
             return 0;
         }
@@ -26876,6 +27059,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--recognition-save-only"))) {
+            pinnedRecognitionEffectsScaleOnce();
             pinnedTablesSaveExcelOffscreen();
             pinnedTextRecognitionSavesSourceFilesOffscreen();
             pinnedRecognitionSaveSnapshotsAndRoutesOffscreen();

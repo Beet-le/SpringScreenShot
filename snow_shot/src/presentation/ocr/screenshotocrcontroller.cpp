@@ -418,9 +418,9 @@ QImage clipRecognitionSelection(QImage image, const ScreenshotSelectionModel& se
         return image;
     auto style = selection.resultStyle();
     const qreal scale = qreal(image.width()) / selection.pixelSelection().width();
-    style.regionScale = scale;
-    style.cornerRadius = qRound(style.cornerRadius * scale);
+    style = ScreenshotResultCompositor::scaledStyle(style, scale);
     style.shadowWidth = 0;
+    style.borderWidth = 0;
     style.backgroundOpacityPercent = 0;
     return ScreenshotResultCompositor::compose(image, style);
 }
