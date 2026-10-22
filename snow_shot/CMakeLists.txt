@@ -1113,6 +1113,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/app/launchcommands.cpp)
     target_include_directories(snow-shot-launch-command-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_compile_definitions(snow-shot-launch-command-tests PRIVATE
+        SNOW_SHOT_LAUNCH_MAIN_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/src/app/main.cpp")
     target_link_libraries(snow-shot-launch-command-tests PRIVATE Qt6::Core)
     add_test(NAME snow-shot-launch-command-tests COMMAND snow-shot-launch-command-tests)
     set_tests_properties(snow-shot-launch-command-tests PROPERTIES LABELS "unit" TIMEOUT 30
