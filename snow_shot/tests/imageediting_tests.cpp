@@ -991,6 +991,7 @@ void runImageEditingCloseTests();
 void runImageEditingSourceTests();
 void runImageEditingSmartEraseTests();
 void runImageEditingSaveTests();
+void runImageEditingSpreadsheetOpenTests();
 void runImageEditingConversionAvailabilityTests();
 void runImageEditingCanvasTests();
 void runImageEditingTextPreferencesTests();
@@ -1027,6 +1028,10 @@ void runImageEditingTests() {
     }
     if (QApplication::arguments().contains(QStringLiteral("--image-editing-save-only"))) {
         runImageEditingSaveTests();
+        return;
+    }
+    if (QApplication::arguments().contains(QStringLiteral("--spreadsheet-open-only"))) {
+        runImageEditingSpreadsheetOpenTests();
         return;
     }
     if (QApplication::arguments().contains(

@@ -587,6 +587,10 @@ void ScreenshotOcrController::resetTable() {
     m_session->resetTable();
 }
 
+bool ScreenshotOcrController::openSpreadsheetFile() {
+    return m_session->openSpreadsheetFile();
+}
+
 void ScreenshotOcrController::undoTableEdit() {
     m_session->undoTableEdit();
 }

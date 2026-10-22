@@ -7,6 +7,7 @@
 #include "snow_shot/storage/configurationstore.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "widgets/button.h"
+#include "recognition_workbook_test_support.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -23,6 +24,9 @@
 #include <QTcpSocket>
 #include <QThreadPool>
 #include <QTimer>
+#include <QDir>
+#include <QFileInfo>
+#include <QUrl>
 
 #include <algorithm>
 #include <cstdlib>
@@ -460,6 +464,27 @@ void tableModelSwitchesReuseEditorAndRestoreIndependentViewState() {
     ScreenshotRecognitionWindow window(ScreenshotRecognitionWindowActions{});
     auto actions = headlessActions();
     actions.ensureContent = [&] { return &window; };
+    QString openedPath;
+    bool acceptOpen = false;
+    int openFailures = 0;
+    actions.openSpreadsheetUrl = [&](const QUrl& url) {
+        openedPath = url.toLocalFile();
+        const auto sheet =
+            recognition_workbook_test::sheet(recognition_workbook_test::parts(openedPath));
+        require(sheet.dimension == QStringLiteral("A1:F16") &&
+                    sheet.cells.value(QStringLiteral("A1")) ==
+                        QStringLiteral("  B pending\nline  "),
+                "opening a spreadsheet commits the active editor and exports every cell");
+        const auto* tableEditor = window.findChild<ScreenshotTableEditor*>();
+        require(tableEditor && sheet.columnWidths.size() == tableEditor->model()->columnCount(),
+                "opening a spreadsheet exports the editor's full column layout");
+        for (int column = 0; column < tableEditor->model()->columnCount(); ++column)
+            require(qAbs(sheet.columnWidths.value(column + 1) * 7.0 -
+                         tableEditor->columnWidth(column)) < 1.0,
+                    "exported widths must match the editor within XLSX rounding precision");
+        return acceptOpen;
+    };
+    actions.showStatus = [&](const QString&, bool error) { openFailures += error ? 1 : 0; };
     ScreenshotRecognitionSessionController session(nullptr, nullptr, nullptr, actions);
     ScreenshotRecognitionResults seed;
     seed.key = QStringLiteral("table-editor-model-switch");
@@ -515,11 +540,16 @@ void tableModelSwitchesReuseEditorAndRestoreIndependentViewState() {
     editor->verticalScrollBar()->setValue(64);
     const int horizontalA = editor->horizontalScrollBar()->value();
     const int verticalA = editor->verticalScrollBar()->value();
+    QVector<int> widthsA;
+    for (int column = 0; column < editor->model()->columnCount(); ++column)
+        widthsA.append(editor->columnWidth(column));
     const auto fileA = session.fileExportSnapshot();
     require(fileA && fileA->kind == ScreenshotRecognitionFileKind::Table && fileA->hasContent() &&
                 fileA->table->rowCount() == 16 && fileA->table->columnCount() == 6 &&
                 fileA->table->cellText(1, 2) == QStringLiteral("A edited"),
             "table file snapshots contain the whole current draft despite a partial selection");
+    require(fileA->tableColumnWidths == widthsA && widthsA.size() == 6,
+            "file snapshots capture every displayed column, including offscreen columns");
     session.setRecognitionModel(QStringLiteral("vision-b"));
     require(editor && window.findChild<ScreenshotTableEditor*>() == editor &&
                 editor->model()->index(0, 0).data() == QStringLiteral("B"),
@@ -552,11 +582,22 @@ void tableModelSwitchesReuseEditorAndRestoreIndependentViewState() {
     auto* pending = editor->findChild<QPlainTextEdit*>(QStringLiteral("snowShotTableCellEditor"));
     require(pending, "open an active table cell editor before saving");
     pending->setPlainText(QStringLiteral("  B pending\nline  "));
+    require(!session.openSpreadsheetFile() && session.active() && openFailures == 1 &&
+                !openedPath.isEmpty() && !QFileInfo::exists(openedPath),
+            "a rejected launch commits edits but preserves recognition and reports failure");
+    acceptOpen = true;
+    require(session.openSpreadsheetFile() && QFileInfo::exists(openedPath),
+            "successful launch reports completion to the host and retains the workbook");
+    editor->setColumnWidth(0, 173);
+    editor->setColumnWidth(1, 311);
     const auto fileB = session.fileExportSnapshot();
     require(fileB && fileB->hasContent() && !editor->isEditingCell() &&
                 fileB->table->cellText(0, 0) == QStringLiteral("  B pending\nline  ") &&
                 fileA->table->cellText(0, 0) == QStringLiteral("A"),
             "snapshot preparation commits active edits and retains an independent document copy");
+    require(fileB->tableColumnWidths.value(0) == 173 && fileB->tableColumnWidths.value(1) == 311 &&
+                fileA->tableColumnWidths == widthsA,
+            "new snapshots capture current widths without modifying earlier snapshots");
     session.setTarget(target(QStringLiteral("table-editor-new-target")));
     require(editor.isNull(), "changing the screenshot releases the retained model editor widget");
     session.activate(Mode::Table);
@@ -565,6 +606,10 @@ void tableModelSwitchesReuseEditorAndRestoreIndependentViewState() {
             "an active table without a result must retain table save routing without stale cells");
     session.deactivate();
     require(!session.fileExportSnapshot(), "inactive table recognition must release save routing");
+    require(QFileInfo::exists(openedPath) && !session.openSpreadsheetFile(),
+            "ending recognition retains the launched workbook and disables further opens");
+    require(QFile::remove(openedPath) && QDir().rmdir(QFileInfo(openedPath).absolutePath()),
+            "remove this test's retained workbook");
 }
 
 class BlockedRecognitionWorkers final {

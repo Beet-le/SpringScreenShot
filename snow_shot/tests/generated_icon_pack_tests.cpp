@@ -97,8 +97,8 @@ void everySnowShotEntryRenders() {
     const auto registered = icons::registerWith(renderer);
     require(registered.ok(), "Snow Shot pack registration should succeed");
     const adqt::icons::IconPack* staticPack = icons::pack().staticPack();
-    require(staticPack != nullptr && staticPack->entryCount == 198,
-            "Snow Shot pack should contain all 198 project-owned assets");
+    require(staticPack != nullptr && staticPack->entryCount == 199,
+            "Snow Shot pack should contain all 199 project-owned assets");
 
     adqt::icons::IconRenderRequest request;
     request.logicalSize = QSize(32, 32);
@@ -528,6 +528,67 @@ void imageStitchingIconFollowsAntDesign() {
         require(preview.save(path), "save stitching icon light/dark inspection sheet");
 }
 
+void spreadsheetIconFollowsAntDesign() {
+    namespace icons = snow_shot::presentation::icons::custom;
+    const auto ref = icons::outlined::OpenSpreadsheetFile();
+    const auto* descriptor = ref.descriptor();
+    require(descriptor && descriptor->colorModel == adqt::icons::IconColorModel::Monochrome,
+            "spreadsheet uses the monochrome theme pipeline");
+    const QByteArray svg(descriptor->svg.data(), static_cast<qsizetype>(descriptor->svg.size()));
+    require(svg.contains("viewBox=\"0 0 1024 1024\"") && svg.contains("stroke-width=\"72\"") &&
+                svg.contains("__ADQT_SLOT_PRIMARY__"),
+            "spreadsheet follows the Ant Design grid and outline weight");
+    const QRect bounds = alphaBounds(render(ref, QSize(1024, 1024)).toImage());
+    require(bounds.left() >= 64 && bounds.top() >= 64 && bounds.right() < 960 &&
+                bounds.bottom() < 960,
+            "spreadsheet keeps the Ant Design safe margin");
+    QImage preview(440, 256, QImage::Format_ARGB32_Premultiplied);
+    preview.fill(Qt::white);
+    QPainter painter(&preview);
+    const QList<QColor> colors{QColor("#262626"), QColor("#f0f0f0"), QColor("#1677ff"),
+                               QColor("#bfbfbf")};
+    for (int row = 0; row < colors.size(); ++row) {
+        const QColor color = colors[row];
+        painter.fillRect(QRect(0, row * 64, 440, 64), row == 1 ? QColor("#141414") : Qt::white);
+        int column = 0;
+        for (int size : {14, 16, 20, 32}) {
+            for (qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+                const QImage pixels = render(icons::outlined::OpenSpreadsheetFile(
+                                                 adqt::icons::IconColors::primary(color)),
+                                             QSize(size, size), dpr)
+                                          .toImage();
+                require(!alphaBounds(pixels).isEmpty(),
+                        "spreadsheet remains legible at menu sizes");
+                for (int y = 0; y < pixels.height(); ++y) {
+                    for (int x = 0; x < pixels.width(); ++x) {
+                        const QColor pixel = pixels.pixelColor(x, y);
+                        if (pixel.alpha() > 128)
+                            require(qAbs(pixel.red() - color.red()) <= 2 &&
+                                        qAbs(pixel.green() - color.green()) <= 2 &&
+                                        qAbs(pixel.blue() - color.blue()) <= 2,
+                                    "spreadsheet inherits menu foreground color at every DPI");
+                    }
+                }
+            }
+            painter.drawPixmap(24 + column++ * 90, row * 64 + (64 - size) / 2,
+                               render(icons::outlined::OpenSpreadsheetFile(
+                                          adqt::icons::IconColors::primary(color)),
+                                      QSize(size, size)));
+        }
+    }
+    painter.end();
+    adqt::icons::IconRenderRequest disabled;
+    disabled.logicalSize = QSize(20, 20);
+    disabled.mode = QIcon::Disabled;
+    adqt::icons::IconStatePalette palette;
+    palette.set(QIcon::Disabled, QIcon::Off, adqt::icons::IconColors::primary(colors.last()));
+    require(containsOpaqueColor(adqt::icons::renderIconPixmap(ref, disabled, palette).toImage(),
+                                colors.last()),
+            "spreadsheet supports the menu's disabled palette");
+    if (const auto path = qEnvironmentVariable("SNOW_SPREADSHEET_ICON_PREVIEW"); !path.isEmpty())
+        require(preview.save(path), "save spreadsheet icon visual inspection sheet");
+}
+
 void revealIconFollowsAntDesign() {
     namespace icons = snow_shot::presentation::icons::custom;
     const auto ref = icons::outlined::RevealInFolder();
@@ -876,6 +937,9 @@ void borderFillIconMatchesToolbarGeometry() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
+        spreadsheetIconFollowsAntDesign();
+        if (application.arguments().contains(QStringLiteral("--spreadsheet-only")))
+            return 0;
         if (application.arguments().contains(QStringLiteral("--flip-icons-only"))) {
             flipIconsShowMirroredShapesWithoutDividers();
             return 0;

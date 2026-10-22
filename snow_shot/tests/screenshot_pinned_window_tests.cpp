@@ -2,6 +2,7 @@
 #include "snow_shot/presentation/imageeditingwindow.h"
 #include "snow_shot/app/supportedpinfiles.h"
 #include "angle_wheel_host_test_support.h"
+#include "spreadsheet_open_test_support.h"
 #include "canvas_text_editing_preferences_test_support.h"
 #include "../src/app/mcp/mcppinnedstate_p.h"
 #include "../src/app/mcp/mcppinnedworkflowowners_p.h"
@@ -15740,6 +15741,11 @@ void pinnedTablesSaveExcelOffscreen() {
     QPointer<ScreenshotPinnedWindow> window(new ScreenshotPinnedWindow);
     require(window->present(config), "present table recognition pin");
     waitForUi(100);
+    auto* editButton =
+        window->findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotPinnedEditButton"));
+    require(editButton, "the table pin exposes its editing toolbar");
+    editButton->click();
+    waitForUi(30);
     auto* session = window->findChild<ScreenshotRecognitionSessionController*>();
     require(session, "table recognition session unavailable");
     session->activate(ScreenshotRecognitionSessionController::Mode::Table);
@@ -15815,6 +15821,22 @@ void pinnedTablesSaveExcelOffscreen() {
     cancel.stop();
     require(session->active() && QDir(directory.path()).entryList(QDir::Files).size() == 4,
             "canceling Save As leaves the editable table and existing files intact");
+    {
+        SpreadsheetOpenTestReceiver receiver;
+        auto* controller = window->findChild<ScreenshotPinnedEditController*>();
+        auto* palette = controller && controller->toolbarWindow()
+                            ? controller->toolbarWindow()->palette()
+                            : nullptr;
+        require(palette, "the pinned recognition toolbar is available");
+        palette->openSpreadsheetFileRequested();
+        require(receiver.calls == 1 && QFileInfo::exists(receiver.path) && !session->active() &&
+                    window->isVisible(),
+                "opening a spreadsheet ends pinned recognition while preserving the pinned image");
+        require(recognition_workbook_test::sheet(recognition_workbook_test::parts(receiver.path))
+                            .cells == quickSheet.cells &&
+                    settings.lastManualSaveDirectory() == directory.path(),
+                "pinned spreadsheet opening exports current edits without changing save settings");
+    }
     session->invalidate();
     QImage unavailableImage(32, 32, QImage::Format_ARGB32);
     unavailableImage.fill(Qt::white);

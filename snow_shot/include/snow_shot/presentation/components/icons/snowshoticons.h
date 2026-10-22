@@ -154,6 +154,7 @@ MoveSelectionHorizontal(const adqt::icons::IconColors& colors = {});
 MoveSelectionVertical(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef OcrTranslate(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Opacity(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef OpenSpreadsheetFile(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef PhysicalPixels(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef PinClipboard(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef PinToScreen(const adqt::icons::IconColors& colors = {});

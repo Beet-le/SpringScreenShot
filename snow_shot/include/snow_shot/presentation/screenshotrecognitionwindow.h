@@ -14,6 +14,7 @@
 #include <QRectF>
 #include <QStringList>
 #include <QTransform>
+#include <QVector>
 #include <QWidget>
 
 #include <functional>
@@ -162,6 +163,7 @@ class ScreenshotRecognitionWindow final : public QWidget {
     void undoTableEdit();
     void redoTableEdit();
     void commitActiveTableEdit();
+    [[nodiscard]] QVector<int> tableColumnWidths() const;
 
     void showTextEditor(QTextDocument* document, bool readOnly = false, bool streaming = false);
     void showTextEditor(std::shared_ptr<QTextDocument> document, bool readOnly = false,

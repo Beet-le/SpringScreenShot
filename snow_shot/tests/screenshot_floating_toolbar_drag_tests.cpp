@@ -236,6 +236,10 @@ class NoOpToolbarCommands final : public ScreenshotToolbarCommandSink {
     void setTextTool() override {}
     void setSerialNumberTool() override {}
     void setOcrTool() override {}
+    void openSpreadsheetFile() override {
+        ++openSpreadsheetCount;
+    }
+    int openSpreadsheetCount = 0;
     void setTextTranslationTool() override {
         ++textTranslationToolCount;
     }
@@ -3128,6 +3132,9 @@ int main(int argc, char* argv[]) {
             NoOpToolbarCommands commands;
             ScreenshotToolbarWindow window(commands);
             require(window.palette(), "screenshot toolbar palette unavailable");
+            window.palette()->openSpreadsheetFileRequested();
+            require(commands.openSpreadsheetCount == 1,
+                    "spreadsheet opening forwards exactly one command to the screenshot host");
             window.palette()->printRequested();
             require(commands.printCount == 1,
                     "Print must forward exactly one command to the screenshot sink");

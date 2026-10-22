@@ -173,6 +173,7 @@ constexpr int TOOLBAR_ITEM_SPACING = 8;
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Merge cells"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Split cells"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Reset"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Open spreadsheet file"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Formatting"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Punctuation"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Target Language"),
@@ -1605,6 +1606,8 @@ bool ScreenshotToolPalette::setSecondaryToolbarVisibility(bool actionToolbarVisi
          m_jumpToTranslationPageButton->isHidden() ==
              !(ocrVisible && m_jumpToTranslationPageVisible)) &&
         (m_tableMergeButton == nullptr || m_tableMergeButton->isHidden() == !tableVisible) &&
+        (m_openSpreadsheetFileButton == nullptr ||
+         m_openSpreadsheetFileButton->isHidden() == !tableVisible) &&
         (m_recognitionModelSelect == nullptr ||
          m_recognitionModelSelect->isHidden() == !modelVisible) &&
         (m_scrollingRecognitionControls == nullptr ||
@@ -1666,6 +1669,8 @@ bool ScreenshotToolPalette::setSecondaryToolbarVisibility(bool actionToolbarVisi
     if (m_tableResetButton != nullptr) {
         m_tableResetButton->setVisible(tableVisible);
     }
+    if (m_openSpreadsheetFileButton != nullptr)
+        m_openSpreadsheetFileButton->setVisible(tableVisible);
     if (m_recognitionModelSelect != nullptr) {
         m_recognitionModelSelect->setVisible(modelVisible);
     }
@@ -1690,7 +1695,9 @@ bool ScreenshotToolPalette::setSecondaryToolbarVisibility(bool actionToolbarVisi
     setSpacersVisible(m_tableActionSpacers, tableVisible);
     for (QFrame* separator : std::as_const(m_styleSeparatorFrames)) {
         if (separator != nullptr && separator->parentWidget() == m_selectActionPanel) {
-            separator->setVisible(!recognitionActionVisible);
+            separator->setVisible(separator == m_openSpreadsheetFileSeparator
+                                      ? tableVisible
+                                      : !recognitionActionVisible);
         }
     }
     if (m_selectActionLayout != nullptr) {
@@ -2866,6 +2873,8 @@ void ScreenshotToolPalette::updateScrollingRecognitionButtons() {
 void ScreenshotToolPalette::setTableBusy(bool busy) {
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     m_tableBusy = busy;
+    if (m_openSpreadsheetFileButton != nullptr)
+        m_openSpreadsheetFileButton->setEnabled(m_tableEditingAvailable && !busy);
     updateTableQrBusy();
 #else
     Q_UNUSED(busy);
@@ -2914,6 +2923,8 @@ void ScreenshotToolPalette::setTableEditingState(bool available, bool canUndo, b
     m_tableCanMerge = canMerge;
     m_tableCanSplit = canSplit;
     m_tableCanReset = canReset;
+    if (m_openSpreadsheetFileButton != nullptr)
+        m_openSpreadsheetFileButton->setEnabled(available && !m_tableBusy);
     if (m_tableMergeButton != nullptr) {
         m_tableMergeButton->setEnabled(available && canMerge);
     }
@@ -7922,6 +7933,8 @@ void ScreenshotToolPalette::clearSecondaryResourceBindings() {
     m_tableMergeButton = nullptr;
     m_tableSplitButton = nullptr;
     m_tableResetButton = nullptr;
+    m_openSpreadsheetFileButton = nullptr;
+    m_openSpreadsheetFileSeparator = nullptr;
     m_recognitionModelSelect = nullptr;
     m_recognitionModelSpacer = nullptr;
     m_textFormattingSelect = nullptr;
@@ -9024,6 +9037,19 @@ void ScreenshotToolPalette::createTableRecognitionActionFamily() {
             .select;
     m_recognitionModelSelect->setSearchFilterFields({QStringLiteral("label")});
     m_selectActionLayout->addWidget(m_recognitionModelSelect);
+    m_tableActionSpacers.push_back(
+        addStyleToolbarSpacing(m_selectActionLayout, STYLE_GROUP_SPACING * 2));
+    m_openSpreadsheetFileSeparator = createStyleToolbarSeparator(m_selectActionPanel);
+    m_openSpreadsheetFileSeparator->setObjectName(
+        QStringLiteral("screenshotOpenSpreadsheetFileSeparator"));
+    m_selectActionLayout->addWidget(m_openSpreadsheetFileSeparator);
+    m_tableActionSpacers.push_back(
+        addStyleToolbarSpacing(m_selectActionLayout, STYLE_GROUP_SPACING * 2));
+    m_openSpreadsheetFileButton =
+        add("Open spreadsheet file", custom_outlined_icons::OpenSpreadsheetFile(),
+            QStringLiteral("screenshotOpenSpreadsheetFileButton"));
+    connect(m_openSpreadsheetFileButton, &adqt::widgets::AdButton::clicked, this,
+            &ScreenshotToolPalette::openSpreadsheetFileRequested);
     connect(m_recognitionModelSelect, &adqt::widgets::AdSelect::currentValueChanged, this,
             [this](const QVariant& value) {
                 if (m_replayingMaterializedState ||

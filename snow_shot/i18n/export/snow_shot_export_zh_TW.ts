@@ -243,6 +243,14 @@
             <source>The screenshot filename format is invalid</source>
             <translation>螢幕截圖檔名格式無效</translation>
         </message>
+        <message>
+            <source>The spreadsheet file could not be opened</source>
+            <translation>無法開啟試算表檔案</translation>
+        </message>
+        <message>
+            <source>The temporary directory could not be created</source>
+            <translation>無法建立暫存目錄</translation>
+        </message>
     </context>
     <context>
         <name>ScreenshotSaveAsFileDialog</name>

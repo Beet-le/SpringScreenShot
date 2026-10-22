@@ -884,6 +884,10 @@
             <translation>打开录制文件夹</translation>
         </message>
         <message>
+            <source>Open spreadsheet file</source>
+            <translation>打开电子表格文件</translation>
+        </message>
+        <message>
             <source>Outlined circle</source>
             <translation>轮廓圆形</translation>
         </message>

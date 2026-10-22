@@ -10,6 +10,8 @@
 #include "widgets/input_line_edit.h"
 #include "widgets/modal.h"
 #include "../src/presentation/imageediting/imageeditingexportcontroller.h"
+#include "spreadsheet_open_test_support.h"
+#include "recognition_workbook_test_support.h"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -707,6 +709,41 @@ void runImageEditingConversionAvailabilityTests() {
     cachedConversionsRemainAvailableAcrossModes();
     conversionAvailabilityTracksProvidersAndCache();
 #endif
+}
+
+void runImageEditingSpreadsheetOpenTests() {
+    SpreadsheetOpenTestReceiver receiver;
+    ImageEditingWindow window({});
+    auto initial = source();
+    initial.recognition.key = QStringLiteral("editor-open-spreadsheet");
+    SnowShotTableResult table;
+    table.html = QStringLiteral("<table><tr><td>00123</td><td>雪</td></tr></table>");
+    initial.recognition.table = table;
+    window.present(initial);
+    window.palette()->tableRequested();
+    auto* session = window.recognition();
+    require(session && session->active(), "table recognition is active in the image editor");
+    const auto cell = [&](const QString& text) {
+        return session->editWorkflow({{QStringLiteral("action"), QStringLiteral("set_cell")},
+                                      {QStringLiteral("row"), 0},
+                                      {QStringLiteral("column"), 0},
+                                      {QStringLiteral("text"), text}});
+    };
+    require(cell(QString(32768, QLatin1Char('x'))), "prepare an unsupported workbook cell");
+    window.palette()->openSpreadsheetFileRequested();
+    require(session->active() && receiver.calls == 0,
+            "failed spreadsheet export retains recognition in the image editor");
+    require(cell(QStringLiteral("00123")), "restore a supported workbook cell");
+    window.palette()->openSpreadsheetFileRequested();
+    require(receiver.calls == 1 && QFileInfo::exists(receiver.path) && !session->active() &&
+                window.modal()->isOpen() &&
+                window.palette()->activeTool() == ScreenshotToolPalette::Tool::Move,
+            "successful spreadsheet launch returns to image editing without closing the host");
+    require(recognition_workbook_test::sheet(recognition_workbook_test::parts(receiver.path))
+                    .cells.value(QStringLiteral("A1")) == QStringLiteral("00123"),
+            "the editor launches the recognized table as a workbook");
+    window.shutdown();
+    require(QFileInfo::exists(receiver.path), "editor shutdown retains the launched workbook");
 }
 
 void runImageEditingSaveTests() {

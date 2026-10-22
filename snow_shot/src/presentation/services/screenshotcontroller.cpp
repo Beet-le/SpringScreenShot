@@ -449,6 +449,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void mergeTableSelection() override;
     void splitTableSelection() override;
     void resetTable() override;
+    void openSpreadsheetFile() override;
     void setShowOriginalImage(bool show) override;
     void toggleTextEditing() override;
     void toggleTextTranslation() override;
@@ -2901,6 +2902,12 @@ void ScreenshotController::Impl::resetTable() {
     }
 }
 
+void ScreenshotController::Impl::openSpreadsheetFile() {
+    const QPointer<ScreenshotController> lifetime(&owner);
+    if (m_ocrController && m_ocrController->openSpreadsheetFile() && lifetime)
+        detachCaptureForExport();
+}
+
 void ScreenshotController::Impl::setShowOriginalImage(bool show) {
     if (m_ocrController != nullptr) {
         m_ocrController->setShowOriginalImage(show);
@@ -4522,7 +4529,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer ? QStringLiteral("service_destroyed")
+                                           : !printer         ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,

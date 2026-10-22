@@ -1167,6 +1167,19 @@ void ScreenshotRecognitionWindow::redoTableEdit() {
 #endif
 }
 
+QVector<int> ScreenshotRecognitionWindow::tableColumnWidths() const {
+    QVector<int> widths;
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    if (m_tableEditor && m_tableEditor->model()) {
+        const int columns = m_tableEditor->model()->columnCount();
+        widths.reserve(columns);
+        for (int column = 0; column < columns; ++column)
+            widths.append(m_tableEditor->columnWidth(column));
+    }
+#endif
+    return widths;
+}
+
 void ScreenshotRecognitionWindow::commitActiveTableEdit() {
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     if (m_tableEditor != nullptr) {

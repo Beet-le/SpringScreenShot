@@ -8525,6 +8525,26 @@ void tableToolExposesStructureActionsAndOwnHistoryState() {
     ScreenshotToolPalette palette(options);
     palette.setActiveTool(ScreenshotToolPalette::Tool::Table);
 
+    auto* open = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotOpenSpreadsheetFileButton"));
+    auto* separator =
+        palette.findChild<QFrame*>(QStringLiteral("screenshotOpenSpreadsheetFileSeparator"));
+    auto* model = palette.findChild<adqt::widgets::AdSelect*>(
+        QStringLiteral("screenshotRecognitionModelSelect"));
+    require(open && separator && model && !open->isHidden() && !separator->isHidden() &&
+                !open->isEnabled() && open->toolTip() == QStringLiteral("Open spreadsheet file") &&
+                open->accessibleName() == QStringLiteral("Open spreadsheet file"),
+            "table mode exposes an accessible open spreadsheet button disabled before recognition");
+    const auto* layout = palette.actionPanel()->layout();
+    require(layout->indexOf(separator) == layout->indexOf(model) + 2 &&
+                layout->indexOf(open) == layout->indexOf(separator) + 2,
+            "the separator and open action follow the model selector");
+    int openRequests = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::openSpreadsheetFileRequested,
+                     [&] { ++openRequests; });
+    open->click();
+    require(openRequests == 0, "disabled open does not dispatch");
+
     auto* merge =
         palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotTableMergeButton"));
     auto* split =
@@ -8550,6 +8570,12 @@ void tableToolExposesStructureActionsAndOwnHistoryState() {
             "table commands should remain disabled until a recognized document is ready");
 
     palette.setTableEditingState(true, true, false, true, false, true);
+    require(open->isEnabled(), "a recognized table enables spreadsheet opening");
+    palette.setTableBusy(true);
+    require(!open->isEnabled(), "busy table recognition disables spreadsheet opening");
+    palette.setTableBusy(false);
+    open->click();
+    require(openRequests == 1, "one open click dispatches one command");
     require(merge->isEnabled() && !split->isEnabled() && reset->isEnabled() && undo->isEnabled() &&
                 !redo->isEnabled(),
             "table command state should independently drive every editing action");
@@ -8575,6 +8601,12 @@ void tableToolExposesStructureActionsAndOwnHistoryState() {
     require(mergeRequests == 1 && splitRequests == 1 && resetRequests == 1,
             "enabled table action buttons should forward exactly one command");
 
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Latex);
+    require(open->isHidden() && separator->isHidden(), "LaTeX hides spreadsheet-only controls");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Table);
+    require(!open->isHidden() && !separator->isHidden() && open->isEnabled(),
+            "returning from LaTeX restores the table action");
+
     palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
     require(palette.findChild<adqt::widgets::AdButton*>(
                 QStringLiteral("screenshotTableMergeButton")) == nullptr &&
@@ -8584,6 +8616,13 @@ void tableToolExposesStructureActionsAndOwnHistoryState() {
                     QStringLiteral("screenshotTableResetButton")) == nullptr &&
                 undo->isEnabled() && redo->isEnabled(),
             "leaving Table should evict table actions and restore cached canvas history");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Table);
+    open = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotOpenSpreadsheetFileButton"));
+    require(open && !open->isHidden() && open->isEnabled(),
+            "rebuilding the table toolbar restores spreadsheet availability");
+    open->click();
+    require(openRequests == 2, "rebuilding the toolbar does not duplicate signal connections");
 }
 
 void isolatedBusyIndicatorMatchesItsOwnerWindowBand() {

@@ -96,6 +96,7 @@ struct ScreenshotRecognitionSessionActions {
     std::function<void(bool, bool, bool)> setLatexEditingState;
     std::function<void(int, const ScreenshotRecognitionModelState&)> setRecognitionModelState;
     std::function<QImage()> renderTranslationImage;
+    std::function<bool(const QUrl&)> openSpreadsheetUrl;
 };
 
 class ScreenshotRecognitionSessionController final : public QObject {
@@ -149,6 +150,7 @@ class ScreenshotRecognitionSessionController final : public QObject {
     void mergeTableSelection();
     void splitTableSelection();
     void resetTable();
+    [[nodiscard]] bool openSpreadsheetFile();
     void undoTableEdit();
     void redoTableEdit();
     void undoTextEdit();
@@ -357,6 +359,7 @@ class ScreenshotRecognitionSessionController final : public QObject {
 #endif
     ScreenshotRecognitionSessionActions m_actions;
     bool m_destroying = false;
+    bool m_openingSpreadsheet = false;
     ScreenshotRecognitionTarget m_target;
     QPointer<ScreenshotRecognitionWindow> m_content;
     QHash<QString, TextCacheEntry> m_textCache;

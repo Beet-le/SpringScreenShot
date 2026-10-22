@@ -314,6 +314,8 @@ void ScreenshotToolbarWindow::connectToolCommands(ScreenshotToolPalette& toolPal
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     connect(&toolPalette, &ScreenshotToolPalette::tableResetRequested, this,
             [this]() { m_commands.resetTable(); });
+    connect(&toolPalette, &ScreenshotToolPalette::openSpreadsheetFileRequested, this,
+            [this]() { m_commands.openSpreadsheetFile(); });
 #endif
 }
 

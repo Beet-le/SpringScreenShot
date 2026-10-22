@@ -895,6 +895,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "OpenSpreadsheetFile",
+      "name": "open-spreadsheet-file",
+      "source": "../src/presentation/components/icons/resources/open-spreadsheet-file.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "PhysicalPixels",
       "name": "physical-pixels",
       "source": "../src/presentation/components/icons/resources/physical-pixels.svg",

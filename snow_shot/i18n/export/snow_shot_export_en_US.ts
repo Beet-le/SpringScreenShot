@@ -243,6 +243,14 @@
             <source>The screenshot filename format is invalid</source>
             <translation>The screenshot filename format is invalid</translation>
         </message>
+        <message>
+            <source>The spreadsheet file could not be opened</source>
+            <translation>The spreadsheet file could not be opened</translation>
+        </message>
+        <message>
+            <source>The temporary directory could not be created</source>
+            <translation>The temporary directory could not be created</translation>
+        </message>
     </context>
     <context>
         <name>ScreenshotSaveAsFileDialog</name>

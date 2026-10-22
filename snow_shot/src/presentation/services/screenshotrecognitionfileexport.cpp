@@ -9,6 +9,10 @@
 #include <QMessageBox>
 #include <QTemporaryFile>
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+#include <QDesktopServices>
+#include <QTemporaryDir>
+#include <QUrl>
+#include <QUuid>
 #include <QScopeGuard>
 #include <QXmlStreamWriter>
 #include <mz.h>
@@ -17,6 +21,7 @@
 #include <mz_zip.h>
 #include <mz_zip_rw.h>
 #include <algorithm>
+#include <cmath>
 #endif
 
 namespace {
@@ -58,7 +63,8 @@ QString spreadsheetText(const QString& text) {
     return result;
 }
 
-QByteArray tableWorkbook(const ScreenshotTableDocument& document) {
+QByteArray tableWorkbook(const ScreenshotTableDocument& document,
+                         const QVector<int>& columnWidths) {
     if (document.empty() || document.rowCount() > 1048576 || document.columnCount() > 16384)
         return {};
     void* stream = mz_stream_mem_create();
@@ -152,10 +158,18 @@ QByteArray tableWorkbook(const ScreenshotTableDocument& document) {
         !addXml("xl/styles.xml", u"styleSheet", spreadsheetNamespace, [](QXmlStreamWriter& xml) {
             xml.writeStartElement(u"fonts");
             xml.writeAttribute(u"count", u"2");
-            xml.writeEmptyElement(u"font");
-            xml.writeStartElement(u"font");
-            xml.writeEmptyElement(u"b");
-            xml.writeEndElement();
+            // Column widths use the Normal font's maximum digit width: Calibri 11 is
+            // 7 pixels at 96 DPI. Declare it explicitly so viewer defaults cannot change it.
+            for (bool bold : {false, true}) {
+                xml.writeStartElement(u"font");
+                if (bold)
+                    xml.writeEmptyElement(u"b");
+                xml.writeEmptyElement(u"sz");
+                xml.writeAttribute(u"val", u"11");
+                xml.writeEmptyElement(u"name");
+                xml.writeAttribute(u"val", u"Calibri");
+                xml.writeEndElement();
+            }
             xml.writeEndElement();
             xml.writeStartElement(u"fills");
             xml.writeAttribute(u"count", u"2");
@@ -209,6 +223,27 @@ QByteArray tableWorkbook(const ScreenshotTableDocument& document) {
                     xml.writeAttribute(u"ref", QStringLiteral("A1:") +
                                                    cellReference(document.rowCount() - 1,
                                                                  document.columnCount() - 1));
+                    if (!columnWidths.isEmpty()) {
+                        xml.writeStartElement(u"cols");
+                        for (int column = 0;
+                             column < document.columnCount() && column < columnWidths.size();
+                             ++column) {
+                            const int pixels = columnWidths.at(column);
+                            if (pixels <= 0)
+                                continue;
+                            // OOXML stores the padded width in 1/256 digit-width units.
+                            // QTableView widths already include padding; use logical pixels,
+                            // without multiplying by the screen's device pixel ratio.
+                            const double width =
+                                std::min(255.0, std::floor(pixels * 256.0 / 7.0) / 256.0);
+                            xml.writeEmptyElement(u"col");
+                            xml.writeAttribute(u"min", QString::number(column + 1));
+                            xml.writeAttribute(u"max", QString::number(column + 1));
+                            xml.writeAttribute(u"width", QString::number(width, 'f', 8));
+                            xml.writeAttribute(u"customWidth", u"1");
+                        }
+                        xml.writeEndElement();
+                    }
                     xml.writeStartElement(u"sheetData");
                     QStringList merges;
                     for (int row = 0; row < document.rowCount(); ++row) {
@@ -366,6 +401,34 @@ bool ScreenshotRecognitionFileExport::confirmOverwrite(QWidget* owner, const QSt
     return dialog.exec() == QMessageBox::Yes;
 }
 
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+ScreenshotRecognitionFileSaveResult ScreenshotRecognitionFileExport::openTemporaryTable(
+    const ScreenshotRecognitionFileSnapshot& snapshot, std::function<bool(const QUrl&)> openUrl) {
+    if (snapshot.kind != ScreenshotRecognitionFileKind::Table || !snapshot.hasContent())
+        return {{},
+                message(QT_TRANSLATE_NOOP("ScreenshotRecognitionFileExport",
+                                          "No recognition result is available to save"))};
+    QTemporaryDir directory(
+        QDir(QDir::tempPath()).filePath(QStringLiteral("SnowShot-table-XXXXXX")));
+    if (!directory.isValid())
+        return {{},
+                message(QT_TRANSLATE_NOOP("ScreenshotRecognitionFileExport",
+                                          "The temporary directory could not be created"))};
+    const QString fileName =
+        QStringLiteral("Table-%1.xlsx").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const auto result = saveToPath(snapshot, directory.filePath(fileName));
+    if (!result.succeeded())
+        return result;
+    const QUrl url = QUrl::fromLocalFile(result.path);
+    if (!(openUrl ? openUrl(url) : QDesktopServices::openUrl(url)))
+        return {{},
+                message(QT_TRANSLATE_NOOP("ScreenshotRecognitionFileExport",
+                                          "The spreadsheet file could not be opened"))};
+    directory.setAutoRemove(false);
+    return result;
+}
+#endif
+
 ScreenshotRecognitionFileSaveResult
 ScreenshotRecognitionFileExport::saveToPath(const ScreenshotRecognitionFileSnapshot& snapshot,
                                             const QString& path, bool allowOverwrite) {
@@ -399,7 +462,7 @@ ScreenshotRecognitionFileExport::saveToPath(const ScreenshotRecognitionFileSnaps
     QByteArray bytes;
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     if (snapshot.kind == ScreenshotRecognitionFileKind::Table) {
-        bytes = tableWorkbook(*snapshot.table);
+        bytes = tableWorkbook(*snapshot.table, snapshot.tableColumnWidths);
         if (bytes.isEmpty())
             return {{},
                     message(QT_TRANSLATE_NOOP("ScreenshotRecognitionFileExport",

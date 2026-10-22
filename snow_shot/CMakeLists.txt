@@ -4978,6 +4978,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
 
     add_executable(snow-shot-pinned-window-tests
+        tests/spreadsheet_open_test_support.h
         ${SNOW_SHOT_IMAGE_EDITING_SOURCES}
         tests/imageediting_tests.cpp
         tests/imageediting_canvas_tests.cpp
@@ -5140,6 +5141,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     snow_shot_import_offscreen_platform(snow-shot-pinned-window-tests)
     add_test(NAME snow-shot-image-editing-tests
         COMMAND snow-shot-pinned-window-tests --image-editing-only -platform offscreen)
+    add_test(NAME snow-shot-image-editing-spreadsheet-open-tests
+        COMMAND snow-shot-pinned-window-tests --image-editing-only --spreadsheet-open-only
+            -platform offscreen)
+    set_tests_properties(snow-shot-image-editing-spreadsheet-open-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
     foreach(_snow_editor_regression IN ITEMS
         close source smart-erase save canvas document translation branch conversion-availability)
         set(_snow_editor_regression_test
@@ -8753,6 +8760,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
 
     add_executable(snow-shot-recognition-session-controller-tests
+        src/presentation/services/screenshotrecognitionfileexport.cpp
         src/presentation/ocr/screenshotrecognitionimage.cpp
         tests/screenshot_recognition_session_controller_tests.cpp
         tests/original_image_translation_tests.cpp
@@ -8786,6 +8794,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         "${SNOW_DRAW_ENGINE_SOURCE_DIR}/include"
     )
     target_link_libraries(snow-shot-recognition-session-controller-tests PRIVATE
+        MINIZIP::minizip-ng
         snow_shot_translation
         ant_design_qt
         Qt6::Network

@@ -884,6 +884,10 @@
             <translation>Open recording folder</translation>
         </message>
         <message>
+            <source>Open spreadsheet file</source>
+            <translation>Open spreadsheet file</translation>
+        </message>
+        <message>
             <source>Outlined circle</source>
             <translation>Outlined circle</translation>
         </message>

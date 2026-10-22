@@ -1784,6 +1784,37 @@ void ScreenshotRecognitionSessionController::resetTable() {
 #endif
 }
 
+bool ScreenshotRecognitionSessionController::openSpreadsheetFile() {
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    if (!tableModeActive() || busy(Mode::Table) || m_openingSpreadsheet)
+        return false;
+    const QPointer<ScreenshotRecognitionSessionController> lifetime(this);
+    const QString targetKey = m_target.key;
+    m_openingSpreadsheet = true;
+    const auto snapshot = fileExportSnapshot();
+    if (!lifetime)
+        return false;
+    if (!snapshot || snapshot->kind != ScreenshotRecognitionFileKind::Table) {
+        m_openingSpreadsheet = false;
+        return false;
+    }
+    const auto result = ScreenshotRecognitionFileExport::openTemporaryTable(
+        *snapshot, m_actions.openSpreadsheetUrl);
+    if (!lifetime)
+        return false;
+    m_openingSpreadsheet = false;
+    if (!tableModeActive() || m_target.key != targetKey)
+        return false;
+    if (!result.succeeded()) {
+        static_cast<void>(notifyCallback(m_actions.showStatus, result.error, true));
+        return false;
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
 void ScreenshotRecognitionSessionController::undoTableEdit() {
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     if (tableModeActive() && content() != nullptr) {
@@ -2633,8 +2664,11 @@ ScreenshotRecognitionSessionController::fileExportSnapshot() {
             return std::nullopt;
         ScreenshotRecognitionFileSnapshot snapshot;
         snapshot.kind = ScreenshotRecognitionFileKind::Table;
-        if (m_tableSession)
+        if (m_tableSession) {
             snapshot.table = m_tableSession->document;
+            if (content())
+                snapshot.tableColumnWidths = content()->tableColumnWidths();
+        }
         return snapshot;
     }
 #endif
@@ -3744,7 +3778,8 @@ void ScreenshotRecognitionSessionController::updateTableState(
         return;
     }
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
-    const bool available = m_active && m_mode == Mode::Table && m_tableSession != nullptr;
+    const bool available = m_active && m_mode == Mode::Table && m_tableSession != nullptr &&
+                           !m_tableSession->document.empty();
 #else
     constexpr bool available = false;
 #endif

@@ -884,6 +884,10 @@
             <translation>開啟錄製資料夾</translation>
         </message>
         <message>
+            <source>Open spreadsheet file</source>
+            <translation>開啟試算表檔案</translation>
+        </message>
+        <message>
             <source>Outlined circle</source>
             <translation>輪廓圓形</translation>
         </message>

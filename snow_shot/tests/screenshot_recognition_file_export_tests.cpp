@@ -12,6 +12,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTranslator>
+#include <QUrl>
 
 #include <stdexcept>
 #include <iostream>
@@ -109,6 +110,106 @@ void savesRealWorkbookWithLiteralCellsAndSpans() {
                 package.value(QStringLiteral("xl/styles.xml")).contains("<b/>") &&
                 package.value(QStringLiteral("xl/styles.xml")).contains("wrapText=\"1\""),
             "header cells must be bold and multiline text must wrap");
+}
+
+void temporaryWorkbooksOpenOnlyAfterSavingAndSurviveSuccess() {
+    auto snapshot = tableSnapshot();
+    snapshot.table->setCellText(1, 0, QStringLiteral("雪\n00123"));
+    snapshot.table->setCellText(1, 1, QStringLiteral("=SUM(A1:A2)"));
+    QStringList paths;
+    const auto launch = [&](const QUrl& url) {
+        require(url.isLocalFile(), "the default application receives a local file URL");
+        const QString path = url.toLocalFile();
+        require(QFileInfo(path).fileName().startsWith(QStringLiteral("Table-")) &&
+                    QFileInfo(path).suffix() == QStringLiteral("xlsx") &&
+                    QFileInfo(QFileInfo(path).absolutePath()).absolutePath() == QDir::tempPath(),
+                "workbooks use a reserved directory directly under the system temporary directory");
+        const auto sheet = recognition_workbook_test::sheet(recognition_workbook_test::parts(path));
+        require(sheet.dimension == QStringLiteral("A1:C3") && sheet.merges.size() == 2 &&
+                    sheet.cells.value(QStringLiteral("A2")) == QStringLiteral("雪\n00123") &&
+                    sheet.cells.value(QStringLiteral("B2")) == QStringLiteral("=SUM(A1:A2)"),
+                "the launched workbook preserves the complete table and literal cell values");
+        require(QFile::rename(path, path + QStringLiteral(".probe")) &&
+                    QFile::rename(path + QStringLiteral(".probe"), path),
+                "the workbook is closed before launching the default application");
+        paths.append(path);
+        return true;
+    };
+    require(ScreenshotRecognitionFileExport::openTemporaryTable(snapshot, launch).succeeded() &&
+                ScreenshotRecognitionFileExport::openTemporaryTable(snapshot, launch).succeeded() &&
+                paths.size() == 2 && paths[0] != paths[1] &&
+                QFileInfo(paths[0]).fileName() != QFileInfo(paths[1]).fileName(),
+            "repeated opens retain workbooks with unique filenames as well as unique paths");
+    for (const QString& path : paths) {
+        require(QFileInfo::exists(path),
+                "the workbook survives the temporary helper's destruction");
+        require(QFile::remove(path) && QDir().rmdir(QFileInfo(path).absolutePath()),
+                "remove the test's retained workbook");
+    }
+    QString rejectedPath;
+    const auto rejected =
+        ScreenshotRecognitionFileExport::openTemporaryTable(snapshot, [&](const QUrl& url) {
+            rejectedPath = url.toLocalFile();
+            return false;
+        });
+    require(!rejected.succeeded() && !rejected.error.isEmpty() && !rejectedPath.isEmpty() &&
+                !QFileInfo::exists(QFileInfo(rejectedPath).absolutePath()),
+            "rejected launches remove the reserved directory and report an error");
+    const auto before =
+        QDir(QDir::tempPath())
+            .entryList({QStringLiteral("SnowShot-table-*")}, QDir::Dirs | QDir::NoDotAndDotDot);
+    int launches = 0;
+    const auto unexpectedLaunch = [&](const QUrl&) {
+        ++launches;
+        return true;
+    };
+    snapshot.table->setCellText(1, 0, QString(32768, QLatin1Char('x')));
+    require(!ScreenshotRecognitionFileExport::openTemporaryTable(snapshot, unexpectedLaunch)
+                 .succeeded(),
+            "workbook serialization failure prevents a launch");
+    snapshot.table.reset();
+    require(!ScreenshotRecognitionFileExport::openTemporaryTable(snapshot, unexpectedLaunch)
+                    .succeeded() &&
+                launches == 0 &&
+                before == QDir(QDir::tempPath())
+                              .entryList({QStringLiteral("SnowShot-table-*")},
+                                         QDir::Dirs | QDir::NoDotAndDotDot),
+            "missing results and failed exports leave no temporary artifacts");
+}
+
+void workbookPreservesColumnWidths() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "column width export fixture directory");
+    auto snapshot = tableSnapshot();
+    snapshot.tableColumnWidths = {92, 203, 350};
+    const auto verify = [&](const QString& path) {
+        const auto sheet = recognition_workbook_test::sheet(recognition_workbook_test::parts(path));
+        require(sheet.columnWidths.size() == 3 && sheet.columnWidths.value(1) == 13.140625 &&
+                    sheet.columnWidths.value(2) == 29.0 && sheet.columnWidths.value(3) == 50.0,
+                "each column must retain its displayed width, including columns in merged cells");
+    };
+    const auto saved = ScreenshotRecognitionFileExport::saveToPath(
+        snapshot, directory.filePath(QStringLiteral("widths.xlsx")));
+    require(saved.succeeded(), "save workbook with column widths");
+    verify(saved.path);
+    const auto quick = ScreenshotRecognitionFileExport::quickSave(snapshot, directory.path(),
+                                                                  QStringLiteral("quick-widths"));
+    require(quick.succeeded(), "quick save workbook with column widths");
+    verify(quick.path);
+    const auto opened =
+        ScreenshotRecognitionFileExport::openTemporaryTable(snapshot, [&](const QUrl& url) {
+            verify(url.toLocalFile());
+            return false;
+        });
+    require(!opened.succeeded(), "declined test launch cleans up the temporary workbook");
+
+    snapshot.tableColumnWidths.clear();
+    const auto headless = ScreenshotRecognitionFileExport::saveToPath(
+        snapshot, directory.filePath(QStringLiteral("headless.xlsx")));
+    require(headless.succeeded() &&
+                recognition_workbook_test::sheet(recognition_workbook_test::parts(headless.path))
+                    .columnWidths.isEmpty(),
+            "headless snapshots without layout keep the workbook's default widths");
 }
 
 void workbookSaveHandlesCollisionsOverwriteAndFailures() {
@@ -352,6 +453,8 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         savesRealWorkbookWithLiteralCellsAndSpans();
+        workbookPreservesColumnWidths();
+        temporaryWorkbooksOpenOnlyAfterSavingAndSurviveSuccess();
         workbookSaveHandlesCollisionsOverwriteAndFailures();
         savesConversionPairsWithExactSource();
         savesQrValuesAsOneTextFile();

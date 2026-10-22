@@ -548,6 +548,7 @@ class ScreenshotToolPalette final : public QWidget,
     void tableMergeRequested();
     void tableSplitRequested();
     void tableResetRequested();
+    void openSpreadsheetFileRequested();
     void showOriginalImageRequested(bool show);
     void textEditRequested();
     void textTranslateRequested();
@@ -981,6 +982,8 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdButton* m_tableMergeButton = nullptr;
     adqt::widgets::AdButton* m_tableSplitButton = nullptr;
     adqt::widgets::AdButton* m_tableResetButton = nullptr;
+    adqt::widgets::AdButton* m_openSpreadsheetFileButton = nullptr;
+    QFrame* m_openSpreadsheetFileSeparator = nullptr;
     adqt::widgets::AdSelect* m_recognitionModelSelect = nullptr;
     QSpacerItem* m_recognitionModelSpacer = nullptr;
     ScreenshotRecognitionModelState m_tableRecognitionModelState;
