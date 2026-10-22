@@ -19,6 +19,7 @@
 #include "theme/theme_manager.h"
 #include "widgets/button.h"
 #include "widgets/checkbox.h"
+#include "widgets/context_menu.h"
 #include "widgets/message.h"
 #include "widgets/modal.h"
 #include "widgets/navigation_menu.h"
@@ -39,6 +40,7 @@
 #include <QFontDatabase>
 #include <QLabel>
 #include <QMenu>
+#include <QKeyEvent>
 #include <QPointer>
 #include <QPalette>
 #include <QScrollBar>
@@ -1055,6 +1057,19 @@ void permissionRedirectShowsMainInterfacePrompt() {
 }
 #endif
 
+void triggerBatchAction(adqt::widgets::AdButton* trigger, int index) {
+    trigger->click();
+    QCoreApplication::processEvents();
+    auto* menu = trigger->window()->findChild<adqt::widgets::AdContextMenu*>(
+        QStringLiteral("pinnedManagementBatchActionsMenu"));
+    require(menu && menu->isPopupVisible(), "Batch Actions opens its menu");
+    menu->setActiveAction(menu->actions().at(index));
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(menu, &enter);
+    QCoreApplication::processEvents();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
 void pinnedCollageRequestReachesMainWindow() {
     const auto& registry = settings::builtInSettingsRegistry();
     snow_shot::presentation::GlobalShortcutManager shortcuts;
@@ -1080,13 +1095,20 @@ void pinnedCollageRequestReachesMainWindow() {
     auto* page = window.findChild<PinnedWindowManagementPageWidget*>();
     require(page != nullptr, "main window creates the pinned management page");
     auto* checkbox = page->findChild<adqt::widgets::AdCheckbox*>();
-    auto* collage =
-        page->findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementCollage"));
-    require(checkbox && collage, "pinned navigation exposes selection and collage controls");
+    auto* batchActions =
+        page->findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementBatchActions"));
+    require(checkbox && batchActions, "pinned navigation exposes selection and collage controls");
     checkbox->setChecked(true);
-    collage->click();
+    triggerBatchAction(batchActions, 0);
     require(requested == QStringList{record.id},
             "pinned collage selection reaches MainWindow through ContentCardWidget");
+    QVector<QStringList> showRequests;
+    QObject::connect(&snow_shot::storage::ApplicationStorage::instance(),
+                     &snow_shot::storage::ApplicationStorage::pinnedWindowsShowRequested, &window,
+                     [&](const QStringList& ids) { showRequests.append(ids); });
+    triggerBatchAction(batchActions, 1);
+    require(showRequests == QVector<QStringList>{QStringList{record.id}},
+            "the production page forwards one complete restoration batch through storage");
     require(repository.remove(record.id).success, "remove the pinned navigation fixture");
 }
 

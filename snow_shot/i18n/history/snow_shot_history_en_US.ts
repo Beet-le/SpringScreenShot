@@ -1228,6 +1228,10 @@ Files:
             <translation>All sources</translation>
         </message>
         <message>
+            <source>Batch Actions</source>
+            <translation>Batch Actions</translation>
+        </message>
+        <message>
             <source>Bulk actions for selected pinned windows</source>
             <translation>Bulk actions for selected pinned windows</translation>
         </message>
@@ -1246,14 +1250,6 @@ Files:
         <message>
             <source>Closed</source>
             <translation>Closed</translation>
-        </message>
-        <message>
-            <source>Collage</source>
-            <translation>Collage</translation>
-        </message>
-        <message>
-            <source>Create a collage from selected pinned windows</source>
-            <translation>Create a collage from selected pinned windows</translation>
         </message>
         <message>
             <source>Date</source>
@@ -1347,6 +1343,10 @@ Files:
             <translation>Pin to Screen Management</translation>
         </message>
         <message>
+            <source>Pin to screen</source>
+            <translation>Pin to screen</translation>
+        </message>
+        <message>
             <source>Pinned images and text will appear here</source>
             <translation>Pinned images and text will appear here</translation>
         </message>
@@ -1381,6 +1381,10 @@ Files:
         <message>
             <source>Select all entries on this page</source>
             <translation>Select all entries on this page</translation>
+        </message>
+        <message>
+            <source>Select pinned windows from the same group to pin them to the screen.</source>
+            <translation>Select pinned windows from the same group to pin them to the screen.</translation>
         </message>
         <message>
             <source>Select record</source>
@@ -1448,6 +1452,10 @@ Files:
             <translation>All sources</translation>
         </message>
         <message>
+            <source>Batch Actions</source>
+            <translation>Batch Actions</translation>
+        </message>
+        <message>
             <source>Bulk actions for selected screenshot history entries</source>
             <translation>Bulk actions for selected screenshot history entries</translation>
         </message>
@@ -1460,20 +1468,12 @@ Files:
             <translation>Change the source or date range to see more history</translation>
         </message>
         <message>
-            <source>Collage</source>
-            <translation>Collage</translation>
-        </message>
-        <message>
             <source>Copied and pinned screenshots will appear here</source>
             <translation>Copied and pinned screenshots will appear here</translation>
         </message>
         <message>
             <source>Copy to clipboard</source>
             <translation>Copy to clipboard</translation>
-        </message>
-        <message>
-            <source>Create a collage from selected screenshots</source>
-            <translation>Create a collage from selected screenshots</translation>
         </message>
         <message>
             <source>Current monitor</source>
@@ -1564,6 +1564,10 @@ Files:
         <message>
             <source>Start date</source>
             <translation>Start date</translation>
+        </message>
+        <message>
+            <source>Stitch Image</source>
+            <translation>Stitch Image</translation>
         </message>
         <message>
             <source>This action cannot be undone</source>

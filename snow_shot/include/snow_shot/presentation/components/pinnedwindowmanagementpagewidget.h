@@ -12,6 +12,7 @@
 #include <QWidget>
 #include <optional>
 
+class QAction;
 class QBoxLayout;
 class QLabel;
 class QVBoxLayout;
@@ -44,6 +45,7 @@ class PinnedWindowManagementDataSource : public QObject {
     virtual void requestFullImage(const QString& id, quint64 requestId) = 0;
     virtual void cancelPreviews() {}
     virtual void showRecord(const QString& id) = 0;
+    virtual void showRecords(const QStringList& ids) = 0;
     [[nodiscard]] virtual bool revealRecord(const QString&) {
         return false;
     }
@@ -88,6 +90,9 @@ class PinnedWindowManagementPageWidget final : public QWidget {
     void rebuildPreview();
     void updateHeader();
     void updateSelectionBar();
+    void updateBatchActions();
+    [[nodiscard]] QStringList selectedRecordIds() const;
+    [[nodiscard]] std::optional<QString> selectedGroupId() const;
     void clearSelection();
     void selectCurrentPage();
     void deleteSelected();
@@ -109,7 +114,9 @@ class PinnedWindowManagementPageWidget final : public QWidget {
     QLabel* m_selectionSummary = nullptr;
     QWidget* m_selectionActions = nullptr;
     adqt::widgets::AdButton* m_deleteSelected = nullptr;
-    adqt::widgets::AdButton* m_collageButton = nullptr;
+    adqt::widgets::AdButton* m_batchActionsButton = nullptr;
+    QPointer<QAction> m_batchStitchAction;
+    QPointer<QAction> m_batchPinAction;
     adqt::widgets::AdButton* m_selectPage = nullptr;
     adqt::widgets::AdButton* m_deselect = nullptr;
     adqt::widgets::AdPopconfirm* m_deleteSelectedConfirmation = nullptr;

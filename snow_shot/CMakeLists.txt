@@ -5246,6 +5246,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 60)
     add_test(NAME snow-shot-pinned-management-lifecycle-tests
         COMMAND snow-shot-pinned-window-tests --management-only -platform offscreen)
+    add_test(NAME snow-shot-pinned-batch-restore-tests
+        COMMAND snow-shot-pinned-window-tests --batch-restore-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-batch-restore-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 30)
     add_test(NAME snow-shot-pinned-close-persistence-tests
         COMMAND snow-shot-pinned-window-tests --deferred-user-close-only -platform offscreen)
     add_test(NAME snow-shot-pinned-hidden-window-lifecycle-tests
@@ -6028,6 +6032,11 @@ if(SNOW_SHOT_BUILD_TESTS)
              COMMAND snow-shot-export-coordinator-tests)
     add_test(NAME snow-shot-export-scheduling-tests
              COMMAND snow-shot-export-coordinator-tests --scheduling-only)
+    add_test(NAME snow-shot-export-queue-tests
+        COMMAND snow-shot-export-coordinator-tests --queue-only)
+    set_tests_properties(snow-shot-export-queue-tests PROPERTIES
+        LABELS unit TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-export-scheduling-tests PROPERTIES
         LABELS unit TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

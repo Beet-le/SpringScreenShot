@@ -234,6 +234,11 @@ class ApplicationController::Impl {
                              if (auto* controller = ensureScreenshotController())
                                  controller->showPinnedRecord(id);
                          });
+        QObject::connect(&pinnedStorage, &storage::ApplicationStorage::pinnedWindowsShowRequested,
+                         &q, [this](const QStringList& ids) {
+                             if (auto* controller = ensureScreenshotController())
+                                 controller->showPinnedRecords(ids);
+                         });
         QObject::connect(&pinnedStorage, &storage::ApplicationStorage::pinnedWindowDeleteRequested,
                          &q, [this](const QVector<QString>& ids) {
                              if (auto* controller = ensureScreenshotController())

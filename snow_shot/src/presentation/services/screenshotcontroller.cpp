@@ -679,13 +679,8 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     QString m_pendingClipboardGroup;
     bool m_pendingClipboardShake = false;
     bool m_clipboardDecodeBeforePresentation = false;
-    struct HistoryPinRequest {
-        quint64 id = 0;
-        ScreenshotExportJobHandle job;
-    };
-    std::vector<HistoryPinRequest> m_historyPinJobs;
+    ScreenshotExportQueue m_historyPinQueue{ScreenshotExportCoordinator::shared()};
     quint64 m_historyPinEpoch = 0;
-    quint64 m_historyPinSerial = 0;
     quint64 m_delayedCaptureGeneration = 0;
     snow_shot::runtime::RuntimeActivityLease m_delayedCaptureActivity;
     PendingSelectionAction m_pendingSelectionAction = PendingSelectionAction::None;
@@ -3570,10 +3565,7 @@ void ScreenshotController::Impl::cancelContentPin() {
 
 void ScreenshotController::Impl::cancelHistoryPins() {
     ++m_historyPinEpoch;
-    for (const HistoryPinRequest& request : m_historyPinJobs) {
-        request.job.cancel();
-    }
-    m_historyPinJobs.clear();
+    m_historyPinQueue.cancel();
 }
 
 void ScreenshotController::Impl::pinHistoryRecord(const QString& recordId) {
@@ -3641,11 +3633,8 @@ void ScreenshotController::Impl::pinHistoryRecord(const QString& recordId) {
     const QPointer<ScreenshotController> receiver(&owner);
     const QPointer<QScreen> guardedScreen(cursorScreen);
     const quint64 epoch = m_historyPinEpoch;
-    const quint64 requestId = ++m_historyPinSerial;
-    HistoryPinRequest request;
-    request.id = requestId;
-    request.job = ScreenshotExportCoordinator::shared().submit(
-        &owner, ScreenshotExportCoordinator::Priority::Foreground,
+    const bool queued = m_historyPinQueue.enqueue(
+        ScreenshotExportCoordinator::Priority::Foreground,
         [record](const ScreenshotExportCancellation& cancellation) {
             if (cancellation.isCancellationRequested()) {
                 return ScreenshotExportTaskResult::failure(
@@ -3668,15 +3657,12 @@ void ScreenshotController::Impl::pinHistoryRecord(const QString& recordId) {
             loaded.image = std::move(*image);
             return loaded;
         },
-        [receiver, guardedScreen, autoResizeWindow, epoch, requestId,
+        [receiver, guardedScreen, autoResizeWindow, epoch,
          record](ScreenshotExportTaskResult result) {
             if (receiver.isNull() || receiver->m_impl == nullptr) {
                 return;
             }
             auto& impl = *receiver->m_impl;
-            std::erase_if(impl.m_historyPinJobs, [requestId](const HistoryPinRequest& pending) {
-                return pending.id == requestId;
-            });
             if (epoch != impl.m_historyPinEpoch ||
                 result.failureStage == ScreenshotExportFailureStage::Cancelled) {
                 return;
@@ -3747,12 +3733,11 @@ void ScreenshotController::Impl::pinHistoryRecord(const QString& recordId) {
                 }
             }
         });
-    if (!request.job.isValid()) {
-        qWarning("Screenshot history pin failed: the export queue is full");
+    if (!queued) {
+        qWarning("Screenshot history pin failed: the export queue is unavailable");
         reportFailed();
         return;
     }
-    m_historyPinJobs.push_back(std::move(request));
 }
 
 ScreenshotFilePinBatch::Present
@@ -6258,6 +6243,11 @@ void ScreenshotController::showPinnedRecord(const QString& id) {
         m_impl->m_messages->error(QStringLiteral("restore-pinned"),
                                   tr("The pinned window could not be restored"));
 }
+void ScreenshotController::showPinnedRecords(const QStringList& ids) {
+    if (m_impl->ensureExportFeature() && !m_impl->m_selectionExportUiServices->restoreRecords(ids))
+        m_impl->m_messages->error(QStringLiteral("restore-pinned"),
+                                  tr("The pinned window could not be restored"));
+}
 void ScreenshotController::destroyPinnedRecords(const QVector<QString>& ids) {
     if (m_impl->ensureExportFeature())
         m_impl->m_selectionExportUiServices->destroyRecords(ids);
@@ -6292,7 +6282,7 @@ void ScreenshotController::setCaptureSuspended(bool suspended) {
 
 bool ScreenshotController::blocksApplicationUpdate() const {
     return !m_impl->canBeginCapture() || m_impl->m_filePinQueue.active() ||
-           !m_impl->m_activeImageExports.isEmpty() ||
+           m_impl->m_historyPinQueue.active() || !m_impl->m_activeImageExports.isEmpty() ||
            static_cast<bool>(m_impl->m_cancelSaveDialog) ||
            ScreenshotExportCoordinator::shared().pendingJobCount() > 0 ||
            (m_impl->m_screenRecordingController != nullptr &&
@@ -6304,7 +6294,7 @@ bool ScreenshotController::blocksMemoryTrimming() const {
     const auto& state = *m_impl;
     return !state.canBeginCapture() || state.m_recaptureBusy || state.m_globalMouseDrag.active() ||
            state.m_filePinBatch.active() || state.m_filePinQueue.active() ||
-           !state.m_historyPinJobs.empty() || !state.m_activeImageExports.isEmpty() ||
+           state.m_historyPinQueue.active() || !state.m_activeImageExports.isEmpty() ||
            static_cast<bool>(state.m_cancelSaveDialog) ||
            (state.m_historyService && state.m_historyService->navigationInProgress()) ||
            (state.m_scrollingCaptureController && state.m_scrollingCaptureController->active()) ||

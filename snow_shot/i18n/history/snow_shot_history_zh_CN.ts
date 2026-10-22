@@ -1227,6 +1227,10 @@ Files:
             <translation>所有来源</translation>
         </message>
         <message>
+            <source>Batch Actions</source>
+            <translation>批量操作</translation>
+        </message>
+        <message>
             <source>Bulk actions for selected pinned windows</source>
             <translation>对选中的固定到屏幕窗口执行批量操作</translation>
         </message>
@@ -1245,14 +1249,6 @@ Files:
         <message>
             <source>Closed</source>
             <translation>已关闭</translation>
-        </message>
-        <message>
-            <source>Collage</source>
-            <translation>图片拼接</translation>
-        </message>
-        <message>
-            <source>Create a collage from selected pinned windows</source>
-            <translation>使用选中的固定到屏幕窗口创建图片拼接</translation>
         </message>
         <message>
             <source>Date</source>
@@ -1345,6 +1341,10 @@ Files:
             <translation>固定到屏幕管理</translation>
         </message>
         <message>
+            <source>Pin to screen</source>
+            <translation>固定到屏幕</translation>
+        </message>
+        <message>
             <source>Pinned images and text will appear here</source>
             <translation>固定到屏幕的图片和文字将显示在这里</translation>
         </message>
@@ -1379,6 +1379,10 @@ Files:
         <message>
             <source>Select all entries on this page</source>
             <translation>选择此页的所有条目</translation>
+        </message>
+        <message>
+            <source>Select pinned windows from the same group to pin them to the screen.</source>
+            <translation>请选择同一分组中的固定窗口，以将它们固定到屏幕。</translation>
         </message>
         <message>
             <source>Select record</source>
@@ -1444,6 +1448,10 @@ Files:
             <translation>所有来源</translation>
         </message>
         <message>
+            <source>Batch Actions</source>
+            <translation>批量操作</translation>
+        </message>
+        <message>
             <source>Bulk actions for selected screenshot history entries</source>
             <translation>所选截图历史记录的批量操作</translation>
         </message>
@@ -1456,20 +1464,12 @@ Files:
             <translation>更改来源或日期范围以查看更多历史记录</translation>
         </message>
         <message>
-            <source>Collage</source>
-            <translation>图片拼接</translation>
-        </message>
-        <message>
             <source>Copied and pinned screenshots will appear here</source>
             <translation>已复制或固定到屏幕的截图会显示在这里</translation>
         </message>
         <message>
             <source>Copy to clipboard</source>
             <translation>复制到剪贴板</translation>
-        </message>
-        <message>
-            <source>Create a collage from selected screenshots</source>
-            <translation>使用选中的截图创建图片拼接</translation>
         </message>
         <message>
             <source>Current monitor</source>
@@ -1558,6 +1558,10 @@ Files:
         <message>
             <source>Start date</source>
             <translation>开始日期</translation>
+        </message>
+        <message>
+            <source>Stitch Image</source>
+            <translation>图片拼接</translation>
         </message>
         <message>
             <source>This action cannot be undone</source>

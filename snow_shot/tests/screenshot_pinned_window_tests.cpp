@@ -21235,6 +21235,66 @@ void pinnedHideCancelsRestoreAndRejectsStaleCallbacks() {
     services.destroyRecords({id});
 }
 
+void pinnedBatchRestoreValidatesAndActivatesOneGroup() {
+    IsolatedPinnedStorage isolated;
+    using namespace snow_shot;
+    auto& repository = storage::ApplicationStorage::instance().pinnedWindows();
+    require(storage::PinToScreenSettings().setAutomaticTextRecognition(false),
+            "disable automatic recognition for batch restoration");
+    presentation::PinnedWindowGroupManager groups(&repository);
+    const auto group = groups.createGroup(QStringLiteral("Batch"));
+    require(group.has_value(), "create a second restore group");
+    ScreenshotSelectionExportUiServices services(nullptr, nullptr, nullptr, {}, {}, &groups);
+    QObject connections;
+    int changes = 0;
+    QObject::connect(&groups, &presentation::PinnedWindowGroupManager::activeGroupChanged,
+                     &connections, [&](const auto&) { ++changes; });
+    QObject::connect(&groups,
+                     &presentation::PinnedWindowGroupManager::restoreActiveGroupWindowsRequested,
+                     &connections, [&] { services.restorePersistedWindows(); });
+    int failures = 0;
+    services.setRestoreFailureHandler([&] { ++failures; });
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen, "batch restoration needs a screen");
+    QStringList ids;
+    for (int index = 0; index < 5; ++index) {
+        auto record = savedPinnedRecord(*screen, 1.0, QSize(100, 60), 100.0, QPoint(50, 50));
+        record.groupId = index == 0 ? QStringLiteral("default") : *group;
+        record.hidden = index == 3;
+        require(repository.upsert(record).success, "seed the batch restoration selection");
+        if (index < 3)
+            require(repository.markClosed(record.id).success, "seed closed selected pins");
+        ids.append(record.id);
+    }
+    require(!services.restoreRecords({ids[1], ids[0]}) &&
+                !services.restoreRecords({ids[1], QStringLiteral("missing-batch-pin")}) &&
+                !services.restoreRecords({}) && changes == 0 &&
+                groups.activeGroupId() == QStringLiteral("default") &&
+                repository.summary(ids[1])->ignored && groups.liveWindows().isEmpty(),
+            "invalid or mixed-group selections are rejected before changing any group or pin");
+    const QStringList selected = ids.mid(1);
+    require(services.restoreRecords(selected + QStringList{selected.first()}) &&
+                services.restoreRecords(selected) && changes == 1 &&
+                groups.activeGroupId() == *group,
+            "a batch activates its common group once and accepts already-restoring pins");
+    QElapsedTimer deadline;
+    deadline.start();
+    const auto restored = [&] {
+        return std::all_of(selected.cbegin(), selected.cend(), [&](const auto& id) {
+            auto* window = groups.liveWindow(id);
+            const auto summary = repository.summary(id);
+            return window && window->isVisible() && window->sourcePinAvailable() && summary &&
+                   !summary->ignored && !summary->hidden && summary->groupId == *group;
+        });
+    };
+    while (!restored() && deadline.elapsed() < 5000)
+        waitForUi(5);
+    require(restored() && failures == 0 && groups.liveWindows().size() == selected.size() &&
+                repository.summary(ids[0])->ignored,
+            "closed, hidden and automatically restoring pins all finish in their original group");
+    services.destroyRecords(ids);
+}
+
 void pinnedManagementLifecycle() {
     IsolatedPinnedStorage isolated;
     using namespace snow_shot;
@@ -26796,7 +26856,12 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--management-only"))) {
+            pinnedBatchRestoreValidatesAndActivatesOneGroup();
             pinnedManagementLifecycle();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--batch-restore-only"))) {
+            pinnedBatchRestoreValidatesAndActivatesOneGroup();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--pin-lifetime-only"))) {

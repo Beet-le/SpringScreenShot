@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QScopeGuard>
 #include <QSemaphore>
+#include <QSet>
 
 #include <algorithm>
 #include <atomic>
@@ -163,6 +164,151 @@ void queueAndWorkerBoundsAreEnforced() {
             "bounded coordinator jobs did not all complete");
     require(peak.load(std::memory_order_acquire) <= 2,
             "coordinator exceeded its two-worker concurrency bound");
+}
+
+void exportQueueDrainsLargeSelectionsAfterContention() {
+    ScreenshotExportCoordinator coordinator;
+    QObject receiver;
+    auto externalGate = std::make_shared<QSemaphore>();
+    auto decodeGate = std::make_shared<QSemaphore>();
+    auto started = std::make_shared<std::atomic_int>(0);
+    const auto release = qScopeGuard([&] {
+        externalGate->release(16);
+        decodeGate->release(50);
+    });
+    int externalCompletions = 0;
+    for (int index = 0; index < 16; ++index) {
+        require(coordinator
+                    .submit(
+                        &receiver, ScreenshotExportCoordinator::Priority::Foreground,
+                        [externalGate](const auto&) {
+                            externalGate->acquire();
+                            return ScreenshotExportTaskResult{};
+                        },
+                        [&](auto) { ++externalCompletions; })
+                    .isValid(),
+                "fill shared coordinator capacity before the batch");
+    }
+    ScreenshotExportQueue queue(coordinator);
+    const int workerCount = std::clamp(QThread::idealThreadCount(), 1, 2);
+    QSet<int> completed;
+    int failures = 0;
+    QThread* const guiThread = QThread::currentThread();
+    for (int index = 0; index < 50; ++index) {
+        require(queue.enqueue(
+                    ScreenshotExportCoordinator::Priority::Foreground,
+                    [decodeGate, started, index](const auto&) {
+                        started->fetch_add(1);
+                        decodeGate->acquire();
+                        ScreenshotExportTaskResult result;
+                        result.savedPath = QString::number(index);
+                        if (index == 17)
+                            result.failureStage = ScreenshotExportFailureStage::Source;
+                        return result;
+                    },
+                    [&](ScreenshotExportTaskResult result) {
+                        require(QThread::currentThread() == guiThread,
+                                "queued pin completions stay on the GUI thread");
+                        const int index = result.savedPath.toInt();
+                        require(!completed.contains(index), "each queued pin completes once");
+                        completed.insert(index);
+                        if (!result.succeeded())
+                            ++failures;
+                    }),
+                "a saturated coordinator must retain all fifty selected pin requests");
+    }
+    require(queue.active() && coordinator.pendingJobCount() == 16 && started->load() == 0,
+            "waiting selections do not bypass shared admission or start decoding");
+    externalGate->release(16);
+    require(
+        processUntil([&] { return externalCompletions == 16 && started->load() == workerCount; }),
+        "freeing shared capacity wakes a queue with no admitted jobs");
+    require(coordinator.pendingJobCount() == 2,
+            "a large batch admits only two blocked decodes at a time");
+    decodeGate->release(50);
+    require(processUntil([&] { return completed.size() == 50 && !queue.active(); }),
+            "the complete selection drains after contention and individual decode failures");
+    require(failures == 1 && coordinator.pendingJobCount() == 0,
+            "failed records report once without dropping subsequent selected pins");
+}
+
+void exportQueueCancellationAndLifetime() {
+    ScreenshotExportCoordinator coordinator;
+    const int workerCount = std::clamp(QThread::idealThreadCount(), 1, 2);
+    auto entered = std::make_shared<std::atomic_int>(0);
+    auto queue = std::make_unique<ScreenshotExportQueue>(coordinator);
+    int completions = 0;
+    const auto blocking = [entered](const ScreenshotExportCancellation& token) {
+        entered->fetch_add(1);
+        while (!token.isCancellationRequested())
+            QThread::msleep(1);
+        return ScreenshotExportTaskResult{};
+    };
+    for (int index = 0; index < 50; ++index)
+        require(queue->enqueue(ScreenshotExportCoordinator::Priority::Foreground, blocking,
+                               [&](auto) { ++completions; }),
+                "admit cancellable batch");
+    require(processUntil([&] { return entered->load() == workerCount; }), "start batch decodes");
+    queue->cancel();
+    require(!queue->active(), "cancel clears waiting and admitted requests immediately");
+    require(queue->enqueue(
+                ScreenshotExportCoordinator::Priority::Foreground,
+                [](const auto&) { return ScreenshotExportTaskResult{}; },
+                [&](auto) { ++completions; }),
+            "a later selection may reuse a cancelled queue");
+    require(processUntil([&] {
+                return completions == 1 && !queue->active() && coordinator.pendingJobCount() == 0;
+            }),
+            "cancelled generations cannot deliver callbacks into the next selection");
+    const int cancelledStarted = entered->load();
+    require(cancelledStarted <= 2, "cancel never decodes the unsubmitted batch tail");
+    require(queue->enqueue(ScreenshotExportCoordinator::Priority::Foreground, blocking,
+                           [&](auto) { ++completions; }),
+            "admit lifetime fixture");
+    require(processUntil([&] { return entered->load() == cancelledStarted + 1; }),
+            "start lifetime fixture");
+    queue.reset();
+    require(processUntil([&] { return coordinator.pendingJobCount() == 0; }),
+            "destroying the queue cancels in-flight work");
+    QCoreApplication::processEvents();
+    require(completions == 1, "destroyed queues never deliver completions");
+
+    ScreenshotExportQueue stopped(coordinator);
+    for (int index = 0; index < 50; ++index)
+        require(stopped.enqueue(ScreenshotExportCoordinator::Priority::Foreground, blocking,
+                                [&](auto) { ++completions; }),
+                "admit shutdown batch");
+    coordinator.shutdown();
+    require(!stopped.active() && coordinator.pendingJobCount() == 0 &&
+                !stopped.enqueue(ScreenshotExportCoordinator::Priority::Foreground, blocking,
+                                 [&](auto) { ++completions; }),
+            "shutdown discards every waiting request and rejects future selections");
+    QCoreApplication::processEvents();
+    require(completions == 1, "shutdown suppresses queued pin completions");
+}
+
+void exportQueueCompletionMayReplaceOrDeleteTheQueue() {
+    ScreenshotExportCoordinator coordinator;
+    auto queue = std::make_unique<ScreenshotExportQueue>(coordinator);
+    int completions = 0;
+    require(queue->enqueue(
+                ScreenshotExportCoordinator::Priority::Foreground,
+                [](const auto&) { return ScreenshotExportTaskResult{}; },
+                [&](auto) {
+                    ++completions;
+                    queue->cancel();
+                    require(queue->enqueue(
+                                ScreenshotExportCoordinator::Priority::Foreground,
+                                [](const auto&) { return ScreenshotExportTaskResult{}; },
+                                [&](auto) {
+                                    ++completions;
+                                    queue.reset();
+                                }),
+                            "completion may enqueue a replacement selection");
+                }),
+            "admit reentrant completion");
+    require(processUntil([&] { return completions == 2 && !queue; }),
+            "completion can replace and delete its queue safely");
 }
 
 void queuedPromotionPreservesOwnershipAndPriority() {
@@ -585,10 +731,19 @@ int main(int argc, char** argv) {
             idleWorkersRetireAndLaterWorkRestarts();
             return EXIT_SUCCESS;
         }
+        if (application.arguments().contains(QStringLiteral("--queue-only"))) {
+            exportQueueDrainsLargeSelectionsAfterContention();
+            exportQueueCancellationAndLifetime();
+            exportQueueCompletionMayReplaceOrDeleteTheQueue();
+            return EXIT_SUCCESS;
+        }
         completionRunsOnceOnGuiThread();
         cancellationPropagates();
         destroyedReceiverSuppressesCompletion();
         queueAndWorkerBoundsAreEnforced();
+        exportQueueDrainsLargeSelectionsAfterContention();
+        exportQueueCancellationAndLifetime();
+        exportQueueCompletionMayReplaceOrDeleteTheQueue();
         queuedPromotionPreservesOwnershipAndPriority();
         queuedCancellationImmediatelyReleasesCapacity();
         shutdownCancelsAndDrains();

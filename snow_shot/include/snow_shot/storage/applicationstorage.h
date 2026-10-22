@@ -11,6 +11,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QThreadPool>
 
 #include <atomic>
@@ -116,6 +117,9 @@ class ApplicationStorage final : public QObject {
     void requestPinnedWindowShow(const QString& id) {
         emit pinnedWindowShowRequested(id);
     }
+    void requestPinnedWindowsShow(const QStringList& ids) {
+        emit pinnedWindowsShowRequested(ids);
+    }
     void requestPinnedWindowDelete(const QVector<QString>& ids) {
         emit pinnedWindowDeleteRequested(ids);
     }
@@ -138,6 +142,7 @@ class ApplicationStorage final : public QObject {
     void captureHistoryChanged();
     void pinnedWindowsChanged();
     void pinnedWindowShowRequested(const QString& id);
+    void pinnedWindowsShowRequested(const QStringList& ids);
     void pinnedWindowDeleteRequested(const QVector<QString>& ids);
     void storageStatusChanged(const snow_shot::storage::StorageStatus& status);
     void smartSelectionChanged(bool enabled);

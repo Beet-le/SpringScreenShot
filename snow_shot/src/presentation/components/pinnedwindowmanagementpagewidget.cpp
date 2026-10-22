@@ -319,6 +319,10 @@ class ApplicationPinnedDataSource final : public PinnedWindowManagementDataSourc
         storage::ApplicationStorage::instance().requestPinnedWindowShow(id);
     }
 
+    void showRecords(const QStringList& ids) override {
+        storage::ApplicationStorage::instance().requestPinnedWindowsShow(ids);
+    }
+
     void removeRecords(const QVector<QString>& ids) override {
         storage::ApplicationStorage::instance().requestPinnedWindowDelete(ids);
     }
@@ -529,10 +533,10 @@ PinnedWindowManagementPageWidget::PinnedWindowManagementPageWidget(
     m_deleteSelected->setObjectName(QStringLiteral("pinnedManagementDeleteSelected"));
     history_page::configureSelectionAction(m_deleteSelected, true);
     selectionActionsLayout->addWidget(m_deleteSelected);
-    m_collageButton = new adqt::widgets::AdButton(m_selectionActions);
-    m_collageButton->setObjectName(QStringLiteral("pinnedManagementCollage"));
-    history_page::configureSelectionAction(m_collageButton, false);
-    selectionActionsLayout->addWidget(m_collageButton);
+    m_batchActionsButton = new adqt::widgets::AdButton(m_selectionActions);
+    m_batchActionsButton->setObjectName(QStringLiteral("pinnedManagementBatchActions"));
+    history_page::configureSelectionAction(m_batchActionsButton, false);
+    selectionActionsLayout->addWidget(m_batchActionsButton);
     m_selectPage = new adqt::widgets::AdButton(m_selectionActions);
     m_selectPage->setObjectName(QStringLiteral("pinnedManagementSelectAll"));
     history_page::configureSelectionAction(m_selectPage, false);
@@ -610,15 +614,31 @@ PinnedWindowManagementPageWidget::PinnedWindowManagementPageWidget(
     });
     connect(m_selectPage, &QAbstractButton::clicked, this,
             &PinnedWindowManagementPageWidget::selectCurrentPage);
-    connect(m_collageButton, &QAbstractButton::clicked, this, [this] {
-        QStringList selected;
-        for (const auto& record : std::as_const(m_records)) {
-            if (m_selected.contains(record.id))
-                selected.append(record.id);
-        }
-        if (!selected.isEmpty())
-            emit collageRequested(selected);
-    });
+    new presentation::ActionPopupMenu(
+        m_batchActionsButton,
+        [this] {
+            auto* menu = new adqt::widgets::AdContextMenu(this);
+            menu->setObjectName(QStringLiteral("pinnedManagementBatchActionsMenu"));
+            m_batchStitchAction =
+                menu->addItem(QString(), presentation::icons::custom::outlined::ImageStitching());
+            m_batchStitchAction->setObjectName(QStringLiteral("pinnedManagementBatchStitch"));
+            m_batchPinAction =
+                menu->addItem(QString(), presentation::icons::custom::outlined::PinToScreen());
+            m_batchPinAction->setObjectName(QStringLiteral("pinnedManagementBatchPin"));
+            updateBatchActions();
+            connect(m_batchStitchAction, &QAction::triggered, this, [this] {
+                const QStringList selected = selectedRecordIds();
+                if (!selected.isEmpty())
+                    emit collageRequested(selected);
+            });
+            connect(m_batchPinAction, &QAction::triggered, this, [this] {
+                if (m_source && selectedGroupId())
+                    m_source->showRecords(selectedRecordIds());
+            });
+            return menu;
+        },
+        presentation::ActionPopupMenu::Placement::BottomLeft,
+        presentation::ActionPopupMenu::Surface::Widget);
     connect(m_deselect, &QAbstractButton::clicked, this,
             &PinnedWindowManagementPageWidget::clearSelection);
     connect(m_sourceFilter, &adqt::widgets::AdSelect::currentValuesChanged, this,
@@ -1060,9 +1080,47 @@ void PinnedWindowManagementPageWidget::updateHeader() {
     updateSelectionBar();
 }
 
+QStringList PinnedWindowManagementPageWidget::selectedRecordIds() const {
+    QStringList selected;
+    for (const auto& record : m_records)
+        if (m_selected.contains(record.id))
+            selected.append(record.id);
+    return selected;
+}
+
+std::optional<QString> PinnedWindowManagementPageWidget::selectedGroupId() const {
+    std::optional<QString> groupId;
+    for (const auto& record : m_records) {
+        if (!m_selected.contains(record.id))
+            continue;
+        if (groupId && *groupId != record.groupId)
+            return std::nullopt;
+        groupId = record.groupId;
+    }
+    return groupId;
+}
+
+void PinnedWindowManagementPageWidget::updateBatchActions() {
+    m_batchActionsButton->setEnabled(!m_selected.isEmpty());
+    if (m_batchStitchAction) {
+        m_batchStitchAction->setText(tr("Stitch Image"));
+        m_batchStitchAction->setToolTip(m_batchStitchAction->text());
+        m_batchStitchAction->setEnabled(!m_selected.isEmpty());
+    }
+    if (m_batchPinAction) {
+        const bool singleGroup = selectedGroupId().has_value();
+        m_batchPinAction->setText(tr("Pin to screen"));
+        m_batchPinAction->setToolTip(
+            singleGroup
+                ? m_batchPinAction->text()
+                : tr("Select pinned windows from the same group to pin them to the screen."));
+        m_batchPinAction->setEnabled(m_source && singleGroup);
+    }
+}
+
 void PinnedWindowManagementPageWidget::updateSelectionBar() {
+    updateBatchActions();
     const int count = static_cast<int>(m_selected.size());
-    m_collageButton->setEnabled(count > 0);
     history_page::updateSelectionBar(
         {m_selectionBar, m_selectionLayout, m_selectionSummary, m_selectionActions, m_selectPage,
          m_deleteSelected, m_deselect, m_deleteSelectedConfirmation},
@@ -1142,9 +1200,10 @@ void PinnedWindowManagementPageWidget::retranslateUi() {
     m_deleteSelected->setText(tr("Delete"));
     m_deleteSelected->setToolTip(tr("Delete selected pinned windows"));
     m_deleteSelected->setAccessibleName(tr("Delete selected pinned windows"));
-    m_collageButton->setText(tr("Collage"));
-    m_collageButton->setToolTip(tr("Create a collage from selected pinned windows"));
-    m_collageButton->setAccessibleName(tr("Create a collage from selected pinned windows"));
+    m_batchActionsButton->setText(tr("Batch Actions"));
+    m_batchActionsButton->setToolTip(tr("Batch Actions"));
+    m_batchActionsButton->setAccessibleName(tr("Batch Actions"));
+    updateBatchActions();
     m_selectPage->setText(tr("Select all"));
     m_selectPage->setToolTip(tr("Select all entries on this page"));
     m_selectPage->setAccessibleName(tr("Select all entries on this page"));

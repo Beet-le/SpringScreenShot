@@ -1241,10 +1241,10 @@ ScreenshotHistoryPageWidget::ScreenshotHistoryPageWidget(
     m_deleteSelectedButton->setObjectName(QStringLiteral("screenshotHistoryDeleteSelected"));
     history_page::configureSelectionAction(m_deleteSelectedButton, true);
     selectionActionsLayout->addWidget(m_deleteSelectedButton);
-    m_collageButton = new adqt::widgets::AdButton(m_selectionActions);
-    m_collageButton->setObjectName(QStringLiteral("screenshotHistoryCollage"));
-    history_page::configureSelectionAction(m_collageButton, false);
-    selectionActionsLayout->addWidget(m_collageButton);
+    m_batchActionsButton = new adqt::widgets::AdButton(m_selectionActions);
+    m_batchActionsButton->setObjectName(QStringLiteral("screenshotHistoryBatchActions"));
+    history_page::configureSelectionAction(m_batchActionsButton, false);
+    selectionActionsLayout->addWidget(m_batchActionsButton);
     m_selectAllButton = new adqt::widgets::AdButton(m_selectionActions);
     m_selectAllButton->setObjectName(QStringLiteral("screenshotHistorySelectAll"));
     history_page::configureSelectionAction(m_selectAllButton, false);
@@ -1321,15 +1321,39 @@ ScreenshotHistoryPageWidget::ScreenshotHistoryPageWidget(
             &ScreenshotHistoryPageWidget::requestDeleteSelected);
     connect(m_selectAllButton, &QAbstractButton::clicked, this,
             &ScreenshotHistoryPageWidget::selectCurrentPage);
-    connect(m_collageButton, &QAbstractButton::clicked, this, [this] {
-        QVector<storage::CaptureHistoryRecord> selected;
-        for (const auto& record : std::as_const(m_records)) {
-            if (m_selectedRecordIds.contains(record.id))
-                selected.append(record);
-        }
-        if (!selected.isEmpty())
-            emit collageRequested(selected);
-    });
+    new snow_shot::presentation::ActionPopupMenu(
+        m_batchActionsButton,
+        [this] {
+            auto* menu = new adqt::widgets::AdContextMenu(this);
+            menu->setObjectName(QStringLiteral("screenshotHistoryBatchActionsMenu"));
+            m_batchStitchAction = menu->addItem(QString(), custom_outlined_icons::ImageStitching());
+            m_batchStitchAction->setObjectName(QStringLiteral("screenshotHistoryBatchStitch"));
+            m_batchPinAction = menu->addItem(QString(), custom_outlined_icons::PinToScreen());
+            m_batchPinAction->setObjectName(QStringLiteral("screenshotHistoryBatchPin"));
+            updateBatchActions();
+            connect(m_batchStitchAction, &QAction::triggered, this, [this] {
+                QVector<storage::CaptureHistoryRecord> selected;
+                for (const auto& record : std::as_const(m_records)) {
+                    if (m_selectedRecordIds.contains(record.id))
+                        selected.append(record);
+                }
+                if (!selected.isEmpty())
+                    emit collageRequested(selected);
+            });
+            connect(m_batchPinAction, &QAction::triggered, this, [this] {
+                QStringList selected;
+                for (const auto& record : std::as_const(m_records)) {
+                    if (m_selectedRecordIds.contains(record.id) && record.result.has_value())
+                        selected.append(record.id);
+                }
+                for (const auto& id : std::as_const(selected)) {
+                    emit pinRequested(id);
+                }
+            });
+            return menu;
+        },
+        snow_shot::presentation::ActionPopupMenu::Placement::BottomLeft,
+        snow_shot::presentation::ActionPopupMenu::Surface::Widget);
     connect(m_deselectAllButton, &QAbstractButton::clicked, this,
             &ScreenshotHistoryPageWidget::clearSelection);
     connect(m_pagination, &adqt::widgets::AdPagination::currentPageChanged, this, [this](int) {
@@ -1753,11 +1777,29 @@ void ScreenshotHistoryPageWidget::selectCurrentPage() {
     updateSelectionBar();
 }
 
+void ScreenshotHistoryPageWidget::updateBatchActions() {
+    m_batchActionsButton->setEnabled(!m_selectedRecordIds.isEmpty());
+    if (m_batchStitchAction) {
+        m_batchStitchAction->setText(tr("Stitch Image"));
+        m_batchStitchAction->setToolTip(m_batchStitchAction->text());
+        m_batchStitchAction->setEnabled(!m_selectedRecordIds.isEmpty());
+    }
+    if (m_batchPinAction) {
+        m_batchPinAction->setText(tr("Pin to screen"));
+        m_batchPinAction->setToolTip(m_batchPinAction->text());
+        m_batchPinAction->setEnabled(
+            std::any_of(m_records.cbegin(), m_records.cend(), [this](const auto& record) {
+                return m_selectedRecordIds.contains(record.id) && record.result.has_value();
+            }));
+    }
+}
+
 void ScreenshotHistoryPageWidget::updateSelectionBar() {
     if (m_selectionBar == nullptr) {
         return;
     }
 
+    updateBatchActions();
     const int selectionCount = static_cast<int>(m_selectedRecordIds.size());
     const auto status = storage::ApplicationStorage::instance().status();
     const int availableWidth = m_entriesHost != nullptr ? m_entriesHost->width() : width();
@@ -1835,9 +1877,10 @@ void ScreenshotHistoryPageWidget::retranslateUi() {
     m_deleteSelectedButton->setToolTip(tr("Delete selected history entries"));
     m_deleteSelectedButton->setAccessibleName(tr("Delete selected history entries"));
     m_selectAllButton->setText(tr("Select all"));
-    m_collageButton->setText(tr("Collage"));
-    m_collageButton->setToolTip(tr("Create a collage from selected screenshots"));
-    m_collageButton->setAccessibleName(tr("Create a collage from selected screenshots"));
+    m_batchActionsButton->setText(tr("Batch Actions"));
+    m_batchActionsButton->setToolTip(tr("Batch Actions"));
+    m_batchActionsButton->setAccessibleName(tr("Batch Actions"));
+    updateBatchActions();
     m_selectAllButton->setToolTip(tr("Select all entries on this page"));
     m_selectAllButton->setAccessibleName(tr("Select all entries on this page"));
     m_deselectAllButton->setText(tr("Deselect all"));

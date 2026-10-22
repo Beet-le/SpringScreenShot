@@ -134,6 +134,7 @@ struct ScreenshotExportCoordinator::Impl final {
     std::atomic_bool shuttingDown{false};
     QMutex mutex;
     std::vector<std::weak_ptr<Job>> jobs;
+    QList<QPointer<ScreenshotExportQueue>> queues;
 };
 
 ScreenshotExportCoordinator::ScreenshotExportCoordinator(QObject* parent)
@@ -176,12 +177,14 @@ ScreenshotExportJobHandle ScreenshotExportCoordinator::submit(QObject* receiver,
         auto sharedResult = std::make_shared<ScreenshotExportTaskResult>(std::move(result));
         static_cast<void>(QMetaObject::invokeMethod(
             guardedCoordinator,
-            [guardedReceiver, terminal, sharedResult, activity,
+            [guardedCoordinator, guardedReceiver, terminal, sharedResult, activity,
              completion = std::move(completion)]() mutable {
                 static_cast<void>(activity);
-                if (terminal->exchange(true, std::memory_order_acq_rel) || guardedReceiver.isNull())
-                    return;
-                completion(std::move(*sharedResult));
+                if (!terminal->exchange(true, std::memory_order_acq_rel) && guardedReceiver)
+                    completion(std::move(*sharedResult));
+                // A freed slot also wakes queues whose own first job has not yet been admitted.
+                if (guardedCoordinator)
+                    guardedCoordinator->dispatchQueues();
             },
             Qt::QueuedConnection));
     };
@@ -245,10 +248,25 @@ int ScreenshotExportCoordinator::pendingJobCount() const {
     return m_impl->pending.load(std::memory_order_acquire);
 }
 
+bool ScreenshotExportCoordinator::acceptingSubmissions() const {
+    return !m_impl->shuttingDown.load(std::memory_order_acquire);
+}
+
+void ScreenshotExportCoordinator::dispatchQueues() {
+    const auto queues = m_impl->queues;
+    for (const auto& queue : queues)
+        if (queue)
+            queue->dispatch();
+}
+
 void ScreenshotExportCoordinator::shutdown() {
     if (m_impl == nullptr || m_impl->shuttingDown.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
+    const auto queues = m_impl->queues;
+    for (const auto& queue : queues)
+        if (queue)
+            queue->cancel();
     std::vector<std::shared_ptr<Impl::Job>> jobs;
     {
         QMutexLocker lock(&m_impl->mutex);
@@ -275,5 +293,64 @@ void ScreenshotExportCoordinator::shutdown() {
         // ordinary finite timeout also retire without needing throwaway jobs.
         m_impl->pool->setExpiryTimeout(0);
         static_cast<void>(m_impl->pool.release());
+    }
+}
+
+ScreenshotExportQueue::ScreenshotExportQueue(ScreenshotExportCoordinator& coordinator,
+                                             QObject* parent)
+    : QObject(parent), m_coordinator(&coordinator) {
+    coordinator.m_impl->queues.append(this);
+}
+
+ScreenshotExportQueue::~ScreenshotExportQueue() {
+    cancel();
+    if (m_coordinator)
+        m_coordinator->m_impl->queues.removeAll(this);
+}
+
+bool ScreenshotExportQueue::enqueue(ScreenshotExportCoordinator::Priority priority,
+                                    ScreenshotExportCoordinator::Work work,
+                                    ScreenshotExportCoordinator::Completion completion) {
+    if (!m_coordinator || !m_coordinator->acceptingSubmissions() || !work || !completion)
+        return false;
+    m_requests.enqueue({priority, std::move(work), std::move(completion)});
+    dispatch();
+    return true;
+}
+
+void ScreenshotExportQueue::cancel() {
+    ++m_generation;
+    m_requests.clear();
+    const auto jobs = std::exchange(m_jobs, {});
+    for (const auto& job : jobs)
+        job.cancel();
+}
+
+bool ScreenshotExportQueue::active() const {
+    return !m_requests.isEmpty() || !m_jobs.isEmpty();
+}
+
+void ScreenshotExportQueue::dispatch() {
+    constexpr qsizetype maximumConcurrentJobs = 2;
+    while (m_coordinator && m_coordinator->acceptingSubmissions() &&
+           m_jobs.size() < maximumConcurrentJobs && !m_requests.isEmpty()) {
+        const auto& request = m_requests.head();
+        const quint64 id = ++m_nextId;
+        auto job = m_coordinator->submit(
+            this, request.priority, request.work,
+            [this, generation = m_generation, id,
+             completion = request.completion](ScreenshotExportTaskResult result) mutable {
+                if (generation != m_generation)
+                    return;
+                m_jobs.remove(id);
+                const QPointer<ScreenshotExportQueue> guard(this);
+                completion(std::move(result));
+                if (guard)
+                    dispatch();
+            });
+        if (!job.isValid())
+            return;
+        m_requests.dequeue();
+        m_jobs.insert(id, std::move(job));
     }
 }

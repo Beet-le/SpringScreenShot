@@ -1300,6 +1300,34 @@ void ScreenshotSelectionExportUiServices::restorePersistedWindows() {
     }
 }
 
+bool ScreenshotSelectionExportUiServices::restoreRecords(const QStringList& ids) {
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    if (!storage.isInitialized() || ids.isEmpty())
+        return false;
+    auto& repository = storage.pinnedWindows();
+    std::optional<QString> groupId;
+    QStringList selected;
+    QSet<QString> seen;
+    for (const auto& id : ids) {
+        if (seen.contains(id))
+            continue;
+        const auto found = repository.summary(id);
+        if (!found || (groupId && *groupId != found->groupId))
+            return false;
+        groupId = found->groupId;
+        seen.insert(id);
+        selected.append(id);
+    }
+    if (m_groupManager && !m_groupManager->setActiveGroup(*groupId))
+        return false;
+    bool success = true;
+    for (const auto& id : selected) {
+        if (!m_restoringIds.contains(id) && !restoreRecord(id, false))
+            success = false;
+    }
+    return success;
+}
+
 bool ScreenshotSelectionExportUiServices::restoreRecord(const QString& id, bool activateGroup) {
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
     if (!storage.isInitialized() || m_restoringIds.contains(id))
