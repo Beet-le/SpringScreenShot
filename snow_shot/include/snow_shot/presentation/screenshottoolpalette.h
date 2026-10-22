@@ -433,7 +433,9 @@ class ScreenshotToolPalette final : public QWidget,
     void setRecordingMouseHighlightEnabled(bool value);
     [[nodiscard]] bool recordingMouseHighlightEnabled() const;
     void setRecordingRecordMouseClicks(bool value);
+    void setRecordingRecordMouseScrolling(bool value);
     [[nodiscard]] bool recordingRecordMouseClicks() const;
+    [[nodiscard]] bool recordingRecordMouseScrolling() const;
     void setRecordingMouseHighlightColor(const QColor& value);
     [[nodiscard]] QColor recordingMouseHighlightColor() const;
     void setRecordingMouseHighlightRadius(int value);
@@ -634,6 +636,7 @@ class ScreenshotToolPalette final : public QWidget,
     void recordingKeyboardVisibleChanged(bool visible);
     void recordingMouseHighlightEnabledChanged(bool value);
     void recordingRecordMouseClicksChanged(bool value);
+    void recordingRecordMouseScrollingChanged(bool value);
     void recordingMouseHighlightColorChanged(const QColor& value);
     void recordingMouseHighlightRadiusChanged(int value);
     void recordingCursorVisibleChanged(bool visible);
@@ -1062,12 +1065,14 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdPopover* m_recordCursorPopover = nullptr;
     QPointer<adqt::widgets::AdCheckbox> m_recordHighlightCheckbox;
     QPointer<adqt::widgets::AdCheckbox> m_recordClicksCheckbox;
+    QPointer<adqt::widgets::AdCheckbox> m_recordScrollingCheckbox;
     adqt::widgets::AdColorPicker* m_recordHighlightColorPicker = nullptr;
     QLabel* m_recordHighlightSwatch = nullptr;
     adqt::widgets::AdInputNumber* m_recordHighlightRadiusInput = nullptr;
     int m_recordingMouseHighlightRadius = 41;
     bool m_recordingMouseHighlightEnabled = false;
     bool m_recordingRecordMouseClicks = false;
+    bool m_recordingRecordMouseScrolling = false;
     QColor m_recordingMouseHighlightColor{255, 255, 0, 128};
     QLabel* m_recordMouseTrailIcon = nullptr;
     QLabel* m_recordMouseClickIcon = nullptr;

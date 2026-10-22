@@ -23,24 +23,32 @@
     <context>
         <name>RecordingKeyboardLabels</name>
         <message>
-            <source>Left click</source>
-            <translation>Left click</translation>
+            <source>Button 4</source>
+            <translation>Button 4</translation>
         </message>
         <message>
-            <source>Middle click</source>
-            <translation>Middle click</translation>
+            <source>Button 5</source>
+            <translation>Button 5</translation>
         </message>
         <message>
-            <source>Mouse button 4</source>
-            <translation>Mouse button 4</translation>
+            <source>Left</source>
+            <translation>Left</translation>
         </message>
         <message>
-            <source>Mouse button 5</source>
-            <translation>Mouse button 5</translation>
+            <source>Middle</source>
+            <translation>Middle</translation>
         </message>
         <message>
-            <source>Right click</source>
-            <translation>Right click</translation>
+            <source>Right</source>
+            <translation>Right</translation>
+        </message>
+        <message>
+            <source>Scroll down</source>
+            <translation>Scroll down</translation>
+        </message>
+        <message>
+            <source>Scroll up</source>
+            <translation>Scroll up</translation>
         </message>
     </context>
     <context>

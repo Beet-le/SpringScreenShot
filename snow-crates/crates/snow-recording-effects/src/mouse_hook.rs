@@ -8,6 +8,8 @@ pub enum ObservedMouseButton {
     Middle,
     Button4,
     Button5,
+    ScrollUp,
+    ScrollDown,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -27,12 +29,24 @@ impl ObservedMouseButton {
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::Left => "Left click",
-            Self::Right => "Right click",
-            Self::Middle => "Middle click",
-            Self::Button4 => "Mouse button 4",
-            Self::Button5 => "Mouse button 5",
+            Self::Left => "Left",
+            Self::Right => "Right",
+            Self::Middle => "Middle",
+            Self::Button4 => "Button 4",
+            Self::Button5 => "Button 5",
+            Self::ScrollUp => "Scroll up",
+            Self::ScrollDown => "Scroll down",
         }
+    }
+    pub fn scroll_direction(self) -> Option<super::keyboard_overlay::ScrollDirection> {
+        super::keyboard_overlay::ScrollDirection::from_key(self.key())
+    }
+    pub fn from_scroll_delta(delta: f64) -> Option<Self> {
+        super::keyboard_overlay::ScrollDirection::from_delta(delta).map(|direction| match direction
+        {
+            super::keyboard_overlay::ScrollDirection::Up => Self::ScrollUp,
+            super::keyboard_overlay::ScrollDirection::Down => Self::ScrollDown,
+        })
     }
     pub fn has_ring(self) -> bool {
         matches!(self, Self::Left | Self::Right | Self::Middle)
@@ -49,7 +63,9 @@ impl MouseClickObservation {
         let modifiers = MODIFIER_KEYS
             .into_iter()
             .zip(self.modifiers)
-            .filter(|(_, held)| include_modifiers && *held)
+            .filter(|(_, held)| {
+                include_modifiers && self.button.scroll_direction().is_none() && *held
+            })
             .map(|(key, _)| (key, modifier_label(key, style).expect("physical modifier")))
             .collect();
         crate::keyboard_overlay::KeyEvent {
@@ -90,8 +106,8 @@ mod platform {
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, GetMessageW, HHOOK, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW,
         PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL, WM_LBUTTONDOWN,
-        WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN,
-        WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+        WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT,
+        WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
     };
 
     use super::{MouseClickObservation, MouseMovement, ObservedMouseButton};
@@ -128,11 +144,14 @@ mod platform {
                 } else {
                     ObservedMouseButton::Button5
                 }),
+                WM_MOUSEWHEEL => {
+                    ObservedMouseButton::from_scroll_delta(f64::from((hook.mouseData >> 16) as i16))
+                }
                 _ => None,
             };
             let down = matches!(
                 wparam.0 as u32,
-                WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+                WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN | WM_MOUSEWHEEL
             );
             if button.is_some() || wparam.0 as u32 == WM_MOUSEMOVE {
                 let hook = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
@@ -153,7 +172,9 @@ mod platform {
                             context.held[*button as usize]
                         }
                     }) {
-                        context.held[button as usize] = down;
+                        if button.scroll_direction().is_none() {
+                            context.held[button as usize] = down;
+                        }
                         if context
                             .sender
                             .try_send(MouseClickObservation {
@@ -330,6 +351,51 @@ mod platform {
     mod tests {
         use super::*;
         #[test]
+        fn vertical_scroll_filters_region_zero_and_horizontal_and_keeps_small_deltas() {
+            let (sender, receiver) = crossbeam_channel::bounded(32);
+            HOOK_CONTEXT.with(|slot| {
+                *slot.borrow_mut() = Some(HookContext {
+                    sender,
+                    region: (10, 10, 100, 100),
+                    movement: None,
+                    continuity: 0,
+                    was_inside: false,
+                    held: [false; 5],
+                    generation: Arc::new(AtomicU64::new(0)),
+                })
+            });
+            for (message, delta, x) in [
+                (WM_MOUSEWHEEL, 1i16, 20),
+                (WM_MOUSEWHEEL, -1, 20),
+                (WM_MOUSEWHEEL, 0, 20),
+                (WM_MOUSEWHEEL, 120, 0),
+                (
+                    windows::Win32::UI::WindowsAndMessaging::WM_MOUSEHWHEEL,
+                    120,
+                    20,
+                ),
+            ] {
+                let raw = MSLLHOOKSTRUCT {
+                    pt: windows::Win32::Foundation::POINT { x, y: 20 },
+                    mouseData: u32::from(delta as u16) << 16,
+                    ..Default::default()
+                };
+                unsafe {
+                    mouse_hook_proc(
+                        0,
+                        WPARAM(message as usize),
+                        LPARAM((&raw const raw) as isize),
+                    );
+                }
+            }
+            let events: Vec<_> = receiver.try_iter().collect();
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0].button, ObservedMouseButton::ScrollUp);
+            assert_eq!(events[1].button, ObservedMouseButton::ScrollDown);
+            assert!(events.iter().all(|e| e.down && !e.button.has_ring()));
+            clear_hook_context();
+        }
+        #[test]
         fn five_buttons_emit_edges_release_outside_and_never_accept_outside_presses() {
             let (sender, receiver) = crossbeam_channel::bounded(32);
             HOOK_CONTEXT.with(|slot| {
@@ -441,10 +507,10 @@ mod platform {
                             let x = event.x.round() as i32 - region.0;
                             let y = event.y.round() as i32 - region.1;
                             let inside = x >= 0 && y >= 0 && x < region.2 as i32 && y < region.3 as i32;
-                            let button = match event.kind { 1|2 => Some(ObservedMouseButton::Left), 3|4 => Some(ObservedMouseButton::Right), 25|26 => match event.mouse_button { 2 => Some(ObservedMouseButton::Middle), 3 => Some(ObservedMouseButton::Button4), 4 => Some(ObservedMouseButton::Button5), _ => None }, _ => None };
-                            let down = matches!(event.kind,1|3|25);
+                            let button = match event.kind { 22 => ObservedMouseButton::from_scroll_delta(event.scroll_delta_y), 1|2 => Some(ObservedMouseButton::Left), 3|4 => Some(ObservedMouseButton::Right), 25|26 => match event.mouse_button { 2 => Some(ObservedMouseButton::Middle), 3 => Some(ObservedMouseButton::Button4), 4 => Some(ObservedMouseButton::Button5), _ => None }, _ => None };
+                            let down = matches!(event.kind,1|3|25|22);
                             if let Some(button) = button.filter(|button| if down { inside } else { held[*button as usize] }) {
-                                held[button as usize] = down;
+                                if button.scroll_direction().is_none() { held[button as usize] = down; }
                                 if sender.try_send(MouseClickObservation { at,x,y,button,down,modifiers:crate::keyboard_hook::macos_modifier_sides(event.modifiers) }).is_err() {
                                     shared.fetch_add(1,Ordering::AcqRel); held = [false;5];
                                 }

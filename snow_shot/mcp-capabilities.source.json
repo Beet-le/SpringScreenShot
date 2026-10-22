@@ -395,6 +395,9 @@
           "record_mouse_clicks": {
             "type": "boolean"
           },
+          "record_mouse_scrolling": {
+            "type": "boolean"
+          },
           "mouse_trail_duration_ms": {
             "type": "integer",
             "minimum": 100,

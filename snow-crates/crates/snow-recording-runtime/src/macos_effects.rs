@@ -27,6 +27,7 @@ pub struct NativeEffectsConfig {
     pub keyboard: Option<KeyboardOverlayConfig>,
     pub show_keyboard: bool,
     pub record_mouse_clicks: bool,
+    pub record_mouse_scrolling: bool,
     pub highlight_radius: u32,
     pub highlight_rgba: [u8; 4],
 }
@@ -41,6 +42,7 @@ impl Default for NativeEffectsConfig {
             keyboard: None,
             show_keyboard: false,
             record_mouse_clicks: false,
+            record_mouse_scrolling: false,
             highlight_radius: snow_recording_model::render::DEFAULT_MOUSE_HIGHLIGHT_RADIUS,
             highlight_rgba: [0; 4],
         }
@@ -110,8 +112,11 @@ impl Effects {
             ));
         }
         let separate = cursor_mode == snow_media::CursorMode::Separate;
-        let observing =
-            config.clicks || config.trail || config.show_keyboard || config.record_mouse_clicks;
+        let observing = config.clicks
+            || config.trail
+            || config.show_keyboard
+            || config.record_mouse_clicks
+            || config.record_mouse_scrolling;
         if !observing && !separate && config.highlight_rgba[3] == 0 {
             return Ok(None);
         }
@@ -119,7 +124,10 @@ impl Effects {
             .then(|| {
                 InputObserver::start(
                     config.show_keyboard,
-                    config.clicks || config.trail || config.record_mouse_clicks,
+                    config.clicks
+                        || config.trail
+                        || config.record_mouse_clicks
+                        || config.record_mouse_scrolling,
                 )
                 .map_err(super::macos::native_error)
             })
@@ -151,7 +159,8 @@ impl Effects {
                     .map_err(ScreenRecorderError::UnsupportedFeature)?;
                 Ok::<_, ScreenRecorderError>(
                     KeyboardOverlay::new((output.width, output.height), rasterizer)
-                        .with_keycap_size(config.keycap_size),
+                        .with_keycap_size(config.keycap_size)
+                        .with_icon_color(config.text_rgba),
                 )
             })
             .transpose()?;
@@ -298,6 +307,23 @@ impl Effects {
                         button,
                     });
                 }
+            }
+            if self.config.record_mouse_scrolling
+                && event.kind == 22
+                && point.is_some()
+                && let Some(button) = ObservedMouseButton::from_scroll_delta(event.scroll_delta_y)
+                && let Some(style) = &self.config.keyboard
+            {
+                let observation = snow_recording_effects::mouse_hook::MouseClickObservation {
+                    at,
+                    x: 0,
+                    y: 0,
+                    button,
+                    down: true,
+                    modifiers: [false; 8],
+                };
+                let key = observation.event(at_ms, style, false);
+                self.input_effects.queue_key(key);
             }
             if self.config.record_mouse_clicks {
                 let button = match event.kind {

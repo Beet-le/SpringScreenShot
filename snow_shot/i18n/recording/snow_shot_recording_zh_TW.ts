@@ -23,24 +23,32 @@
     <context>
         <name>RecordingKeyboardLabels</name>
         <message>
-            <source>Left click</source>
-            <translation>滑鼠左鍵</translation>
+            <source>Button 4</source>
+            <translation>按鍵 4</translation>
         </message>
         <message>
-            <source>Middle click</source>
-            <translation>滑鼠中鍵</translation>
+            <source>Button 5</source>
+            <translation>按鍵 5</translation>
         </message>
         <message>
-            <source>Mouse button 4</source>
-            <translation>滑鼠按鍵 4</translation>
+            <source>Left</source>
+            <translation>左鍵</translation>
         </message>
         <message>
-            <source>Mouse button 5</source>
-            <translation>滑鼠按鍵 5</translation>
+            <source>Middle</source>
+            <translation>中鍵</translation>
         </message>
         <message>
-            <source>Right click</source>
-            <translation>滑鼠右鍵</translation>
+            <source>Right</source>
+            <translation>右鍵</translation>
+        </message>
+        <message>
+            <source>Scroll down</source>
+            <translation>向下捲動</translation>
+        </message>
+        <message>
+            <source>Scroll up</source>
+            <translation>向上捲動</translation>
         </message>
     </context>
     <context>

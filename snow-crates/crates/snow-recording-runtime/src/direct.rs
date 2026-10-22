@@ -163,6 +163,7 @@ pub struct DirectRecordingConfig {
     pub mouse_highlight_radius: u32,
     pub mouse_highlight_rgba: [u8; 4],
     pub record_mouse_clicks: bool,
+    pub record_mouse_scrolling: bool,
     pub show_keyboard: bool,
     pub excluded_windows: Arc<[u32]>,
     pub excluded_processes: Arc<[i32]>,
@@ -184,6 +185,7 @@ impl DirectRecordingConfig {
                 keyboard: self.keyboard.clone(),
                 show_keyboard: self.show_keyboard,
                 record_mouse_clicks: self.record_mouse_clicks,
+                record_mouse_scrolling: self.record_mouse_scrolling,
                 mouse_trail_rgba: self.mouse_trail_rgba,
                 mouse_trail_duration_ms: self.mouse_trail_duration_ms,
                 mouse_click_rgba: self.mouse_click_rgba,
@@ -950,9 +952,8 @@ impl DirectRecordingSession {
                         snow_recording_model::PlaybackOverlay::None,
                     );
                     compositor.effects = Some(render.effects.clone());
-                    compositor.mouse_input_style = render
-                        .effects
-                        .record_mouse_clicks
+                    compositor.mouse_input_style = (render.effects.record_mouse_clicks
+                        || render.effects.record_mouse_scrolling)
                         .then(|| render.effects.keyboard.clone())
                         .flatten();
                     compositor.include_mouse_modifiers = render.effects.show_keyboard;
@@ -965,13 +966,16 @@ impl DirectRecordingSession {
                         compositor.direct_output = bench_pixel_paths.1;
                     }
                     if let Some(style) = render.effects.keyboard.as_ref().filter(|_| {
-                        render.effects.show_keyboard || render.effects.record_mouse_clicks
+                        render.effects.show_keyboard
+                            || render.effects.record_mouse_clicks
+                            || render.effects.record_mouse_scrolling
                     }) {
                         match crate::keyboard_rasterizer::create(style) {
                             Ok(rasterizer) => {
                                 compositor.input_effects.keyboard = Some(
                                     KeyboardOverlay::new(config.output_dimensions(), rasterizer)
-                                        .with_keycap_size(style.keycap_size),
+                                        .with_keycap_size(style.keycap_size)
+                                        .with_icon_color(style.text_rgba),
                                 )
                             }
                             Err(error) => {
@@ -1689,11 +1693,6 @@ fn run_direct_worker(inputs: DirectWorkerInputs) -> Result<DirectRecordingReport
                     .push_back(event.event(clock.active_elapsed_ms(event.at), style));
             }
         }
-        compositor
-            .input_effects
-            .pending_keys
-            .make_contiguous()
-            .sort_by_key(|event| event.at_ms);
         if !stopping
             && !canceled
             && let Err(error) = encoder.tick()
@@ -2591,7 +2590,16 @@ fn drain_click_observations(
         {
             continue;
         }
-        if let Some(style) = &compositor.mouse_input_style {
+        let enabled = compositor.effects.as_ref().is_some_and(|effects| {
+            if observation.button.scroll_direction().is_some() {
+                effects.record_mouse_scrolling
+            } else {
+                effects.record_mouse_clicks
+            }
+        });
+        if let Some(style) = &compositor.mouse_input_style
+            && enabled
+        {
             let event = observation.event(
                 clock.active_elapsed_ms(observation.at),
                 style,
@@ -3077,7 +3085,7 @@ impl VisualCompositor {
         Ok(rgba)
     }
 
-    fn has_active_animation(&self, config: &DirectRecordingConfig, timestamp_ms: u64) -> bool {
+    fn has_active_animation(&mut self, config: &DirectRecordingConfig, timestamp_ms: u64) -> bool {
         let fallback;
         let effects = if let Some(effects) = &self.effects {
             effects
@@ -3567,6 +3575,7 @@ mod tests {
             mouse_highlight_radius: snow_recording_model::render::DEFAULT_MOUSE_HIGHLIGHT_RADIUS,
             mouse_highlight_rgba: [0; 4],
             record_mouse_clicks: false,
+            record_mouse_scrolling: false,
             show_keyboard: true,
         }
     }
@@ -5177,6 +5186,72 @@ mod tests {
             compositor.input_effects.clicks.front().map(|click| click.x),
             Some((CLICK_QUEUE_DEPTH * 2) as i32)
         );
+    }
+
+    #[test]
+    fn scroll_observations_respect_pause_clock_and_disabled_policy_without_click_rings() {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let start = Instant::now();
+        let clock = RecordingClock::new(start);
+        clock
+            .controller()
+            .mark_pause(start + Duration::from_millis(100));
+        clock
+            .controller()
+            .mark_resume(start + Duration::from_millis(300));
+        let style = KeyboardOverlayConfig {
+            font: None,
+            keycap_size: 64,
+            background_rgba: [0; 4],
+            text_rgba: [255; 4],
+            border_rgba: [0; 4],
+            labels: Default::default(),
+        };
+        let mut compositor = VisualCompositor::new((320, 240));
+        compositor.effects = Some(snow_recording_model::EffectsConfig {
+            record_mouse_scrolling: true,
+            keyboard: Some(style.clone()),
+            ..Default::default()
+        });
+        compositor.mouse_input_style = Some(style);
+        for ms in [50, 150, 299, 301, 401] {
+            sender
+                .send(MouseClickObservation {
+                    at: start + Duration::from_millis(ms),
+                    x: 0,
+                    y: 0,
+                    button: ObservedMouseButton::ScrollUp,
+                    down: true,
+                    modifiers: [false; 8],
+                })
+                .unwrap();
+        }
+        drain_click_observations(
+            &receiver,
+            &clock,
+            false,
+            start + Duration::from_millis(300),
+            Some(start + Duration::from_millis(301)),
+            &mut compositor,
+        );
+        assert!(compositor.input_effects.clicks.is_empty());
+        assert_eq!(compositor.input_effects.pending_keys.len(), 1);
+        assert_eq!(compositor.input_effects.pending_keys[0].at_ms, 101);
+        compositor.input_effects.reset_inputs(102);
+        compositor.effects.as_mut().unwrap().record_mouse_scrolling = false;
+        sender
+            .send(MouseClickObservation {
+                at: start + Duration::from_millis(400),
+                x: 0,
+                y: 0,
+                button: ObservedMouseButton::ScrollDown,
+                down: true,
+                modifiers: [false; 8],
+            })
+            .unwrap();
+        drain_click_observations(&receiver, &clock, false, start, None, &mut compositor);
+        assert!(compositor.input_effects.pending_keys.is_empty());
+        assert!(compositor.input_effects.clicks.is_empty());
     }
 
     #[test]

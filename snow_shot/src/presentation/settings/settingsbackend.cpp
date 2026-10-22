@@ -2930,6 +2930,9 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("screen_recording/record_mouse_clicks"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/record_mouse_clicks"))},
+            {QStringLiteral("screen_recording/record_mouse_scrolling"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screen_recording/record_mouse_scrolling"))},
             {QStringLiteral("screen_recording/mouse_highlight_color"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/mouse_highlight_color"))},

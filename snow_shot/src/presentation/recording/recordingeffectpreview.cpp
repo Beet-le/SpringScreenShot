@@ -167,7 +167,7 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
                                        int highlightRadius, uint32_t playbackOverlay,
                                        const QColor& progressBarColor, SnowWebcam* webcam,
                                        int webcamSize, uint32_t webcamShape,
-                                       const QPoint& webcamOffset) {
+                                       const QPoint& webcamOffset, bool recordMouseScrolling) {
     if (m_sessionEnding)
         return;
     const bool sameScene =
@@ -175,7 +175,8 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
         m_keyboard == keyboard && m_trailDurationMs == trailDurationMs &&
         m_keyboardBackground == keyboardBackground && m_keyboardForeground == keyboardForeground &&
         m_keyboardSize == keyboardSize && m_highlight == highlight &&
-        m_recordMouseClicks == recordMouseClicks && m_highlightRadius == highlightRadius &&
+        m_recordMouseClicks == recordMouseClicks &&
+        m_recordMouseScrolling == recordMouseScrolling && m_highlightRadius == highlightRadius &&
         m_playbackOverlay == playbackOverlay && m_progressBarColor == progressBarColor &&
         m_webcam == webcam;
     if (sameScene && m_webcamSize == webcamSize && m_webcamShape == webcamShape &&
@@ -202,6 +203,7 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
     m_highlight = highlight;
     m_highlightRadius = highlightRadius;
     m_recordMouseClicks = recordMouseClicks;
+    m_recordMouseScrolling = recordMouseScrolling;
     m_keyboard = keyboard;
     m_webcam = webcam;
     m_webcamSize = webcamSize;
@@ -214,7 +216,7 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
     m_keyboardForeground = keyboardForeground;
     m_failed = false;
     if (trail.alpha() == 0 && click.alpha() == 0 && !keyboard && highlight.alpha() == 0 &&
-        !recordMouseClicks && playbackOverlay == 0 && !webcam) {
+        !recordMouseClicks && !recordMouseScrolling && playbackOverlay == 0 && !webcam) {
         stopAndClear();
     }
     // Status prompts remain available even when no native effect observer is needed.
@@ -283,7 +285,7 @@ void RecordingEffectPreview::synchronize() {
     }
     const bool motionEnabled = m_trail.alpha() != 0 || m_click.alpha() != 0 || m_keyboard ||
                                m_highlight.alpha() != 0 || m_recordMouseClicks ||
-                               m_webcam != nullptr;
+                               m_recordMouseScrolling || m_webcam != nullptr;
     if (!motionEnabled) {
         m_running = false;
         m_source->stop();
@@ -300,7 +302,8 @@ void RecordingEffectPreview::synchronize() {
         ++m_generation;
         clearFrame();
     }
-    const RecordingKeyboardLabels labels(m_keyboard || m_recordMouseClicks);
+    const RecordingKeyboardLabels labels(m_keyboard || m_recordMouseClicks ||
+                                         m_recordMouseScrolling);
     const RecordingKeyboardTheme theme(m_keyboardBackground, m_keyboardForeground);
     const RecordingKeyboardFont font;
     SnowRecordingEffectsConfig config{SNOW_RECORDING_EFFECTS_CONFIG_VERSION,
@@ -334,7 +337,8 @@ void RecordingEffectPreview::synchronize() {
                                       static_cast<uint32_t>(m_webcamSize),
                                       m_webcamShape,
                                       static_cast<uint32_t>(m_webcamOffset.x()),
-                                      static_cast<uint32_t>(m_webcamOffset.y())};
+                                      static_cast<uint32_t>(m_webcamOffset.y()),
+                                      static_cast<uint32_t>(m_recordMouseScrolling)};
     font.applyTo(config);
     QString error;
     const bool success = m_running ? m_source->configure(config, error)

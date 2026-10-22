@@ -529,6 +529,7 @@ pub struct SnowCaptureDirectRecordingConfig {
     webcam_shape: u32,
     webcam_offset_left: u32,
     webcam_offset_bottom: u32,
+    record_mouse_scrolling: u32,
 }
 
 #[repr(C)]
@@ -538,7 +539,7 @@ struct SnowCaptureDirectRecordingConfigHeader {
     struct_size: u32,
 }
 
-pub const DIRECT_RECORDING_CONFIG_VERSION: u32 = 14;
+pub const DIRECT_RECORDING_CONFIG_VERSION: u32 = 15;
 // Version 8 ended with four padding bytes now occupied by quality.
 const DIRECT_RECORDING_CONFIG_V8_SIZE: u32 = 256;
 const DIRECT_RECORDING_CONFIG_V4_FIELDS_SIZE: usize =
@@ -576,6 +577,9 @@ fn direct_config_size(version: u32) -> Result<u32, String> {
         // Version 12 uses the four tail-padding bytes of the version-11 structure.
         11 | 12 => Ok(272),
         13 => Ok(std::mem::offset_of!(SnowCaptureDirectRecordingConfig, webcam_offset_left) as u32),
+        14 => Ok(
+            std::mem::offset_of!(SnowCaptureDirectRecordingConfig, record_mouse_scrolling) as u32,
+        ),
         DIRECT_RECORDING_CONFIG_VERSION => Ok(DIRECT_RECORDING_CONFIG_SIZE),
         _ => Err(format!(
             "unsupported direct recording config version: {version}"
@@ -910,13 +914,17 @@ fn parse_keyboard_config(
     }
     if config.show_keyboard > 1
         || (config.version >= 7 && config.record_mouse_clicks > 1)
+        || (config.version >= 15 && config.record_mouse_scrolling > 1)
         || (config.version == 2 && config.mouse_trail_duration_ms != 0)
         || (config.version >= 4 && !(32..=128).contains(&config.keyboard_size))
         || config.keyboard_label_count > 256
     {
         return Err("invalid keyboard recording options".into());
     }
-    if config.show_keyboard == 0 && (config.version < 7 || config.record_mouse_clicks == 0) {
+    if config.show_keyboard == 0
+        && (config.version < 7 || config.record_mouse_clicks == 0)
+        && (config.version < 15 || config.record_mouse_scrolling == 0)
+    {
         return Ok(None);
     }
     if config.keyboard_label_count != 0 && config.keyboard_labels.is_null() {
@@ -925,7 +933,7 @@ fn parse_keyboard_config(
     let mut labels = std::collections::BTreeMap::new();
     for index in 0..config.keyboard_label_count as usize {
         let label = unsafe { std::ptr::read_unaligned(config.keyboard_labels.add(index)) };
-        if (label.key_code > 255 && !(0x200..=0x204).contains(&label.key_code))
+        if (label.key_code > 255 && !(0x200..=0x206).contains(&label.key_code))
             || label.utf8_len == 0
             || label.utf8_len > 128
             || label.utf8.is_null()
@@ -1134,6 +1142,7 @@ fn parse_direct_recording_config(
             [0; 4]
         },
         record_mouse_clicks: config.version >= 7 && config.record_mouse_clicks != 0,
+        record_mouse_scrolling: config.version >= 15 && config.record_mouse_scrolling != 0,
         show_keyboard: config.show_keyboard != 0,
         excluded_windows,
         excluded_processes,
@@ -1915,12 +1924,13 @@ mod tests {
 
     #[test]
     fn direct_recording_exclusion_abi_layout() {
-        assert_eq!(DIRECT_RECORDING_CONFIG_VERSION, 14);
+        assert_eq!(DIRECT_RECORDING_CONFIG_VERSION, 15);
         assert_eq!(
             std::mem::offset_of!(SnowCaptureDirectRecordingConfig, exclusions),
             192
         );
-        assert_eq!(DIRECT_RECORDING_CONFIG_SIZE, 296);
+        assert_eq!(DIRECT_RECORDING_CONFIG_SIZE, 304);
+        assert_eq!(direct_config_size(14).unwrap(), 296);
         assert_eq!(direct_config_size(13).unwrap(), 288);
         assert_eq!(direct_config_size(12).unwrap(), 272);
         assert_eq!(direct_config_size(11).unwrap(), 272);
@@ -2258,6 +2268,21 @@ mod tests {
         );
     }
     #[test]
+    fn scrolling_config_is_independent_and_old_layouts_default_off() {
+        let mut raw = direct_config(c"scroll.mp4");
+        raw.record_mouse_scrolling = 1;
+        let parsed = parse_direct_recording_config(&raw).unwrap();
+        assert!(parsed.record_mouse_scrolling && parsed.keyboard.is_some());
+        assert!(!parsed.record_mouse_clicks && !parsed.show_keyboard);
+        raw.record_mouse_scrolling = 2;
+        assert!(parse_direct_recording_config(&raw).is_err());
+        raw.version = 14;
+        raw.struct_size = direct_config_size(14).unwrap();
+        let old = unsafe { read_direct_recording_config(&raw) }.unwrap();
+        let parsed = parse_direct_recording_config(&old).unwrap();
+        assert!(!parsed.record_mouse_scrolling && parsed.keyboard.is_none());
+    }
+    #[test]
     fn mouse_config_round_trips_and_legacy_callers_default_off() {
         let output = CString::new("mouse.mp4").unwrap();
         let mut raw = direct_config(&output);
@@ -2340,6 +2365,7 @@ mod tests {
             mouse_click_rgba: 0xAABBCC80,
             mouse_highlight_rgba: 0,
             record_mouse_clicks: 0,
+            record_mouse_scrolling: 0,
             keyboard_font_family_utf8: std::ptr::null(),
             keyboard_cjk_font_family_utf8: std::ptr::null(),
             keyboard_font_weight: 0,

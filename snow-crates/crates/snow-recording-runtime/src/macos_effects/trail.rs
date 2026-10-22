@@ -50,6 +50,7 @@ mod tests {
                 highlight_radius: snow_recording_model::render::DEFAULT_MOUSE_HIGHLIGHT_RADIUS,
                 highlight: [0; 4],
                 record_mouse_clicks: false,
+                record_mouse_scrolling: false,
                 show_keyboard: false,
                 keyboard: None,
                 generation: 0,

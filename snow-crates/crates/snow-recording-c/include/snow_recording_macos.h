@@ -44,6 +44,8 @@ typedef struct SnowMacRecordingConfig {
     uint32_t highlight_rgba;      /* 0xRRGGBBAA multiply tint, visible cursor only */
     uint32_t record_mouse_clicks; /* independent of keyboard */
     uint32_t highlight_radius;    /* output pixels (8..128); older callers use 41 */
+    uint32_t reserved_padding;
+    uint32_t record_mouse_scrolling;
 } SnowMacRecordingConfig;
 typedef struct SnowMacRecordingEvent {
     uint32_t kind; /* 0 idle, 1 configuration, 2 encoded frame, 3 source interrupted */

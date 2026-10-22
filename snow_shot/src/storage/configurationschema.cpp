@@ -717,6 +717,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/record_mouse_clicks"), false,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("screen_recording/record_mouse_scrolling"), false,
+     ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/mouse_highlight_color"), QStringLiteral("#FFFF0080"),
      ConfigurationValueKind::String},
     {QStringLiteral("screen_recording/mouse_highlight_radius"), 41, ConfigurationValueKind::Integer,

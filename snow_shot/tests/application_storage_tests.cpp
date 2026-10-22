@@ -2619,15 +2619,18 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
             "recording adapters must reject unadvertised values atomically");
 
     require(!recording.mouseHighlightEnabled() && !recording.recordMouseClicks() &&
+                !recording.recordMouseScrolling() &&
                 recording.mouseHighlightColor() == QColor(255, 255, 0, 128) &&
                 recording.mouseHighlightRadius() == 41,
             "new mouse recording settings default off with soft yellow");
     require(recording.setMouseHighlightEnabled(true) && recording.setRecordMouseClicks(true) &&
+                recording.setRecordMouseScrolling(true) &&
                 recording.setMouseHighlightColor(QColor(12, 34, 56, 78)) &&
                 recording.setMouseHighlightRadius(96),
             "mouse recording settings save");
     const storage::RecordingSettings reloadedRecording;
     require(reloadedRecording.mouseHighlightEnabled() && reloadedRecording.recordMouseClicks() &&
+                reloadedRecording.recordMouseScrolling() &&
                 reloadedRecording.mouseHighlightColor() == QColor(12, 34, 56, 78) &&
                 reloadedRecording.mouseHighlightRadius() == 96,
             "mouse recording settings persist across adapter instances");

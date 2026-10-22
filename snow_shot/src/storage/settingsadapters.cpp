@@ -1963,8 +1963,14 @@ bool RecordingSettings::setMouseHighlightEnabled(bool enabled) const {
 bool RecordingSettings::recordMouseClicks() const {
     return cache().value(QStringLiteral("screen_recording/record_mouse_clicks")).toBool();
 }
+bool RecordingSettings::recordMouseScrolling() const {
+    return cache().value(QStringLiteral("screen_recording/record_mouse_scrolling")).toBool();
+}
 bool RecordingSettings::setRecordMouseClicks(bool enabled) const {
     return cache().setValue(QStringLiteral("screen_recording/record_mouse_clicks"), enabled);
+}
+bool RecordingSettings::setRecordMouseScrolling(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/record_mouse_scrolling"), enabled);
 }
 QColor RecordingSettings::mouseHighlightColor() const {
     return colorValue(QStringLiteral("screen_recording/mouse_highlight_color"));

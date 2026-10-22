@@ -1,3 +1,4 @@
+#include <QVBoxLayout>
 #include "snow_shot/presentation/screenshotcanvastools.h"
 #include "palette_style_edit_test_support.h"
 #include "physical_key_test_support.h"
@@ -525,6 +526,27 @@ void recordingCursorOptionsAreIndependentAndLazy() {
         QStringLiteral("screenRecordingMouseHighlight"));
     auto* click = popover->contentWidget()->findChild<adqt::widgets::AdCheckbox*>(
         QStringLiteral("screenRecordingRecordMouseClicks"));
+    auto* scroll = popover->contentWidget()->findChild<adqt::widgets::AdCheckbox*>(
+        QStringLiteral("screenRecordingRecordMouseScrolling"));
+    require(scroll && !scroll->isChecked() &&
+                scroll->text() == QStringLiteral("Record mouse scrolling") &&
+                scroll->accessibleName() == scroll->text(),
+            "scrolling option defaults off and is accessible");
+    auto* optionsLayout = qobject_cast<QVBoxLayout*>(popover->contentWidget()->layout());
+    require(optionsLayout && optionsLayout->indexOf(scroll) == optionsLayout->indexOf(click) + 1,
+            "scrolling option follows mouse clicks");
+    int scrollChanges = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::recordingRecordMouseScrollingChanged,
+                     [&scrollChanges](bool value) {
+                         if (value)
+                             ++scrollChanges;
+                     });
+    scroll->click();
+    require(scrollChanges == 1 && palette.recordingRecordMouseScrolling() && !click->isChecked() &&
+                !palette.recordingKeyboardVisible(),
+            "scrolling is independent of click and keyboard recording");
+    palette.setRecordingRecordMouseScrolling(false);
+    require(!scroll->isChecked() && scrollChanges == 1, "scrolling synchronization is silent");
     require(highlight && click && !highlight->isChecked() && !click->isChecked(),
             "both checkboxes start unchecked");
     const QString snapshotDirectory = qEnvironmentVariable("SNOW_RECORDING_UI_SNAPSHOT_DIR");
@@ -550,7 +572,8 @@ void recordingCursorOptionsAreIndependentAndLazy() {
     QEvent languageChange(QEvent::LanguageChange);
     QCoreApplication::sendEvent(&palette, &languageChange);
     require(highlight->text() == QStringLiteral("Mouse highlight") &&
-                click->text() == QStringLiteral("Record mouse clicks"),
+                click->text() == QStringLiteral("Record mouse clicks") &&
+                scroll->text() == QStringLiteral("Record mouse scrolling"),
             "cursor options retranslate");
     popover->show();
     QCoreApplication::processEvents();

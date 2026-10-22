@@ -535,7 +535,9 @@ class RecordingSettings final {
     [[nodiscard]] bool mouseHighlightEnabled() const;
     bool setMouseHighlightEnabled(bool enabled) const;
     [[nodiscard]] bool recordMouseClicks() const;
+    [[nodiscard]] bool recordMouseScrolling() const;
     bool setRecordMouseClicks(bool enabled) const;
+    bool setRecordMouseScrolling(bool enabled) const;
     [[nodiscard]] QColor mouseHighlightColor() const;
     bool setMouseHighlightColor(const QColor& color) const;
     [[nodiscard]] int mouseHighlightRadius() const;

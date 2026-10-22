@@ -276,6 +276,7 @@
         "webcam_shape",
         "mouse_highlight",
         "record_mouse_clicks",
+        "record_mouse_scrolling",
         "mouse_trail_duration_ms",
         "keyboard_size",
         "keyboard_background",
@@ -421,6 +422,9 @@
           "type": "boolean"
         },
         "record_mouse_clicks": {
+          "type": "boolean"
+        },
+        "record_mouse_scrolling": {
           "type": "boolean"
         },
         "mouse_trail_duration_ms": {

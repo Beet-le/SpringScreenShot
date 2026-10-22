@@ -291,6 +291,7 @@ struct ScreenRecordingController::Impl {
         mouseClickColor = settings.mouseClickColor();
         mouseHighlightEnabled = settings.mouseHighlightEnabled();
         recordMouseClicks = settings.recordMouseClicks();
+        recordMouseScrolling = settings.recordMouseScrolling();
         mouseHighlightColor = settings.mouseHighlightColor();
         mouseHighlightRadius = settings.mouseHighlightRadius();
         showCursor = settings.showCursor();
@@ -831,6 +832,12 @@ struct ScreenRecordingController::Impl {
                              snow_shot::storage::RecordingSettings().setRecordMouseClicks(value);
                              syncPreview();
                          });
+        QObject::connect(palette, &ScreenshotToolPalette::recordingRecordMouseScrollingChanged,
+                         uiSession->connections.get(), [this](bool value) {
+                             setOption(recordMouseScrolling, value);
+                             snow_shot::storage::RecordingSettings().setRecordMouseScrolling(value);
+                             syncPreview();
+                         });
         QObject::connect(palette, &ScreenshotToolPalette::recordingMouseHighlightColorChanged,
                          uiSession->connections.get(), [this](const QColor& value) {
                              setOption(mouseHighlightColor, value);
@@ -1009,6 +1016,7 @@ struct ScreenRecordingController::Impl {
             mouseClickColor = settings.mouseClickColor();
             mouseHighlightEnabled = settings.mouseHighlightEnabled();
             recordMouseClicks = settings.recordMouseClicks();
+            recordMouseScrolling = settings.recordMouseScrolling();
             mouseHighlightColor = settings.mouseHighlightColor();
             mouseHighlightRadius = settings.mouseHighlightRadius();
             showCursor = settings.showCursor();
@@ -1081,8 +1089,8 @@ struct ScreenRecordingController::Impl {
     }
 
     bool allowRecording(bool notify) {
-        const bool input = showKeyboard || recordMouseClicks || mouseTrailColor.alpha() != 0 ||
-                           mouseClickColor.alpha() != 0;
+        const bool input = showKeyboard || recordMouseClicks || recordMouseScrolling ||
+                           mouseTrailColor.alpha() != 0 || mouseClickColor.alpha() != 0;
         return !permissionCheck ||
                permissionCheck(outputFormat == QStringLiteral("mp4") && microphoneEnabled, input,
                                notify);
@@ -1210,6 +1218,7 @@ struct ScreenRecordingController::Impl {
                 webcamShape == QStringLiteral("circle") ? 1u : 0u,
                 static_cast<uint32_t>(webcamOffset.x()),
                 static_cast<uint32_t>(webcamOffset.y()),
+                static_cast<uint32_t>(recordMouseScrolling),
             };
             sessionLoopAnimatedImages = config.loop_animated_images != 0;
             const QDateTime outputTimestamp = QDateTime::currentDateTime();
@@ -1221,7 +1230,7 @@ struct ScreenRecordingController::Impl {
                 snow_shot::presentation::recording::screenRecordingDirectories(outputTimestamp,
                                                                                sessionWindowNames);
             const QString extension = sessionOutputSettings.extension;
-            const bool keyboard = showKeyboard || recordMouseClicks;
+            const bool keyboard = showKeyboard || recordMouseClicks || recordMouseScrolling;
             const QString requestedPath =
                 automationOptions.value(QStringLiteral("path")).toString();
             startupRecovery =
@@ -1889,6 +1898,7 @@ struct ScreenRecordingController::Impl {
             {QStringLiteral("webcam_offset_bottom"), webcamOffset.y()},
             {QStringLiteral("webcam_shape"), webcamShape},
             {QStringLiteral("record_mouse_clicks"), recordMouseClicks},
+            {QStringLiteral("record_mouse_scrolling"), recordMouseScrolling},
             {QStringLiteral("mouse_highlight"), mouseHighlightEnabled},
             {QStringLiteral("start_delay_seconds"), startDelaySeconds},
             {QStringLiteral("keyboard_size"), keyboardSize},
@@ -2297,7 +2307,7 @@ struct ScreenRecordingController::Impl {
                 ? SNOW_RECORDING_PLAYBACK_OVERLAY_PLAYBACK_TIME
                 : SNOW_RECORDING_PLAYBACK_OVERLAY_PROGRESS_BAR,
             progressBarColor, webcamEnabled && !webcamFailed ? webcam.get() : nullptr, webcamSize,
-            webcamShape == QStringLiteral("circle") ? 1u : 0u, webcamOffset);
+            webcamShape == QStringLiteral("circle") ? 1u : 0u, webcamOffset, recordMouseScrolling);
         const bool audioSupported = outputFormat == QStringLiteral("mp4");
         uiSession->preview->setStatusPrompts(
             snow_shot::storage::RecordingSettings().showStatusPrompts(), outputFormat,
@@ -2343,6 +2353,7 @@ struct ScreenRecordingController::Impl {
             palette->setRecordingMouseClickColor(mouseClickColor);
             palette->setRecordingMouseHighlightEnabled(mouseHighlightEnabled);
             palette->setRecordingRecordMouseClicks(recordMouseClicks);
+            palette->setRecordingRecordMouseScrolling(recordMouseScrolling);
             palette->setRecordingMouseHighlightColor(mouseHighlightColor);
             palette->setRecordingMouseHighlightRadius(mouseHighlightRadius);
             palette->setRecordingStartDelaySeconds(startDelaySeconds);
@@ -2470,6 +2481,7 @@ struct ScreenRecordingController::Impl {
     QColor mouseClickColor{0, 0, 0, 0};
     bool mouseHighlightEnabled = false;
     bool recordMouseClicks = false;
+    bool recordMouseScrolling = false;
     QColor mouseHighlightColor{255, 255, 0, 128};
     int mouseHighlightRadius = 41;
     bool showCursor = true;
@@ -2822,6 +2834,8 @@ bool ScreenRecordingController::startAutomation(const QRect& region, const QJson
     s.webcamShape = options.value(QStringLiteral("webcam_shape")).toString(settings.webcamShape());
     s.recordMouseClicks =
         options.value(QStringLiteral("record_mouse_clicks")).toBool(settings.recordMouseClicks());
+    s.recordMouseScrolling = options.value(QStringLiteral("record_mouse_scrolling"))
+                                 .toBool(settings.recordMouseScrolling());
     s.mouseHighlightEnabled =
         options.value(QStringLiteral("mouse_highlight")).toBool(settings.mouseHighlightEnabled());
     s.mouseTrailDurationMs = options.value(QStringLiteral("mouse_trail_duration_ms"))

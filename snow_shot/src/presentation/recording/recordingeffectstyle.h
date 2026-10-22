@@ -90,11 +90,13 @@ struct RecordingKeyboardLabels {
         for (uint32_t key = 0x60; key <= 0x69; ++key) {
             add(key, QStringLiteral("Num %1").arg(key - 0x60));
         }
-        add(0x200, QCoreApplication::translate("RecordingKeyboardLabels", "Left click"));
-        add(0x201, QCoreApplication::translate("RecordingKeyboardLabels", "Right click"));
-        add(0x202, QCoreApplication::translate("RecordingKeyboardLabels", "Middle click"));
-        add(0x203, QCoreApplication::translate("RecordingKeyboardLabels", "Mouse button 4"));
-        add(0x204, QCoreApplication::translate("RecordingKeyboardLabels", "Mouse button 5"));
+        add(0x200, QCoreApplication::translate("RecordingKeyboardLabels", "Left"));
+        add(0x201, QCoreApplication::translate("RecordingKeyboardLabels", "Right"));
+        add(0x202, QCoreApplication::translate("RecordingKeyboardLabels", "Middle"));
+        add(0x203, QCoreApplication::translate("RecordingKeyboardLabels", "Button 4"));
+        add(0x204, QCoreApplication::translate("RecordingKeyboardLabels", "Button 5"));
+        add(0x205, QCoreApplication::translate("RecordingKeyboardLabels", "Scroll up"));
+        add(0x206, QCoreApplication::translate("RecordingKeyboardLabels", "Scroll down"));
         for (const auto& entry : entries) {
             previewEntries.push_back({entry.key_code, reinterpret_cast<const char*>(entry.utf8)});
         }

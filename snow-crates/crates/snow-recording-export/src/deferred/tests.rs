@@ -255,6 +255,8 @@ fn held_composition_matches_forced_redraw_across_inputs_expiry_webcam_and_playba
         metadata.render.effects.mouse_click_rgba = [255, 100, 20, 255];
         metadata.render.effects.mouse_trail_rgba = [255, 40, 60, 180];
         metadata.render.effects.show_keyboard = true;
+        metadata.render.effects.record_mouse_clicks = true;
+        metadata.render.effects.record_mouse_scrolling = true;
         metadata.render.effects.keyboard = Some(snow_recording_model::KeyboardOverlayConfig {
             font: None,
             keycap_size: 32,
@@ -273,7 +275,7 @@ fn held_composition_matches_forced_redraw_across_inputs_expiry_webcam_and_playba
             shape_rgba: [0, 255, 0, 255].repeat(4),
         };
         let key = KeyEvent {
-            at_ms: 100,
+            at_ms: 90,
             key: 65,
             down: true,
             label: "A".into(),
@@ -308,6 +310,17 @@ fn held_composition_matches_forced_redraw_across_inputs_expiry_webcam_and_playba
                         },
                     }),
                 ),
+                // Mouse and keyboard observers admit a batch in source-specific
+                // order, while keycap rendering must retain their original times.
+                (
+                    100,
+                    RecordedInput::Scroll(KeyEvent {
+                        at_ms: 100,
+                        key: 0x205,
+                        label: "Scroll up".into(),
+                        ..key.clone()
+                    }),
+                ),
                 (100, RecordedInput::Key(key.clone())),
                 (
                     200,
@@ -324,6 +337,24 @@ fn held_composition_matches_forced_redraw_across_inputs_expiry_webcam_and_playba
                     RecordedInput::Key(KeyEvent {
                         at_ms: 300,
                         down: false,
+                        ..key.clone()
+                    }),
+                ),
+                (
+                    333,
+                    RecordedInput::Scroll(KeyEvent {
+                        at_ms: 333,
+                        key: 0x205,
+                        label: "Scroll up".into(),
+                        ..key.clone()
+                    }),
+                ),
+                (
+                    400,
+                    RecordedInput::Scroll(KeyEvent {
+                        at_ms: 500,
+                        key: 0x206,
+                        label: "Scroll down".into(),
                         ..key.clone()
                     }),
                 ),
@@ -2058,7 +2089,7 @@ fn animation_guard_avoids_scans_until_idle_without_changing_decoded_frames() {
             pixels.extend((0..32 * 24).flat_map(|_| [20, 30, 40, 255]));
             effects.apply_rgba(&mut pixels, frame).unwrap();
             encoder.set_frame_reuse(
-                if guard && reusable_effect_frame(&effects, frame.timestamp_ms) {
+                if guard && reusable_effect_frame(&mut effects, frame.timestamp_ms) {
                     crate::streaming::VideoFrameReuse::ReuseConversion
                 } else {
                     crate::streaming::VideoFrameReuse::Encode

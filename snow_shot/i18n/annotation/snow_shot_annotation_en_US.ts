@@ -1004,6 +1004,10 @@
             <translation>Record mouse clicks</translation>
         </message>
         <message>
+            <source>Record mouse scrolling</source>
+            <translation>Record mouse scrolling</translation>
+        </message>
+        <message>
             <source>Record screen</source>
             <translation>Record screen</translation>
         </message>

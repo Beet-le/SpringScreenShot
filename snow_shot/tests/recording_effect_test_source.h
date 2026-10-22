@@ -21,6 +21,7 @@ struct RecordingEffectTestState {
     uint32_t highlight = 0;
     uint32_t highlightRadius = 0;
     bool recordMouseClicks = false;
+    bool recordMouseScrolling = false;
     bool showKeyboard = false;
     uint32_t trailDurationMs = 0;
     uint32_t keyboardBackground = 0;
@@ -80,6 +81,7 @@ class RecordingEffectTestSource final : public RecordingEffectsSource {
         state->highlight = config.highlight_rgba;
         state->highlightRadius = config.highlight_radius;
         state->recordMouseClicks = config.record_mouse_clicks != 0;
+        state->recordMouseScrolling = config.record_mouse_scrolling != 0;
         state->showKeyboard = config.show_keyboard != 0;
         state->trailDurationMs = config.trail_duration_ms;
         state->keyboardBackground = config.keyboard_background_rgba;

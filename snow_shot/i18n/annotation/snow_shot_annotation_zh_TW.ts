@@ -1001,7 +1001,11 @@
         </message>
         <message>
             <source>Record mouse clicks</source>
-            <translation>記錄滑鼠點擊</translation>
+            <translation>錄製滑鼠按鍵</translation>
+        </message>
+        <message>
+            <source>Record mouse scrolling</source>
+            <translation>錄製滑鼠捲動</translation>
         </message>
         <message>
             <source>Record screen</source>

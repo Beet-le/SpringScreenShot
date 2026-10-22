@@ -759,6 +759,7 @@ mod tests {
             timestamp_ns: 0,
             key_code: 36,
             mouse_button: 0,
+            scroll_delta_y: 0.0,
             keyboard_type: 40,
             modifiers: (1 << 20) | (1 << 19) | 0x8 | 0x20,
             repeat: false,

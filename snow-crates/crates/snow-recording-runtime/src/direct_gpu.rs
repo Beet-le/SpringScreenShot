@@ -1080,6 +1080,7 @@ mod tests {
             mouse_highlight_radius: snow_recording_model::render::DEFAULT_MOUSE_HIGHLIGHT_RADIUS,
             mouse_highlight_rgba: [0; 4],
             record_mouse_clicks: false,
+            record_mouse_scrolling: false,
             show_keyboard: true,
         }
     }

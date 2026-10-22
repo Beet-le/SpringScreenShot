@@ -404,6 +404,7 @@ recording_options! {
     webcam_size: WebcamSize,
     webcam_shape: WebcamShape,
     record_mouse_clicks: bool,
+    record_mouse_scrolling: bool,
     mouse_trail_duration_ms: TrailDuration,
     keyboard_size: KeyboardSize,
     keyboard_background: String,
@@ -1295,6 +1296,30 @@ mod tests {
                 "snow_shot_recording_start",
                 Some(serde_json::json!({
                     "region": [0, 0, 320, 240], "options": {"separate_audio_tracks": 1}
+                }))
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn recording_accepts_only_boolean_record_mouse_scrolling() {
+        for value in [serde_json::json!(true), serde_json::json!(false)] {
+            assert!(
+                schema(
+                    "snow_shot_recording_start",
+                    Some(serde_json::json!({
+                        "region": [0, 0, 320, 240], "options": {"record_mouse_scrolling": value}
+                    }))
+                )
+                .is_ok()
+            );
+        }
+        assert!(
+            schema(
+                "snow_shot_recording_start",
+                Some(serde_json::json!({
+                    "region": [0, 0, 320, 240], "options": {"record_mouse_scrolling": 1}
                 }))
             )
             .is_err()

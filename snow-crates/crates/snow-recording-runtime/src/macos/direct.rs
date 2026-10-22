@@ -139,6 +139,7 @@ pub(super) fn native_config(
             keyboard: effects.keyboard,
             show_keyboard: effects.show_keyboard,
             record_mouse_clicks: effects.record_mouse_clicks,
+            record_mouse_scrolling: effects.record_mouse_scrolling,
             highlight_radius: effects.mouse_highlight_radius,
             highlight_rgba: if effects.show_cursor {
                 effects.mouse_highlight_rgba
@@ -438,6 +439,7 @@ mod tests {
             mouse_highlight_radius: snow_recording_model::render::DEFAULT_MOUSE_HIGHLIGHT_RADIUS,
             mouse_highlight_rgba: [0; 4],
             record_mouse_clicks: false,
+            record_mouse_scrolling: false,
             show_keyboard: false,
             excluded_windows: vec![123].into(),
             excluded_processes: vec![456].into(),

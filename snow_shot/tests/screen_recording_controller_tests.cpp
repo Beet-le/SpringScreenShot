@@ -2147,6 +2147,12 @@ void controllerPreviewTransitions() {
         "hiding cursor suppresses highlight without forgetting preference or hiding click keycaps");
     palette()->recordingMouseHighlightEnabledChanged(false);
     palette()->recordingRecordMouseClicksChanged(false);
+    palette()->recordingRecordMouseScrollingChanged(true);
+    pumpPreview();
+    require(state->recordMouseScrolling && !state->recordMouseClicks && !state->showKeyboard &&
+                RecordingSettings().recordMouseScrolling(),
+            "scroll-only preview and persistence are independent");
+    palette()->recordingRecordMouseScrollingChanged(false);
     palette()->recordingCursorVisibleChanged(true);
     pumpPreview();
     ScreenRecordingAreaWindow* area = nullptr;
@@ -2632,6 +2638,7 @@ void permissionsAndExactLogicalRegion() {
                                settings.microphoneEnabled()),
                 "start permission check must reflect the current microphone and output settings");
         require(input == (settings.showKeyboard() || settings.recordMouseClicks() ||
+                          settings.recordMouseScrolling() ||
                           settings.mouseTrailColor().alpha() != 0 ||
                           settings.mouseClickColor().alpha() != 0),
                 "only selected input effects require monitoring permission");
@@ -3500,6 +3507,7 @@ void prepareWebcamSettings(bool enabled) {
              {QStringLiteral("screen_recording/show_cursor"), false},
              {QStringLiteral("screen_recording/show_keyboard"), false},
              {QStringLiteral("screen_recording/record_mouse_clicks"), false},
+             {QStringLiteral("screen_recording/record_mouse_scrolling"), false},
              {QStringLiteral("screen_recording/mouse_highlight_enabled"), false},
              {QStringLiteral("screen_recording/mouse_trail_color"), QStringLiteral("#00000000")},
              {QStringLiteral("screen_recording/mouse_click_color"), QStringLiteral("#00000000")},
@@ -7642,6 +7650,14 @@ template <typename Application> int runRecordingControllerTests(Application& app
             }
         } translator;
         const RecordingKeyboardLabels original(true);
+        for (const auto& entry : original.entries) {
+            if (entry.key_code >= 0x200 && entry.key_code <= 0x204) {
+                const char* expected[] = {"Left", "Right", "Middle", "Button 4", "Button 5"};
+                require(QByteArray(reinterpret_cast<const char*>(entry.utf8), entry.utf8_len) ==
+                            expected[entry.key_code - 0x200],
+                        "mouse icon labels must use compact button names");
+            }
+        }
         require(app.installTranslator(&translator), "key translator must install");
         const RecordingKeyboardLabels localized(true);
         require(localized.text == original.text,

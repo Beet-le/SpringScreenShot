@@ -135,6 +135,9 @@ inline const QJsonObject& recordingAutomationOptionContracts() {
         {QStringLiteral("record_mouse_clicks"),
          QJsonObject{
              {QStringLiteral("type"), QStringLiteral("boolean")}}},
+        {QStringLiteral("record_mouse_scrolling"),
+         QJsonObject{
+             {QStringLiteral("type"), QStringLiteral("boolean")}}},
         {QStringLiteral("mouse_trail_duration_ms"),
          QJsonObject{
              {QStringLiteral("type"), QStringLiteral("integer")},

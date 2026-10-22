@@ -2518,8 +2518,15 @@ void ScreenshotToolPalette::setRecordingRecordMouseClicks(bool value) {
     m_recordingRecordMouseClicks = value;
     refreshRecordingMouseOptions();
 }
+void ScreenshotToolPalette::setRecordingRecordMouseScrolling(bool value) {
+    m_recordingRecordMouseScrolling = value;
+    refreshRecordingMouseOptions();
+}
 bool ScreenshotToolPalette::recordingRecordMouseClicks() const {
     return m_recordingRecordMouseClicks;
+}
+bool ScreenshotToolPalette::recordingRecordMouseScrolling() const {
+    return m_recordingRecordMouseScrolling;
 }
 void ScreenshotToolPalette::setRecordingMouseHighlightColor(const QColor& value) {
     m_recordingMouseHighlightColor = value.isValid() ? value : QColor(255, 255, 0, 128);
@@ -2578,18 +2585,23 @@ QColor ScreenshotToolPalette::recordingProgressBarColor() const {
 }
 
 void ScreenshotToolPalette::refreshRecordingMouseOptions() {
-    if (!m_recordHighlightCheckbox || !m_recordClicksCheckbox) {
+    if (!m_recordHighlightCheckbox || !m_recordClicksCheckbox || !m_recordScrollingCheckbox) {
         return;
     }
     const QSignalBlocker highlightBlocker(m_recordHighlightCheckbox);
     const QSignalBlocker clicksBlocker(m_recordClicksCheckbox);
+    const QSignalBlocker scrollingBlocker(m_recordScrollingCheckbox);
     m_recordHighlightCheckbox->setText(tr("Mouse highlight"));
     m_recordClicksCheckbox->setText(tr("Record mouse clicks"));
+    m_recordScrollingCheckbox->setText(tr("Record mouse scrolling"));
     m_recordHighlightCheckbox->setAccessibleName(tr("Mouse highlight"));
     m_recordClicksCheckbox->setAccessibleName(tr("Record mouse clicks"));
+    m_recordScrollingCheckbox->setAccessibleName(tr("Record mouse scrolling"));
     m_recordHighlightCheckbox->setChecked(m_recordingMouseHighlightEnabled);
     m_recordClicksCheckbox->setChecked(m_recordingRecordMouseClicks);
-    for (auto* checkbox : {m_recordHighlightCheckbox.data(), m_recordClicksCheckbox.data()}) {
+    m_recordScrollingCheckbox->setChecked(m_recordingRecordMouseScrolling);
+    for (auto* checkbox : {m_recordHighlightCheckbox.data(), m_recordClicksCheckbox.data(),
+                           m_recordScrollingCheckbox.data()}) {
         auto tokens = adqt::widgets::AdCheckbox::ComponentTokens{};
         tokens.metrics.checkboxSize = scaledMetric(16);
         tokens.metrics.labelPaddingInlineStart = scaledMetric(8);
@@ -7208,12 +7220,16 @@ void ScreenshotToolPalette::createRecordingExportSettingsToolbar() {
             options->setSpacing(scaledMetric(8));
             m_recordHighlightCheckbox = new adqt::widgets::AdCheckbox(content);
             m_recordClicksCheckbox = new adqt::widgets::AdCheckbox(content);
+            m_recordScrollingCheckbox = new adqt::widgets::AdCheckbox(content);
             m_recordHighlightCheckbox->setObjectName(
                 QStringLiteral("screenRecordingMouseHighlight"));
             m_recordClicksCheckbox->setObjectName(
                 QStringLiteral("screenRecordingRecordMouseClicks"));
+            m_recordScrollingCheckbox->setObjectName(
+                QStringLiteral("screenRecordingRecordMouseScrolling"));
             options->addWidget(m_recordHighlightCheckbox);
             options->addWidget(m_recordClicksCheckbox);
+            options->addWidget(m_recordScrollingCheckbox);
             refreshRecordingMouseOptions();
             connect(m_recordHighlightCheckbox, &QAbstractButton::toggled, this, [this](bool value) {
                 setRecordingMouseHighlightEnabled(value);
@@ -7222,6 +7238,10 @@ void ScreenshotToolPalette::createRecordingExportSettingsToolbar() {
             connect(m_recordClicksCheckbox, &QAbstractButton::toggled, this, [this](bool value) {
                 setRecordingRecordMouseClicks(value);
                 emit recordingRecordMouseClicksChanged(value);
+            });
+            connect(m_recordScrollingCheckbox, &QAbstractButton::toggled, this, [this](bool value) {
+                setRecordingRecordMouseScrolling(value);
+                emit recordingRecordMouseScrollingChanged(value);
             });
             return content;
         },
