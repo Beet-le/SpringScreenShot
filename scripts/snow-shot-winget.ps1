@@ -30,6 +30,41 @@ function Get-SnowShotWingetArchitectures($Release, [string]$Version) {
     return $architectures
 }
 
+function Save-SnowShotWingetInstaller([string]$Url, [string]$Path) {
+    # Release downloads are idempotent. Retry transient network failures without
+    # retrying manifest validation or allowing partial bytes into the SHA-256 hash.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Write-Host "Downloading WinGet installer $Url (attempt $attempt/3)."
+        try {
+            Invoke-WebRequest -Uri $Url -OutFile $Path -TimeoutSec 600
+            return
+        } catch {
+            $retryable = $false
+            for ($cause = $_.Exception; $null -ne $cause; $cause = $cause.InnerException) {
+                if ($cause -is [Microsoft.PowerShell.Commands.HttpResponseException]) {
+                    $retryable = [int]$cause.Response.StatusCode -in @(408, 429, 500, 502, 503, 504)
+                    break
+                }
+                if ($cause -is [Net.Sockets.SocketException]) {
+                    $retryable = [string]$cause.SocketErrorCode -in @('TimedOut', 'ConnectionReset',
+                        'ConnectionAborted', 'ConnectionRefused', 'NetworkDown', 'NetworkUnreachable',
+                        'HostUnreachable', 'TryAgain')
+                    break
+                }
+                if ($cause -is [TimeoutException]) {
+                    $retryable = $true
+                    break
+                }
+            }
+            if (-not $retryable -or $attempt -eq 3) { throw }
+            if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path }
+            $delay = 2 * $attempt
+            Write-Warning "Installer download failed: $($_.Exception.Message) Retrying in $delay seconds."
+            Start-Sleep -Seconds $delay
+        }
+    }
+}
+
 function New-SnowShotWingetManifest([string]$Tag, [string]$OutputDirectory,
     [ValidateSet('Full')][string]$Edition = 'Full') {
     $product = Get-SnowShotEdition $Edition
@@ -53,7 +88,7 @@ function New-SnowShotWingetManifest([string]$Tag, [string]$OutputDirectory,
     if ($assets[0].browser_download_url -cne $url) { throw 'Unexpected installer asset URL.' }
     $download = Join-Path $OutputDirectory "$([guid]::NewGuid().ToString('N')).exe"
     try {
-        Invoke-WebRequest -Uri $url -OutFile $download -TimeoutSec 600
+        Save-SnowShotWingetInstaller -Url $url -Path $download
         if ((Get-Item -LiteralPath $download).Length -ne $assets[0].size -or $assets[0].size -le 0) {
             throw 'Downloaded installer size does not match the release asset.'
         }
