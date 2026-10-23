@@ -344,7 +344,8 @@ bool SnowCanvasTextEditorSession::setCursorFromViewPosition(const QFont& baseFon
 
 SnowCanvasTextEditorSession::KeyResult
 SnowCanvasTextEditorSession::handleKeyPress(QKeyEvent* event, const QFont& baseFont,
-                                            const SceneDisplayInfo& sceneInfo) {
+                                            const SceneDisplayInfo& sceneInfo,
+                                            bool deleteTextAfterCursor) {
     KeyResult result;
     if (!m_hasPreview || event == nullptr) {
         return result;
@@ -356,7 +357,8 @@ SnowCanvasTextEditorSession::handleKeyPress(QKeyEvent* event, const QFont& baseF
             [this, &baseFont, &sceneInfo](QTextCursor::MoveOperation operation,
                                           QTextCursor::MoveMode mode) {
                 return moveCursor(operation, mode, baseFont, sceneInfo);
-            });
+            },
+            deleteTextAfterCursor);
     result.handled = commandResult.handled;
     result.changed = commandResult.changed;
     switch (commandResult.command) {

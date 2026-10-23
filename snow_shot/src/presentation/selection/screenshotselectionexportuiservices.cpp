@@ -118,18 +118,16 @@ void applyPersistence(ScreenshotPinnedWindow::Config* config, const QString& id 
         };
 }
 
-// Restore display-local positions within the current usable area. Window
-// extents retain their platform units independently of image density.
-screenshot_pinned_restore_geometry::RestoredState
+screenshot_pinned_restore_geometry::PlacementState
 reconcileRestoreState(const snow_shot::storage::PinnedWindowRecord& record, QScreen& target) {
     using namespace snow_shot::presentation;
-    const auto restore = [&target](const snow_shot::storage::PinnedWindowPlacement& placement) {
-        return placement.isValid()
-                   ? pinnedWindowRect(recoverPinnedPlacement(placement, target), target)
-                   : QRect();
-    };
-    return {restore(record.placement), restore(record.preThumbnailPlacement),
-            restore(record.hideToTopPlacement)};
+    QList<PinnedDisplayGeometry> screens;
+    for (const QScreen* screen : QGuiApplication::screens()) {
+        screens.append(pinnedDisplayGeometry(*screen));
+    }
+    return screenshot_pinned_restore_geometry::reconcileSavedState(
+        {record.placement, record.preThumbnailPlacement, record.hideToTopPlacement},
+        pinnedDisplayGeometry(target), screens);
 }
 
 QScreen* restoreScreen(const snow_shot::storage::PinnedWindowRecord& record) {
@@ -1051,8 +1049,10 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImageOnCanvas(
     config.recognitionProvider = m_recognitionProvider;
     if (document != nullptr) {
         const auto& selection = document->selection;
-        config.resultStyle = {selection.radius, selection.shadowWidth, selection.shadowColor,
-                              selection.region};
+        config.resultStyle = selection.resultStyle();
+        config.borderAppearance =
+            screenshotSelectionBorderAppearance(selection.selection.size(), config.resultStyle);
+        config.checkerboardEnabled = screenshotSelectionNeedsCheckerboard(config.borderAppearance);
         const auto layout = ScreenshotResultCompositor::layoutForContent(selection.selection.size(),
                                                                          config.resultStyle);
         config.surfaceCanvasRect =
@@ -1300,6 +1300,34 @@ void ScreenshotSelectionExportUiServices::restorePersistedWindows() {
     }
 }
 
+bool ScreenshotSelectionExportUiServices::restoreRecords(const QStringList& ids) {
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    if (!storage.isInitialized() || ids.isEmpty())
+        return false;
+    auto& repository = storage.pinnedWindows();
+    std::optional<QString> groupId;
+    QStringList selected;
+    QSet<QString> seen;
+    for (const auto& id : ids) {
+        if (seen.contains(id))
+            continue;
+        const auto found = repository.summary(id);
+        if (!found || (groupId && *groupId != found->groupId))
+            return false;
+        groupId = found->groupId;
+        seen.insert(id);
+        selected.append(id);
+    }
+    if (m_groupManager && !m_groupManager->setActiveGroup(*groupId))
+        return false;
+    bool success = true;
+    for (const auto& id : selected) {
+        if (!m_restoringIds.contains(id) && !restoreRecord(id, false))
+            success = false;
+    }
+    return success;
+}
+
 bool ScreenshotSelectionExportUiServices::restoreRecord(const QString& id, bool activateGroup) {
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
     if (!storage.isInitialized() || m_restoringIds.contains(id))
@@ -1411,12 +1439,17 @@ bool ScreenshotSelectionExportUiServices::presentRestoredRecord(
     if (targetScreen == nullptr || record.nativeGeometry.isEmpty()) {
         return false;
     }
-    const screenshot_pinned_restore_geometry::RestoredState restored =
+    const screenshot_pinned_restore_geometry::PlacementState restored =
         reconcileRestoreState(record, *targetScreen);
+    const auto geometry = [targetScreen](const auto& placement) {
+        QScreen* screen = snow_shot::presentation::pinnedDisplay(placement, targetScreen);
+        return placement.isValid() && screen
+                   ? snow_shot::presentation::pinnedWindowRect(placement, *screen)
+                   : QRect();
+    };
     ScreenshotPinnedWindow::Config config;
-    config.nativeGeometry = restored.nativeGeometry;
-    config.placement =
-        snow_shot::presentation::recoverPinnedPlacement(record.placement, *targetScreen);
+    config.nativeGeometry = geometry(restored.placement);
+    config.placement = restored.placement;
     config.canvasSourceRect = record.canvasSourceRect;
     // The persisted content/surface rects describe the post-transform
     // frame. Presentation starts from the immutable source canvas and
@@ -1452,7 +1485,7 @@ bool ScreenshotSelectionExportUiServices::presentRestoredRecord(
     config.persistedImageTransform = record.imageTransform;
     config.persistedQuarterTurns = record.quarterTurns;
     config.persistedHideToTopMode = record.hideToTopMode;
-    config.persistedHideToTopHandleNativeGeometry = restored.hideToTopHandleNativeGeometry;
+    config.persistedHideToTopHandleNativeGeometry = geometry(restored.hideToTopPlacement);
     config.persistedHideToTopAccentIndex = record.hideToTopAccentIndex;
     config.persistedThumbnailMode = record.thumbnailMode;
     config.persistedClickThroughMode = record.clickThroughMode;
@@ -1460,11 +1493,8 @@ bool ScreenshotSelectionExportUiServices::presentRestoredRecord(
     config.persistedAlwaysOnTop = record.alwaysOnTop;
     config.persistedShowBorder = record.showBorder;
     config.persistedShowShadow = record.showShadow;
-    config.persistedPreThumbnailNativeGeometry = restored.preThumbnailNativeGeometry;
-    if (record.preThumbnailPlacement.isValid()) {
-        config.persistedPreThumbnailPlacement = snow_shot::presentation::recoverPinnedPlacement(
-            record.preThumbnailPlacement, *targetScreen);
-    }
+    config.persistedPreThumbnailNativeGeometry = geometry(restored.preThumbnailPlacement);
+    config.persistedPreThumbnailPlacement = restored.preThumbnailPlacement;
     config.persistedFirstCreationTextDpi = record.firstCreationTextDpi;
     config.persistedCanvasSession = record.canvasSession;
     config.persistedRecognitionResults = record.recognitionResults;

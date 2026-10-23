@@ -716,6 +716,10 @@
             <translation>LaTeX 专用模型</translation>
         </message>
         <message>
+            <source>Laser pointer</source>
+            <translation>激光笔</translation>
+        </message>
+        <message>
             <source>Layout compaction disabled</source>
             <translation>已禁用紧凑布局</translation>
         </message>
@@ -880,6 +884,10 @@
             <translation>打开录制文件夹</translation>
         </message>
         <message>
+            <source>Open spreadsheet file</source>
+            <translation>打开电子表格文件</translation>
+        </message>
+        <message>
             <source>Outlined circle</source>
             <translation>轮廓圆形</translation>
         </message>
@@ -993,7 +1001,11 @@
         </message>
         <message>
             <source>Record mouse clicks</source>
-            <translation>记录鼠标点击</translation>
+            <translation>录制鼠标按键</translation>
+        </message>
+        <message>
+            <source>Record mouse scrolling</source>
+            <translation>录制鼠标滚动</translation>
         </message>
         <message>
             <source>Record screen</source>
@@ -1566,6 +1578,14 @@
         <message>
             <source>Could not change canvas click-through.</source>
             <translation>无法切换画布的鼠标穿透状态。</translation>
+        </message>
+        <message>
+            <source>Could not show the laser pointer: %1</source>
+            <translation>无法显示激光笔：%1</translation>
+        </message>
+        <message>
+            <source>The laser pointer is unavailable.</source>
+            <translation>激光笔不可用。</translation>
         </message>
     </context>
 </TS>

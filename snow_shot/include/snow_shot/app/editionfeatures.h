@@ -1,13 +1,12 @@
-#ifndef SNOW_SHOT_PRESENTATION_EDITIONFEATURES_H
-#define SNOW_SHOT_PRESENTATION_EDITIONFEATURES_H
+#ifndef SNOW_SHOT_APP_EDITIONFEATURES_H
+#define SNOW_SHOT_APP_EDITIONFEATURES_H
 
 #include "snow_shot/app/edition.h"
 
 #include <QString>
 
-namespace snow_shot::presentation {
+namespace snow_shot::app {
 [[nodiscard]] inline bool editionActionToolAvailable(const QString& id) {
-    using namespace app;
     if (id == QStringLiteral("barcode-recognition"))
         return edition::qrRecognition;
     if (id == QStringLiteral("table-recognition"))
@@ -22,7 +21,6 @@ namespace snow_shot::presentation {
 }
 
 [[nodiscard]] inline bool editionRecognitionModeAvailable(int mode) {
-    using namespace app;
     switch (mode) {
     case 0:
         return true;
@@ -41,7 +39,6 @@ namespace snow_shot::presentation {
 }
 
 [[nodiscard]] inline bool editionConfigurationKeyAvailable(const QString& key) {
-    using namespace app;
     if (!edition::apiConfiguration && key.startsWith(QStringLiteral("api_configuration/")))
         return false;
     if (!edition::extendedFeatures && key.startsWith(QStringLiteral("extended_features/")))
@@ -64,6 +61,6 @@ namespace snow_shot::presentation {
         return false;
     return true;
 }
-} // namespace snow_shot::presentation
+} // namespace snow_shot::app
 
-#endif // SNOW_SHOT_PRESENTATION_EDITIONFEATURES_H
+#endif // SNOW_SHOT_APP_EDITIONFEATURES_H

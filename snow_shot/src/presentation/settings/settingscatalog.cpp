@@ -3,7 +3,7 @@
 #include "snow_shot/ocrtextoptions.h"
 #include "snow_shot/translation/translationlanguagecatalog.h"
 
-#include "snow_shot/presentation/editionfeatures.h"
+#include "snow_shot/app/editionfeatures.h"
 
 #include "antd_icons.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
@@ -1464,7 +1464,7 @@ SettingsItemDefinition screenshotCopyFileItem() {
         QStringLiteral("screenshot.copy-image-file-to-clipboard"),
         QT_TRANSLATE_NOOP("SettingsCatalog", "Copy image file to clipboard"),
         QT_TRANSLATE_NOOP("SettingsCatalog",
-                          "Write the image to a file and copy that file to the clipboard"),
+                          "Copy both the image and its exported file to the clipboard"),
         QStringLiteral("screenshot/copy_image_file_to_clipboard"),
         SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard);
 }
@@ -1474,6 +1474,13 @@ QVector<SettingsItemDefinition> screenshotOutputItems() {
         screenshotAutoSaveAfterExecutionItem(),
         screenshotCopyFileItem(),
         screenshotSaveAsFileDialogItem(),
+        switchItem(QStringLiteral("screenshot.show-save-result"),
+                   QT_TRANSLATE_NOOP("SettingsCatalog", "Show save result"),
+                   QT_TRANSLATE_NOOP(
+                       "SettingsCatalog",
+                       "Keep the Snow Shot save dialog open after saving to show the result"),
+                   QStringLiteral("screenshot/show_save_result"),
+                   SettingsSwitchBinding::ScreenshotShowSaveResult),
         directoryPathItem(
             QStringLiteral("screenshot-output.image-save-directory"),
             QT_TRANSLATE_NOOP("SettingsCatalog", "Image save directory"),
@@ -1752,6 +1759,17 @@ SettingsItemDefinition drawingQuickSelectionItem() {
     };
 }
 
+SettingsItemDefinition drawingDeleteTextAfterCursorItem() {
+    return switchItem(
+        QStringLiteral("drawing.delete-text-after-cursor"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Delete text after the cursor"),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "While editing text, press Delete to remove selected text or the "
+                          "character after the cursor."),
+        QStringLiteral("drawing/delete_text_after_cursor"),
+        SettingsSwitchBinding::DrawingDeleteTextAfterCursor);
+}
+
 SettingsItemDefinition drawingRememberLastUsedToolItem() {
     return switchItem(QStringLiteral("drawing.remember-last-used-tool"),
                       QT_TRANSLATE_NOOP("SettingsCatalog", "Remember last used tool"),
@@ -2028,6 +2046,16 @@ SettingsItemDefinition originalImageTranslationItem() {
         QT_TRANSLATE_NOOP("SettingsCatalog", "Display translated text in the original image"),
         QStringLiteral("screenshot_translation/original_image_translation"),
         SettingsSwitchBinding::OriginalImageTranslation);
+}
+
+SettingsItemDefinition copyTranslationResultsAsImageItem() {
+    return switchItem(
+        QStringLiteral("translation.copy-results-as-image"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Copy Translation Results as an Image"),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "Copy the full translation result as an image when no text is selected"),
+        QStringLiteral("screenshot_translation/copy_translation_results_as_image"),
+        SettingsSwitchBinding::CopyTranslationResultsAsImage);
 }
 #endif
 
@@ -2783,7 +2811,7 @@ QVector<SettingsItemDefinition> pinToScreenShortcutItems() {
         localShortcutItem(SettingsLocalShortcutScope::PinToScreen,
                           QStringLiteral("flip_horizontal"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Flip horizontally"),
-                          []() { return outlined_icons::Swap(); }),
+                          []() { return custom_outlined_icons::FlipHorizontal(); }),
         localShortcutItem(SettingsLocalShortcutScope::PinToScreen, QStringLiteral("flip_vertical"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Flip vertically"),
                           []() { return custom_outlined_icons::FlipVertical(); }),
@@ -3433,9 +3461,9 @@ QVector<SettingsPageDefinition> builtInPages() {
                      "SettingsCatalog",
                      "Configure annotation tools and the screenshot annotation toolbar")),
                  SettingsSectionReset::DrawingQuickSelection,
-                 {drawingQuickSelectionItem(), drawingRememberLastUsedToolItem(),
-                  drawingAlwaysShowFirstToolbarGroupButtonItem(), strokeColorPresetsItem(),
-                  fillColorPresetsItem()},
+                 {drawingQuickSelectionItem(), drawingDeleteTextAfterCursorItem(),
+                  drawingRememberLastUsedToolItem(), drawingAlwaysShowFirstToolbarGroupButtonItem(),
+                  strokeColorPresetsItem(), fillColorPresetsItem()},
              },
              {
                  QStringLiteral("drawing"),
@@ -3658,6 +3686,7 @@ QVector<SettingsPageDefinition> builtInPages() {
                        settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "%"))}},
                   translationServiceItem(),
                   originalImageTranslationItem(),
+                  copyTranslationResultsAsImageItem(),
                   translationLayoutProcessingItem()},
              },
 #endif
@@ -4025,8 +4054,9 @@ QVector<SettingsPageDefinition> builtInPages() {
 #if SNOW_SHOT_ENABLE_API_CONFIGURATION
              {QStringLiteral("text-translation"),
               settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Translation services")),
-              settingsText(QT_TRANSLATE_NOOP(
-                  "SettingsCatalog", "Custom DeepL, Baidu, and Youdao-compatible services")),
+              settingsText(
+                  QT_TRANSLATE_NOOP("SettingsCatalog",
+                                    "Custom DeepL, DeepLX, Baidu, and Youdao-compatible services")),
               SettingsSectionReset::TextTranslationConfigurations,
               {{QStringLiteral("api.text-translation"),
                 settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Translation Configurations")),
@@ -4332,7 +4362,7 @@ SettingsCatalog::SettingsCatalog(QVector<SettingsPageDefinition> pages,
             for (auto& section : page.sections) {
                 section.items.removeIf([](const SettingsItemDefinition& item) {
                     return !item.configurationKey.isEmpty() &&
-                           !editionConfigurationKeyAvailable(item.configurationKey);
+                           !app::editionConfigurationKeyAvailable(item.configurationKey);
                 });
             }
             page.sections.removeIf(
@@ -5126,6 +5156,9 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard:
                         expectedKey = QStringLiteral("screenshot/copy_image_file_to_clipboard");
                         break;
+                    case SettingsSwitchBinding::ScreenshotShowSaveResult:
+                        expectedKey = QStringLiteral("screenshot/show_save_result");
+                        break;
                     case SettingsSwitchBinding::SaveRecognitionResultAsImage:
                         expectedKey =
                             QStringLiteral("text_recognition/save_recognition_result_as_image");
@@ -5177,6 +5210,10 @@ QStringList SettingsCatalog::validationErrors() const {
                         expectedKey =
                             QStringLiteral("screenshot_translation/original_image_translation");
                         break;
+                    case SettingsSwitchBinding::CopyTranslationResultsAsImage:
+                        expectedKey = QStringLiteral(
+                            "screenshot_translation/copy_translation_results_as_image");
+                        break;
                     case SettingsSwitchBinding::SeparateRecordingAudioTracks:
                         expectedKey = QStringLiteral("screen_recording/separate_audio_tracks");
                         break;
@@ -5217,6 +5254,9 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsSwitchBinding::AutoStartAtBoot:
                         expectedKey = QStringLiteral("system/auto_start_at_boot");
+                        break;
+                    case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
+                        expectedKey = QStringLiteral("drawing/delete_text_after_cursor");
                         break;
                     case SettingsSwitchBinding::DrawingRememberLastUsedTool:
                         expectedKey = QStringLiteral("drawing/remember_last_used_tool");

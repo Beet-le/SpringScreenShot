@@ -1,8 +1,9 @@
 #include "snow_shot/shortcuts/screenshotshortcutcontext.h"
+#include "snow_shot/shortcuts/pinnedshortcutcontext.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/storage/floatingtoolbarsettings.h"
 
-#include "snow_shot/presentation/editionfeatures.h"
+#include "snow_shot/app/editionfeatures.h"
 
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationschema.h"
@@ -113,7 +114,7 @@ const QStringList& screenshotShortcutActionIds() {
             QStringLiteral("redo"),
         };
         result.removeIf([](const QString& id) {
-            return !snow_shot::presentation::editionConfigurationKeyAvailable(
+            return !snow_shot::app::editionConfigurationKeyAvailable(
                 QStringLiteral("screenshot_shortcuts/") + id);
         });
         return result;
@@ -616,6 +617,16 @@ bool WindowMemorySettings::setMainWindowGeometry(const QRect& normalGeometry,
 }
 
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+std::optional<PersistedWindowGeometry> WindowMemorySettings::translationWindowGeometry() const {
+    return parseWindowGeometry(
+        cache().value(QStringLiteral("interface/translation_window_geometry")).toObject());
+}
+
+bool WindowMemorySettings::setTranslationWindowGeometry(const QRect& normalGeometry) const {
+    return cache().setValue(QStringLiteral("interface/translation_window_geometry"),
+                            windowGeometryToJson(normalGeometry, false));
+}
+
 std::optional<QSize> WindowMemorySettings::translationWindowSize() const {
     return parseWindowSize(
         cache().value(QStringLiteral("interface/translation_window_size")).toObject());
@@ -1100,6 +1111,14 @@ bool ScreenshotSettings::setSaveAsFileDialog(const QString& dialog) const {
     return cache().setValue(QStringLiteral("screenshot/save_as_file_dialog"), dialog);
 }
 
+bool ScreenshotSettings::showSaveResult() const {
+    return cache().value(QStringLiteral("screenshot/show_save_result")).toBool();
+}
+
+bool ScreenshotSettings::setShowSaveResult(bool enabled) const {
+    return cache().setValue(QStringLiteral("screenshot/show_save_result"), enabled);
+}
+
 QVector<ScreenshotSavePathShortcut> ScreenshotSettings::savePathShortcuts() const {
     QVector<ScreenshotSavePathShortcut> result;
     for (const auto& value :
@@ -1201,6 +1220,14 @@ QStringList DrawingSettings::quickSelectionDisabledTools() const {
 bool DrawingSettings::setQuickSelectionDisabledTools(const QStringList& tools) const {
     return cache().setValue(QStringLiteral("drawing/quick_selection_disabled_tools"),
                             stringArray(tools));
+}
+
+bool DrawingSettings::deleteTextAfterCursor() const {
+    return cache().value(QStringLiteral("drawing/delete_text_after_cursor")).toBool();
+}
+
+bool DrawingSettings::setDeleteTextAfterCursor(bool enabled) const {
+    return cache().setValue(QStringLiteral("drawing/delete_text_after_cursor"), enabled);
 }
 
 bool DrawingSettings::rememberLastUsedTool() const {
@@ -1530,17 +1557,7 @@ PinToScreenShortcutSettings::shortcuts(const QString& actionId) const {
 }
 
 bool PinToScreenShortcutSettings::actionsMayConflict(const QString& first, const QString& second) {
-    const auto animation = [](const QString& id) {
-        return id == QStringLiteral("toggle_playback") || id == QStringLiteral("next_frame") ||
-               id == QStringLiteral("previous_frame") ||
-               id.endsWith(QStringLiteral("playback_speed"));
-    };
-    const auto staticContent = [](const QString& id) {
-        return id == QStringLiteral("drawing_mode") || id == QStringLiteral("resize_window") ||
-               id == QStringLiteral("show_text_recognition_results");
-    };
-    return !((animation(first) && staticContent(second)) ||
-             (animation(second) && staticContent(first)));
+    return shortcuts::pinnedShortcutActionsMayConflict(first, second);
 }
 
 bool PinToScreenShortcutSettings::setShortcuts(
@@ -1917,6 +1934,19 @@ bool RecordingSettings::setWebcamSize(int size) const {
     return cache().setValue(QStringLiteral("screen_recording/webcam_size"), size);
 }
 
+int RecordingSettings::webcamOffsetLeft() const {
+    return cache().value(QStringLiteral("screen_recording/webcam_offset_left")).toInt();
+}
+int RecordingSettings::webcamOffsetBottom() const {
+    return cache().value(QStringLiteral("screen_recording/webcam_offset_bottom")).toInt();
+}
+bool RecordingSettings::setWebcamLayout(int size, const QPoint& offset) const {
+    return cache().setValues(
+        {{QStringLiteral("screen_recording/webcam_size"), size},
+         {QStringLiteral("screen_recording/webcam_offset_left"), offset.x()},
+         {QStringLiteral("screen_recording/webcam_offset_bottom"), offset.y()}});
+}
+
 QString RecordingSettings::webcamShape() const {
     return cache().value(QStringLiteral("screen_recording/webcam_shape")).toString();
 }
@@ -1941,8 +1971,14 @@ bool RecordingSettings::setMouseHighlightEnabled(bool enabled) const {
 bool RecordingSettings::recordMouseClicks() const {
     return cache().value(QStringLiteral("screen_recording/record_mouse_clicks")).toBool();
 }
+bool RecordingSettings::recordMouseScrolling() const {
+    return cache().value(QStringLiteral("screen_recording/record_mouse_scrolling")).toBool();
+}
 bool RecordingSettings::setRecordMouseClicks(bool enabled) const {
     return cache().setValue(QStringLiteral("screen_recording/record_mouse_clicks"), enabled);
+}
+bool RecordingSettings::setRecordMouseScrolling(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/record_mouse_scrolling"), enabled);
 }
 QColor RecordingSettings::mouseHighlightColor() const {
     return colorValue(QStringLiteral("screen_recording/mouse_highlight_color"));
@@ -2220,6 +2256,19 @@ bool ScreenshotTranslationSettings::originalImageTranslationEnabled() const {
 bool ScreenshotTranslationSettings::setOriginalImageTranslationEnabled(bool enabled) const {
     return cache().setValue(QStringLiteral("screenshot_translation/original_image_translation"),
                             enabled);
+}
+#endif
+
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+bool ScreenshotTranslationSettings::copyTranslationResultsAsImage() const {
+    return cache()
+        .value(QStringLiteral("screenshot_translation/copy_translation_results_as_image"))
+        .toBool();
+}
+
+bool ScreenshotTranslationSettings::setCopyTranslationResultsAsImage(bool enabled) const {
+    return cache().setValue(
+        QStringLiteral("screenshot_translation/copy_translation_results_as_image"), enabled);
 }
 #endif
 

@@ -936,18 +936,17 @@ bool SnowCanvasWidgetTextInteraction::handleEditorMouseRelease(QMouseEvent* even
     return true;
 }
 
-SnowCanvasWidgetTextInteraction::EditorEventResult
-SnowCanvasWidgetTextInteraction::handleKeyPress(QKeyEvent* event, SnowRuntime runtime,
-                                                SnowViewport viewport, bool hasViewport,
-                                                SnowCanvasDisplayCache& displayCache) {
+SnowCanvasWidgetTextInteraction::EditorEventResult SnowCanvasWidgetTextInteraction::handleKeyPress(
+    QKeyEvent* event, SnowRuntime runtime, SnowViewport viewport, bool hasViewport,
+    SnowCanvasDisplayCache& displayCache, bool deleteTextAfterCursor) {
     EditorEventResult result;
     if (!m_session.isActive()) {
         return result;
     }
 
     const QRegion beforeRegion = editingRegion(displayCache, m_widget.font());
-    const SnowCanvasTextEditorSession::KeyResult keyResult =
-        m_session.handleKeyPress(event, m_widget.font(), displayCache.sceneInfo());
+    const SnowCanvasTextEditorSession::KeyResult keyResult = m_session.handleKeyPress(
+        event, m_widget.font(), displayCache.sceneInfo(), deleteTextAfterCursor);
     if (!keyResult.handled) {
         return result;
     }

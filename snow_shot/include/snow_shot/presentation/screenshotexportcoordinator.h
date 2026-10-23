@@ -4,7 +4,10 @@
 #include "snow_shot/presentation/screenshotclipboardservice.h"
 
 #include <QImage>
+#include <QHash>
 #include <QObject>
+#include <QPointer>
+#include <QQueue>
 #include <QString>
 
 #include <atomic>
@@ -69,6 +72,8 @@ class ScreenshotExportJobHandle final {
     std::function<void()> m_promoteQueued;
 };
 
+class ScreenshotExportQueue;
+
 class ScreenshotExportCoordinator final : public QObject {
   public:
     enum class Priority { Background, Foreground };
@@ -85,11 +90,43 @@ class ScreenshotExportCoordinator final : public QObject {
     [[nodiscard]] ScreenshotExportJobHandle submit(QObject* receiver, Priority priority, Work work,
                                                    Completion completion);
     [[nodiscard]] int pendingJobCount() const;
+    [[nodiscard]] bool acceptingSubmissions() const;
     void shutdown();
 
   private:
+    friend class ScreenshotExportQueue;
+    void dispatchQueues();
     struct Impl;
     std::shared_ptr<Impl> m_impl;
+};
+
+// GUI-thread FIFO admission for independent requests. Only two jobs per queue enter the
+// coordinator at once; the remaining work waits for capacity without decoding images.
+// cancel(), destruction and coordinator shutdown discard pending work and completions.
+class ScreenshotExportQueue final : public QObject {
+  public:
+    explicit ScreenshotExportQueue(ScreenshotExportCoordinator& coordinator,
+                                   QObject* parent = nullptr);
+    ~ScreenshotExportQueue() override;
+    [[nodiscard]] bool enqueue(ScreenshotExportCoordinator::Priority priority,
+                               ScreenshotExportCoordinator::Work work,
+                               ScreenshotExportCoordinator::Completion completion);
+    void cancel();
+    [[nodiscard]] bool active() const;
+
+  private:
+    friend class ScreenshotExportCoordinator;
+    void dispatch();
+    struct Request {
+        ScreenshotExportCoordinator::Priority priority;
+        ScreenshotExportCoordinator::Work work;
+        ScreenshotExportCoordinator::Completion completion;
+    };
+    QPointer<ScreenshotExportCoordinator> m_coordinator;
+    QQueue<Request> m_requests;
+    QHash<quint64, ScreenshotExportJobHandle> m_jobs;
+    quint64 m_generation = 0;
+    quint64 m_nextId = 0;
 };
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENSHOTEXPORTCOORDINATOR_H

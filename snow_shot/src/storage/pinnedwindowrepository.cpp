@@ -531,7 +531,8 @@ QJsonValue borderAppearanceToJson(const std::optional<PinnedBorderAppearance>& a
     QJsonObject result{{QStringLiteral("source_size"), sizeToJson(appearance->sourceSize)},
                        {QStringLiteral("content_rect"), rectFToJson(appearance->contentRect)},
                        {QStringLiteral("corner_radius"), appearance->cornerRadius},
-                       {QStringLiteral("has_shadow"), appearance->hasShadow}};
+                       {QStringLiteral("has_shadow"), appearance->hasShadow},
+                       {QStringLiteral("has_border"), appearance->hasBorder}};
     if (appearance->region && appearance->region->custom()) {
         result.insert(QStringLiteral("geometry"), appearance->region->toJson());
     } else if (appearance->region) {
@@ -577,6 +578,10 @@ std::optional<PinnedBorderAppearance> borderAppearanceFromJson(const QJsonValue&
     }
     appearance.cornerRadius = radius;
     appearance.hasShadow = object.value(QStringLiteral("has_shadow")).toBool(false);
+    if (object.contains(QStringLiteral("has_border")) &&
+        !object.value(QStringLiteral("has_border")).isBool())
+        return {};
+    appearance.hasBorder = object.value(QStringLiteral("has_border")).toBool(false);
     return appearance;
 }
 

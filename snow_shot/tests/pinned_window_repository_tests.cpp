@@ -1636,8 +1636,8 @@ void borderAndShadowStatesRoundTripWithLegacyDefaults() {
     auto record = recordWithId(id, patternedImage(QSize(200, 100), 5));
     record.showBorder = false;
     record.showShadow = true;
-    record.borderAppearance =
-        storage::PinnedBorderAppearance{QSize(200, 100), QRectF(8, 8, 184, 84), 16.0, true, {}};
+    record.borderAppearance = storage::PinnedBorderAppearance{
+        QSize(200, 100), QRectF(8, 8, 184, 84), 16.0, false, {}, true};
     const QString manifest =
         QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
     {

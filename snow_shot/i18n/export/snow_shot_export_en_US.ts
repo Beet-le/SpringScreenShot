@@ -70,6 +70,10 @@
             <translation>The image save directory is not configured</translation>
         </message>
         <message>
+            <source>The screenshot clipboard payload is invalid</source>
+            <translation>The screenshot clipboard payload is invalid</translation>
+        </message>
+        <message>
             <source>The screenshot export queue is full</source>
             <translation>The screenshot export queue is full</translation>
         </message>
@@ -239,6 +243,14 @@
             <source>The screenshot filename format is invalid</source>
             <translation>The screenshot filename format is invalid</translation>
         </message>
+        <message>
+            <source>The spreadsheet file could not be opened</source>
+            <translation>The spreadsheet file could not be opened</translation>
+        </message>
+        <message>
+            <source>The temporary directory could not be created</source>
+            <translation>The temporary directory could not be created</translation>
+        </message>
     </context>
     <context>
         <name>ScreenshotSaveAsFileDialog</name>
@@ -301,6 +313,18 @@
         <message>
             <source>Compression level</source>
             <translation>Compression level</translation>
+        </message>
+        <message>
+            <source>Continue editing</source>
+            <translation>Continue editing</translation>
+        </message>
+        <message>
+            <source>Copy image file</source>
+            <translation>Copy image file</translation>
+        </message>
+        <message>
+            <source>Copy image path</source>
+            <translation>Copy image path</translation>
         </message>
         <message>
             <source>Delete</source>
@@ -371,6 +395,10 @@
             <translation>OK</translation>
         </message>
         <message>
+            <source>Open folder</source>
+            <translation>Open folder</translation>
+        </message>
+        <message>
             <source>PDF</source>
             <translation>PDF</translation>
         </message>
@@ -427,6 +455,10 @@
             <translation>Save path</translation>
         </message>
         <message>
+            <source>Saved successfully</source>
+            <translation>Saved successfully</translation>
+        </message>
+        <message>
             <source>Select save directory</source>
             <translation>Select save directory</translation>
         </message>
@@ -437,6 +469,10 @@
         <message>
             <source>Size unit</source>
             <translation>Size unit</translation>
+        </message>
+        <message>
+            <source>The clipboard could not be updated: %1</source>
+            <translation>The clipboard could not be updated: %1</translation>
         </message>
         <message>
             <source>The dimensions are not supported by this image format</source>
@@ -451,12 +487,24 @@
             <translation>The export could not be prepared: %1</translation>
         </message>
         <message>
+            <source>The folder could not be opened</source>
+            <translation>The folder could not be opened</translation>
+        </message>
+        <message>
+            <source>The image could not be prepared for the clipboard</source>
+            <translation>The image could not be prepared for the clipboard</translation>
+        </message>
+        <message>
             <source>The image dimensions exceed the export limit</source>
             <translation>The image dimensions exceed the export limit</translation>
         </message>
         <message>
             <source>The save paths could not be stored</source>
             <translation>The save paths could not be stored</translation>
+        </message>
+        <message>
+            <source>The saved file no longer exists</source>
+            <translation>The saved file no longer exists</translation>
         </message>
         <message>
             <source>The screenshot could not be prepared</source>

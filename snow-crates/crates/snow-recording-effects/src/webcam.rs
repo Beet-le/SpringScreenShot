@@ -11,7 +11,7 @@ pub struct WebcamImage<'a> {
 
 #[derive(Default)]
 pub struct WebcamOverlay {
-    key: Option<(u64, WebcamStyle, (u32, u32))>,
+    key: Option<(u64, u32, WebcamShape)>,
     rect: (u32, u32, u32),
     mask: Vec<u8>,
     mask_key: Option<(u32, WebcamShape)>,
@@ -26,9 +26,12 @@ impl WebcamOverlay {
         style: WebcamStyle,
         output: (u32, u32),
     ) -> bool {
-        let next = frame.map(|frame| (frame.revision, style, output));
+        let rect = style.placement(output);
+        let moved = self.rect != rect;
+        self.rect = rect;
+        let next = frame.map(|frame| (frame.revision, rect.2, style.shape));
         if next == self.key {
-            return false;
+            return moved && self.visible();
         }
         self.key = next;
         self.generation = self.generation.wrapping_add(1);
@@ -36,7 +39,6 @@ impl WebcamOverlay {
         let Some(frame) = frame else {
             return true;
         };
-        self.rect = style.placement(output);
         let size = self.rect.2;
         if size == 0 {
             return true;
@@ -125,6 +127,46 @@ mod tests {
     use crate::surface::{RgbaSurface, TileSurface};
     use std::{sync::Arc, time::Instant};
     #[test]
+    fn webcam_movement_invalidates_placement_without_a_new_camera_frame() {
+        let frame = Frame {
+            revision: 1,
+            at: Instant::now(),
+            size: 50,
+            rgba: Arc::new([220, 40, 10, 255].repeat(50 * 50)),
+        };
+        for shape in [WebcamShape::Square, WebcamShape::Circle] {
+            let mut overlay = WebcamOverlay::default();
+            let style = WebcamStyle {
+                size: 50,
+                shape,
+                ..Default::default()
+            };
+            overlay.prepare(Some(&frame), style, (800, 600));
+            let old = overlay.image().unwrap().rect;
+            let pixels = overlay.image().unwrap().pixels.as_ptr();
+            let generation = overlay.image().unwrap().generation;
+            let moved = WebcamStyle {
+                offset_left: 300,
+                offset_bottom: 200,
+                ..style
+            };
+            assert!(overlay.prepare(Some(&frame), moved, (800, 600)));
+            assert_ne!(old, overlay.image().unwrap().rect);
+            assert_eq!(overlay.image().unwrap().rect, (300, 350, 50));
+            assert_eq!(overlay.image().unwrap().pixels.as_ptr(), pixels);
+            assert_eq!(
+                overlay.image().unwrap().generation,
+                generation,
+                "movement reuses the rasterized image and native texture"
+            );
+            assert!(!overlay.prepare(Some(&frame), moved, (800, 600)));
+            let mut surface = TileSurface::new((800, 600));
+            overlay.draw_to(&mut surface);
+            assert!(overlay.prepare(None, moved, (800, 600)));
+            assert!(!overlay.visible());
+        }
+    }
+    #[test]
     fn webcam_placement_masks_layering_and_stale_clearing_agree_for_all_surfaces() {
         let frame = Frame {
             revision: 1,
@@ -135,7 +177,11 @@ mod tests {
         for size in [50, 150, 500] {
             for shape in [WebcamShape::Square, WebcamShape::Circle] {
                 for output in [(800, 600), (160, 170), (20, 30)] {
-                    let style = WebcamStyle { size, shape };
+                    let style = WebcamStyle {
+                        size,
+                        shape,
+                        ..Default::default()
+                    };
                     let (x, y, side) = style.placement(output);
                     assert!(x + side <= output.0 && y + side <= output.1);
                     let mut overlay = WebcamOverlay::default();

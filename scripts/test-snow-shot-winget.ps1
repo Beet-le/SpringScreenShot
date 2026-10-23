@@ -1,6 +1,8 @@
 #Requires -Version 7.0
 # Deterministic fixtures only: no GitHub requests, installer execution, or PR submissions.
 $ErrorActionPreference = 'Stop'
+# Load the web exception types before replacing Invoke-WebRequest with a fixture.
+Import-Module Microsoft.PowerShell.Utility
 . (Join-Path $PSScriptRoot 'snow-shot-winget.ps1')
 $root = Join-Path ([IO.Path]::GetTempPath()) "snow-shot-winget-tests-$([guid]::NewGuid().ToString('N'))"
 $originalToken = $env:WINGET_CREATE_GITHUB_TOKEN
@@ -8,6 +10,8 @@ $script:submitted = 0
 $script:submitExitCode = 0
 $script:requests = @()
 $script:mode = 'missing'
+$script:downloadFailures = @()
+$script:downloadAttempts = 0
 
 function Require($Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
@@ -43,6 +47,14 @@ function Invoke-SnowShotWingetApi([string]$Path) {
 }
 function Invoke-WebRequest([string]$Uri, [string]$OutFile, [int]$TimeoutSec) {
     Require ($Uri -ceq $script:release.assets[0].browser_download_url) 'Wrong download URL'
+    Require (-not (Test-Path -LiteralPath $OutFile)) 'A partial installer download was reused'
+    $script:downloadAttempts++
+    if ($script:downloadFailures.Count) {
+        $failure = $script:downloadFailures[0]
+        $script:downloadFailures = @($script:downloadFailures | Select-Object -Skip 1)
+        [IO.File]::WriteAllBytes($OutFile, [byte[]](9))
+        throw $failure
+    }
     [IO.File]::WriteAllBytes($OutFile, [byte[]](1, 2, 3, 4))
 }
 function Invoke-FixtureSubmit {
@@ -74,6 +86,65 @@ try {
     Expect-Failure { & (Join-Path $PSScriptRoot 'test-snow-shot-winget-install.ps1') -Edition Mini } 'Mini'
     Require ($script:requests.Count -eq $requestsBeforeMini -and $script:submitted -eq 0) 'Unsupported Mini requests must fail before network or submission.'
     Require (-not (Test-Path -LiteralPath $root)) 'Unsupported Mini requests must not generate manifests.'
+    # Only transient transport/HTTP failures may retry; partial bytes must never be hashed.
+    & {
+        function Start-Sleep([int]$Seconds) { $script:retrySleeps += $Seconds }
+        $transientFailures = @(
+            [Net.Http.HttpRequestException]::new('Fixture connection timeout',
+                [Net.Sockets.SocketException]::new(10060))
+            [Net.Http.HttpRequestException]::new('Fixture connection reset',
+                [Net.Sockets.SocketException]::new(10054))
+            [Threading.Tasks.TaskCanceledException]::new('Fixture request timeout',
+                [TimeoutException]::new('Fixture timeout'))
+        )
+        foreach ($status in @(408, 429, 500, 502, 503, 504)) {
+            $response = [Net.Http.HttpResponseMessage]::new([Net.HttpStatusCode]$status)
+            $transientFailures += [Microsoft.PowerShell.Commands.HttpResponseException]::new('Fixture transient HTTP failure', $response)
+        }
+        foreach ($failure in $transientFailures) {
+            Set-FixtureRelease 'v1.3.6_snow-shot'
+            $script:downloadAttempts = 0
+            $script:retrySleeps = @()
+            $script:downloadFailures = @($failure, $failure)
+            $directory = New-SnowShotWingetManifest 'v1.3.6_snow-shot' (Join-Path $root 'recovered')
+            Require ($script:downloadAttempts -eq 3) 'Transient downloads must recover within the attempt limit'
+            Require (($script:retrySleeps -join ',') -ceq '2,4') 'Retries must use bounded backoff'
+            $installer = Get-Content -LiteralPath (Join-Path $directory 'mg-chao.snow-shot.installer.yaml') -Raw
+            $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([byte[]](1, 2, 3, 4)))
+            Require ($installer.Contains("InstallerSha256: $hash")) 'Recovered installer hash is incorrect'
+            Require (@(Get-ChildItem -LiteralPath (Join-Path $root 'recovered') -Filter '*.exe').Count -eq 0) 'Recovered downloads must be cleaned up'
+        }
+        $permanentFailures = @(
+            [IO.IOException]::new('Fixture disk failure')
+            [Net.Http.HttpRequestException]::new('Fixture TLS failure',
+                [Security.Authentication.AuthenticationException]::new('Fixture certificate failure'))
+            [Net.Http.HttpRequestException]::new('Fixture unknown HTTP client failure')
+            [Threading.Tasks.TaskCanceledException]::new('Fixture cancellation without timeout')
+        )
+        foreach ($status in @(400, 401, 403, 404, 501)) {
+            $response = [Net.Http.HttpResponseMessage]::new([Net.HttpStatusCode]$status)
+            $permanentFailures += [Microsoft.PowerShell.Commands.HttpResponseException]::new('Fixture permanent HTTP failure', $response)
+        }
+        foreach ($failure in @($transientFailures[0]) + $permanentFailures) {
+            $script:downloadAttempts = 0
+            $script:retrySleeps = @()
+            $script:downloadFailures = @($failure, $failure, $failure)
+            $failedOutput = Join-Path $root "failed-$([guid]::NewGuid().ToString('N'))"
+            Expect-Failure { New-SnowShotWingetManifest 'v1.3.6_snow-shot' $failedOutput } ([regex]::Escape($failure.Message))
+            $transient = $failure -eq $transientFailures[0]
+            Require ($script:downloadAttempts -eq $(if ($transient) { 3 } else { 1 })) 'Permanent errors must fail immediately and transient retries must be bounded'
+            Require ($script:retrySleeps.Count -eq $(if ($transient) { 2 } else { 0 })) 'Unexpected retry delay after failure'
+            Require (@(Get-ChildItem -LiteralPath $failedOutput -Recurse -File).Count -eq 0) 'Failed downloads must leave no installer or manifest files'
+        }
+        $script:downloadFailures = @()
+        $script:downloadAttempts = 0
+        $script:retrySleeps = @()
+        $script:release.assets[0].size = 5
+        $invalidOutput = Join-Path $root 'invalid-size'
+        Expect-Failure { New-SnowShotWingetManifest 'v1.3.6_snow-shot' $invalidOutput } 'size does not match'
+        Require ($script:downloadAttempts -eq 1 -and $script:retrySleeps.Count -eq 0) 'Validation failures must not retry'
+        Require (@(Get-ChildItem -LiteralPath $invalidOutput -Recurse -File).Count -eq 0) 'Invalid installers must be cleaned up'
+    }
     # Here-string line endings follow the checkout, while generated YAML must always use LF.
     $source = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'snow-shot-winget.ps1')).Replace("`r`n", "`n")
     $expectedManifests = @{}

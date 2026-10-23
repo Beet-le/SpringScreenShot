@@ -5,6 +5,12 @@
 extern "C" {
 #endif
 typedef struct SnowWebcam SnowWebcam;
+typedef struct SnowWebcamPlacement {
+    uint32_t x, y, size;
+} SnowWebcamPlacement;
+/* Pure placement in physical preview pixels or output video pixels. */
+SnowWebcamPlacement snow_webcam_placement(uint32_t width, uint32_t height, uint32_t size,
+                                          uint32_t offset_left, uint32_t offset_bottom);
 /* Created inactive. Device work and destruction run on a worker; no callbacks enter the host.
  * A configuration consumer retains its own reference. Size: 50..500; fps: 1..30. */
 SnowWebcam* snow_webcam_create(uint32_t size, uint32_t fps);

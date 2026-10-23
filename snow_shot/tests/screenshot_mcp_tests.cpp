@@ -525,6 +525,43 @@ void selection() {
                 "path selection");
     }
 }
+void selectionStyle() {
+    ScreenshotSelectionModel model;
+    model.setSelectionRect(QRect(10, 20, 100, 80));
+    QString field;
+    require(applySelectionStyle(model,
+                                {{QStringLiteral("border_type"), QStringLiteral("border")},
+                                 {QStringLiteral("border_width"), 48},
+                                 {QStringLiteral("border_color"), QJsonArray{20, 80, 180, 50}},
+                                 {QStringLiteral("shadow_width"), 12}},
+                                &field),
+            "MCP can configure independent active border and inactive shadow settings");
+    const auto saved = model.params(QRect(0, 0, 800, 600));
+    const auto state = selectionStyleState(model);
+    require(model.effectWidth() == 48 && model.shadowWidth() == 12 &&
+                state.value(QStringLiteral("border_type")) == QStringLiteral("border") &&
+                state.value(QStringLiteral("border_color")) == QJsonArray{20, 80, 180, 255},
+            "MCP reports the actual normalized border appearance");
+    for (const auto& invalid :
+         {QJsonObject{{QStringLiteral("border_type"), QStringLiteral("outline")}},
+          QJsonObject{{QStringLiteral("border_width"), -1}},
+          QJsonObject{{QStringLiteral("border_width"), 1.5}},
+          QJsonObject{{QStringLiteral("border_color"), QJsonArray{0, 0, 256, 255}}},
+          QJsonObject{{QStringLiteral("border_color"), QJsonArray{0, 0, 0}}}}) {
+        auto patch = invalid;
+        patch.insert(QStringLiteral("shadow_width"), 3);
+        require(!applySelectionStyle(model, patch, &field) && !field.isEmpty() &&
+                    model.params(QRect(0, 0, 800, 600)) == saved,
+                "invalid style patches must leave all model settings unchanged");
+    }
+    require(applySelectionStyle(model,
+                                {{QStringLiteral("border_type"), QStringLiteral("shadow")},
+                                 {QStringLiteral("border_width"), 1000}},
+                                &field) &&
+                model.effectWidth() == 12 && model.borderWidth() == 64,
+            "style switching preserves inactive settings and editor limits remain in canvas units");
+}
+
 void session() {
     QJsonObject editor{{QStringLiteral("capture_phase"), QStringLiteral("idle")}};
     int canceled = 0, artifacts = 0, mutations = 0;
@@ -1314,6 +1351,10 @@ int main(int argc, char** argv) {
         ScreenshotExportCoordinator::shared().shutdown();
         storage.shutdown();
     });
+    if (app.arguments().contains(QStringLiteral("--selection-style-only"))) {
+        selectionStyle();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--session-completion-reentry-only"))) {
         sessionCompletionReentry();
         return 0;
@@ -1339,6 +1380,7 @@ int main(int argc, char** argv) {
     transport();
     descriptorOverride();
     selection();
+    selectionStyle();
     session();
     return 0;
 }

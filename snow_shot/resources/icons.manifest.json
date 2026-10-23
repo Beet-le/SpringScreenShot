@@ -647,6 +647,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "FlipHorizontal",
+      "name": "flip-horizontal",
+      "source": "../src/presentation/components/icons/resources/flip-horizontal.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "FlipVertical",
       "name": "flip-vertical",
       "source": "../src/presentation/components/icons/resources/flip-vertical.svg",
@@ -882,6 +890,14 @@
       "symbol": "Opacity",
       "name": "opacity",
       "source": "../src/presentation/components/icons/resources/opacity.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "OpenSpreadsheetFile",
+      "name": "open-spreadsheet-file",
+      "source": "../src/presentation/components/icons/resources/open-spreadsheet-file.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

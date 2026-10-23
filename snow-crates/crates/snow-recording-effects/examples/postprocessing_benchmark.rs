@@ -235,6 +235,7 @@ fn compare_sparse(size: (u32, u32)) -> Result<(), String> {
         highlight_radius: snow_recording_model::render::DEFAULT_MOUSE_HIGHLIGHT_RADIUS,
         highlight: [0; 4],
         record_mouse_clicks: false,
+        record_mouse_scrolling: false,
         show_keyboard: true,
         keyboard: Some(style.clone()),
         generation: 1,

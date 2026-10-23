@@ -92,6 +92,7 @@ class ScreenshotToolbarCommandSink {
     virtual void mergeTableSelection() {}
     virtual void splitTableSelection() {}
     virtual void resetTable() {}
+    virtual void openSpreadsheetFile() {}
     virtual void setShowOriginalImage(bool) {}
     virtual void beginTextEditing() {}
     virtual void toggleTextEditing() {
@@ -172,8 +173,8 @@ class ScreenshotSelectionToolbarCommandSink {
     virtual void hideColorPickersForScreenshotUi() = 0;
     virtual void adjustSelectionFromToolbar(int minDx, int minDy, int maxDx, int maxDy) = 0;
     virtual void setSelectionCornerRadiusFromToolbar(int radius) = 0;
-    virtual void setSelectionShadowWidthFromToolbar(int shadowWidth) = 0;
-    virtual void adjustSelectionEffectsFromWheel(int radiusDelta, int shadowDelta) = 0;
+    virtual void setSelectionEffectWidthFromToolbar(int effectWidth) = 0;
+    virtual void adjustSelectionEffectsFromWheel(int radiusDelta, int effectDelta) = 0;
     virtual void setSelectionToolbarHovered(bool hovered) = 0;
     virtual void setSelectionToolbarPopupVisible(bool) {}
 };

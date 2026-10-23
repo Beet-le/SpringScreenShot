@@ -12,6 +12,7 @@
 #include "snow_shot/storage/persistedwindowgeometry.h"
 
 #include <QColor>
+#include <QPoint>
 #include <QByteArray>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -154,6 +155,8 @@ class WindowMemorySettings final {
     [[nodiscard]] std::optional<PersistedWindowGeometry> mainWindowGeometry() const;
     bool setMainWindowGeometry(const QRect& normalGeometry, bool maximized) const;
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+    [[nodiscard]] std::optional<PersistedWindowGeometry> translationWindowGeometry() const;
+    bool setTranslationWindowGeometry(const QRect& normalGeometry) const;
     [[nodiscard]] std::optional<QSize> translationWindowSize() const;
     bool setTranslationWindowSize(const QSize& size) const;
 #endif
@@ -281,6 +284,8 @@ class ScreenshotSettings final {
     bool setLastManualSaveFormat(const QString& format) const;
     [[nodiscard]] QString saveAsFileDialog() const;
     bool setSaveAsFileDialog(const QString& dialog) const;
+    [[nodiscard]] bool showSaveResult() const;
+    bool setShowSaveResult(bool enabled) const;
     [[nodiscard]] QVector<ScreenshotSavePathShortcut> savePathShortcuts() const;
     bool setSavePathShortcuts(const QVector<ScreenshotSavePathShortcut>& shortcuts) const;
     [[nodiscard]] QString pdfPageSize() const;
@@ -304,6 +309,8 @@ class DrawingSettings final {
   public:
     [[nodiscard]] QStringList quickSelectionDisabledTools() const;
     bool setQuickSelectionDisabledTools(const QStringList& tools) const;
+    [[nodiscard]] bool deleteTextAfterCursor() const;
+    bool setDeleteTextAfterCursor(bool enabled) const;
     [[nodiscard]] bool rememberLastUsedTool() const;
     bool setRememberLastUsedTool(bool enabled) const;
     [[nodiscard]] bool alwaysShowFirstToolbarGroupButton() const;
@@ -429,6 +436,8 @@ class ScreenshotTranslationSettings final {
   public:
     [[nodiscard]] bool originalImageTranslationEnabled() const;
     bool setOriginalImageTranslationEnabled(bool enabled) const;
+    [[nodiscard]] bool copyTranslationResultsAsImage() const;
+    bool setCopyTranslationResultsAsImage(bool enabled) const;
     [[nodiscard]] QString layoutProcessing() const;
     bool setLayoutProcessing(const QString& mode) const;
     [[nodiscard]] ScreenshotTranslationConfiguration configuration() const;
@@ -522,6 +531,9 @@ class RecordingSettings final {
     bool setWebcamEnabled(bool enabled) const;
     [[nodiscard]] int webcamSize() const;
     bool setWebcamSize(int size) const;
+    [[nodiscard]] int webcamOffsetLeft() const;
+    [[nodiscard]] int webcamOffsetBottom() const;
+    bool setWebcamLayout(int size, const QPoint& offset) const;
     [[nodiscard]] QString webcamShape() const;
     bool setWebcamShape(const QString& shape) const;
     [[nodiscard]] bool showKeyboard() const;
@@ -529,7 +541,9 @@ class RecordingSettings final {
     [[nodiscard]] bool mouseHighlightEnabled() const;
     bool setMouseHighlightEnabled(bool enabled) const;
     [[nodiscard]] bool recordMouseClicks() const;
+    [[nodiscard]] bool recordMouseScrolling() const;
     bool setRecordMouseClicks(bool enabled) const;
+    bool setRecordMouseScrolling(bool enabled) const;
     [[nodiscard]] QColor mouseHighlightColor() const;
     bool setMouseHighlightColor(const QColor& color) const;
     [[nodiscard]] int mouseHighlightRadius() const;

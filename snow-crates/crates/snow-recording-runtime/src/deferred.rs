@@ -1574,6 +1574,10 @@ impl InputRecorder {
                     modifiers: Vec::new(),
                 }
             };
+            if event.button.scroll_direction().is_some() {
+                self.push(clock, now, RecordedInput::Scroll(key))?;
+                continue;
+            }
             let (x, y) = self.hook_point((event.x, event.y));
             let button = match event.button {
                 ObservedMouseButton::Left => InputMouseButton::Left,
@@ -1581,6 +1585,9 @@ impl InputRecorder {
                 ObservedMouseButton::Middle => InputMouseButton::Middle,
                 ObservedMouseButton::Button4 => InputMouseButton::Button4,
                 ObservedMouseButton::Button5 => InputMouseButton::Button5,
+                ObservedMouseButton::ScrollUp | ObservedMouseButton::ScrollDown => {
+                    unreachable!("scroll handled above")
+                }
             };
             self.push(
                 clock,
@@ -1949,6 +1956,7 @@ mod tests {
             mouse_highlight_radius: snow_recording_model::render::DEFAULT_MOUSE_HIGHLIGHT_RADIUS,
             mouse_highlight_rgba: [0; 4],
             record_mouse_clicks: false,
+            record_mouse_scrolling: false,
             show_keyboard: false,
             excluded_windows: Default::default(),
             excluded_processes: Default::default(),

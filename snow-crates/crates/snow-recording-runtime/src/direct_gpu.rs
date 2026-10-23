@@ -1080,6 +1080,7 @@ mod tests {
             mouse_highlight_radius: snow_recording_model::render::DEFAULT_MOUSE_HIGHLIGHT_RADIUS,
             mouse_highlight_rgba: [0; 4],
             record_mouse_clicks: false,
+            record_mouse_scrolling: false,
             show_keyboard: true,
         }
     }
@@ -1301,6 +1302,8 @@ mod tests {
                         } else {
                             snow_webcam::WebcamShape::Circle
                         },
+                        offset_left: 32 + index as u32 * 12,
+                        offset_bottom: 32 + index as u32 * 6,
                     },
                     size,
                 );

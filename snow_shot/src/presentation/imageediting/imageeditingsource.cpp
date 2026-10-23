@@ -21,7 +21,7 @@ bool hasEditableSelection(const storage::PersistedSelection& selection) {
     // would reveal excluded pixels or change annotation placement. Their stored composite is the
     // faithful representation until that state can also be edited. Background and compaction
     // preferences have no visual effect on a plain rectangle without an effect inset.
-    return !selection.region && selection.cornerRadius == 0 && selection.shadowWidth == 0;
+    return !selection.region && selection.cornerRadius == 0 && selection.effectWidth() == 0;
 }
 } // namespace
 
@@ -129,7 +129,7 @@ ImageEditingSource readImageEditingPinned(storage::PinnedWindowRecord record,
         result.error = loadError();
         return result;
     }
-    if (style->region || style->cornerRadius != 0 || style->shadowWidth != 0)
+    if (style->region || style->cornerRadius != 0 || style->effectWidth() != 0)
         result.resultStyle = *style;
     if (record.sourceKind == storage::PinnedWindowSourceKind::ClipboardText) {
         ScreenshotClipboardOriginalContent original;
@@ -170,8 +170,7 @@ ScreenshotExportSource imageEditingExportSource(const ImageEditingSource& source
     auto outputStyle = source.resultStyle.value_or(ScreenshotResultStyle{});
     const qreal scale =
         source.canvasRect.width() > 0 ? source.image.width() / source.canvasRect.width() : 1.0;
-    outputStyle.cornerRadius = qRound(outputStyle.cornerRadius * scale);
-    outputStyle.shadowWidth = qRound(outputStyle.shadowWidth * scale);
+    outputStyle = ScreenshotResultCompositor::scaledStyle(outputStyle, scale);
     ScreenshotPinnedViewportExportSource viewport{source.canvasSession, source.image,
                                                   source.canvasRect,    source.image.size(),
                                                   outputStyle,          source.smartErase};

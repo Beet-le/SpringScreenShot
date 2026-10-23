@@ -599,7 +599,7 @@ pub fn render_bundle_range_with_speed(
         let hold_composition = !source_changed
             && previous_effects_idle
             && previous_effect_identity == Some(effect_identity)
-            && reusable_effect_frame(&effects, frame.timestamp_ms);
+            && reusable_effect_frame(&mut effects, frame.timestamp_ms);
         if hold_composition {
             #[cfg(feature = "bench-timing")]
             {
@@ -621,7 +621,7 @@ pub fn render_bundle_range_with_speed(
                 .map_err(RecordingExportError::Export)?;
             blend_hdr_tiles(rgb, &tiles);
             let converted = hdr_encoded.as_mut().expect("HDR encode frame");
-            let reusable = reusable_effect_frame(&effects, frame.timestamp_ms);
+            let reusable = reusable_effect_frame(&mut effects, frame.timestamp_ms);
             #[cfg(feature = "bench-timing")]
             if reusable && playback_unchanged && hdr_valid {
                 hdr_reuse_checks += 1;
@@ -664,7 +664,7 @@ pub fn render_bundle_range_with_speed(
             // Known changing animations cannot reuse prepared pixels. For
             // other slots, exact complete-pixel equality remains authoritative.
             encoder.set_frame_reuse(
-                if playback_unchanged && reusable_effect_frame(&effects, frame.timestamp_ms) {
+                if playback_unchanged && reusable_effect_frame(&mut effects, frame.timestamp_ms) {
                     if fixed_rate_retime {
                         crate::streaming::VideoFrameReuse::ReuseConversion
                     } else {
@@ -687,7 +687,7 @@ pub fn render_bundle_range_with_speed(
             }
         }
         previous_effect_identity = Some(effect_identity);
-        previous_effects_idle = reusable_effect_frame(&effects, frame.timestamp_ms);
+        previous_effects_idle = reusable_effect_frame(&mut effects, frame.timestamp_ms);
         #[cfg(feature = "bench-timing")]
         let stage_started = Instant::now();
         audio.emit_until(
@@ -801,7 +801,7 @@ fn deferred_conversion_threads(
     }
 }
 
-fn reusable_effect_frame(effects: &RecordedEffects, at_ms: u64) -> bool {
+fn reusable_effect_frame(effects: &mut RecordedEffects, at_ms: u64) -> bool {
     !effects.needs_frame(at_ms)
 }
 

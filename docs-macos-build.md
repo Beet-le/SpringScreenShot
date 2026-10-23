@@ -86,8 +86,10 @@ ls "$tap_dir/Casks/snow-shot.rb"
 ```
 
 Finish recordings and quit Snow Shot before upgrading or uninstalling. Homebrew
-owns the final application placement and removal; the cask's preflight verifies
-and locally signs a staged copy. The archive includes the DMG, its checksum, and
+owns the final application placement and removal; the cask's vendor installer
+verifies and locally signs a staged copy before the app artifact runs. Unlike
+declarative flight steps, it preserves the installing account's HOME and Keychain
+access. The archive includes the DMG, its checksum, and
 the installer from the matching release source. Its SHA-256 is pinned in the tap.
 Installation never downloads a newer installer or follows the website's mutable
 latest-package URL.

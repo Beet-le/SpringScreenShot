@@ -14,10 +14,12 @@
 #include <QApplication>
 #include <QImage>
 #include <QInputMethodEvent>
+#include <QInputMethodQueryEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QWheelEvent>
@@ -900,6 +902,106 @@ void deleteKeyRemovesEditedText() {
     }
 }
 
+void enabledDeleteKeepsEditedTextAndItsOwner() {
+    const auto text = [](SnowCanvasWidget& canvas) {
+        QInputMethodQueryEvent query(Qt::ImSurroundingText);
+        QApplication::sendEvent(&canvas, &query);
+        return query.value(Qt::ImSurroundingText).toString();
+    };
+    const auto standardKey = [](SnowCanvasWidget& canvas, QKeySequence::StandardKey command) {
+        const auto shortcut = QKeySequence(command)[0];
+        key(canvas, shortcut.key(), shortcut.keyboardModifiers());
+    };
+    for (const bool attached : {false, true}) {
+        for (const bool existing : {false, true}) {
+            SnowCanvasRuntime runtime;
+            SnowCanvasWidget canvas(runtime);
+            require(!canvas.deleteTextAfterCursor(), "forward Delete defaults to disabled");
+            canvas.setDeleteTextAfterCursor(true);
+            canvas.resize(600, 360);
+            canvas.show();
+            QApplication::processEvents();
+            if (attached) {
+                createArrow(canvas, runtime);
+                openLabel(canvas);
+            } else {
+                require(canvas.setCanvasTool(SnowCanvasTool::Text), "activate text tool");
+                mouse(canvas, QEvent::MouseButtonPress, {280, 180}, Qt::LeftButton, Qt::LeftButton);
+                mouse(canvas, QEvent::MouseButtonRelease, {280, 180}, Qt::LeftButton, Qt::NoButton);
+            }
+            key(canvas, Qt::Key_A, Qt::NoModifier, QStringLiteral("abc"));
+            if (existing) {
+                key(canvas, Qt::Key_Return, Qt::ControlModifier);
+                if (attached) {
+                    openLabel(canvas);
+                } else {
+                    mouse(canvas, QEvent::MouseButtonPress, {280, 180}, Qt::LeftButton,
+                          Qt::LeftButton);
+                    mouse(canvas, QEvent::MouseButtonRelease, {280, 180}, Qt::LeftButton,
+                          Qt::NoButton);
+                }
+            }
+            const QByteArray history = runtime.serializeDocumentHistory();
+            canvas.setDeleteTextAfterCursor(false);
+            canvas.setDeleteTextAfterCursor(true);
+            require(canvas.hasActiveTextEditing() && runtime.serializeDocumentHistory() == history,
+                    "changing Delete preferences preserves the active draft and document history");
+            key(canvas, Qt::Key_Home);
+            key(canvas, Qt::Key_Right);
+            key(canvas, Qt::Key_Delete);
+            require(canvas.hasActiveTextEditing() &&
+                        canvas.testAttribute(Qt::WA_InputMethodEnabled),
+                    "forward Delete retains the editor and input methods");
+            require(text(canvas) == QStringLiteral("ac"),
+                    "forward Delete removes only the next character");
+            standardKey(canvas, QKeySequence::Undo);
+            require(text(canvas) == QStringLiteral("abc"), "draft undo restores forward deletion");
+            standardKey(canvas, QKeySequence::Redo);
+            require(text(canvas) == QStringLiteral("ac"), "draft redo reapplies forward deletion");
+            key(canvas, Qt::Key_End);
+            key(canvas, Qt::Key_Delete);
+            require(canvas.hasActiveTextEditing(), "Delete at the end retains the element");
+            key(canvas, Qt::Key_A, Qt::ControlModifier);
+            key(canvas, Qt::Key_Delete);
+            key(canvas, Qt::Key_Delete);
+            require(canvas.hasActiveTextEditing() && text(canvas).isEmpty(),
+                    "deleting selected text and the empty draft retains editing");
+            standardKey(canvas, QKeySequence::Undo);
+            require(text(canvas) == QStringLiteral("ac"), "undo restores the deleted selection");
+            key(canvas, Qt::Key_Return, Qt::ControlModifier);
+            require(payload(runtime, QStringLiteral("Text")).value(QStringLiteral("text")) ==
+                        QStringLiteral("ac"),
+                    "commit persists the edited text");
+            if (existing) {
+                require(
+                    canvas.undo() &&
+                        payload(runtime, QStringLiteral("Text")).value(QStringLiteral("text")) ==
+                            QStringLiteral("abc"),
+                    "document undo restores text before the edit");
+                require(canvas.redo(), "document redo reapplies the committed text edit");
+            }
+            if (attached) {
+                require(records(runtime, QStringLiteral("Arrow")).size() == 1,
+                        "editing a label preserves its arrow");
+            }
+            // With no active editor, Delete still follows normal element selection semantics.
+            require(canvas.setCanvasTool(SnowCanvasTool::Select), "activate element selection");
+            const auto id = records(runtime, QStringLiteral("Text"))[0]
+                                .toObject()
+                                .value(QStringLiteral("id"))
+                                .toObject();
+            SnowCanvasRuntimeEditor editor(runtime);
+            require(
+                editor.select(static_cast<quint32>(id.value(QStringLiteral("index")).toInt()),
+                              static_cast<quint32>(id.value(QStringLiteral("generation")).toInt())),
+                "select text before testing element deletion");
+            key(canvas, Qt::Key_Delete);
+            require(records(runtime, QStringLiteral("Text")).isEmpty(),
+                    "Delete outside text editing still deletes selected elements");
+        }
+    }
+}
+
 void commandResolverPreservesTextAndEngineCommands() {
     SnowCanvasRuntime runtime;
     SnowCanvasWidget canvas(runtime);
@@ -1372,6 +1474,11 @@ int main(int argc, char** argv) {
     }
 #endif
     QApplication app(argc, argv);
+    if (app.arguments().contains(QStringLiteral("--delete-text-only"))) {
+        deleteKeyRemovesEditedText();
+        enabledDeleteKeepsEditedTextAndItsOwner();
+        return 0;
+    }
     retainedTextLayoutsPreservePixelsAndRespectInvalidationAndBudget();
     naturalLayoutCacheTracksTypographyAndHasABoundedBudget();
     documentCleanupReleasesTextDraftHistoryStorage();
@@ -1387,6 +1494,7 @@ int main(int argc, char** argv) {
     indentedTriangleStyleRoundTrips();
     escapeKeyCommitsEditedText();
     deleteKeyRemovesEditedText();
+    enabledDeleteKeepsEditedTextAndItsOwner();
     commandResolverPreservesTextAndEngineCommands();
     widgetLifecycle();
     arrowLabelWheelChangesFontSizeWhileSelecting();

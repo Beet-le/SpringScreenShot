@@ -445,6 +445,10 @@ bool encodeDraft(const CaptureHistoryDraft& draft, qint64 quota, EncodedDraft* r
         draft.selection.rectangle.isEmpty() || !draft.selection.shadowColor.isValid() ||
         draft.selection.cornerRadius < 0 || draft.selection.cornerRadius > 256 ||
         draft.selection.shadowWidth < 0 || draft.selection.shadowWidth > 64 ||
+        draft.selection.borderWidth < 0 || draft.selection.borderWidth > 64 ||
+        !draft.selection.borderColor.isValid() ||
+        (draft.selection.borderType != ScreenshotSelectionBorderType::Shadow &&
+         draft.selection.borderType != ScreenshotSelectionBorderType::Border) ||
         !validCanvas(draft.canvasHistory) || draft.displays.isEmpty() ||
         draft.displays.size() > kMaximumDisplays || sourceText(draft.source).isEmpty()) {
         return false;

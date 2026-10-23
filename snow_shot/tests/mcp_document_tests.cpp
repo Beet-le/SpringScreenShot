@@ -560,6 +560,81 @@ void documentReservations(const QString& directory) {
         service.shutdown();
     }
 }
+void documentSelectionStylesPreserveCanvasUnits() {
+    McpJobRegistry jobs;
+    McpDocumentService::Ports ports;
+    ports.jobs = &jobs;
+    ports.resolveSource = [](const ScreenshotMcpRequest&, auto done, auto budget) {
+        require(budget(200 * 120 * 4), "reserve border document pixels");
+        McpDocumentService::Source source;
+        source.image = QImage(200, 120, QImage::Format_ARGB32_Premultiplied);
+        source.image.fill(Qt::blue);
+        done(std::move(source), {});
+    };
+    McpDocumentService service(std::move(ports));
+    QString id;
+    quint64 sequence = 0, revision = 1;
+    const auto call = [&](const QString& method, QJsonObject params = {}) {
+        if (!id.isEmpty())
+            params.insert(QStringLiteral("document_id"), id);
+        ScreenshotMcpRequest request;
+        request.connectionId = 1;
+        request.requestId = QString::number(++sequence);
+        request.idempotencyKey = request.requestId;
+        request.expectedRevision = revision;
+        request.method = QStringLiteral("snow_shot_document_") + method;
+        request.params = std::move(params);
+        std::optional<ScreenshotMcpResponse> response;
+        service.request(request, [&](auto value) { response = std::move(value); });
+        QElapsedTimer timer;
+        timer.start();
+        while (!response && timer.elapsed() < 5000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        require(response.has_value(), "selection style document request completes");
+        if (response->ok && response->revision)
+            revision = *response->revision;
+        return *response;
+    };
+    const auto opened =
+        call(QStringLiteral("open"), {{QStringLiteral("source"), QStringLiteral("clipboard")}});
+    require(opened.ok, "open border document");
+    id = opened.result.value(QStringLiteral("document_id")).toString();
+    const auto changed = call(QStringLiteral("set_selection_style"),
+                              {{QStringLiteral("border_type"), QStringLiteral("border")},
+                               {QStringLiteral("border_width"), 48},
+                               {QStringLiteral("border_color"), QJsonArray{255, 0, 0, 255}},
+                               {QStringLiteral("shadow_width"), 9}});
+    require(changed.ok && changed.revision == 2 &&
+                changed.result.value(QStringLiteral("selection_style"))
+                        .toObject()
+                        .value(QStringLiteral("border_width")) == 48,
+            "document state reports editable canvas-unit border settings");
+    const auto rendered = call(QStringLiteral("render"), {{QStringLiteral("scale"), 2}});
+    const auto pixels = QImage::fromData(rendered.attachment);
+    require(rendered.ok && pixels.size() == QSize(592, 432) &&
+                pixels.pixelColor(0, 200) == QColor(Qt::red) &&
+                pixels.pixelColor(96, 200) == QColor(Qt::blue),
+            "document export scales a 48-unit border to 96 pixels without capping it");
+    require(!call(QStringLiteral("set_selection_style"),
+                  {{QStringLiteral("border_type"), QStringLiteral("outline")},
+                   {QStringLiteral("border_width"), 2}})
+                 .ok,
+            "invalid document styles fail atomically");
+    const auto unchanged = call(QStringLiteral("render"), {{QStringLiteral("scale"), 2}});
+    require(unchanged.ok && unchanged.revision == 2 && unchanged.attachment == rendered.attachment,
+            "a rejected patch preserves document revision and cached pixels");
+    require(call(QStringLiteral("set_selection_style"),
+                 {{QStringLiteral("border_type"), QStringLiteral("shadow")}})
+                .ok,
+            "switch document back to its saved shadow settings");
+    const auto shadow = call(QStringLiteral("render"), {{QStringLiteral("scale"), 2}});
+    require(shadow.ok && QImage::fromData(shadow.attachment).size() == QSize(436, 276),
+            "effect switching invalidates rendered pixels and restores the independent shadow");
+    service.shutdown();
+}
+
 void compactedDocumentsKeepEditingCoordinates(const QString& directory, int opacity = 0,
                                               bool annotations = false) {
     FixtureOcr ocr;
@@ -3244,6 +3319,11 @@ int main(int argc, char** argv) {
                 .success,
             "isolated application storage");
     const qsizetype serveIndex = application.arguments().indexOf(QStringLiteral("--serve"));
+    if (application.arguments().contains(QStringLiteral("--selection-style-only"))) {
+        documentSelectionStylesPreserveCanvasUnits();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (serveIndex >= 0 && application.arguments().size() > serveIndex + 1) {
         const int result = serve(application, application.arguments().at(serveIndex + 1));
         snow_shot::storage::ApplicationStorage::instance().shutdown();
@@ -3357,6 +3437,7 @@ int main(int argc, char** argv) {
     documentReplayCallbacksPreserveReusedRequestIds(true);
     documentMemoryActivity();
     documents(temporary.path());
+    documentSelectionStylesPreserveCanvasUnits();
     documentWorkflows();
     recognitionModelDocuments(temporary.path());
     recognitionServiceTeardown();

@@ -6,7 +6,7 @@
 #include "../recording/recordingaudiogainpopover.h"
 #include "snow_shot/presentation/shortcutdisplaytext.h"
 
-#include "snow_shot/presentation/editionfeatures.h"
+#include "snow_shot/app/editionfeatures.h"
 
 #include "screenshottoolbarperfinstrumentation.h"
 #include "../recording/screenrecordingperfinstrumentation.h"
@@ -173,6 +173,7 @@ constexpr int TOOLBAR_ITEM_SPACING = 8;
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Merge cells"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Split cells"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Reset"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Open spreadsheet file"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Formatting"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Punctuation"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Target Language"),
@@ -1605,6 +1606,8 @@ bool ScreenshotToolPalette::setSecondaryToolbarVisibility(bool actionToolbarVisi
          m_jumpToTranslationPageButton->isHidden() ==
              !(ocrVisible && m_jumpToTranslationPageVisible)) &&
         (m_tableMergeButton == nullptr || m_tableMergeButton->isHidden() == !tableVisible) &&
+        (m_openSpreadsheetFileButton == nullptr ||
+         m_openSpreadsheetFileButton->isHidden() == !tableVisible) &&
         (m_recognitionModelSelect == nullptr ||
          m_recognitionModelSelect->isHidden() == !modelVisible) &&
         (m_scrollingRecognitionControls == nullptr ||
@@ -1666,6 +1669,8 @@ bool ScreenshotToolPalette::setSecondaryToolbarVisibility(bool actionToolbarVisi
     if (m_tableResetButton != nullptr) {
         m_tableResetButton->setVisible(tableVisible);
     }
+    if (m_openSpreadsheetFileButton != nullptr)
+        m_openSpreadsheetFileButton->setVisible(tableVisible);
     if (m_recognitionModelSelect != nullptr) {
         m_recognitionModelSelect->setVisible(modelVisible);
     }
@@ -1690,7 +1695,9 @@ bool ScreenshotToolPalette::setSecondaryToolbarVisibility(bool actionToolbarVisi
     setSpacersVisible(m_tableActionSpacers, tableVisible);
     for (QFrame* separator : std::as_const(m_styleSeparatorFrames)) {
         if (separator != nullptr && separator->parentWidget() == m_selectActionPanel) {
-            separator->setVisible(!recognitionActionVisible);
+            separator->setVisible(separator == m_openSpreadsheetFileSeparator
+                                      ? tableVisible
+                                      : !recognitionActionVisible);
         }
     }
     if (m_selectActionLayout != nullptr) {
@@ -1903,7 +1910,7 @@ void ScreenshotToolPalette::setActiveTool(Tool tool) {
     m_angleWheelSteps.reset();
     if (m_recordTrimPanel)
         return;
-    if (!snow_shot::presentation::editionActionToolAvailable(actionToolItemId(tool)))
+    if (!snow_shot::app::editionActionToolAvailable(actionToolItemId(tool)))
         return;
     SNOW_SHOT_TOOLBAR_PERF_SCOPE("palette.set_active_tool");
     if (m_releasingSecondaryResources) {
@@ -2511,8 +2518,15 @@ void ScreenshotToolPalette::setRecordingRecordMouseClicks(bool value) {
     m_recordingRecordMouseClicks = value;
     refreshRecordingMouseOptions();
 }
+void ScreenshotToolPalette::setRecordingRecordMouseScrolling(bool value) {
+    m_recordingRecordMouseScrolling = value;
+    refreshRecordingMouseOptions();
+}
 bool ScreenshotToolPalette::recordingRecordMouseClicks() const {
     return m_recordingRecordMouseClicks;
+}
+bool ScreenshotToolPalette::recordingRecordMouseScrolling() const {
+    return m_recordingRecordMouseScrolling;
 }
 void ScreenshotToolPalette::setRecordingMouseHighlightColor(const QColor& value) {
     m_recordingMouseHighlightColor = value.isValid() ? value : QColor(255, 255, 0, 128);
@@ -2571,18 +2585,23 @@ QColor ScreenshotToolPalette::recordingProgressBarColor() const {
 }
 
 void ScreenshotToolPalette::refreshRecordingMouseOptions() {
-    if (!m_recordHighlightCheckbox || !m_recordClicksCheckbox) {
+    if (!m_recordHighlightCheckbox || !m_recordClicksCheckbox || !m_recordScrollingCheckbox) {
         return;
     }
     const QSignalBlocker highlightBlocker(m_recordHighlightCheckbox);
     const QSignalBlocker clicksBlocker(m_recordClicksCheckbox);
+    const QSignalBlocker scrollingBlocker(m_recordScrollingCheckbox);
     m_recordHighlightCheckbox->setText(tr("Mouse highlight"));
     m_recordClicksCheckbox->setText(tr("Record mouse clicks"));
+    m_recordScrollingCheckbox->setText(tr("Record mouse scrolling"));
     m_recordHighlightCheckbox->setAccessibleName(tr("Mouse highlight"));
     m_recordClicksCheckbox->setAccessibleName(tr("Record mouse clicks"));
+    m_recordScrollingCheckbox->setAccessibleName(tr("Record mouse scrolling"));
     m_recordHighlightCheckbox->setChecked(m_recordingMouseHighlightEnabled);
     m_recordClicksCheckbox->setChecked(m_recordingRecordMouseClicks);
-    for (auto* checkbox : {m_recordHighlightCheckbox.data(), m_recordClicksCheckbox.data()}) {
+    m_recordScrollingCheckbox->setChecked(m_recordingRecordMouseScrolling);
+    for (auto* checkbox : {m_recordHighlightCheckbox.data(), m_recordClicksCheckbox.data(),
+                           m_recordScrollingCheckbox.data()}) {
         auto tokens = adqt::widgets::AdCheckbox::ComponentTokens{};
         tokens.metrics.checkboxSize = scaledMetric(16);
         tokens.metrics.labelPaddingInlineStart = scaledMetric(8);
@@ -2866,6 +2885,8 @@ void ScreenshotToolPalette::updateScrollingRecognitionButtons() {
 void ScreenshotToolPalette::setTableBusy(bool busy) {
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     m_tableBusy = busy;
+    if (m_openSpreadsheetFileButton != nullptr)
+        m_openSpreadsheetFileButton->setEnabled(m_tableEditingAvailable && !busy);
     updateTableQrBusy();
 #else
     Q_UNUSED(busy);
@@ -2914,6 +2935,8 @@ void ScreenshotToolPalette::setTableEditingState(bool available, bool canUndo, b
     m_tableCanMerge = canMerge;
     m_tableCanSplit = canSplit;
     m_tableCanReset = canReset;
+    if (m_openSpreadsheetFileButton != nullptr)
+        m_openSpreadsheetFileButton->setEnabled(available && !m_tableBusy);
     if (m_tableMergeButton != nullptr) {
         m_tableMergeButton->setEnabled(available && canMerge);
     }
@@ -4573,6 +4596,12 @@ void ScreenshotToolPalette::setGlobalCanvasClickThrough(bool enabled) {
     }
 }
 
+void ScreenshotToolPalette::setGlobalCanvasLaserPointer(bool enabled) {
+    if (m_globalCanvasLaserPointerButton != nullptr) {
+        m_globalCanvasLaserPointerButton->setChecked(enabled);
+    }
+}
+
 void ScreenshotToolPalette::refreshShortcutTooltips() {
     if (m_globalCanvasExitButton != nullptr) {
         const QString title = tr("Exit");
@@ -5389,7 +5418,7 @@ adqt::widgets::AdButton* ScreenshotToolPalette::actionToolEntryButton(const QStr
 }
 
 bool ScreenshotToolPalette::actionToolAvailable(const QString& itemId) const {
-    if (!snow_shot::presentation::editionActionToolAvailable(itemId))
+    if (!snow_shot::app::editionActionToolAvailable(itemId))
         return false;
     if (itemId == QStringLiteral("barcode-recognition")) {
         return (m_options.showQrTool && snow_shot::app::edition::qrRecognition);
@@ -6059,6 +6088,7 @@ void ScreenshotToolPalette::applyMainToolbarLayout(bool notify) {
             : nullptr,
         configurableResultActions ? nullptr : m_copyButton,
         configurableConfirm ? nullptr : m_confirmButton,
+        m_globalCanvasLaserPointerButton,
         m_globalCanvasClickThroughButton,
         m_globalCanvasExitButton,
     };
@@ -6713,6 +6743,20 @@ void ScreenshotToolPalette::addMainActionButtons(const Options& options, QBoxLay
     };
 
     if (options.showGlobalCanvasActions) {
+        m_globalCanvasLaserPointerButton =
+            addToolButton(QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Laser pointer"),
+                          custom_outlined_icons::LaserPointer());
+        m_globalCanvasLaserPointerButton->setObjectName(
+            QStringLiteral("globalCanvasLaserPointerButton"));
+        m_globalCanvasLaserPointerButton->setCheckable(true);
+        m_globalCanvasLaserPointerButton->setCheckedUsesActiveStyle(false);
+        connect(m_globalCanvasLaserPointerButton, &adqt::widgets::AdButton::toggled, this,
+                [this](bool enabled) {
+                    setScreenshotToolPaletteButtonActive(m_globalCanvasLaserPointerButton, enabled);
+                });
+        addButton(m_globalCanvasLaserPointerButton);
+        connect(m_globalCanvasLaserPointerButton, &adqt::widgets::AdButton::clicked, this,
+                &ScreenshotToolPalette::globalCanvasLaserPointerRequested);
         m_globalCanvasClickThroughButton =
             addToolButton("Click-through", custom_outlined_icons::Mouse());
         m_globalCanvasClickThroughButton->setObjectName(
@@ -7176,12 +7220,16 @@ void ScreenshotToolPalette::createRecordingExportSettingsToolbar() {
             options->setSpacing(scaledMetric(8));
             m_recordHighlightCheckbox = new adqt::widgets::AdCheckbox(content);
             m_recordClicksCheckbox = new adqt::widgets::AdCheckbox(content);
+            m_recordScrollingCheckbox = new adqt::widgets::AdCheckbox(content);
             m_recordHighlightCheckbox->setObjectName(
                 QStringLiteral("screenRecordingMouseHighlight"));
             m_recordClicksCheckbox->setObjectName(
                 QStringLiteral("screenRecordingRecordMouseClicks"));
+            m_recordScrollingCheckbox->setObjectName(
+                QStringLiteral("screenRecordingRecordMouseScrolling"));
             options->addWidget(m_recordHighlightCheckbox);
             options->addWidget(m_recordClicksCheckbox);
+            options->addWidget(m_recordScrollingCheckbox);
             refreshRecordingMouseOptions();
             connect(m_recordHighlightCheckbox, &QAbstractButton::toggled, this, [this](bool value) {
                 setRecordingMouseHighlightEnabled(value);
@@ -7190,6 +7238,10 @@ void ScreenshotToolPalette::createRecordingExportSettingsToolbar() {
             connect(m_recordClicksCheckbox, &QAbstractButton::toggled, this, [this](bool value) {
                 setRecordingRecordMouseClicks(value);
                 emit recordingRecordMouseClicksChanged(value);
+            });
+            connect(m_recordScrollingCheckbox, &QAbstractButton::toggled, this, [this](bool value) {
+                setRecordingRecordMouseScrolling(value);
+                emit recordingRecordMouseScrollingChanged(value);
             });
             return content;
         },
@@ -7901,6 +7953,8 @@ void ScreenshotToolPalette::clearSecondaryResourceBindings() {
     m_tableMergeButton = nullptr;
     m_tableSplitButton = nullptr;
     m_tableResetButton = nullptr;
+    m_openSpreadsheetFileButton = nullptr;
+    m_openSpreadsheetFileSeparator = nullptr;
     m_recognitionModelSelect = nullptr;
     m_recognitionModelSpacer = nullptr;
     m_textFormattingSelect = nullptr;
@@ -9003,6 +9057,19 @@ void ScreenshotToolPalette::createTableRecognitionActionFamily() {
             .select;
     m_recognitionModelSelect->setSearchFilterFields({QStringLiteral("label")});
     m_selectActionLayout->addWidget(m_recognitionModelSelect);
+    m_tableActionSpacers.push_back(
+        addStyleToolbarSpacing(m_selectActionLayout, STYLE_GROUP_SPACING * 2));
+    m_openSpreadsheetFileSeparator = createStyleToolbarSeparator(m_selectActionPanel);
+    m_openSpreadsheetFileSeparator->setObjectName(
+        QStringLiteral("screenshotOpenSpreadsheetFileSeparator"));
+    m_selectActionLayout->addWidget(m_openSpreadsheetFileSeparator);
+    m_tableActionSpacers.push_back(
+        addStyleToolbarSpacing(m_selectActionLayout, STYLE_GROUP_SPACING * 2));
+    m_openSpreadsheetFileButton =
+        add("Open spreadsheet file", custom_outlined_icons::OpenSpreadsheetFile(),
+            QStringLiteral("screenshotOpenSpreadsheetFileButton"));
+    connect(m_openSpreadsheetFileButton, &adqt::widgets::AdButton::clicked, this,
+            &ScreenshotToolPalette::openSpreadsheetFileRequested);
     connect(m_recognitionModelSelect, &adqt::widgets::AdSelect::currentValueChanged, this,
             [this](const QVariant& value) {
                 if (m_replayingMaterializedState ||

@@ -24,6 +24,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/update/startupupdate.h"
 #include "snow_shot/diagnostics/diagnostics.h"
+#include "snow_shot/diagnostics/ffmpegdiagnostics.h"
 #include "diagnosticsbridge.h"
 #include "startupregistrationreport.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -78,6 +79,7 @@ extern "C" void snow_diagnostics_install_panic_hook(void (*callback)(const unsig
 
 #ifdef SNOW_SHOT_CONTROLLER_LIFETIME_TESTS
 int runScreenshotControllerLifetimeTests(int argc, char** argv);
+int runScreenshotControllerClipboardTests(int argc, char** argv);
 #endif
 
 namespace {
@@ -191,6 +193,9 @@ int main(int argc, char* argv[]) {
 #ifdef SNOW_SHOT_CONTROLLER_LIFETIME_TESTS
     if (argc == 2 && QString::fromLocal8Bit(argv[1]) == u"--controller-lifetime-tests") {
         return runScreenshotControllerLifetimeTests(argc, argv);
+    }
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == u"--clipboard-pin-tests") {
+        return runScreenshotControllerClipboardTests(argc, argv);
     }
 #endif
 #ifdef SNOW_SHOT_MCP_TEST_FIXTURE
@@ -521,6 +526,7 @@ int main(int argc, char* argv[]) {
     auto& diagnostics = snow_shot::diagnostics::DiagnosticsService::instance();
     struct DiagnosticsLifetime {
         ~DiagnosticsLifetime() {
+            snow_shot::diagnostics::stopFfmpegDiagnostics();
             snow_shot::diagnostics::DiagnosticsService::instance().shutdown();
         }
     } diagnosticsLifetime;
@@ -543,6 +549,7 @@ int main(int argc, char* argv[]) {
     diagnosticsOptions.buildConfiguration = QStringLiteral(SNOW_DIAGNOSTICS_BUILD);
     static_cast<void>(diagnostics.initialize(std::move(diagnosticsOptions)));
     snow_diagnostics_install_panic_hook(snow_diag_panic);
+    snow_shot::diagnostics::installFfmpegDiagnostics();
 
     // Capture overlays embed native window-type children (the floating tool
     // palette) alongside alien, click-through children (selection toolbar,

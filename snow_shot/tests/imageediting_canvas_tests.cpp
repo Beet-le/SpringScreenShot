@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "snow_shot/presentation/imageeditingcanvas.h"
+#include "canvas_text_editing_preferences_test_support.h"
 
 #include <QApplication>
 #include <QJsonArray>
@@ -584,4 +585,12 @@ void runImageEditingCanvasTests() {
     documentPixelsRemainClippedWhileControlsAreVisible();
     blankOutsideGesturesCannotCreateAnnotations();
     cropPreviewsRepaintOnlyTheirDamageAndCancelCleanly();
+}
+
+void runImageEditingTextPreferencesTests() {
+    canvas_text_editing_preferences_test::exercise([](auto verify) {
+        snow_shot::presentation::ImageEditingDocument document;
+        snow_shot::presentation::ImageEditingCanvas canvas(document);
+        verify(canvas);
+    });
 }

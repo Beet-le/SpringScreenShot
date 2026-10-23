@@ -12,6 +12,9 @@ pub enum WebcamShape {
 pub struct WebcamStyle {
     pub size: u32,
     pub shape: WebcamShape,
+    /// Preferred distances from the recording region's left and bottom edges.
+    pub offset_left: u32,
+    pub offset_bottom: u32,
 }
 
 impl Default for WebcamStyle {
@@ -19,6 +22,8 @@ impl Default for WebcamStyle {
         Self {
             size: 150,
             shape: WebcamShape::Square,
+            offset_left: 48,
+            offset_bottom: 48,
         }
     }
 }
@@ -34,8 +39,8 @@ impl WebcamStyle {
     /// Reduce the inset before reducing the image, retaining the complete square/circle.
     pub fn placement(self, output: (u32, u32)) -> (u32, u32, u32) {
         let side = self.size.min(output.0).min(output.1);
-        let x = 48.min(output.0.saturating_sub(side));
-        let bottom = 48.min(output.1.saturating_sub(side));
+        let x = self.offset_left.min(output.0.saturating_sub(side));
+        let bottom = self.offset_bottom.min(output.1.saturating_sub(side));
         (x, output.1.saturating_sub(bottom + side), side)
     }
 }
@@ -70,7 +75,22 @@ impl WebcamMetadata {
     }
 }
 
-const MAGIC: &[u8; 9] = b"SNOWCAM\0\x01";
+const MAGIC: &[u8; 9] = b"SNOWCAM\0\x02";
+
+// Bincode is positional: decode the original layout explicitly instead of adding
+// serde defaults, which cannot distinguish new fields from the old fps/timeline.
+#[derive(Serialize, Deserialize)]
+struct WebcamStyleV1 {
+    size: u32,
+    shape: WebcamShape,
+}
+#[derive(Serialize, Deserialize)]
+struct WebcamMetadataV1 {
+    style: WebcamStyleV1,
+    fps: u32,
+    duration_ms: u64,
+    visibility: Vec<(u64, bool)>,
+}
 pub fn write_metadata(path: &std::path::Path, metadata: &WebcamMetadata) -> crate::Result<()> {
     use std::io::Write;
     metadata
@@ -87,16 +107,33 @@ pub fn read_metadata(mut input: impl std::io::Read) -> crate::Result<WebcamMetad
     use bincode::Options;
     let mut magic = [0; MAGIC.len()];
     input.read_exact(&mut magic)?;
-    if &magic != MAGIC {
+    if magic[..8] != MAGIC[..8] || !matches!(magic[8], 1 | 2) {
         return Err(crate::RecordingModelError::Decode(
             "unsupported webcam metadata".into(),
         ));
     }
-    let metadata: WebcamMetadata = bincode::DefaultOptions::new()
+    let options = bincode::DefaultOptions::new()
         .with_fixint_encoding()
-        .with_limit(4 * 1024 * 1024)
-        .deserialize_from(input)
-        .map_err(|e| crate::RecordingModelError::Decode(e.to_string()))?;
+        .with_limit(4 * 1024 * 1024);
+    let metadata: WebcamMetadata = if magic[8] == 1 {
+        let old: WebcamMetadataV1 = options
+            .deserialize_from(input)
+            .map_err(|e| crate::RecordingModelError::Decode(e.to_string()))?;
+        WebcamMetadata {
+            style: WebcamStyle {
+                size: old.style.size,
+                shape: old.style.shape,
+                ..Default::default()
+            },
+            fps: old.fps,
+            duration_ms: old.duration_ms,
+            visibility: old.visibility,
+        }
+    } else {
+        options
+            .deserialize_from(input)
+            .map_err(|e| crate::RecordingModelError::Decode(e.to_string()))?
+    };
     metadata
         .validate()
         .map_err(crate::RecordingModelError::Decode)?;
@@ -107,13 +144,70 @@ pub fn read_metadata(mut input: impl std::io::Read) -> crate::Result<WebcamMetad
 mod tests {
     use super::*;
     #[test]
+    fn webcam_offsets_fit_without_changing_the_preferred_layout() {
+        let style = WebcamStyle {
+            offset_left: 600,
+            offset_bottom: 400,
+            ..Default::default()
+        };
+        assert_eq!(style.placement((1000, 800)), (600, 250, 150));
+        assert_eq!(style.placement((700, 500)), (550, 0, 150));
+        assert_eq!(style.placement((100, 80)), (20, 0, 80));
+        assert_eq!(style.placement((1000, 800)), (600, 250, 150));
+        for output in [(0, 0), (1, 1), (160, 170), (800, 600)] {
+            for offset in [0, 48, 900, u32::MAX] {
+                let style = WebcamStyle {
+                    offset_left: offset,
+                    offset_bottom: offset,
+                    ..style
+                };
+                let (x, y, side) = style.placement(output);
+                assert!(x + side <= output.0 && y + side <= output.1);
+            }
+        }
+    }
+
+    #[test]
+    fn webcam_metadata_reads_v1_and_round_trips_v2_offsets() {
+        let old = WebcamMetadataV1 {
+            style: WebcamStyleV1 {
+                size: 220,
+                shape: WebcamShape::Circle,
+            },
+            fps: 30,
+            duration_ms: 1000,
+            visibility: vec![(0, true)],
+        };
+        let mut bytes = b"SNOWCAM\0\x01".to_vec();
+        bincode::serialize_into(&mut bytes, &old).unwrap();
+        let mut metadata = read_metadata(bytes.as_slice()).unwrap();
+        assert_eq!(
+            (metadata.style.offset_left, metadata.style.offset_bottom),
+            (48, 48)
+        );
+        assert_eq!(metadata.style.size, 220);
+        metadata.style.offset_left = 370;
+        metadata.style.offset_bottom = 240;
+        let mut current = MAGIC.to_vec();
+        bincode::serialize_into(&mut current, &metadata).unwrap();
+        let decoded = read_metadata(current.as_slice()).unwrap();
+        assert_eq!(decoded.style, metadata.style);
+        for bytes in [&bytes, &current] {
+            for len in 0..bytes.len() {
+                assert!(read_metadata(&bytes[..len]).is_err());
+            }
+        }
+    }
+    #[test]
     fn webcam_metadata_is_versioned_validated_and_preserves_visibility_boundaries() {
         let style = WebcamStyle::default();
         assert_eq!(
             style,
             WebcamStyle {
                 size: 150,
-                shape: WebcamShape::Square
+                shape: WebcamShape::Square,
+                offset_left: 48,
+                offset_bottom: 48,
             }
         );
         assert_eq!(style.placement((800, 600)), (48, 402, 150));
@@ -139,7 +233,7 @@ mod tests {
         ] {
             assert_eq!(restored.visible_at(at), expected);
         }
-        bytes[8] = 2;
+        bytes[8] = 3;
         assert!(read_metadata(bytes.as_slice()).is_err());
         metadata.visibility.push((800, false));
         assert!(metadata.validate().is_err());

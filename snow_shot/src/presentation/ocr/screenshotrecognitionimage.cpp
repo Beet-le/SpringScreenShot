@@ -54,19 +54,13 @@ QImage renderScreenshotRecognitionImage(const ScreenshotRecognitionImageSnapshot
         painter.restore();
     }
     painter.end();
-    auto style = snapshot.resultStyle;
-    if (style.region) {
-        const qreal scale = image.width() / rect.width();
-        style.regionScale *= scale;
-        style.cornerRadius = qRound(style.cornerRadius * scale);
-        style.shadowWidth = qRound(style.shadowWidth * scale);
-    }
+    auto style =
+        ScreenshotResultCompositor::scaledStyle(snapshot.resultStyle, image.width() / rect.width());
     std::shared_ptr<const ScreenshotLayoutCompactionPlan> backgroundPlan;
     const QSize sourcePixelSize = image.size();
     if (snapshot.layoutCompaction.enabled && style.region) {
-        const auto plan = screenshotLayoutCompactionPlan(
-            *style.region, image.size(), style.regionScale, snapshot.layoutCompaction,
-            ScreenshotResultCompositor::normalizedStyle(style).shadowWidth);
+        const auto plan = ScreenshotResultCompositor::layoutCompactionForContent(
+            image.size(), style, snapshot.layoutCompaction);
         backgroundPlan = plan;
         if (!plan->isValid())
             return {};

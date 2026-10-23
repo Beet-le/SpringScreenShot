@@ -4,7 +4,7 @@
 #include "snow_shot/image/screenshotregionpoints.h"
 #include "snow_shot/presentation/screenshotselectorworkflow.h"
 #include "snow_shot/presentation/screenshotregionpreferences.h"
-#include "snow_shot/presentation/screenshotregiontypeshortcut.h"
+#include "snow_shot/shortcuts/screenshotregiontypeshortcut.h"
 #include "snow_shot/presentation/screenshothistoryservice.h"
 #include "snow_shot/presentation/directcapturehistory.h"
 #include "snowimageqtcodec.h"
@@ -5343,7 +5343,7 @@ void rejectedGlobalScreenshotShortcutsPreserveSession() {
                 ScreenshotInteractionState::EffectGesture gesture;
                 gesture.handle = reason == Rejection::CornerRadiusDrag
                                      ? ScreenshotSelectionEffectHandle::TopLeft
-                                     : ScreenshotSelectionEffectHandle::Shadow;
+                                     : ScreenshotSelectionEffectHandle::Width;
                 gesture.rollback = [&] { ++rollbacks; };
                 require(interaction.beginEffectDrag(std::move(gesture)),
                         "start global shortcut effect drag");

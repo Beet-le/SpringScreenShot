@@ -81,7 +81,10 @@ impl RecordedEffects {
         }
         let output = (config.output_width, config.output_height);
         let playback = PlaybackRenderer::new(config.playback_overlay, output, playback_rasterizer)?;
-        let mut keyboard = if config.effects.show_keyboard || config.effects.record_mouse_clicks {
+        let mut keyboard = if config.effects.show_keyboard
+            || config.effects.record_mouse_clicks
+            || config.effects.record_mouse_scrolling
+        {
             let style = config
                 .effects
                 .keyboard
@@ -91,7 +94,11 @@ impl RecordedEffects {
                 Some(value) => value,
                 None => crate::keyboard_rasterizer::create(style)?,
             };
-            Some(KeyboardOverlay::new(output, rasterizer).with_keycap_size(style.keycap_size))
+            Some(
+                KeyboardOverlay::new(output, rasterizer)
+                    .with_keycap_size(style.keycap_size)
+                    .with_icon_color(style.text_rgba),
+            )
         } else {
             None
         };
@@ -142,16 +149,16 @@ impl RecordedEffects {
         }
     }
 
-    /// Changes admitted through `observe` and `set_webcam_frame` that can affect pixels.
-    /// Animation and playback time are independent; direct `input_effects` mutations
-    /// are not tracked by this revision.
+    /// Changes outside the clocked keycap model, admitted through `observe` and
+    /// `set_webcam_frame`. Keycap invalidation follows the source clock in
+    /// `needs_frame`; direct `input_effects` mutations are not tracked here.
     pub fn observation_revision(&self) -> u64 {
         self.observation_revision
     }
 
     /// Clock-driven invalidation, including pointer observations admitted ahead
     /// of their source timestamp. Observation revisions are checked separately.
-    pub fn needs_frame(&self, now: u64) -> bool {
+    pub fn needs_frame(&mut self, now: u64) -> bool {
         self.input_effects
             .has_active_animation(&self.config.effects, now)
             || (self.config.effects.mouse_trail_rgba[3] != 0
@@ -198,11 +205,18 @@ impl RecordedEffects {
                 let moved = self.pointer.observe(*position, *at_ms);
                 effects.mouse_trail_rgba[3] != 0 && (moved || broken)
             }
-            RecordedInput::Click(_) => {
-                effects.record_mouse_clicks || effects.mouse_click_rgba[3] != 0
+            RecordedInput::Click(click) => {
+                effects.mouse_click_rgba[3] != 0
+                    && click.down
+                    && observed_button(click.button).has_ring()
             }
-            RecordedInput::Key(_) | RecordedInput::KeyboardReset => {
-                effects.show_keyboard || effects.record_mouse_clicks
+            // Keycap invalidation follows the source clock after the whole input
+            // batch is queued. Admission alone cannot relabel a visible scroll row.
+            RecordedInput::Key(_) | RecordedInput::Scroll(_) => false,
+            RecordedInput::KeyboardReset => {
+                effects.show_keyboard
+                    || effects.record_mouse_clicks
+                    || effects.record_mouse_scrolling
             }
             RecordedInput::Reset => true,
         };
@@ -215,6 +229,11 @@ impl RecordedEffects {
                 self.cursor = Some(cursor.clone());
             }
             RecordedInput::Pointer { .. } => {}
+            RecordedInput::Scroll(key) => {
+                if effects.record_mouse_scrolling {
+                    self.input_effects.queue_key(key.clone());
+                }
+            }
             RecordedInput::Click(click) => {
                 let button = observed_button(click.button);
                 if click.down && button.has_ring() && self.config.effects.mouse_click_rgba[3] != 0 {
@@ -843,6 +862,83 @@ mod tests {
             })
         }
     }
+
+    #[test]
+    fn held_keycap_frames_match_redraw_across_bursts_future_reversal_and_reset() {
+        let size = (320, 240);
+        let mut policy = config(PlaybackOverlay::None);
+        policy.output_width = size.0;
+        policy.output_height = size.1;
+        policy.effects.show_cursor = false;
+        policy.effects.show_keyboard = true;
+        policy.effects.record_mouse_scrolling = true;
+        policy.effects.keyboard = Some(KeyboardOverlayConfig {
+            font: None,
+            keycap_size: 64,
+            background_rgba: [0; 4],
+            text_rgba: [255; 4],
+            border_rgba: [0; 4],
+            labels: Default::default(),
+        });
+        let mut held = RecordedEffects::new(policy.clone(), size, Some(Box::new(Glyph))).unwrap();
+        let mut reference = RecordedEffects::new(policy, size, Some(Box::new(Glyph))).unwrap();
+        let pristine = || [20, 40, 60, 255].repeat((size.0 * size.1) as usize);
+        let mut retained = pristine();
+        let mut previous = None;
+        let mut previous_idle = false;
+        let mut sequence = 0;
+        let mut skipped = 0;
+        for index in 0..400 {
+            let now = index * 10;
+            let event = match index {
+                0 | 230 => Some(RecordedInput::Key(KeyEvent {
+                    at_ms: now,
+                    key: 65,
+                    down: true,
+                    label: "A".into(),
+                    modifiers: vec![],
+                })),
+                1..=60 | 210 => Some(RecordedInput::Scroll(KeyEvent {
+                    at_ms: if index == 210 { 2200 } else { now },
+                    key: if index <= 30 || index == 210 {
+                        0x205
+                    } else {
+                        0x206
+                    },
+                    down: true,
+                    label: "Scroll".into(),
+                    modifiers: vec![],
+                })),
+                211 => Some(RecordedInput::KeyboardReset),
+                _ => None,
+            };
+            if let Some(event) = event {
+                let event = input(sequence, now, event);
+                held.observe(&event).unwrap();
+                reference.observe(&event).unwrap();
+                sequence += 1;
+            }
+            let revision = held.observation_revision();
+            if previous == Some(revision) && previous_idle && !held.needs_frame(now) {
+                skipped += 1;
+            } else {
+                retained = pristine();
+                held.apply_rgba(&mut retained, frame(index, now, 0.0))
+                    .unwrap();
+            }
+            let mut expected = pristine();
+            reference
+                .apply_rgba(&mut expected, frame(index, now, 0.0))
+                .unwrap();
+            assert_eq!(retained, expected, "held keycaps at {now} ms");
+            previous = Some(revision);
+            previous_idle = !held.needs_frame(now);
+        }
+        assert!(
+            skipped > 250,
+            "unchanged scroll observations must keep settled pixels reusable"
+        );
+    }
     #[test]
     fn actual_live_preview_and_replay_match_clocked_inputs_resets_and_expiry() {
         use crate::preview::{EffectsPreview, PreviewConfig};
@@ -877,6 +973,7 @@ mod tests {
                 highlight_radius: snow_recording_model::render::DEFAULT_MOUSE_HIGHLIGHT_RADIUS,
                 highlight: [0; 4],
                 record_mouse_clicks: false,
+                record_mouse_scrolling: false,
                 show_keyboard: true,
                 keyboard: Some(style),
                 generation: 0,
@@ -1215,9 +1312,12 @@ mod tests {
                 }),
             ))
             .unwrap();
+        assert_eq!(effects.observation_revision(), 0);
+        assert!(!effects.needs_frame(99));
         let mut before = pixels();
         effects.apply_rgba(&mut before, frame(0, 99, 0.0)).unwrap();
         assert_eq!(before, pixels());
+        assert!(effects.needs_frame(100));
         let mut after = pixels();
         effects.apply_rgba(&mut after, frame(1, 100, 0.0)).unwrap();
         assert_ne!(after, pixels());

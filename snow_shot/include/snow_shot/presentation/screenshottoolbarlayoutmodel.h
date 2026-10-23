@@ -1,7 +1,7 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARLAYOUTMODEL_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARLAYOUTMODEL_H
 
-#include "snow_shot/presentation/editionfeatures.h"
+#include "snow_shot/app/editionfeatures.h"
 
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -248,7 +248,7 @@ struct EditorDescriptor {
              Icon::Cancel},
         };
         result.removeIf([](const EditorDescriptor& descriptor) {
-            return !editionActionToolAvailable(QString::fromLatin1(descriptor.id));
+            return !app::editionActionToolAvailable(QString::fromLatin1(descriptor.id));
         });
         return result;
     }();
@@ -435,7 +435,7 @@ editorDescriptors(storage::ScreenshotToolbarLayoutKind kind) {
 [[nodiscard]] inline QVector<QStringList> editionActionPositions(QVector<QStringList> positions) {
     for (QStringList& position : positions) {
         position.removeIf([](const QString& id) {
-            return !editionActionToolAvailable(id) ||
+            return !app::editionActionToolAvailable(id) ||
                    (app::edition::isMini && id == QStringLiteral("text-recognition"));
         });
     }

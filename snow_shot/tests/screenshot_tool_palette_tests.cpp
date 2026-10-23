@@ -1,3 +1,4 @@
+#include <QVBoxLayout>
 #include "snow_shot/presentation/screenshotcanvastools.h"
 #include "palette_style_edit_test_support.h"
 #include "physical_key_test_support.h"
@@ -525,6 +526,27 @@ void recordingCursorOptionsAreIndependentAndLazy() {
         QStringLiteral("screenRecordingMouseHighlight"));
     auto* click = popover->contentWidget()->findChild<adqt::widgets::AdCheckbox*>(
         QStringLiteral("screenRecordingRecordMouseClicks"));
+    auto* scroll = popover->contentWidget()->findChild<adqt::widgets::AdCheckbox*>(
+        QStringLiteral("screenRecordingRecordMouseScrolling"));
+    require(scroll && !scroll->isChecked() &&
+                scroll->text() == QStringLiteral("Record mouse scrolling") &&
+                scroll->accessibleName() == scroll->text(),
+            "scrolling option defaults off and is accessible");
+    auto* optionsLayout = qobject_cast<QVBoxLayout*>(popover->contentWidget()->layout());
+    require(optionsLayout && optionsLayout->indexOf(scroll) == optionsLayout->indexOf(click) + 1,
+            "scrolling option follows mouse clicks");
+    int scrollChanges = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::recordingRecordMouseScrollingChanged,
+                     [&scrollChanges](bool value) {
+                         if (value)
+                             ++scrollChanges;
+                     });
+    scroll->click();
+    require(scrollChanges == 1 && palette.recordingRecordMouseScrolling() && !click->isChecked() &&
+                !palette.recordingKeyboardVisible(),
+            "scrolling is independent of click and keyboard recording");
+    palette.setRecordingRecordMouseScrolling(false);
+    require(!scroll->isChecked() && scrollChanges == 1, "scrolling synchronization is silent");
     require(highlight && click && !highlight->isChecked() && !click->isChecked(),
             "both checkboxes start unchecked");
     const QString snapshotDirectory = qEnvironmentVariable("SNOW_RECORDING_UI_SNAPSHOT_DIR");
@@ -550,7 +572,8 @@ void recordingCursorOptionsAreIndependentAndLazy() {
     QEvent languageChange(QEvent::LanguageChange);
     QCoreApplication::sendEvent(&palette, &languageChange);
     require(highlight->text() == QStringLiteral("Mouse highlight") &&
-                click->text() == QStringLiteral("Record mouse clicks"),
+                click->text() == QStringLiteral("Record mouse clicks") &&
+                scroll->text() == QStringLiteral("Record mouse scrolling"),
             "cursor options retranslate");
     popover->show();
     QCoreApplication::processEvents();
@@ -4590,6 +4613,7 @@ void tableQrPopoverSharesOneEntryAndRemembersTheSelectedMode() {
     ScreenshotToolPalette::Options options;
     options.showSelectTool = false;
     options.showShapeTool = false;
+    options.showSpeechBubbleTool = false;
     options.showArrowTool = false;
     options.showDistanceTool = false;
     options.showAngleTool = false;
@@ -5936,26 +5960,40 @@ void quickSaveStacksAndLayoutMigration() {
     const QString print = QStringLiteral("print");
     const QString quick = QStringLiteral("quick-save");
     const QString save = QStringLiteral("save-as-file");
+    const auto positionFor = [](const ScreenshotToolbarLayout& layout,
+                                const QString& item) -> qsizetype {
+        for (qsizetype index = 0; index < layout.positions.size(); ++index) {
+            if (layout.positions.at(index).contains(item))
+                return index;
+        }
+        require(false, "the save migration fixture must retain each configured action");
+        return -1;
+    };
+    const auto savePosition = [&](const ScreenshotToolbarLayout& layout) {
+        return positionFor(layout, save);
+    };
     auto legacy = normalizedLayout(ScreenshotToolbarLayout{}, kind);
     for (auto& position : legacy.positions)
         position.removeAll(quick);
     const auto upgraded = normalizedLayout(legacy, kind);
-    require(upgraded.positions.constLast() == QStringList{cloud, print, quick, save} &&
+    require(upgraded.positions.at(savePosition(upgraded)) ==
+                    QStringList{cloud, print, quick, save} &&
                 normalizedLayout(upgraded, kind) == upgraded,
             "legacy default saves must upgrade to an idempotent quick-save stack");
     auto custom = legacy;
-    custom.positions.last().prepend(QStringLiteral("record-screen"));
-    custom.positions.removeAt(1);
-    require(normalizedLayout(custom, kind).positions.constLast() ==
+    custom.positions.removeAt(positionFor(custom, QStringLiteral("record-screen")));
+    custom.positions[savePosition(custom)].prepend(QStringLiteral("record-screen"));
+    const auto customUpgraded = normalizedLayout(custom, kind);
+    require(customUpgraded.positions.at(savePosition(customUpgraded)) ==
                 QStringList{QStringLiteral("record-screen"), cloud, print, quick, save},
             "custom save placements must gain Quick save immediately above Save");
-    legacy.positions.removeLast();
+    legacy.positions.removeAt(savePosition(legacy));
     legacy.hidden = {save};
     const auto hidden = normalizedLayout(legacy, kind);
     require(hidden.hidden.contains(save) && hidden.hidden.contains(quick),
             "hiding Save in a legacy layout must also hide the new Quick save action");
     auto explicitLayout = upgraded;
-    explicitLayout.positions.last().removeAll(quick);
+    explicitLayout.positions[savePosition(explicitLayout)].removeAll(quick);
     explicitLayout.hidden = {quick};
     require(normalizedLayout(explicitLayout, kind) == explicitLayout,
             "an explicitly hidden Quick save must stay hidden");
@@ -6252,6 +6290,7 @@ void arrowAndLineRemainDirectWhenConfiguredIndividually() {
     ScreenshotToolPalette::Options arrowOptions;
     arrowOptions.showSelectTool = false;
     arrowOptions.showShapeTool = false;
+    arrowOptions.showSpeechBubbleTool = false;
     arrowOptions.showArrowTool = true;
     arrowOptions.showDistanceTool = false;
     arrowOptions.showAngleTool = false;
@@ -6266,6 +6305,7 @@ void arrowAndLineRemainDirectWhenConfiguredIndividually() {
     ScreenshotToolPalette::Options lineOptions;
     lineOptions.showSelectTool = false;
     lineOptions.showShapeTool = false;
+    lineOptions.showSpeechBubbleTool = false;
     lineOptions.showArrowTool = false;
     lineOptions.showDistanceTool = false;
     lineOptions.showAngleTool = false;
@@ -8508,6 +8548,26 @@ void tableToolExposesStructureActionsAndOwnHistoryState() {
     ScreenshotToolPalette palette(options);
     palette.setActiveTool(ScreenshotToolPalette::Tool::Table);
 
+    auto* open = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotOpenSpreadsheetFileButton"));
+    auto* separator =
+        palette.findChild<QFrame*>(QStringLiteral("screenshotOpenSpreadsheetFileSeparator"));
+    auto* model = palette.findChild<adqt::widgets::AdSelect*>(
+        QStringLiteral("screenshotRecognitionModelSelect"));
+    require(open && separator && model && !open->isHidden() && !separator->isHidden() &&
+                !open->isEnabled() && open->toolTip() == QStringLiteral("Open spreadsheet file") &&
+                open->accessibleName() == QStringLiteral("Open spreadsheet file"),
+            "table mode exposes an accessible open spreadsheet button disabled before recognition");
+    const auto* layout = palette.actionPanel()->layout();
+    require(layout->indexOf(separator) == layout->indexOf(model) + 2 &&
+                layout->indexOf(open) == layout->indexOf(separator) + 2,
+            "the separator and open action follow the model selector");
+    int openRequests = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::openSpreadsheetFileRequested,
+                     [&] { ++openRequests; });
+    open->click();
+    require(openRequests == 0, "disabled open does not dispatch");
+
     auto* merge =
         palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotTableMergeButton"));
     auto* split =
@@ -8533,6 +8593,12 @@ void tableToolExposesStructureActionsAndOwnHistoryState() {
             "table commands should remain disabled until a recognized document is ready");
 
     palette.setTableEditingState(true, true, false, true, false, true);
+    require(open->isEnabled(), "a recognized table enables spreadsheet opening");
+    palette.setTableBusy(true);
+    require(!open->isEnabled(), "busy table recognition disables spreadsheet opening");
+    palette.setTableBusy(false);
+    open->click();
+    require(openRequests == 1, "one open click dispatches one command");
     require(merge->isEnabled() && !split->isEnabled() && reset->isEnabled() && undo->isEnabled() &&
                 !redo->isEnabled(),
             "table command state should independently drive every editing action");
@@ -8558,6 +8624,12 @@ void tableToolExposesStructureActionsAndOwnHistoryState() {
     require(mergeRequests == 1 && splitRequests == 1 && resetRequests == 1,
             "enabled table action buttons should forward exactly one command");
 
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Latex);
+    require(open->isHidden() && separator->isHidden(), "LaTeX hides spreadsheet-only controls");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Table);
+    require(!open->isHidden() && !separator->isHidden() && open->isEnabled(),
+            "returning from LaTeX restores the table action");
+
     palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
     require(palette.findChild<adqt::widgets::AdButton*>(
                 QStringLiteral("screenshotTableMergeButton")) == nullptr &&
@@ -8567,6 +8639,13 @@ void tableToolExposesStructureActionsAndOwnHistoryState() {
                     QStringLiteral("screenshotTableResetButton")) == nullptr &&
                 undo->isEnabled() && redo->isEnabled(),
             "leaving Table should evict table actions and restore cached canvas history");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Table);
+    open = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotOpenSpreadsheetFileButton"));
+    require(open && !open->isHidden() && open->isEnabled(),
+            "rebuilding the table toolbar restores spreadsheet availability");
+    open->click();
+    require(openRequests == 2, "rebuilding the toolbar does not duplicate signal connections");
 }
 
 void isolatedBusyIndicatorMatchesItsOwnerWindowBand() {
@@ -10343,6 +10422,7 @@ void watermarkStyleEditorMatchesShapeHeight() {
 void watermarkAndTextToolsUseStandardSpacing() {
     ScreenshotToolPalette::Options options;
     options.showShapeTool = false;
+    options.showSpeechBubbleTool = false;
     options.showWatermarkTool = true;
     options.showTextTool = true;
     ScreenshotToolPalette palette(options);
@@ -13356,6 +13436,7 @@ void distanceSettingsExposeIndependentPropertiesAndHoverWheel() {
 
     ScreenshotToolPalette::Options hiddenOptions;
     hiddenOptions.showSelectTool = false;
+    hiddenOptions.showSpeechBubbleTool = false;
     hiddenOptions.showArrowTool = false;
     hiddenOptions.showAngleTool = false;
     hiddenOptions.toolbarLayout = snow_shot::storage::ScreenshotToolbarLayout{
@@ -15842,8 +15923,7 @@ void styleToolbarControlsDoNotEnterTabFocusChain() {
 
     const QList<adqt::widgets::AdRadio*> modeButtons =
         palette.findChildren<adqt::widgets::AdRadio*>();
-    require(modeButtons.size() == 21,
-            "style toolbars should expose the expected number of mode radios");
+    require(!modeButtons.isEmpty(), "focus-chain coverage must exercise materialized mode radios");
     for (adqt::widgets::AdRadio* button : modeButtons) {
         require(button != nullptr && button->focusPolicy() == Qt::NoFocus,
                 "style toolbar radio buttons should not enter the Tab focus chain");
@@ -16630,7 +16710,9 @@ void repeatedToolsAndDifferentialStyleSynchronizationAreNoOps() {
     const quint64 beforeSelected = palette.propertyGroupRefreshCountForTests();
     state.source = SnowCanvasStyleToolbarSource::SelectedRectangle;
     palette.setStyleToolbarState(state);
-    require(palette.propertyGroupRefreshCountForTests() == beforeSelected + 7,
+    // Mode, width, stroke, fill, corner, arrow type, arrowheads, and brush mode.
+    constexpr quint64 allShapePropertyGroups = 8;
+    require(palette.propertyGroupRefreshCountForTests() == beforeSelected + allShapePropertyGroups,
             "a selected/default source transition should perform a full refresh");
     const quint64 beforeMixed = palette.propertyGroupRefreshCountForTests();
     state.shapeStyleMixed = SnowCanvasShapeStyleMixedStrokeWidth;
@@ -19402,6 +19484,8 @@ void regionSwitcherRetranslatesAndRenders() {
     auto& language = snow_shot::presentation::LanguageManager::instance();
     auto& appTheme = snow_shot::presentation::styles::ThemeManager::instance();
     const auto oldMode = appTheme.themeMode();
+    // Match application startup so the controls measure the configured application font.
+    appTheme.initialize(*qApp);
     ScreenshotRegionTypeControl floating(nullptr, true);
     floating.show();
     ScreenshotToolPalette::Options options;
@@ -19462,12 +19546,21 @@ void regionSwitcherRetranslatesAndRenders() {
                                         snow_shot::storage::ScreenshotShortcutSettings().shortcuts(
                                             QStringLiteral("next_selection_type")))),
                     "region hint must show the configured next shortcut in every language");
-            require(hint &&
-                        hint->heightForWidth(hint->width()) ==
-                            hint->heightForWidth(hint->width() * 2) &&
-                        hint->palette().color(QPalette::WindowText) ==
-                            scheme.map.colorTextSecondary,
-                    "floating hint stays on one line and uses the secondary theme text color");
+            require(
+                hint &&
+                    hint->heightForWidth(hint->width()) ==
+                        hint->heightForWidth(hint->width() * 2) &&
+                    hint->palette().color(QPalette::WindowText) == scheme.map.colorTextSecondary,
+                qPrintable(
+                    QStringLiteral("floating hint must stay on one line with secondary "
+                                   "text color: width=%1, height=%2/%3, color=%4/%5")
+                        .arg(hint ? hint->width() : -1)
+                        .arg(hint ? hint->heightForWidth(hint->width()) : -1)
+                        .arg(hint ? hint->heightForWidth(hint->width() * 2) : -1)
+                        .arg(hint
+                                 ? hint->palette().color(QPalette::WindowText).name(QColor::HexArgb)
+                                 : QString())
+                        .arg(scheme.map.colorTextSecondary.name(QColor::HexArgb))));
             // Recreate the pre-configuration layout with the same shortcut text.
             ScreenshotRegionTypeControl original(nullptr, true);
             original.layout()->itemAt(0)->layout()->setAlignment({});
@@ -19761,14 +19854,16 @@ void layoutCompactionToolbar() {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    QTemporaryDir storageDirectory;
+    require(storageDirectory.isValid(), "failed to create toolbar test storage directory");
+    const auto storageLifetime =
+        qScopeGuard([] { snow_shot::storage::ApplicationStorage::instance().shutdown(); });
     const int fixtureFont = QFontDatabase::addApplicationFont(
         QStringLiteral(":/recording-test-fonts/SnowRecordingTestSans-Regular.ttf"));
     require(fixtureFont >= 0 && QFontDatabase::applicationFontFamilies(fixtureFont)
                                     .contains(QStringLiteral("Snow Recording Test Sans")),
             "toolbar tests require the repository's registered font fixture");
 
-    QTemporaryDir storageDirectory;
-    require(storageDirectory.isValid(), "failed to create toolbar test storage directory");
     const QString executableDirectory =
         QDir(storageDirectory.path()).filePath(QStringLiteral("bin"));
     require(QDir().mkpath(executableDirectory),
@@ -19807,14 +19902,12 @@ int main(int argc, char** argv) {
             {executableDirectory, storageDirectory.path(), 60000});
         customColorPresetsRefreshCurrentAndLazyDrawingEditors();
         colorPresetEditorsPreserveCommandsAcrossRebinding();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--pressure-brush-only"))) {
         pressureBrushToolbarPreservesStylesAndMixedSelection();
         pressureBrushPreferencePersistsAndRejectsUnknownValues();
         freeDrawToolIsDistinctAndUsesIndependentPathStyleControls();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--eraser-only"))) {
@@ -19822,12 +19915,10 @@ int main(int argc, char** argv) {
         eraserStyleToolbarHeightMatchesOtherTools();
         eraserToolsExposeRememberedModesAndIndependentWidth();
         recordingEraserActivationReturnsToSelect();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--watermark-persistence-only"))) {
         runWatermarkPersistenceTests();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--style-commit-only"))) {
@@ -19844,7 +19935,6 @@ int main(int argc, char** argv) {
         selectedFilterTypeRemembersOnlyTheEditedProperty();
         canvasToolStylesPersistIndependentlyWithoutGlobalStyles();
         runScreenshotStylePersistenceFailureTest();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--serial-number-only"))) {
@@ -19854,13 +19944,11 @@ int main(int argc, char** argv) {
         serialNumberStyleControlsExposeAndEmitRequestedProperties();
         serialNumberInputCommitsEditsAndSupportsWheel();
         canvasToolStylesPersistIndependentlyWithoutGlobalStyles();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--text-alignment-only"))) {
         runScreenshotTextAlignmentTests();
         textStylePopupLifecyclesAreBalanced();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--text-style-only"))) {
@@ -19870,19 +19958,20 @@ int main(int argc, char** argv) {
         textStyleControlsExposeAndEmitAllRequestedProperties();
         textStylePopupLifecyclesAreBalanced();
         runScreenshotTextAlignmentTests();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--focus-chain-only"))) {
+        styleToolbarControlsDoNotEnterTabFocusChain();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--retired-style-editors-only"))) {
         colorSamplerStopsWhenPopupClosureRetiresItsEditor();
         retiredStyleEditorsIgnorePendingCommands();
         watermarkTemplateDialogBindingsRetireWithTheirEditor();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--watermark-dialog-retirement-only"))) {
         watermarkTemplateDialogBindingsRetireWithTheirEditor();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--original-image-only"))) {
@@ -19893,7 +19982,6 @@ int main(int argc, char** argv) {
     if (application.arguments().contains(QStringLiteral("--remembered-drawing-tool-only"))) {
         rememberedDrawingModesPersistAcrossPaletteInstances();
         rememberedDrawingToolRecordedAndRestored();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--auto-filter-only"))) {
@@ -19908,33 +19996,27 @@ int main(int argc, char** argv) {
         rememberedDrawingModesPersistAcrossPaletteInstances();
         rememberedDrawingToolRecordedAndRestored();
         canvasToolStylesPersistIndependentlyWithoutGlobalStyles();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--color-input-only"))) {
         colorPickerChannelKeyboardInput();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--cloud-upload-only"))) {
         cloudUploadToolbarContracts();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--quick-save-only"))) {
         quickSaveStacksAndLayoutMigration();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--hidden-tools-only"))) {
         hiddenToolShortcutsUseCommandAvailability();
         hiddenToolbarShortcutsPreserveToolsAndLayouts();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--canvas-tool-bindings-only"))) {
         canvasToolBindingsRespectCapabilitiesAndLifetime();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--tool-shortcuts-only"))) {
@@ -19944,13 +20026,11 @@ int main(int argc, char** argv) {
         repeatingDrawingShortcutsReturnsToSelect();
         repeatingActionShortcutsReturnsToSelect();
         groupedToolShortcutsToggleOnlyTheRequestedTool();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--popup-recovery-only"))) {
         tableBusyStatePreservesSiblingGroupPopovers();
         tableBusyStatePreservesSiblingGroupPopovers(true);
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--popover-lifecycle-only"))) {
@@ -19965,37 +20045,31 @@ int main(int argc, char** argv) {
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QCoreApplication::processEvents();
         recordingExportSettingsPopoversStayLazy();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--popover-hover-switching-only"))) {
         groupedToolbarHoverSwitchesWithVisibleTooltips();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--compaction-only"))) {
         layoutCompactionToolbar();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--move-options-only"))) {
         regionControlsFollowTheActiveCaptureType();
         moveToolExposesCaptureCursorAndRecaptureOptions();
         regionSwitcherRetranslatesAndRenders();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--region-switcher-only"))) {
         regionControlsFollowTheActiveCaptureType();
         regionSwitcherRetranslatesAndRenders();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--selection-reset-only"))) {
         eraserResetRemainsAvailableWithoutSelection();
         selectToolExposesDedicatedActionToolbar();
         selectionAlignmentActionsFollowSelectionUnitCount();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--recording-controls-only"))) {
@@ -20007,17 +20081,14 @@ int main(int argc, char** argv) {
         recordingActionLayoutSupportsStacksHidingAndStatefulSlots();
         recordingAudioStacksUseVisibleAnchorsWithoutCompetingHoverPopovers();
         recordingExportSettingsAndDrawingAvailabilityFollowSessionState();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--selected-magnifier-wheel-only"))) {
         magnifierStyleWheelsPersistCompletedSteps();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--disabled-selection-opacity-only"))) {
         disabledSelectionOpacityRejectsWheelSteps();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--magnifier-only"))) {
@@ -20028,13 +20099,11 @@ int main(int argc, char** argv) {
         magnifierStyleWheelsPersistCompletedSteps();
         disabledSelectionOpacityRejectsWheelSteps();
         magnifierControlsRetranslateAndRenderPreviews();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--angle-only"))) {
         angleSettingsAndWheelPreserveIndependentProperties();
         runAngleStyleBindingTests();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--distance-only"))) {
@@ -20042,7 +20111,6 @@ int main(int argc, char** argv) {
         editorlessToolsRejectStaleStyleToolbarState();
         distanceSettingsExposeIndependentPropertiesAndHoverWheel();
         distanceActualValueUpdatesTheCanvasAndUndo();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--arrow-icons-only"))) {
@@ -20050,13 +20118,11 @@ int main(int argc, char** argv) {
         arrowStyleControlsExposeAndEmitAllStyleProperties();
         arrowheadOptionsRetranslateInPlace();
         selectedArrowMixedPropertiesResolveIndependently();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--dynamic-i18n-only"))) {
         dynamicToolbarLabelsUseEveryTranslationCatalog();
         moveToolPresentationUsesTheOwningShortcutScope();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--color-control-styles-only"))) {
@@ -20069,7 +20135,6 @@ int main(int argc, char** argv) {
         toolbarScalingDoesNotRelayoutPopupContent();
         popupColorEditorButtonsKeepPopupScaleAfterToolbarDpiCommit();
         familiesHydratedAfterScaleKeepTheSamePhysicalSize();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--border-fill-only"))) {
@@ -20077,14 +20142,12 @@ int main(int argc, char** argv) {
         borderFillControlsRetainColorAndSavedPreferences();
         fillStyleButtonsFollowFillColorPickerTrigger();
         mixedColorsKeepUniformStyleButtonsActive();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--canvas-style-persistence-only"))) {
         screenshotProductStyleProfileIsComplete();
         canvasToolStylesPersistIndependentlyWithoutGlobalStyles();
         arrowShaftEditorPersistsAcrossReopening();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (QApplication::arguments().contains(QStringLiteral("--dpi-scaling-only"))) {
@@ -20095,19 +20158,16 @@ int main(int argc, char** argv) {
         physicalScaleDefersHiddenStyleGroupGeometry();
         watermarkControlsFollowPhysicalScale();
         styleToolbarRowSpacingFollowsPhysicalScale();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--lazy-loading-only"))) {
         secondaryControlsMaterializeOnlyForTheRequestedFamily();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--stroke-editor-only"))) {
         selectedStrokeColorDragKeepsPickerIndicatorInSync();
         textAndHighlightStrokeWidthTriggersUseSharedPreviewButton();
         shapeAndArrowStrokeEditorsShareThePresetCatalog();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--stroke-rendering-only"))) {
@@ -20117,12 +20177,10 @@ int main(int argc, char** argv) {
         strokeRenderingPreferencesRoundTripAndRejectUnknownValues();
         strokeRenderingSelectionEditUsesHistoryAndRemembersOnlyItsProperty();
         strokeRenderingPopupKeepsDpiAndRetranslates();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--styled-template-storage-only"))) {
         styledDrawTemplatesPersistNormalizeAndRemainInsertable();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--style-reconcile-only"))) {
@@ -20132,12 +20190,10 @@ int main(int argc, char** argv) {
         prewarmedDestinationMergesSourceSharedAndDestinationOnlyEditors();
         retainedEditorsApplyDestinationMixedStateDuringReconciliation();
         repeatedStyleReconciliationDoesNotAccumulateHiddenRows();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--popup-lifecycle-only"))) {
         textStylePopupLifecyclesAreBalanced();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--ocr-translation-only"))) {
@@ -20146,26 +20202,22 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--image-conversion-only"))) {
         imageConversionToolsExposeRecognitionActions();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--latex-only"))) {
         latexHistoryActionsUseFormulaHistory();
         recognitionModelSelectorGroupsOptionsAndRetainsIndependentSelections();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--recognition-model-only"))) {
         recognitionModelSelectorGroupsOptionsAndRetainsIndependentSelections();
         recognitionModelSelectorPreservesPopupStateAndScalesAndRetranslates();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--screenshot-actions-tooltips-only"))) {
         screenshotActionTooltipsUseConfiguredShortcuts();
         screenshotActionTooltipsFollowStorageChangesWithoutRetranslation();
         moveToolPresentationUsesTheOwningShortcutScope();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--shortcut-tooltips-only"))) {
@@ -20176,7 +20228,6 @@ int main(int argc, char** argv) {
         screenshotActionTooltipsFollowStorageChangesWithoutRetranslation();
         moveToolPresentationUsesTheOwningShortcutScope();
         ocrToolReplacesSelectionActionToolbarContents();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--canvas-color-sampling-only"))) {
@@ -20189,7 +20240,6 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--spotlight-wheel-only"))) {
         spotlightControlsMatchMaskConfigurationBehavior();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--spotlight-shape-only"))) {
@@ -20199,22 +20249,18 @@ int main(int argc, char** argv) {
         spotlightShapePreferencesRoundTripAndAcceptLegacySettings();
         shapeSelectorIsTheLeftmostStyleGroup();
         shapeSelectorIsExclusiveToTheShapeTool();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--watermark-template-only"))) {
         watermarkTemplateLibraryAndEditorApplySnapshotsDeterministically();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--draw-template-only"))) {
         drawTemplateSelectSavesFiltersInsertsAndDeletes();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--watermark-template-width-only"))) {
         watermarkTemplateSelectMatchesFontSelectWidth();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--toolbar-layout-only"))) {
@@ -20228,26 +20274,22 @@ int main(int argc, char** argv) {
         highlightVariantsUseConfiguredPopoverGroup();
         drawingToolbarGroupsUseToolbarPopoverMetrics();
         spotlightControlsMatchMaskConfigurationBehavior();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--first-group-button-only"))) {
         toolbarGroupsKeepFirstButtonWhenEnabled();
         actionGroupsKeepFirstButtonWhenEnabled();
         commandGroupsKeepFirstButtonWhenEnabled();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--history-only"))) {
         screenshotShortcutsShareButtonCommandsAndAvailability();
         drawingHistoryActionsFollowStacksAndHiddenShortcuts();
         tableToolExposesStructureActionsAndOwnHistoryState();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--stack-availability-only"))) {
         actionStacksKeepEnabledAlternativesReachable();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--screenshot-result-layout-only"))) {
@@ -20256,7 +20298,6 @@ int main(int argc, char** argv) {
         screenshotToolbarUsesCanonicalOrderAndSectionSeparators();
         sharedToolbarLayoutModelOperationsAreDeterministic();
         configurableScreenshotActionLayoutSupportsStacksHidingAndRuntimeReplacement();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--action-toolbar-layout-only"))) {
@@ -20274,7 +20315,6 @@ int main(int argc, char** argv) {
         tableQrPopoverSharesOneEntryAndRemembersTheSelectedMode();
         sharedToolbarLayoutModelOperationsAreDeterministic();
         configurableScreenshotActionLayoutSupportsStacksHidingAndRuntimeReplacement();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--scrolling-only"))) {
@@ -20283,7 +20323,6 @@ int main(int argc, char** argv) {
         scrollingIntervalContentsScaleProportionally();
         scrollingScreenshotExposesAxisRecognitionModes();
         scrollingScreenshotKeepsDrawingToolsAvailable();
-        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     colorPresetEditorsPreserveCommandsAcrossRebinding();

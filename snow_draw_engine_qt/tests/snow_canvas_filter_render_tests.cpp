@@ -1505,6 +1505,93 @@ void filteredBackgroundIsCompositedOnce() {
             "a semitransparent filtered background must be composited exactly once");
 }
 
+void cachedFiltersPreserveTransparentBackdrops() {
+    class Backdrop final : public SnowCanvasCustomRenderer {
+      public:
+        QImage image;
+        void renderBeforeCanvas(QPainter& painter,
+                                const SnowCanvasRenderContext& context) override {
+            painter.drawImage(context.viewportRect, image);
+        }
+    } backdrop;
+    backdrop.image = QImage(40, 40, QImage::Format_ARGB32_Premultiplied);
+    backdrop.image.fill(QColor(40, 120, 200, 96));
+    {
+        QPainter painter(&backdrop.image);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.fillRect(QRect(0, 0, 12, 40), Qt::transparent);
+    }
+    SceneDisplayInfo info{};
+    info.surface_width = 80;
+    info.surface_height = 80;
+    info.camera_zoom = 1.0;
+    info.clear_color = {255, 255, 255, 255};
+    const QRect viewport(0, 0, 80, 80);
+    SnowSceneDisplayItem annotation{};
+    annotation.kind = SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT;
+    annotation.width = 40;
+    annotation.height = 80;
+    annotation.fill = {40, 120, 200, 96};
+    annotation.fill_style = SNOW_FILL_STYLE_SOLID;
+    annotation.opacity = 1.0;
+    SnowSceneDisplayItem filter{};
+    filter.kind = SNOW_SCENE_DISPLAY_ITEM_FILTER;
+    filter.width = 32;
+    filter.height = 32;
+    filter.opacity = 1.0;
+    filter.element_id = {1, 1};
+    for (const qreal dpr : {1.0, 1.25, 2.0}) {
+        const SnowCanvasRenderContext context{viewport, QRegion(viewport), QTransform(), dpr};
+        for (int sourceKind = 0; sourceKind < 3; ++sourceKind) {
+            for (const std::uint32_t type : {0u, 1u, 2u, 3u, 4u, 6u}) {
+                filter.filter = snow_filter_render_spec_resolve(type, 0.7);
+                const SnowCanvasSceneItem items[]{SnowCanvasSceneItem(annotation),
+                                                  SnowCanvasSceneItem(filter)};
+                int namespaceToken = 0;
+                snow_canvas_filter_render::RenderWorkspace workspace;
+                const auto render = [&](int mode) {
+                    QImage output(QSize(qCeil(80 * dpr), qCeil(80 * dpr)),
+                                  QImage::Format_ARGB32_Premultiplied);
+                    output.setDevicePixelRatio(dpr);
+                    output.fill(Qt::transparent);
+                    QPainter painter(&output);
+                    snow_canvas_renderer::SceneRenderRequest request;
+                    request.painter = &painter;
+                    request.displayInfo = &info;
+                    request.sceneItems = sourceKind == 2 ? items : items + 1;
+                    request.sceneItemCount = sourceKind == 2 ? 2 : 1;
+                    request.exposedRegion = QRegion(viewport);
+                    request.backgroundImage = sourceKind == 0 ? &backdrop.image : nullptr;
+                    request.backgroundRenderer = sourceKind == 1 ? &backdrop : nullptr;
+                    request.backgroundContext = &context;
+                    request.workspace = &workspace;
+                    request.cacheNamespace = &namespaceToken;
+                    request.clearBackgroundEnabled = false;
+                    request.enableFilterTileCache = mode != 0;
+                    if (mode == 2)
+                        snow_canvas_renderer::renderSceneItemsTiled(request);
+                    else
+                        snow_canvas_renderer::renderSceneItems(request);
+                    painter.end();
+                    return output;
+                };
+                const QImage direct = render(0);
+                require(direct.pixelColor(0, 0).alpha() == 0 &&
+                            direct.pixelColor(qRound(40 * dpr), qRound(40 * dpr)).alpha() > 0 &&
+                            direct.pixelColor(qRound(40 * dpr), qRound(40 * dpr)).alpha() < 255,
+                        "filter backdrop fixture must retain transparent and translucent pixels");
+                for (const int mode : {1, 2}) {
+                    snow_canvas_filter_tile_cache::invalidateNamespace(&namespaceToken);
+                    require(render(mode) == direct && render(mode) == direct,
+                            "cold and retained filters must honor disabled background clearing "
+                            "for scaled images, custom backdrops and translucent annotations");
+                }
+                snow_canvas_filter_tile_cache::invalidateNamespace(&namespaceToken);
+            }
+        }
+    }
+}
+
 void emptySceneStillRendersBackgroundOnce() {
     QImage image(QSize(24, 18), QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
@@ -3998,6 +4085,13 @@ int main(int argc, char** argv) {
         retainedFilterTilesRenderWithoutReopeningAnActivePainter();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--background-alpha-only"))) {
+        cachedFiltersPreserveTransparentBackdrops();
+        filteredBackgroundIsCompositedOnce();
+        emptySceneStillRendersBackgroundOnce();
+        customBackdropIsRenderedOnceBelowFilters();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--sparse-filter-damage-only"))) {
         sparseSelectionDamageSkipsUntouchedInteriorFilters();
         sparseSpatialFilterDamagePreservesHalosAndRetainedPixels();
@@ -4041,6 +4135,7 @@ int main(int argc, char** argv) {
     mosaicPlanningCropsDirtyOutputAndBatchesEquivalentBlocks();
     movedFiltersMatchAFullRenderAfterDirtyRectangleUpdate();
     filteredBackgroundIsCompositedOnce();
+    cachedFiltersPreserveTransparentBackdrops();
     emptySceneStillRendersBackgroundOnce();
     penFilterUsesRawRoundStrokeMaskForEveryEffect();
     penSpatialFiltersUseSingleImmutableSource();

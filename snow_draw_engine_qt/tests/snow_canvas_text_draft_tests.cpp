@@ -248,6 +248,50 @@ void deleteRequestsElementRemovalWhileBackspaceEditsCharacters() {
             "Delete leaves draft mutation to lifecycle handling");
 }
 
+void enabledDeleteEditsForwardAndSupportsUndoRedo() {
+    const auto remove = [](SnowCanvasTextDraft& draft) {
+        QKeyEvent event(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+        const auto result = snow_canvas_text_editor_input::handleKeyPress(&event, draft, {}, true);
+        require(result.handled &&
+                    result.command == snow_canvas_text_editor_input::EventCommand::None,
+                "enabled Delete is consumed without requesting element removal");
+        return result.changed;
+    };
+    SnowCanvasTextDraft draft;
+    for (const QString& removed :
+         {QStringLiteral("b"), QStringLiteral("\n"), QString::fromUtf8("\xF0\x9F\x99\x82"),
+          QStringLiteral("e\u0301")}) {
+        const QString original = QStringLiteral("a") + removed + QStringLiteral("c");
+        draft.begin(original);
+        draft.setCursorPosition(1);
+        require(remove(draft) && draft.text() == QStringLiteral("ac") &&
+                    draft.cursorPosition() == 1,
+                "Delete removes one forward grapheme or line break and retains the caret");
+        require(draft.undoEdit() && draft.text() == original && draft.cursorPosition() == 1,
+                "undo restores the character and caret");
+        require(draft.redoEdit() && draft.text() == QStringLiteral("ac"),
+                "redo reapplies forward deletion");
+    }
+    draft.begin(QStringLiteral("abcd"));
+    draft.setCursorPosition(1);
+    draft.setCursorPosition(3, true);
+    require(remove(draft) && draft.text() == QStringLiteral("ad") && !draft.hasSelection() &&
+                draft.cursorPosition() == 1,
+            "Delete removes the selected range");
+    draft.setCursorPosition(2);
+    require(!remove(draft) && draft.text() == QStringLiteral("ad"),
+            "Delete at the end is consumed without changing text");
+    draft.begin(QString());
+    require(!remove(draft) && !draft.undoEdit(),
+            "Delete in an empty draft creates no edit history");
+    draft.begin(QStringLiteral("abc"));
+    draft.setCursorPosition(1);
+    QInputMethodEvent preedit(QStringLiteral("pending"), {});
+    draft.handleInputMethodEvent(preedit);
+    require(remove(draft) && draft.text() == QStringLiteral("ac") && !draft.hasPreedit(),
+            "forward Delete clears preedit through the existing draft editing path");
+}
+
 void keyCommandsDelegateCursorMovement() {
     SnowCanvasTextDraft draft;
     draft.begin(QStringLiteral("abc"));
@@ -5508,6 +5552,11 @@ void runAutomaticTextWrappingTests() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    if (app.arguments().contains(QStringLiteral("--delete-text-only"))) {
+        deleteRequestsElementRemovalWhileBackspaceEditsCharacters();
+        enabledDeleteEditsForwardAndSupportsUndoRedo();
+        return 0;
+    }
 #if defined(Q_OS_WIN)
     require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
             "the watermark renderer test requires a system TrueType font");
@@ -5555,6 +5604,7 @@ int main(int argc, char** argv) {
     inputMethodCommitReplacementUsesCursorRelativeRange();
     keyCommandsInsertTextAndReportEditorCommands();
     deleteRequestsElementRemovalWhileBackspaceEditsCharacters();
+    enabledDeleteEditsForwardAndSupportsUndoRedo();
     keyCommandsDelegateCursorMovement();
     keyCommandsReportNoChangeForNoopEdits();
     finishedEditCommitPolicyRequiresViewportAndContent();

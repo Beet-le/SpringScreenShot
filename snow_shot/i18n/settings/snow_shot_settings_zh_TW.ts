@@ -356,6 +356,10 @@
             <translation>複製</translation>
         </message>
         <message>
+            <source>DeepSeek</source>
+            <translation>DeepSeek</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>刪除</translation>
         </message>
@@ -366,6 +370,10 @@
         <message>
             <source>Delete model "%1"? If selected, another available model will be used.</source>
             <translation>刪除模型「%1」？如果目前已選取此模型，將改用其他可用模型。</translation>
+        </message>
+        <message>
+            <source>Doubao</source>
+            <translation>豆包</translation>
         </message>
         <message>
             <source>Edit</source>
@@ -416,6 +424,10 @@
             <translation>尚未設定自訂模型</translation>
         </message>
         <message>
+            <source>OpenAI</source>
+            <translation>OpenAI</translation>
+        </message>
+        <message>
             <source>OpenAI-compatible Chat Completions. /chat/completions is appended to this base URL.</source>
             <translation>相容 OpenAI 的 Chat Completions。系統會在此基底 URL 後附加 /chat/completions。</translation>
         </message>
@@ -424,12 +436,28 @@
             <translation>不需要身分驗證的伺服器可留空。</translation>
         </message>
         <message>
+            <source>Provider Type</source>
+            <translation>提供者類型</translation>
+        </message>
+        <message>
+            <source>Qwen</source>
+            <translation>通義千問</translation>
+        </message>
+        <message>
             <source>Reasoning Support</source>
             <translation>推理支援</translation>
         </message>
         <message>
+            <source>Reasoning is controlled by the model for the OpenAI provider.</source>
+            <translation>選擇 OpenAI 提供者時，推理由模型控制。</translation>
+        </message>
+        <message>
             <source>Save</source>
             <translation>儲存</translation>
+        </message>
+        <message>
+            <source>Select the provider whose reasoning controls this API uses.</source>
+            <translation>選擇此 API 使用的推理控制方式所屬的提供者。</translation>
         </message>
         <message>
             <source>The API key must not contain line breaks.</source>
@@ -1896,12 +1924,20 @@
             <translation>控制截圖色彩選擇器的顯示時機</translation>
         </message>
         <message>
+            <source>Copy Translation Results as an Image</source>
+            <translation>將翻譯結果複製為圖片</translation>
+        </message>
+        <message>
             <source>Copy after text recognition</source>
             <translation>文字辨識後複製</translation>
         </message>
         <message>
             <source>Copy application settings as a zip archive to the clipboard</source>
             <translation>將應用程式設定以 zip 封存檔形式複製到剪貼簿</translation>
+        </message>
+        <message>
+            <source>Copy both the image and its exported file to the clipboard</source>
+            <translation>將影像及其匯出的檔案同時複製到剪貼簿</translation>
         </message>
         <message>
             <source>Copy color</source>
@@ -1960,6 +1996,10 @@
             <translation>將確認的截圖選取範圍複製到剪貼簿</translation>
         </message>
         <message>
+            <source>Copy the full translation result as an image when no text is selected</source>
+            <translation>未選取文字時，將完整翻譯結果複製為圖片</translation>
+        </message>
+        <message>
             <source>Copy to Clipboard</source>
             <translation>複製到剪貼簿</translation>
         </message>
@@ -1984,8 +2024,8 @@
             <translation>自訂 AI 模型</translation>
         </message>
         <message>
-            <source>Custom DeepL, Baidu, and Youdao-compatible services</source>
-            <translation>自訂相容 DeepL、百度和有道的服務</translation>
+            <source>Custom DeepL, DeepLX, Baidu, and Youdao-compatible services</source>
+            <translation>自訂相容 DeepL、DeepLX、百度和有道的服務</translation>
         </message>
         <message>
             <source>Custom Models</source>
@@ -2150,6 +2190,10 @@
         <message>
             <source>Delete temporary recording files?</source>
             <translation>刪除螢幕錄製暫存檔案？</translation>
+        </message>
+        <message>
+            <source>Delete text after the cursor</source>
+            <translation>刪除游標後的文字</translation>
         </message>
         <message>
             <source>Delete the current recording files when closing an active recording. Stopping recording still saves the output.</source>
@@ -2698,6 +2742,10 @@
         <message>
             <source>Keep selection width and height consistent</source>
             <translation>保持選取區寬高一致</translation>
+        </message>
+        <message>
+            <source>Keep the Snow Shot save dialog open after saving to show the result</source>
+            <translation>儲存後保持 Snow Shot 儲存對話方塊開啟，以顯示儲存結果</translation>
         </message>
         <message>
             <source>Keep the first button of each toolbar group visible instead of the last used button</source>
@@ -4012,6 +4060,10 @@
             <translation>顯示錄影狀態提示</translation>
         </message>
         <message>
+            <source>Show save result</source>
+            <translation>顯示儲存結果</translation>
+        </message>
+        <message>
             <source>Show screenshot guides when a capture starts</source>
             <translation>開始截圖時顯示輔助線</translation>
         </message>
@@ -4632,6 +4684,10 @@
             <translation>將重複內容固定到螢幕時</translation>
         </message>
         <message>
+            <source>While editing text, press Delete to remove selected text or the character after the cursor.</source>
+            <translation>編輯文字時，按 Delete 鍵刪除選取的文字或游標後的字元。</translation>
+        </message>
+        <message>
             <source>Window Element API</source>
             <translation>視窗元素 API</translation>
         </message>
@@ -4650,10 +4706,6 @@
         <message>
             <source>Windows context menu</source>
             <translation>Windows 右鍵選單</translation>
-        </message>
-        <message>
-            <source>Write the image to a file and copy that file to the clipboard</source>
-            <translation>將影像寫入檔案並將該檔案複製到剪貼簿</translation>
         </message>
         <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>
@@ -5273,6 +5325,10 @@ Unavailable: %2</source>
             <translation>DeepL</translation>
         </message>
         <message>
+            <source>DeepLX</source>
+            <translation>DeepLX</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>刪除</translation>
         </message>
@@ -5307,6 +5363,10 @@ Unavailable: %2</source>
         <message>
             <source>No translation configurations added</source>
             <translation>尚未新增翻譯設定</translation>
+        </message>
+        <message>
+            <source>Optional access token sent as a Bearer token.</source>
+            <translation>選填的存取權杖，以 Bearer 權杖形式傳送。</translation>
         </message>
         <message>
             <source>Optional for servers that do not require authentication.</source>

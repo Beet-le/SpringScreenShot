@@ -444,7 +444,21 @@ struct SelectionStyle {
     #[serde(default)]
     shadow_color: Option<[u8; 4]>,
     #[serde(default)]
+    border_type: Option<SelectionBorderType>,
+    /// Border width in canvas units; the editor bounds it to 0..64 before output scaling.
+    #[serde(default)]
+    border_width: Option<u32>,
+    /// RGBA color. Solid selection borders use an opaque alpha channel.
+    #[serde(default)]
+    border_color: Option<[u8; 4]>,
+    #[serde(default)]
     aspect_ratio_locked: Option<bool>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum SelectionBorderType {
+    Shadow,
+    Border,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1056,6 +1070,29 @@ pub fn schema(name: &str, input: Option<Value>) -> Result<Map<String, Value>, se
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    #[cfg(not(feature = "mini"))]
+    fn custom_model_provider_schema_accepts_supported_and_legacy_models() {
+        let legacy = json!({"expected_revision":1,"models":[{
+            "id":"11111111-1111-4111-8111-111111111111","name":"Provider",
+            "base_url":"https://example.invalid/v1","model":"test-model"
+        }]});
+        assert!(schema("snow_shot_models_update", Some(legacy.clone())).is_ok());
+        for provider in ["openai", "qwen", "deepseek", "doubao"] {
+            let mut input = legacy.clone();
+            input["models"][0]["provider"] = json!(provider);
+            assert!(
+                schema("snow_shot_models_update", Some(input)).is_ok(),
+                "{provider}"
+            );
+        }
+        for provider in [json!("unknown"), json!(""), json!(1), json!(false)] {
+            let mut input = legacy.clone();
+            input["models"][0]["provider"] = provider;
+            assert!(schema("snow_shot_models_update", Some(input)).is_err());
+        }
+    }
 
     #[test]
     fn border_fill_and_legacy_modes_validate_across_canvas_domains() {
@@ -1844,6 +1881,40 @@ mod tests {
                 })),
             );
             assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn selection_border_styles_are_typed_for_both_hosts() {
+        for (name, owner) in [
+            ("snow_shot_screenshot_set_selection_style", "session_id"),
+            ("snow_shot_document_set_selection_style", "document_id"),
+        ] {
+            for border_type in ["shadow", "border"] {
+                assert!(
+                    schema(
+                        name,
+                        Some(json!({owner:"owned","expected_revision":1,
+                    "border_type":border_type,"border_width":48,"border_color":[20,80,180,255],
+                    "shadow_width":12}))
+                    )
+                    .is_ok()
+                );
+            }
+            for patch in [
+                json!({"border_type":"outline"}),
+                json!({"border_width":-1}),
+                json!({"border_width":1.5}),
+                json!({"border_color":[0,0,256,255]}),
+                json!({"border_color":[0,0,0]}),
+            ] {
+                let mut input = json!({owner:"owned","expected_revision":1});
+                input
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(patch.as_object().unwrap().clone());
+                assert!(schema(name, Some(input)).is_err());
+            }
         }
     }
 

@@ -113,6 +113,7 @@ class ScreenshotController : public QObject {
     void restoreLastClosedPinnedWindow();
     void togglePinnedWindowsVisibility();
     void showPinnedRecord(const QString& id);
+    void showPinnedRecords(const QStringList& ids);
     void destroyPinnedRecords(const QVector<QString>& ids);
     void restoreActivePinnedGroupWindows();
     void startCapture();

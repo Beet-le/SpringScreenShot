@@ -18,7 +18,7 @@ snow_require_msvc_version()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SnowWindowsArchitecture.cmake")
 snow_configure_windows_architecture()
 
-set(SNOW_SHOT_VERSION "1.3.4")
+set(SNOW_SHOT_VERSION "1.3.6")
 if(NOT SNOW_SHOT_VERSION MATCHES "^([0-9]+\\.[0-9]+\\.[0-9]+)(-[0-9A-Za-z.-]+)?$")
     message(FATAL_ERROR "SNOW_SHOT_VERSION must be a semantic version such as 0.8.0-dev")
 endif()
@@ -401,7 +401,7 @@ if(NOT TARGET snow-all)
 endif()
 
 if(NOT TARGET snow-tests)
-    set(_snow_deterministic_test_exclude "interactive^|e2e^|benchmark")
+    set(_snow_deterministic_test_exclude "interactive|e2e|benchmark")
     add_custom_target(snow-tests
         COMMAND ${CMAKE_CTEST_COMMAND}
             --test-dir "${CMAKE_BINARY_DIR}"
@@ -409,6 +409,7 @@ if(NOT TARGET snow-tests)
             -LE ${_snow_deterministic_test_exclude}
             --output-on-failure
         USES_TERMINAL
+        VERBATIM
     )
     add_dependencies(snow-tests snow-all)
     unset(_snow_deterministic_test_exclude)

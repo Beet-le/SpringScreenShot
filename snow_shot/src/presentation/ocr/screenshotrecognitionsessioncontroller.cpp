@@ -5,7 +5,7 @@
 #endif
 #include "snow_shot/presentation/screenshotocrlayout.h"
 
-#include "snow_shot/presentation/editionfeatures.h"
+#include "snow_shot/app/editionfeatures.h"
 
 #include "snow_shot/presentation/screenshotocrpresentation.h"
 #include "snow_shot/presentation/screenshotocrvisuals.h"
@@ -1281,7 +1281,7 @@ void ScreenshotRecognitionSessionController::prefetchText() {
 
 void ScreenshotRecognitionSessionController::activate(Mode mode) {
     const QPointer<ScreenshotRecognitionSessionController> lifetime(this);
-    if (!snow_shot::presentation::editionRecognitionModeAvailable(static_cast<int>(mode)))
+    if (!snow_shot::app::editionRecognitionModeAvailable(static_cast<int>(mode)))
         return;
     if (m_active && m_mode == mode && (mode == Mode::Table || mode == Mode::Latex) && busy(mode)) {
         if (!updateRecognitionModels())
@@ -1781,6 +1781,37 @@ void ScreenshotRecognitionSessionController::resetTable() {
     if (tableModeActive() && content() != nullptr) {
         content()->resetTable();
     }
+#endif
+}
+
+bool ScreenshotRecognitionSessionController::openSpreadsheetFile() {
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    if (!tableModeActive() || busy(Mode::Table) || m_openingSpreadsheet)
+        return false;
+    const QPointer<ScreenshotRecognitionSessionController> lifetime(this);
+    const QString targetKey = m_target.key;
+    m_openingSpreadsheet = true;
+    const auto snapshot = fileExportSnapshot();
+    if (!lifetime)
+        return false;
+    if (!snapshot || snapshot->kind != ScreenshotRecognitionFileKind::Table) {
+        m_openingSpreadsheet = false;
+        return false;
+    }
+    const auto result = ScreenshotRecognitionFileExport::openTemporaryTable(
+        *snapshot, m_actions.openSpreadsheetUrl);
+    if (!lifetime)
+        return false;
+    m_openingSpreadsheet = false;
+    if (!tableModeActive() || m_target.key != targetKey)
+        return false;
+    if (!result.succeeded()) {
+        static_cast<void>(notifyCallback(m_actions.showStatus, result.error, true));
+        return false;
+    }
+    return true;
+#else
+    return false;
 #endif
 }
 
@@ -2327,7 +2358,11 @@ void ScreenshotRecognitionSessionController::reportOverlayTranslationFailure() {
         it->overlayTranslation.status == TextCacheEntry::TranslationStatus::Failed &&
         !it->overlayTranslation.failureReported) {
         it->overlayTranslation.failureReported = true;
-        if (!showStatus(tr("Some text could not be translated"), true))
+        const QString detail = it->translationJob ? it->translationJob->errorText() : QString{};
+        const QString message = detail.isEmpty()
+                                    ? tr("Some text could not be translated")
+                                    : tr("Some text could not be translated: %1").arg(detail);
+        if (!showStatus(message, true))
             return;
     }
 #endif
@@ -2629,8 +2664,11 @@ ScreenshotRecognitionSessionController::fileExportSnapshot() {
             return std::nullopt;
         ScreenshotRecognitionFileSnapshot snapshot;
         snapshot.kind = ScreenshotRecognitionFileKind::Table;
-        if (m_tableSession)
+        if (m_tableSession) {
             snapshot.table = m_tableSession->document;
+            if (content())
+                snapshot.tableColumnWidths = content()->tableColumnWidths();
+        }
         return snapshot;
     }
 #endif
@@ -2681,6 +2719,33 @@ std::unique_ptr<QMimeData> ScreenshotRecognitionSessionController::recognitionCl
     QString text;
     bool resultAvailable = false;
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+    if (translating()) {
+        const auto entry = m_textCache.constFind(m_translationKey);
+        if (entry == m_textCache.cend())
+            return {};
+        const auto* presentation = displayedPresentation != nullptr
+                                       ? displayedPresentation
+                                       : entry->overlayTranslation.presentation.get();
+        if (originalImageTranslationActive() && presentation && presentation->hasTextSelection()) {
+            mimeData->setText(presentation->selectedText());
+            return mimeData;
+        }
+        if (!originalImageTranslationActive() && content()) {
+            if (auto selected = content()->textSelectionClipboardMimeData())
+                return selected;
+        }
+        if (snow_shot::storage::ScreenshotTranslationSettings().copyTranslationResultsAsImage()) {
+            const QImage image =
+                originalImageTranslationActive()
+                    ? (m_actions.renderTranslationImage ? m_actions.renderTranslationImage()
+                                                        : QImage{})
+                    : (content() ? content()->translationDocumentImage() : QImage{});
+            if (image.isNull())
+                return {};
+            mimeData->setImageData(image);
+            return mimeData;
+        }
+    }
     if (originalImageTranslationActive()) {
         const auto entry = m_textCache.value(m_translationKey);
         const auto* presentation = displayedPresentation != nullptr
@@ -3378,6 +3443,17 @@ void ScreenshotRecognitionSessionController::ensureContent() {
             return;
         m_content = created;
         if (m_content != nullptr) {
+            const QPointer<ScreenshotRecognitionSessionController> session(this);
+            m_content->setTranslationClipboardProvider(
+                [session] { return session && session->translating(); },
+                [session]() -> std::unique_ptr<QMimeData> {
+                    if (!session)
+                        return {};
+                    auto mime = session->recognitionClipboardMimeData();
+                    if (!mime)
+                        session->showStatus(tr("Unable to copy translation results"), true);
+                    return mime;
+                });
             m_content->setShowOriginalImage(m_showOriginalImage);
             if (!notify(&ScreenshotRecognitionSessionController::updateTextHighlighting))
                 return;
@@ -3702,7 +3778,8 @@ void ScreenshotRecognitionSessionController::updateTableState(
         return;
     }
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
-    const bool available = m_active && m_mode == Mode::Table && m_tableSession != nullptr;
+    const bool available = m_active && m_mode == Mode::Table && m_tableSession != nullptr &&
+                           !m_tableSession->document.empty();
 #else
     constexpr bool available = false;
 #endif

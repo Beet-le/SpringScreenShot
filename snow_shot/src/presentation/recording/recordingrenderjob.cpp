@@ -1,4 +1,5 @@
 #include "snow_shot/runtime/runtimeactivitytracker.h"
+#include "snow_shot/diagnostics/diagnostics.h"
 #include "recordingrenderjob.h"
 #include "recordingrenderdialog.h"
 #include "snow_shot/platform/applicationqos.h"
@@ -11,6 +12,7 @@
 #include <QPromise>
 #include <QScreen>
 #include <QTimer>
+#include <QUuid>
 #include <algorithm>
 #include <chrono>
 #include <exception>
@@ -128,6 +130,13 @@ struct RecordingRenderJob::Impl {
     void setError(QString error, const char* fallback = nullptr) {
         errorTranslation = error.isEmpty() ? fallback : nullptr;
         lastError = errorTranslation ? renderText(errorTranslation) : std::move(error);
+        if (!lastError.isEmpty())
+            snow_shot::diagnostics::DiagnosticsService::instance().record(
+                QtWarningMsg, QStringLiteral("snow_shot.recording"),
+                QStringLiteral("recording.render_failed"), lastError,
+                {{QStringLiteral("operation"), operation},
+                 {QStringLiteral("stage"), static_cast<int>(stage)},
+                 {QStringLiteral("duration_ms"), static_cast<qint64>(durationMs)}});
     }
     void ensureModal() {
         if (!visible || modal)
@@ -345,6 +354,7 @@ struct RecordingRenderJob::Impl {
     uint32_t stage = SNOW_RECORDING_RENDER_STAGE_PREPARE;
     uint64_t durationMs = 0;
     QString path;
+    const QString operation = QUuid::createUuid().toString(QUuid::Id128);
     QString lastError;
     const char* errorTranslation = nullptr;
     QPointer<adqt::widgets::AdModal> modal;

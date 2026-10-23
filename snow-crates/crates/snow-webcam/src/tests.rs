@@ -77,7 +77,12 @@ fn source_is_lazy_shared_bounded_and_drops_disconnected_and_paused_frames() {
     let starts = Arc::new(AtomicUsize::new(0));
     let live_factory = live.clone();
     let starts_factory = starts.clone();
-    let source = Source::with_backend(CaptureOptions { size: 50, fps: 30 }, move |_| {
+    let source = Source::with_backend(CaptureOptions { size: 50, fps: 30 }, move |capacity| {
+        assert_eq!(
+            capacity,
+            CaptureOptions { size: 500, fps: 30 },
+            "one native format must cover every editable size and admission rate"
+        );
         assert_eq!(
             live_factory.fetch_add(1, Ordering::AcqRel),
             0,
@@ -138,6 +143,92 @@ fn source_is_lazy_shared_bounded_and_drops_disconnected_and_paused_frames() {
     assert!(retained.snapshot(Instant::now()).error.is_some());
     drop(retained);
 }
+#[test]
+fn resizing_keeps_the_camera_and_last_frame_until_a_fresh_size_arrives() {
+    let (tx, rx) = bounded(1);
+    let live = Arc::new(AtomicUsize::new(0));
+    let starts = Arc::new(AtomicUsize::new(0));
+    let capture_live = live.clone();
+    let capture_starts = starts.clone();
+    let source = Source::with_backend(CaptureOptions { size: 50, fps: 30 }, move |_| {
+        if capture_starts.fetch_add(1, Ordering::AcqRel) != 0 {
+            return Err("camera cannot be reopened during an active stream".into());
+        }
+        capture_live.fetch_add(1, Ordering::AcqRel);
+        Ok(Box::new(Fake {
+            frames: rx.clone(),
+            live: capture_live.clone(),
+        }))
+    })
+    .unwrap();
+    source.set_active(true);
+    let at = Instant::now();
+    tx.send(Ok(raw(at, 8, 4))).unwrap();
+    eventually(|| source.snapshot(at).frame.is_some());
+    let initial = source.snapshot(at).frame.unwrap();
+    for size in [500, 75, 300, 50, 220] {
+        source.configure(CaptureOptions { size, fps: 30 }).unwrap();
+        let retained = source.snapshot(at);
+        assert!(
+            retained
+                .frame
+                .as_ref()
+                .is_some_and(|f| Arc::ptr_eq(f, &initial)),
+            "layout resizing must not clear the displayed camera sample"
+        );
+        assert!(retained.error.is_none());
+    }
+    let clock = snow_core::recording_clock::RecordingClock::new(at - Duration::from_millis(1));
+    assert!(
+        source
+            .recording_snapshot(&clock, Duration::from_secs(1))
+            .frame
+            .is_none(),
+        "recording must not encode a retained preview sample with the old dimensions"
+    );
+    let next = at + Duration::from_millis(40);
+    tx.send(Ok(raw(next, 8, 4))).unwrap();
+    eventually(|| {
+        source
+            .snapshot(next)
+            .frame
+            .is_some_and(|f| f.at == next && f.size == 220)
+    });
+    source
+        .configure(CaptureOptions { size: 220, fps: 15 })
+        .unwrap();
+    let skipped = at + Duration::from_millis(80);
+    let admitted = at + Duration::from_millis(120);
+    tx.send(Ok(raw(skipped, 8, 4))).unwrap();
+    tx.send(Ok(raw(admitted, 8, 4))).unwrap();
+    eventually(|| {
+        source
+            .snapshot(admitted)
+            .frame
+            .is_some_and(|f| f.at == admitted)
+    });
+    assert_eq!(
+        source.snapshot(skipped).frame.unwrap().at,
+        next,
+        "a live cadence change must apply admission without reconnecting"
+    );
+    assert_eq!(starts.load(Ordering::Acquire), 1);
+    assert_eq!(live.load(Ordering::Acquire), 1);
+    assert_eq!(initial.size, 50, "retained immutable frames remain valid");
+    tx.send(Err("disconnected".into())).unwrap();
+    eventually(|| source.snapshot(admitted).error.is_some());
+    source
+        .configure(CaptureOptions { size: 150, fps: 15 })
+        .unwrap();
+    assert!(
+        source.snapshot(admitted).error.is_some(),
+        "resizing cannot clear a device failure"
+    );
+    assert!(source.snapshot(admitted).frame.is_none());
+    source.set_active(false);
+    eventually(|| live.load(Ordering::Acquire) == 0);
+}
+
 #[test]
 fn invalid_options_and_startup_failures_do_not_open_or_retry_a_camera() {
     assert!(Source::new(CaptureOptions { size: 49, fps: 30 }).is_err());

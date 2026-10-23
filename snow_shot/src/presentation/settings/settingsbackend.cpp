@@ -927,6 +927,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::ScreenshotSettings().restoreOriginalScreenColors();
     case SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard:
         return storage::ScreenshotSettings().copyImageFileToClipboard();
+    case SettingsSwitchBinding::ScreenshotShowSaveResult:
+        return storage::ScreenshotSettings().showSaveResult();
     case SettingsSwitchBinding::SaveRecognitionResultAsImage:
         return storage::TextRecognitionSettings().saveRecognitionResultAsImage();
     case SettingsSwitchBinding::ShowOriginalImagePreview:
@@ -973,6 +975,12 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
 #else
         return false;
 #endif
+    case SettingsSwitchBinding::CopyTranslationResultsAsImage:
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+        return storage::ScreenshotTranslationSettings().copyTranslationResultsAsImage();
+#else
+        return false;
+#endif
     case SettingsSwitchBinding::SeparateRecordingAudioTracks:
         return storage::RecordingSettings().separateAudioTracks();
     case SettingsSwitchBinding::LoopAnimatedImages:
@@ -1007,6 +1015,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
     case SettingsSwitchBinding::LaunchAsAdministrator:
         return !app::distribution::isStoreManaged() &&
                storage::SystemSettings().launchAsAdministrator();
+    case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
+        return storage::DrawingSettings().deleteTextAfterCursor();
     case SettingsSwitchBinding::DrawingRememberLastUsedTool:
         return storage::DrawingSettings().rememberLastUsedTool();
     case SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton:
@@ -1102,6 +1112,8 @@ QString BuiltInSettingsBackend::switchHint(SettingsSwitchBinding binding) const 
         .launchHint;
 }
 bool BuiltInSettingsBackend::switchEnabled(SettingsSwitchBinding binding) const {
+    if (binding == SettingsSwitchBinding::ScreenshotShowSaveResult)
+        return storage::ScreenshotSettings().saveAsFileDialog() == QStringLiteral("snow_shot");
     if (app::distribution::isStoreManaged()) {
         if (binding == SettingsSwitchBinding::LaunchAsAdministrator)
             return false;
@@ -1117,7 +1129,8 @@ bool BuiltInSettingsBackend::switchEnabled(SettingsSwitchBinding binding) const 
         return false;
 #endif
 #if !SNOW_SHOT_ENABLE_TEXT_TRANSLATION
-    if (binding == SettingsSwitchBinding::OriginalImageTranslation)
+    if (binding == SettingsSwitchBinding::OriginalImageTranslation ||
+        binding == SettingsSwitchBinding::CopyTranslationResultsAsImage)
         return false;
 #endif
 #if !SNOW_SHOT_ENABLE_QR_RECOGNITION
@@ -1152,6 +1165,8 @@ bool BuiltInSettingsBackend::switchEnabled(SettingsSwitchBinding binding) const 
 }
 
 bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, bool value) {
+    if (binding == SettingsSwitchBinding::ScreenshotShowSaveResult)
+        return switchEnabled(binding) && storage::ScreenshotSettings().setShowSaveResult(value);
     if (binding == SettingsSwitchBinding::OcrResidentProcess ||
         binding == SettingsSwitchBinding::OcrModelHotStart) {
         const auto key = binding == SettingsSwitchBinding::OcrResidentProcess
@@ -1211,6 +1226,9 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     }
     if (binding == SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard) {
         return storage::ScreenshotSettings().setCopyImageFileToClipboard(value);
+    }
+    if (binding == SettingsSwitchBinding::DrawingDeleteTextAfterCursor) {
+        return storage::DrawingSettings().setDeleteTextAfterCursor(value);
     }
     if (binding == SettingsSwitchBinding::DrawingRememberLastUsedTool) {
         return storage::DrawingSettings().setRememberLastUsedTool(value);
@@ -1280,6 +1298,13 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::OriginalImageTranslation) {
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
         return storage::ScreenshotTranslationSettings().setOriginalImageTranslationEnabled(value);
+#else
+        return false;
+#endif
+    }
+    if (binding == SettingsSwitchBinding::CopyTranslationResultsAsImage) {
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+        return storage::ScreenshotTranslationSettings().setCopyTranslationResultsAsImage(value);
 #else
         return false;
 #endif
@@ -1373,6 +1398,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::ScreenshotConfirmBeforeExitingViaShortcut:
     case SettingsSwitchBinding::ScreenshotRestoreOriginalScreenColors:
     case SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard:
+    case SettingsSwitchBinding::ScreenshotShowSaveResult:
     case SettingsSwitchBinding::SaveRecognitionResultAsImage:
     case SettingsSwitchBinding::ShowOriginalImagePreview:
     case SettingsSwitchBinding::ShowTextHighlighting:
@@ -1388,6 +1414,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::JumpToTranslationPage:
     case SettingsSwitchBinding::StandaloneTranslationWindow:
     case SettingsSwitchBinding::OriginalImageTranslation:
+    case SettingsSwitchBinding::CopyTranslationResultsAsImage:
     case SettingsSwitchBinding::SeparateRecordingAudioTracks:
     case SettingsSwitchBinding::LoopAnimatedImages:
     case SettingsSwitchBinding::ScreenRecordingCaptureToolbar:
@@ -1400,6 +1427,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::McpEnabled:
     case SettingsSwitchBinding::AutoStartAtBoot:
     case SettingsSwitchBinding::LaunchAsAdministrator:
+    case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
     case SettingsSwitchBinding::DrawingRememberLastUsedTool:
     case SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton:
     case SettingsSwitchBinding::DailyUsageUpload:
@@ -2739,6 +2767,9 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("drawing/quick_selection_disabled_tools"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("drawing/quick_selection_disabled_tools"))},
+            {QStringLiteral("drawing/delete_text_after_cursor"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("drawing/delete_text_after_cursor"))},
             {QStringLiteral("drawing/remember_last_used_tool"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("drawing/remember_last_used_tool"))},
@@ -2878,6 +2909,12 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("screen_recording/webcam_size"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/webcam_size"))},
+            {QStringLiteral("screen_recording/webcam_offset_left"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screen_recording/webcam_offset_left"))},
+            {QStringLiteral("screen_recording/webcam_offset_bottom"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screen_recording/webcam_offset_bottom"))},
             {QStringLiteral("screen_recording/webcam_shape"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/webcam_shape"))},
@@ -2899,6 +2936,9 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("screen_recording/record_mouse_clicks"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/record_mouse_clicks"))},
+            {QStringLiteral("screen_recording/record_mouse_scrolling"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screen_recording/record_mouse_scrolling"))},
             {QStringLiteral("screen_recording/mouse_highlight_color"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/mouse_highlight_color"))},

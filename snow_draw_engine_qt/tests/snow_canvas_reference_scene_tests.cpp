@@ -1,4 +1,7 @@
 #include "snow_canvas_reference_scene_fixture.h"
+#include "snow_canvas_ffi_handles.h"
+#include "snow_canvas_runtime_access.h"
+#include "snow_canvas_viewport.h"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -299,6 +302,80 @@ void editsBeneathFiltersPreserveSamplingAtImageEdges() {
             "partial updates include sampling dependencies from underneath edge filters");
 }
 
+void growingPenStrokesMatchFreshReferencePixels(
+    SnowCanvasFilterRenderReference::Presentation presentation, double zoom, double dpr) {
+    for (const auto type : {SnowCanvasFilterType::Mosaic, SnowCanvasFilterType::GaussianBlur,
+                            SnowCanvasFilterType::Grayscale, SnowCanvasFilterType::Inversion,
+                            SnowCanvasFilterType::Emboss, SnowCanvasFilterType::Brightness}) {
+        Fixture fixture({320, 240}, {20.25, -10.5, 160, 120});
+        fixture.renderer.reference.presentation = presentation;
+        fixture.zoom(zoom);
+        require(fixture.canvas.setCanvasFilterStyle({type, 0.65, 0.7, 22},
+                                                    SnowCanvasFilterStylePropertyType |
+                                                        SnowCanvasFilterStylePropertyStrength |
+                                                        SnowCanvasFilterStylePropertyOpacity |
+                                                        SnowCanvasFilterStylePropertyStrokeWidth),
+                "configure growing pen filter");
+        require(fixture.canvas.setCanvasTool(SnowCanvasTool::PenFilter), "activate pen filter");
+        // Dispatch input directly so the test does not depend on the
+        // widget's timer for coalescing pointer moves.
+        const auto runtime = snow_canvas_runtime::Access::handle(fixture.runtime);
+        SnowCanvasViewport inputViewport;
+        const auto center = fixture.renderer.reference.canvasRect.center();
+        ScopedChangedViewportList toolChanged;
+        require(inputViewport.create(runtime, snow_canvas_viewport::defaultEngineConfig()) &&
+                    snow_viewport_set_surface_size(runtime, inputViewport.get(), 320, 240) ==
+                        SNOW_OK &&
+                    snow_viewport_set_camera(runtime, inputViewport.get(), center.x(), center.y(),
+                                             2.0) == SNOW_OK &&
+                    snow_viewport_set_active_tool_ex(runtime, inputViewport.get(),
+                                                     SNOW_ACTIVE_TOOL_PEN_FILTER,
+                                                     toolChanged.outParam()) == SNOW_OK,
+                "create pen input viewport");
+        const auto pointer = [&](SnowPointerEventType eventType, QPointF position) {
+            SnowInputEvent event{};
+            event.kind = SNOW_INPUT_EVENT_POINTER;
+            event.pointer.pointer_id = 1;
+            event.pointer.event_type = eventType;
+            event.pointer.device = SNOW_POINTER_DEVICE_MOUSE;
+            event.pointer.position_x = position.x();
+            event.pointer.position_y = position.y();
+            event.pointer.button = eventType == SNOW_POINTER_EVENT_MOVE
+                                       ? SNOW_POINTER_BUTTON_NONE
+                                       : SNOW_POINTER_BUTTON_PRIMARY;
+            event.pointer.buttons = eventType == SNOW_POINTER_EVENT_UP ? 0 : 1;
+            SnowInteractionOutput output{};
+            ScopedChangedViewportList changed;
+            require(snow_viewport_process_input_ex(runtime, inputViewport.get(), &event, &output,
+                                                   changed.outParam()) == SNOW_OK,
+                    "process pen input");
+            snow_canvas_runtime::Access::syncChangedViewports(fixture.runtime, changed.get());
+        };
+        pointer(SNOW_POINTER_EVENT_DOWN, {30, 35});
+        fixture.render(dpr);
+        QPointF previous(30, 35);
+        int step = 0;
+        for (const QPointF point : {QPointF(45, 40), QPointF(60, 50), QPointF(90, 70),
+                                    QPointF(140, 110), QPointF(210, 170), QPointF(280, 200),
+                                    QPointF(250, 150), QPointF(160, 140), QPointF(70, 80)}) {
+            // Alternate one patch per paint with multiple patches coalesced before painting.
+            if (++step % 2 == 0)
+                pointer(SNOW_POINTER_EVENT_MOVE, (previous + point) / 2);
+            pointer(SNOW_POINTER_EVENT_MOVE, point);
+            const auto incremental = fixture.render(dpr);
+            fixture.canvas.clearRenderState();
+            require(fixture.render(dpr) == incremental,
+                    "each growing pen-filter preview must match a fresh reference render");
+            previous = point;
+        }
+        pointer(SNOW_POINTER_EVENT_UP, previous);
+        const auto committed = fixture.render(dpr);
+        fixture.canvas.clearRenderState();
+        require(fixture.render(dpr) == committed,
+                "committing a pen filter must retain every painted segment");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -316,5 +393,9 @@ int main(int argc, char** argv) {
     referenceSceneEditsReuseImmutableEraserMasks();
     accumulatedEditsMatchFreshReferencePixels();
     editsBeneathFiltersPreserveSamplingAtImageEdges();
+    growingPenStrokesMatchFreshReferencePixels(
+        SnowCanvasFilterRenderReference::Presentation::Replace, 0.75, 1.25);
+    growingPenStrokesMatchFreshReferencePixels(
+        SnowCanvasFilterRenderReference::Presentation::Composite, 1.5, 2.0);
     return 0;
 }

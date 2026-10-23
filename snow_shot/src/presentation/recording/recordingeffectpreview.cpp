@@ -129,105 +129,12 @@ uint32_t rgba(const QColor& color) {
            (static_cast<uint32_t>(color.blue()) << 8) | static_cast<uint32_t>(color.alpha());
 }
 
-struct SnowRecordingEffectsDeleter {
-    void operator()(SnowRecordingEffects* handle) const {
-        snow_recording_effects_destroy(handle);
-    }
-};
-
-std::shared_ptr<RecordingEffectsFrame> takeFrame(SnowRecordingEffectsFrame* native) {
-    if (native == nullptr) {
-        return {};
-    }
-    auto frame = std::make_shared<RecordingEffectsFrame>();
-    frame->lease = std::shared_ptr<void>(native, [](void* value) {
-        snow_recording_effects_release_frame(static_cast<SnowRecordingEffectsFrame*>(value));
-    });
-    SnowRecordingEffectsFrameInfo info{};
-    if (snow_recording_effects_frame_info(native, &info) == 0) {
-        return {};
-    }
-    frame->generation = info.generation;
-    frame->revision = info.revision;
-    frame->output = QSize(static_cast<int>(info.width), static_cast<int>(info.height));
-    if (info.error_utf8 != nullptr) {
-        frame->error = QString::fromUtf8(info.error_utf8);
-    }
-    const auto appendLayer = [&frame](const SnowRecordingEffectsFrameInfo& layer) {
-        frame->tiles.reserve(frame->tiles.size() + layer.tile_count);
-        for (uint32_t i = 0; i < layer.tile_count; ++i) {
-            const auto& tile = layer.tiles[i];
-            const QRect rect(static_cast<int>(tile.x), static_cast<int>(tile.y),
-                             static_cast<int>(tile.width), static_cast<int>(tile.height));
-            frame->tiles.push_back(
-                {rect,
-                 QImage(tile.rgba_premultiplied, rect.width(), rect.height(),
-                        static_cast<qsizetype>(tile.stride), QImage::Format_RGBA8888_Premultiplied),
-                 QSize(static_cast<int>(layer.width), static_cast<int>(layer.height))});
-        }
-    };
-    appendLayer(info);
-    if (snow_recording_effects_frame_keyboard_info(native, &info) == 0) {
-        return {};
-    }
-    appendLayer(info);
-    return frame;
-}
-
-class NativeRecordingEffectsSource final : public RecordingEffectsSource {
-  public:
-    // The handle owns the native observers (including the low-level input hooks
-    // while active), so every path releases it through the same deleter.
-    using Handle = std::unique_ptr<SnowRecordingEffects, SnowRecordingEffectsDeleter>;
-
-    ~NativeRecordingEffectsSource() override {
-        // Joins the native worker before m_notify is destroyed.
-        stop();
-    }
-    bool start(const SnowRecordingEffectsConfig& config, std::function<void()> notify,
-               QString& error) override {
-        stop();
-        m_notify = std::move(notify);
-        m_handle.reset(snow_recording_effects_create(
-            &config,
-            [](void* context) {
-                auto* self = static_cast<NativeRecordingEffectsSource*>(context);
-                self->m_notify();
-            },
-            this));
-        if (m_handle != nullptr && snow_recording_effects_set_active(m_handle.get(), 1) != 0) {
-            return true;
-        }
-        error = QString::fromUtf8(snow_recording_effects_last_error());
-        stop();
-        return false;
-    }
-    bool configure(const SnowRecordingEffectsConfig& config, QString& error) override {
-        if (snow_recording_effects_configure(m_handle.get(), &config) != 0) {
-            return true;
-        }
-        error = QString::fromUtf8(snow_recording_effects_last_error());
-        return false;
-    }
-    void stop() override {
-        m_handle.reset();
-        m_notify = {};
-    }
-    std::shared_ptr<RecordingEffectsFrame> acquire() override {
-        auto* native = snow_recording_effects_acquire_frame(m_handle.get());
-        return takeFrame(native);
-    }
-
-  private:
-    Handle m_handle;
-    std::function<void()> m_notify;
-};
 } // namespace
 
 RecordingEffectPreview::RecordingEffectPreview(ScreenRecordingAreaWindow& area,
                                                std::unique_ptr<RecordingEffectsSource> source)
     : QObject(&area), m_area(area),
-      m_source(source ? std::move(source) : std::make_unique<NativeRecordingEffectsSource>()),
+      m_source(source ? std::move(source) : createNativeRecordingEffectsSource()),
       m_readout(new CanvasStatusReadout(&area)), m_statusPrompt(new RecordingStatusPrompt(&area)) {
     m_readout->setObjectName(QStringLiteral("screenRecordingMotionPreviewLabel"));
     m_readout->setMessage(CanvasStatusReadout::Message::MotionPreview);
@@ -259,22 +166,34 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
                                        const QColor& highlight, bool recordMouseClicks,
                                        int highlightRadius, uint32_t playbackOverlay,
                                        const QColor& progressBarColor, SnowWebcam* webcam,
-                                       int webcamSize, uint32_t webcamShape) {
+                                       int webcamSize, uint32_t webcamShape,
+                                       const QPoint& webcamOffset, bool recordMouseScrolling) {
     if (m_sessionEnding)
         return;
-    if (m_capture == capture && m_output == output && m_trail == trail && m_click == click &&
+    const bool sameScene =
+        m_capture == capture && m_output == output && m_trail == trail && m_click == click &&
         m_keyboard == keyboard && m_trailDurationMs == trailDurationMs &&
         m_keyboardBackground == keyboardBackground && m_keyboardForeground == keyboardForeground &&
         m_keyboardSize == keyboardSize && m_highlight == highlight &&
-        m_recordMouseClicks == recordMouseClicks && m_highlightRadius == highlightRadius &&
+        m_recordMouseClicks == recordMouseClicks &&
+        m_recordMouseScrolling == recordMouseScrolling && m_highlightRadius == highlightRadius &&
         m_playbackOverlay == playbackOverlay && m_progressBarColor == progressBarColor &&
-        m_webcam == webcam && m_webcamSize == webcamSize && m_webcamShape == webcamShape) {
+        m_webcam == webcam;
+    if (sameScene && m_webcamSize == webcamSize && m_webcamShape == webcamShape &&
+        m_webcamOffset == webcamOffset) {
         return;
     }
-    // Clear with the old transform before changing geometry or disabling an effect.
-    clearFrame();
-    clearPlaybackFrame();
-    ++m_generation;
+    if (sameScene && webcam) {
+        // Layout edits share the active stream's generation. Keep its displayed frame
+        // until the worker replaces it; rapid gestures must not starve presentation.
+        m_webcamLayoutDirty = true;
+    } else {
+        // Clear with the old transform before changing the scene or disabling an effect.
+        clearFrame();
+        clearPlaybackFrame();
+        ++m_generation;
+        m_configurationDirty = true;
+    }
     m_playbackOverlay = playbackOverlay;
     m_progressBarColor = progressBarColor;
     m_capture = capture;
@@ -284,18 +203,20 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
     m_highlight = highlight;
     m_highlightRadius = highlightRadius;
     m_recordMouseClicks = recordMouseClicks;
+    m_recordMouseScrolling = recordMouseScrolling;
     m_keyboard = keyboard;
     m_webcam = webcam;
     m_webcamSize = webcamSize;
+    m_webcamOffset = webcamOffset;
     m_webcamShape = webcamShape;
+    updateWebcamControl();
     m_keyboardSize = keyboardSize;
     m_trailDurationMs = trailDurationMs;
     m_keyboardBackground = keyboardBackground;
     m_keyboardForeground = keyboardForeground;
-    m_configurationDirty = true;
     m_failed = false;
     if (trail.alpha() == 0 && click.alpha() == 0 && !keyboard && highlight.alpha() == 0 &&
-        !recordMouseClicks && playbackOverlay == 0 && !webcam) {
+        !recordMouseClicks && !recordMouseScrolling && playbackOverlay == 0 && !webcam) {
         stopAndClear();
     }
     // Status prompts remain available even when no native effect observer is needed.
@@ -336,6 +257,7 @@ void RecordingEffectPreview::synchronize() {
         return;
     }
     m_previewVisible = true;
+    updateWebcamControl();
     updateReadout();
 #ifdef Q_OS_MACOS
     // Native input uses desktop points; every preview layer uses physical display pixels.
@@ -348,7 +270,7 @@ void RecordingEffectPreview::synchronize() {
         m_playbackDirty = false;
         if (m_playbackOverlay != 0) {
             const RecordingKeyboardFont font;
-            m_playbackFrame = takeFrame(snow_recording_effects_playback_preview(
+            m_playbackFrame = takeRecordingEffectsFrame(snow_recording_effects_playback_preview(
                 static_cast<uint32_t>(m_capture.width()), static_cast<uint32_t>(m_capture.height()),
                 canvasScale, m_playbackOverlay, rgba(m_progressBarColor), font.family.constData(),
                 font.cjkFamily.constData(), font.weight));
@@ -363,7 +285,7 @@ void RecordingEffectPreview::synchronize() {
     }
     const bool motionEnabled = m_trail.alpha() != 0 || m_click.alpha() != 0 || m_keyboard ||
                                m_highlight.alpha() != 0 || m_recordMouseClicks ||
-                               m_webcam != nullptr;
+                               m_recordMouseScrolling || m_webcam != nullptr;
     if (!motionEnabled) {
         m_running = false;
         m_source->stop();
@@ -372,13 +294,16 @@ void RecordingEffectPreview::synchronize() {
         m_configurationDirty = false;
         return;
     }
-    if (m_failed || (m_running && !m_configurationDirty)) {
+    if (m_failed || (m_running && !m_configurationDirty && !m_webcamLayoutDirty)) {
         updateReadout();
         return;
     }
-    ++m_generation;
-    clearFrame();
-    const RecordingKeyboardLabels labels(m_keyboard || m_recordMouseClicks);
+    if (!m_running || m_configurationDirty) {
+        ++m_generation;
+        clearFrame();
+    }
+    const RecordingKeyboardLabels labels(m_keyboard || m_recordMouseClicks ||
+                                         m_recordMouseScrolling);
     const RecordingKeyboardTheme theme(m_keyboardBackground, m_keyboardForeground);
     const RecordingKeyboardFont font;
     SnowRecordingEffectsConfig config{SNOW_RECORDING_EFFECTS_CONFIG_VERSION,
@@ -410,7 +335,10 @@ void RecordingEffectPreview::synchronize() {
                                       static_cast<uint32_t>(m_highlightRadius),
                                       m_webcam,
                                       static_cast<uint32_t>(m_webcamSize),
-                                      m_webcamShape};
+                                      m_webcamShape,
+                                      static_cast<uint32_t>(m_webcamOffset.x()),
+                                      static_cast<uint32_t>(m_webcamOffset.y()),
+                                      static_cast<uint32_t>(m_recordMouseScrolling)};
     font.applyTo(config);
     QString error;
     const bool success = m_running ? m_source->configure(config, error)
@@ -430,6 +358,7 @@ void RecordingEffectPreview::synchronize() {
                                          error);
     m_running = success;
     m_configurationDirty = false;
+    m_webcamLayoutDirty = false;
     if (!success) {
         stopAndClear();
         m_failed = true;
@@ -440,9 +369,11 @@ void RecordingEffectPreview::synchronize() {
 }
 
 void RecordingEffectPreview::stopAndClear(bool present) {
+    m_area.setWebcamOverlay({});
     m_configurationTimer.stop();
     ++m_generation;
     m_running = false;
+    m_webcamLayoutDirty = false;
     m_source->stop();
     clearFrame();
     clearPlaybackFrame();
@@ -544,6 +475,32 @@ QRegion RecordingEffectPreview::frameRegion(const RecordingEffectsFrame& frame) 
     return result.intersected(m_area.canvas()->rect());
 }
 
+void RecordingEffectPreview::updateWebcamControl() {
+    if (!m_previewVisible || !m_eligible || !m_webcam || m_capture.isEmpty()) {
+        m_area.setWebcamOverlay({});
+        return;
+    }
+#ifdef Q_OS_MACOS
+    const qreal scale = m_area.devicePixelRatioF();
+#else
+    const qreal scale = 1;
+#endif
+    const QSize physical(qRound(m_capture.width() * scale), qRound(m_capture.height() * scale));
+    const auto placement = snow_webcam_placement(
+        static_cast<uint32_t>(physical.width()), static_cast<uint32_t>(physical.height()),
+        static_cast<uint32_t>(m_webcamSize), static_cast<uint32_t>(m_webcamOffset.x()),
+        static_cast<uint32_t>(m_webcamOffset.y()));
+    const QRectF bounds =
+        outputToCanvas(physical)
+            .mapRect(QRectF(placement.x, placement.y, placement.size, placement.size))
+            .translated(m_area.canvasGeometry().topLeft());
+    m_area.setWebcamOverlay(
+        bounds, physical, m_webcamSize, m_webcamOffset,
+        QPoint(static_cast<int>(placement.x),
+               physical.height() - static_cast<int>(placement.y + placement.size)),
+        m_webcamShape == 1);
+}
+
 void RecordingEffectPreview::updateReadout() {
     m_statusPrompt->present(m_area.selectionRect(), m_previewVisible && m_showStatusPrompts);
     if (!m_running || !m_frame) {
@@ -577,6 +534,7 @@ bool RecordingEffectPreview::eventFilter(QObject* watched, QEvent* event) {
             m_configurationTimer.start();
             break;
         case QEvent::Resize:
+            updateWebcamControl();
             updateReadout();
             break;
         case QEvent::DevicePixelRatioChange:

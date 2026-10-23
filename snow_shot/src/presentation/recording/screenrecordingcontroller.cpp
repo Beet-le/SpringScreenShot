@@ -12,6 +12,7 @@
 #include "recordingrenderjob.h"
 #include "recordingrecovery.h"
 #include "snow_shot/app/distribution.h"
+#include "snow_shot/app/mcp/recordingoptioncontracts.h"
 #include "snow_shot/platform/filemanager.h"
 #include "widgets/message.h"
 #include "recordingeffectstyle.h"
@@ -283,12 +284,14 @@ struct ScreenRecordingController::Impl {
         keyboardSize = settings.keyboardSize();
         webcamEnabled = settings.webcamEnabled();
         webcamSize = settings.webcamSize();
+        webcamOffset = QPoint(settings.webcamOffsetLeft(), settings.webcamOffsetBottom());
         webcamShape = settings.webcamShape();
         keyboardBackgroundColor = settings.keyboardBackgroundColor();
         keyboardForegroundColor = settings.keyboardForegroundColor();
         mouseClickColor = settings.mouseClickColor();
         mouseHighlightEnabled = settings.mouseHighlightEnabled();
         recordMouseClicks = settings.recordMouseClicks();
+        recordMouseScrolling = settings.recordMouseScrolling();
         mouseHighlightColor = settings.mouseHighlightColor();
         mouseHighlightRadius = settings.mouseHighlightRadius();
         showCursor = settings.showCursor();
@@ -306,7 +309,9 @@ struct ScreenRecordingController::Impl {
                              }
                              if (key == QStringLiteral("screen_recording/enable_webcam") ||
                                  key == QStringLiteral("screen_recording/webcam_size") ||
-                                 key == QStringLiteral("screen_recording/webcam_shape")) {
+                                 key == QStringLiteral("screen_recording/webcam_shape") ||
+                                 key == QStringLiteral("screen_recording/webcam_offset_left") ||
+                                 key == QStringLiteral("screen_recording/webcam_offset_bottom")) {
                                  // Saved preferences belong to the next editable session. Keep
                                  // the refresh pending while recording or automation owns options.
                                  webcamSettingsRefreshPending = true;
@@ -605,6 +610,19 @@ struct ScreenRecordingController::Impl {
                                  uiSession->settingsModal->close();
                          });
         connectDrawingToolbar(*palette);
+        QObject::connect(areaWindow, &ScreenRecordingAreaWindow::webcamLayoutPreviewed,
+                         uiSession->connections.get(), [this](int size, const QPoint& offset) {
+                             setOption(webcamSize, size);
+                             setOption(webcamOffset, offset);
+                             toolbarWindow->palette()->setRecordingWebcamSize(size);
+                             syncPreview();
+                         });
+        QObject::connect(areaWindow, &ScreenRecordingAreaWindow::webcamLayoutCommitted,
+                         uiSession->connections.get(), [this](int size, const QPoint& offset) {
+                             if (recordingOptionsEditable())
+                                 snow_shot::storage::RecordingSettings().setWebcamLayout(size,
+                                                                                         offset);
+                         });
         QObject::connect(palette, &ScreenshotToolPalette::recordingKeyboardSizeChanged,
                          uiSession->connections.get(), [this](int value) {
                              setOption(keyboardSize, value);
@@ -814,6 +832,12 @@ struct ScreenRecordingController::Impl {
                              snow_shot::storage::RecordingSettings().setRecordMouseClicks(value);
                              syncPreview();
                          });
+        QObject::connect(palette, &ScreenshotToolPalette::recordingRecordMouseScrollingChanged,
+                         uiSession->connections.get(), [this](bool value) {
+                             setOption(recordMouseScrolling, value);
+                             snow_shot::storage::RecordingSettings().setRecordMouseScrolling(value);
+                             syncPreview();
+                         });
         QObject::connect(palette, &ScreenshotToolPalette::recordingMouseHighlightColorChanged,
                          uiSession->connections.get(), [this](const QColor& value) {
                              setOption(mouseHighlightColor, value);
@@ -971,6 +995,7 @@ struct ScreenRecordingController::Impl {
         if (!isOpen() || !recordingOptionsEditable()) {
             return;
         }
+        areaWindow->cancelWebcamInteraction();
         // UI starts after an automated session use current saved preferences.
         if (automationOwned && !automationNextStart) {
             automationRevision = snow_shot::presentation::nextAutomationRevision();
@@ -991,6 +1016,7 @@ struct ScreenRecordingController::Impl {
             mouseClickColor = settings.mouseClickColor();
             mouseHighlightEnabled = settings.mouseHighlightEnabled();
             recordMouseClicks = settings.recordMouseClicks();
+            recordMouseScrolling = settings.recordMouseScrolling();
             mouseHighlightColor = settings.mouseHighlightColor();
             mouseHighlightRadius = settings.mouseHighlightRadius();
             showCursor = settings.showCursor();
@@ -1063,8 +1089,8 @@ struct ScreenRecordingController::Impl {
     }
 
     bool allowRecording(bool notify) {
-        const bool input = showKeyboard || recordMouseClicks || mouseTrailColor.alpha() != 0 ||
-                           mouseClickColor.alpha() != 0;
+        const bool input = showKeyboard || recordMouseClicks || recordMouseScrolling ||
+                           mouseTrailColor.alpha() != 0 || mouseClickColor.alpha() != 0;
         return !permissionCheck ||
                permissionCheck(outputFormat == QStringLiteral("mp4") && microphoneEnabled, input,
                                notify);
@@ -1190,6 +1216,9 @@ struct ScreenRecordingController::Impl {
                 webcamEnabled ? webcam.get() : nullptr,
                 static_cast<uint32_t>(webcamSize),
                 webcamShape == QStringLiteral("circle") ? 1u : 0u,
+                static_cast<uint32_t>(webcamOffset.x()),
+                static_cast<uint32_t>(webcamOffset.y()),
+                static_cast<uint32_t>(recordMouseScrolling),
             };
             sessionLoopAnimatedImages = config.loop_animated_images != 0;
             const QDateTime outputTimestamp = QDateTime::currentDateTime();
@@ -1201,7 +1230,7 @@ struct ScreenRecordingController::Impl {
                 snow_shot::presentation::recording::screenRecordingDirectories(outputTimestamp,
                                                                                sessionWindowNames);
             const QString extension = sessionOutputSettings.extension;
-            const bool keyboard = showKeyboard || recordMouseClicks;
+            const bool keyboard = showKeyboard || recordMouseClicks || recordMouseScrolling;
             const QString requestedPath =
                 automationOptions.value(QStringLiteral("path")).toString();
             startupRecovery =
@@ -1304,7 +1333,7 @@ struct ScreenRecordingController::Impl {
             sessionStatus = ScreenshotToolPalette::RecordingSessionStatus::idle();
             automationRevision = snow_shot::presentation::nextAutomationRevision();
             if (!result.error.isEmpty()) {
-                report(QStringLiteral("recording.failed"), QtWarningMsg);
+                report(QStringLiteral("recording.failed"), QtWarningMsg, result.error);
             }
             return;
         }
@@ -1865,8 +1894,11 @@ struct ScreenRecordingController::Impl {
             {QStringLiteral("show_keyboard"), showKeyboard},
             {QStringLiteral("webcam"), webcamEnabled},
             {QStringLiteral("webcam_size"), webcamSize},
+            {QStringLiteral("webcam_offset_left"), webcamOffset.x()},
+            {QStringLiteral("webcam_offset_bottom"), webcamOffset.y()},
             {QStringLiteral("webcam_shape"), webcamShape},
             {QStringLiteral("record_mouse_clicks"), recordMouseClicks},
+            {QStringLiteral("record_mouse_scrolling"), recordMouseScrolling},
             {QStringLiteral("mouse_highlight"), mouseHighlightEnabled},
             {QStringLiteral("start_delay_seconds"), startDelaySeconds},
             {QStringLiteral("keyboard_size"), keyboardSize},
@@ -2132,10 +2164,13 @@ struct ScreenRecordingController::Impl {
             !recordingOptionsEditable())
             return;
         webcamSettingsRefreshPending = false;
+        if (areaWindow)
+            areaWindow->cancelWebcamInteraction();
         const snow_shot::storage::RecordingSettings saved;
         const bool enabledChanged = webcamEnabled != saved.webcamEnabled();
         setOption(webcamEnabled, saved.webcamEnabled());
         setOption(webcamSize, saved.webcamSize());
+        setOption(webcamOffset, QPoint(saved.webcamOffsetLeft(), saved.webcamOffsetBottom()));
         setOption(webcamShape, saved.webcamShape());
         if (enabledChanged) {
             webcamFailed = false;
@@ -2183,6 +2218,8 @@ struct ScreenRecordingController::Impl {
     }
 
     void notifyWebcamError(const QString& error) {
+        if (areaWindow)
+            areaWindow->setWebcamOverlay({});
         showRecordingWarning(QStringLiteral("screen-recording-webcam-error"),
                              tr("Webcam unavailable: %1").arg(error));
     }
@@ -2269,8 +2306,8 @@ struct ScreenRecordingController::Impl {
             : postProcessingEffect == QStringLiteral("playback_time")
                 ? SNOW_RECORDING_PLAYBACK_OVERLAY_PLAYBACK_TIME
                 : SNOW_RECORDING_PLAYBACK_OVERLAY_PROGRESS_BAR,
-            progressBarColor, webcamEnabled ? webcam.get() : nullptr, webcamSize,
-            webcamShape == QStringLiteral("circle") ? 1u : 0u);
+            progressBarColor, webcamEnabled && !webcamFailed ? webcam.get() : nullptr, webcamSize,
+            webcamShape == QStringLiteral("circle") ? 1u : 0u, webcamOffset, recordMouseScrolling);
         const bool audioSupported = outputFormat == QStringLiteral("mp4");
         uiSession->preview->setStatusPrompts(
             snow_shot::storage::RecordingSettings().showStatusPrompts(), outputFormat,
@@ -2316,6 +2353,7 @@ struct ScreenRecordingController::Impl {
             palette->setRecordingMouseClickColor(mouseClickColor);
             palette->setRecordingMouseHighlightEnabled(mouseHighlightEnabled);
             palette->setRecordingRecordMouseClicks(recordMouseClicks);
+            palette->setRecordingRecordMouseScrolling(recordMouseScrolling);
             palette->setRecordingMouseHighlightColor(mouseHighlightColor);
             palette->setRecordingMouseHighlightRadius(mouseHighlightRadius);
             palette->setRecordingStartDelaySeconds(startDelaySeconds);
@@ -2340,7 +2378,7 @@ struct ScreenRecordingController::Impl {
     void showError(const QString& message) {
         if (!recordingSession)
             setCaptureActivity(false);
-        report(QStringLiteral("recording.failed"), QtWarningMsg);
+        report(QStringLiteral("recording.failed"), QtWarningMsg, message);
         automationError = message;
         automationRevision = snow_shot::presentation::nextAutomationRevision();
         if (automationOwned || automationCommand)
@@ -2407,6 +2445,7 @@ struct ScreenRecordingController::Impl {
     snow_shot::storage::ScreenshotWindowNames sessionWindowNames;
     bool webcamEnabled = false;
     int webcamSize = 150;
+    QPoint webcamOffset{48, 48};
     QString webcamShape = QStringLiteral("square");
     bool webcamSettingsRefreshPending = false;
     std::shared_ptr<SnowWebcam> webcam;
@@ -2442,6 +2481,7 @@ struct ScreenRecordingController::Impl {
     QColor mouseClickColor{0, 0, 0, 0};
     bool mouseHighlightEnabled = false;
     bool recordMouseClicks = false;
+    bool recordMouseScrolling = false;
     QColor mouseHighlightColor{255, 255, 0, 128};
     int mouseHighlightRadius = 41;
     bool showCursor = true;
@@ -2451,11 +2491,21 @@ struct ScreenRecordingController::Impl {
     QColor sessionMouseClickColor{0, 0, 0, 0};
     bool sessionShowCursor = true;
     QString sessionCaptureBackendPreference = QStringLiteral("auto");
-    void report(const QString& event, QtMsgType level = QtInfoMsg) const {
-        snow_shot::diagnostics::logEvent(
-            QStringLiteral("snow_shot.recording"), event,
+    void report(const QString& event, QtMsgType level = QtInfoMsg,
+                const QString& message = {}) const {
+        snow_shot::diagnostics::DiagnosticsService::instance().record(
+            level, QStringLiteral("snow_shot.recording"), event, message,
             {{QStringLiteral("operation"), operation},
              {QStringLiteral("backend_preference"), sessionCaptureBackendPreference},
+             {QStringLiteral("format"), sessionOutputSettings.extension},
+             {QStringLiteral("codec"), static_cast<int>(sessionOutputSettings.codec)},
+             {QStringLiteral("hardware"), sessionOutputSettings.useHardwareEncoder},
+             {QStringLiteral("fps"), static_cast<int>(sessionOutputSettings.targetFps)},
+             {QStringLiteral("quality"), static_cast<int>(sessionOutputSettings.quality)},
+             {QStringLiteral("encoding_preset"), static_cast<int>(sessionOutputSettings.preset)},
+             {QStringLiteral("deferred"), sessionDeferred},
+             {QStringLiteral("width"), recordingRegion.width()},
+             {QStringLiteral("height"), recordingRegion.height()},
              {QStringLiteral("duration_ms"),
               operationTimer.isValid() ? operationTimer.elapsed() : 0},
              {QStringLiteral("backend"),
@@ -2464,8 +2514,7 @@ struct ScreenRecordingController::Impl {
 #else
               QStringLiteral("auto")
 #endif
-             }},
-            level);
+             }});
     }
     QString operation;
     QElapsedTimer operationTimer;
@@ -2717,82 +2766,48 @@ bool ScreenRecordingController::startAutomation(const QRect& region, const QJson
         return fail("busy");
     if (!region.isValid() || region.width() > 32768 || region.height() > 32768)
         return fail("invalid_region");
-    const QHash<QString, QStringList> enums{
-        {QStringLiteral("webcam_shape"), {QStringLiteral("square"), QStringLiteral("circle")}},
-        {QStringLiteral("post_processing_effect"),
-         {QStringLiteral("progress_bar"), QStringLiteral("playback_time")}},
-        {QStringLiteral("format"),
-         {QStringLiteral("mp4"), QStringLiteral("gif"), QStringLiteral("apng"),
-          QStringLiteral("webp")}},
-        {QStringLiteral("clarity"),
-         {QStringLiteral("4k"), QStringLiteral("2k"), QStringLiteral("1080p"),
-          QStringLiteral("720p"), QStringLiteral("480p")}},
-        {QStringLiteral("animated_clarity"),
-         {QStringLiteral("1080p"), QStringLiteral("720p"), QStringLiteral("480p")}},
-        {QStringLiteral("encoder"),
-         {QStringLiteral("h264"), QStringLiteral("h265"), QStringLiteral("h264_hw"),
-          QStringLiteral("h265_hw")}},
-        {QStringLiteral("encoding_preset"),
-         {QStringLiteral("ultrafast"), QStringLiteral("veryfast"), QStringLiteral("medium"),
-          QStringLiteral("veryslow"), QStringLiteral("placebo")}}};
-    const QStringList booleans{QStringLiteral("post_processing"),
-                               QStringLiteral("microphone"),
-                               QStringLiteral("system_audio"),
-                               QStringLiteral("separate_audio_tracks"),
-                               QStringLiteral("loop"),
-                               QStringLiteral("capture_toolbar"),
-                               QStringLiteral("show_cursor"),
-                               QStringLiteral("show_keyboard"),
-                               QStringLiteral("webcam"),
-                               QStringLiteral("mouse_highlight"),
-                               QStringLiteral("record_mouse_clicks")};
-    const QStringList colors{
-        QStringLiteral("progress_bar_color"),  QStringLiteral("keyboard_background"),
-        QStringLiteral("keyboard_foreground"), QStringLiteral("mouse_trail"),
-        QStringLiteral("mouse_click"),         QStringLiteral("mouse_highlight_color")};
-    const QHash<QString, QPair<int, int>> integers{
-        {QStringLiteral("system_audio_gain_db"), {-24, 24}},
-        {QStringLiteral("microphone_gain_db"), {-24, 24}},
-        {QStringLiteral("start_delay_seconds"), {0, 10}},
-        {QStringLiteral("frame_rate"), {1, 120}},
-        {QStringLiteral("quality"), {0, 100}},
-        {QStringLiteral("animated_frame_rate"), {1, 24}},
-        {QStringLiteral("mouse_trail_duration_ms"), {100, 2000}},
-        {QStringLiteral("keyboard_size"), {32, 128}},
-        {QStringLiteral("webcam_size"), {50, 500}},
-        {QStringLiteral("mouse_highlight_radius"), {8, 128}}};
+    const auto& contracts = snow_shot::app::mcp::recordingAutomationOptionContracts();
     for (auto it = options.begin(); it != options.end(); ++it) {
-        if (enums.contains(it.key())) {
-            if (!it->isString() || !enums.value(it.key()).contains(it->toString()))
-                return fail("invalid_parameters");
-        } else if (booleans.contains(it.key())) {
-            if (!it->isBool())
-                return fail("invalid_parameters");
-        } else if (colors.contains(it.key())) {
-            const QColor parsed = it.key() == QStringLiteral("progress_bar_color")
-                                      ? progressBarColorFromString(it->toString())
-                                      : QColor(it->toString());
-            if (!it->isString() || !parsed.isValid())
-                return fail("invalid_parameters");
-        } else if (integers.contains(it.key())) {
-            const double n = it->toDouble(-1);
-            const auto range = integers.value(it.key());
-            if (!it->isDouble() || !std::isfinite(n) || std::floor(n) != n || n < range.first ||
-                n > range.second)
-                return fail("invalid_parameters");
-            if (it.key() == QStringLiteral("frame_rate") &&
-                !QList<int>{5, 10, 15, 24, 30, 60, 120, 83}.contains(static_cast<int>(n)))
-                return fail("invalid_parameters");
-            if (it.key() == QStringLiteral("animated_frame_rate") &&
-                !QList<int>{5, 10, 15, 24}.contains(static_cast<int>(n)))
-                return fail("invalid_parameters");
-        } else if (it.key() == QStringLiteral("path")) {
+        const QJsonValue descriptor = contracts.value(it.key());
+        if (!descriptor.isObject())
+            return fail("invalid_parameters");
+        const QJsonObject contract = descriptor.toObject();
+        const QString format = contract.value(QStringLiteral("format")).toString();
+        if (format == QStringLiteral("output-path")) {
             if (!it->isString() || !QFileInfo(it->toString()).isAbsolute() ||
                 QFileInfo::exists(it->toString()) ||
                 !QFileInfo(QFileInfo(it->toString()).absolutePath()).isDir())
                 return fail("output_path_unavailable");
-        } else
+        }
+        const QString type = contract.value(QStringLiteral("type")).toString();
+        if (type == QStringLiteral("boolean")) {
+            if (!it->isBool())
+                return fail("invalid_parameters");
+        } else if (type == QStringLiteral("string")) {
+            if (!it->isString())
+                return fail("invalid_parameters");
+        } else if (type == QStringLiteral("integer")) {
+            const double number = it->toDouble();
+            if (!it->isDouble() || !std::isfinite(number) || std::floor(number) != number)
+                return fail("invalid_parameters");
+            const QJsonValue minimum = contract.value(QStringLiteral("minimum"));
+            const QJsonValue maximum = contract.value(QStringLiteral("maximum"));
+            if ((minimum.isDouble() && number < minimum.toDouble()) ||
+                (maximum.isDouble() && number > maximum.toDouble()))
+                return fail("invalid_parameters");
+        } else {
             return fail("invalid_parameters");
+        }
+        const QJsonValue choices = contract.value(QStringLiteral("enum"));
+        if (choices.isArray() && !choices.toArray().contains(it.value()))
+            return fail("invalid_parameters");
+        if (format == QStringLiteral("qt-color")) {
+            const QColor parsed = it.key() == QStringLiteral("progress_bar_color")
+                                      ? progressBarColorFromString(it->toString())
+                                      : QColor(it->toString());
+            if (!parsed.isValid())
+                return fail("invalid_parameters");
+        }
     }
     const snow_shot::storage::RecordingSettings settings;
     s.outputFormat = options.value(QStringLiteral("format")).toString(settings.outputFormat());
@@ -2815,9 +2830,12 @@ bool ScreenRecordingController::startAutomation(const QRect& region, const QJson
     s.showKeyboard = options.value(QStringLiteral("show_keyboard")).toBool(settings.showKeyboard());
     s.webcamEnabled = options.value(QStringLiteral("webcam")).toBool(settings.webcamEnabled());
     s.webcamSize = options.value(QStringLiteral("webcam_size")).toInt(settings.webcamSize());
+    s.webcamOffset = QPoint(settings.webcamOffsetLeft(), settings.webcamOffsetBottom());
     s.webcamShape = options.value(QStringLiteral("webcam_shape")).toString(settings.webcamShape());
     s.recordMouseClicks =
         options.value(QStringLiteral("record_mouse_clicks")).toBool(settings.recordMouseClicks());
+    s.recordMouseScrolling = options.value(QStringLiteral("record_mouse_scrolling"))
+                                 .toBool(settings.recordMouseScrolling());
     s.mouseHighlightEnabled =
         options.value(QStringLiteral("mouse_highlight")).toBool(settings.mouseHighlightEnabled());
     s.mouseTrailDurationMs = options.value(QStringLiteral("mouse_trail_duration_ms"))

@@ -356,6 +356,10 @@
             <translation>Copy</translation>
         </message>
         <message>
+            <source>DeepSeek</source>
+            <translation>DeepSeek</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>Delete</translation>
         </message>
@@ -366,6 +370,10 @@
         <message>
             <source>Delete model "%1"? If selected, another available model will be used.</source>
             <translation>Delete model "%1"? If selected, another available model will be used.</translation>
+        </message>
+        <message>
+            <source>Doubao</source>
+            <translation>Doubao</translation>
         </message>
         <message>
             <source>Edit</source>
@@ -416,6 +424,10 @@
             <translation>No custom models configured</translation>
         </message>
         <message>
+            <source>OpenAI</source>
+            <translation>OpenAI</translation>
+        </message>
+        <message>
             <source>OpenAI-compatible Chat Completions. /chat/completions is appended to this base URL.</source>
             <translation>OpenAI-compatible Chat Completions. /chat/completions is appended to this base URL.</translation>
         </message>
@@ -424,12 +436,28 @@
             <translation>Optional for servers that do not require authentication.</translation>
         </message>
         <message>
+            <source>Provider Type</source>
+            <translation>Provider Type</translation>
+        </message>
+        <message>
+            <source>Qwen</source>
+            <translation>Qwen</translation>
+        </message>
+        <message>
             <source>Reasoning Support</source>
             <translation>Reasoning Support</translation>
         </message>
         <message>
+            <source>Reasoning is controlled by the model for the OpenAI provider.</source>
+            <translation>Reasoning is controlled by the model for the OpenAI provider.</translation>
+        </message>
+        <message>
             <source>Save</source>
             <translation>Save</translation>
+        </message>
+        <message>
+            <source>Select the provider whose reasoning controls this API uses.</source>
+            <translation>Select the provider whose reasoning controls this API uses.</translation>
         </message>
         <message>
             <source>The API key must not contain line breaks.</source>
@@ -1896,12 +1924,20 @@
             <translation>Control when the screenshot color picker is visible</translation>
         </message>
         <message>
+            <source>Copy Translation Results as an Image</source>
+            <translation>Copy Translation Results as an Image</translation>
+        </message>
+        <message>
             <source>Copy after text recognition</source>
             <translation>Copy after text recognition</translation>
         </message>
         <message>
             <source>Copy application settings as a zip archive to the clipboard</source>
             <translation>Copy application settings as a zip archive to the clipboard</translation>
+        </message>
+        <message>
+            <source>Copy both the image and its exported file to the clipboard</source>
+            <translation>Copy both the image and its exported file to the clipboard</translation>
         </message>
         <message>
             <source>Copy color</source>
@@ -1960,6 +1996,10 @@
             <translation>Copy the confirmed screenshot selection to the clipboard</translation>
         </message>
         <message>
+            <source>Copy the full translation result as an image when no text is selected</source>
+            <translation>Copy the full translation result as an image when no text is selected</translation>
+        </message>
+        <message>
             <source>Copy to Clipboard</source>
             <translation>Copy to Clipboard</translation>
         </message>
@@ -1984,8 +2024,8 @@
             <translation>Custom AI models</translation>
         </message>
         <message>
-            <source>Custom DeepL, Baidu, and Youdao-compatible services</source>
-            <translation>Custom DeepL, Baidu, and Youdao-compatible services</translation>
+            <source>Custom DeepL, DeepLX, Baidu, and Youdao-compatible services</source>
+            <translation>Custom DeepL, DeepLX, Baidu, and Youdao-compatible services</translation>
         </message>
         <message>
             <source>Custom Models</source>
@@ -2150,6 +2190,10 @@
         <message>
             <source>Delete temporary recording files?</source>
             <translation>Delete temporary recording files?</translation>
+        </message>
+        <message>
+            <source>Delete text after the cursor</source>
+            <translation>Delete text after the cursor</translation>
         </message>
         <message>
             <source>Delete the current recording files when closing an active recording. Stopping recording still saves the output.</source>
@@ -2698,6 +2742,10 @@
         <message>
             <source>Keep selection width and height consistent</source>
             <translation>Keep selection width and height consistent</translation>
+        </message>
+        <message>
+            <source>Keep the Snow Shot save dialog open after saving to show the result</source>
+            <translation>Keep the Snow Shot save dialog open after saving to show the result</translation>
         </message>
         <message>
             <source>Keep the first button of each toolbar group visible instead of the last used button</source>
@@ -4012,6 +4060,10 @@
             <translation>Show recording status prompts</translation>
         </message>
         <message>
+            <source>Show save result</source>
+            <translation>Show save result</translation>
+        </message>
+        <message>
             <source>Show screenshot guides when a capture starts</source>
             <translation>Show screenshot guides when a capture starts</translation>
         </message>
@@ -4632,6 +4684,10 @@
             <translation>When pinning duplicate content</translation>
         </message>
         <message>
+            <source>While editing text, press Delete to remove selected text or the character after the cursor.</source>
+            <translation>While editing text, press Delete to remove selected text or the character after the cursor.</translation>
+        </message>
+        <message>
             <source>Window Element API</source>
             <translation>Window Element API</translation>
         </message>
@@ -4650,10 +4706,6 @@
         <message>
             <source>Windows context menu</source>
             <translation>Windows context menu</translation>
-        </message>
-        <message>
-            <source>Write the image to a file and copy that file to the clipboard</source>
-            <translation>Write the image to a file and copy that file to the clipboard</translation>
         </message>
         <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>
@@ -5273,6 +5325,10 @@ Unavailable: %2</translation>
             <translation>DeepL</translation>
         </message>
         <message>
+            <source>DeepLX</source>
+            <translation>DeepLX</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>Delete</translation>
         </message>
@@ -5307,6 +5363,10 @@ Unavailable: %2</translation>
         <message>
             <source>No translation configurations added</source>
             <translation>No translation configurations added</translation>
+        </message>
+        <message>
+            <source>Optional access token sent as a Bearer token.</source>
+            <translation>Optional access token sent as a Bearer token.</translation>
         </message>
         <message>
             <source>Optional for servers that do not require authentication.</source>

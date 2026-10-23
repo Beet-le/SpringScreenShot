@@ -161,7 +161,8 @@ class SnowCanvasWidgetTextInteraction final {
                                const QFont& baseFont);
     bool handleEditorMouseRelease(QMouseEvent* event);
     EditorEventResult handleKeyPress(QKeyEvent* event, SnowRuntime runtime, SnowViewport viewport,
-                                     bool hasViewport, SnowCanvasDisplayCache& displayCache);
+                                     bool hasViewport, SnowCanvasDisplayCache& displayCache,
+                                     bool deleteTextAfterCursor = false);
     bool handleKeyRelease(QKeyEvent* event);
     InputMethodEventResult handleInputMethodEvent(QInputMethodEvent* event, SnowRuntime runtime,
                                                   SnowViewport viewport,

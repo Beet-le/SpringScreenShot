@@ -1,6 +1,5 @@
 #include "../src/presentation/recording/recordingrecovery.h"
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QProcess>
 #include <QTemporaryDir>
 #include <atomic>
@@ -165,8 +164,6 @@ int main(int argc, char** argv) {
     const auto gate = release->get_future().share();
     auto completed = std::make_shared<std::promise<void>>();
     auto done = completed->get_future();
-    QElapsedTimer elapsed;
-    elapsed.start();
     const RecoveryRecord late{
         recording.sourcePath, directory.filePath(QStringLiteral("late-output.mp4")), {}};
     require(!runBoundedPreservation(
@@ -177,7 +174,7 @@ int main(int argc, char** argv) {
                     completed->set_value();
                 },
                 0) &&
-                elapsed.elapsed() < 1000,
+                done.wait_for(std::chrono::seconds(0)) == std::future_status::timeout,
             "deadline returns without joining or cancelling native ownership");
     release->set_value();
     require(done.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
@@ -214,7 +211,6 @@ int main(int argc, char** argv) {
     auto native = std::async(std::launch::async, [nativeGate] { nativeGate.wait(); });
     auto retired = std::make_shared<std::promise<void>>();
     auto retiredResult = retired->get_future();
-    elapsed.restart();
     require(
         !runBoundedPreservation(
             [native = std::move(native), retired]() mutable {
@@ -222,7 +218,7 @@ int main(int argc, char** argv) {
                 retired->set_value();
             },
             0) &&
-            elapsed.elapsed() < 1000,
+            retiredResult.wait_for(std::chrono::seconds(0)) == std::future_status::timeout,
         "async-origin native futures never join the GUI when the preservation deadline expires");
     releaseNative->set_value();
     require(retiredResult.wait_for(std::chrono::seconds(2)) == std::future_status::ready,

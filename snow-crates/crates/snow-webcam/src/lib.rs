@@ -19,6 +19,9 @@ use std::time::{Duration, Instant};
 
 const STALE_AFTER: Duration = Duration::from_secs(2);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+// Negotiate once for the full editable range. Software crop/resize and admission
+// handle presentation changes without reopening the device or its permission flow.
+const CAPTURE_CAPACITY: CaptureOptions = CaptureOptions { size: 500, fps: 30 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CaptureOptions {
@@ -94,7 +97,11 @@ pub unsafe fn config_from_raw(
         1 => WebcamShape::Circle,
         _ => return Err("invalid webcam shape".into()),
     };
-    let style = WebcamStyle { size, shape };
+    let style = WebcamStyle {
+        size,
+        shape,
+        ..Default::default()
+    };
     style.validate()?;
     Ok(Some(Config {
         source: source.clone(),
@@ -189,10 +196,11 @@ impl Source {
                 let mut started = Instant::now();
                 let mut last = None;
                 let mut next_admission = None;
+                let mut admission_fps = 0;
                 while !worker.stopped.load(Ordering::Acquire) {
-                    let (active, options, next) = {
+                    let (active, next) = {
                         let state = worker.state.lock().unwrap_or_else(|e| e.into_inner());
-                        (state.active, state.options, state.generation)
+                        (state.active, state.generation)
                     };
                     if generation != next {
                         backend = None;
@@ -201,7 +209,7 @@ impl Source {
                         next_admission = None;
                         started = Instant::now();
                         if active {
-                            match factory(options) {
+                            match factory(CAPTURE_CAPACITY) {
                                 Ok(camera) => backend = Some(camera),
                                 Err(error) => fail(&worker, generation, error),
                             }
@@ -214,8 +222,19 @@ impl Source {
                     let result = camera.poll(Duration::from_millis(25));
                     match result {
                         Ok(Some(frame)) => {
+                            // Read the latest processing options after polling: a resize may
+                            // have arrived while the backend was waiting for this sample.
+                            let options = worker
+                                .state
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .options;
                             let at = frame.at;
                             let interval = Duration::from_secs_f64(1.0 / f64::from(options.fps));
+                            if admission_fps != options.fps {
+                                admission_fps = options.fps;
+                                next_admission = last.map(|at| at + interval);
+                            }
                             // Keep the phase across ordinary camera jitter; comparing each interval
                             // directly can accidentally halve a nominal 30 fps stream.
                             if next_admission.is_some_and(|next| at + interval / 10 < next) {
@@ -291,7 +310,8 @@ impl Source {
             .unwrap_or_else(|e| e.into_inner());
         if state.options != options {
             state.options = options;
-            reset(&mut state);
+            // Retain a fresh image for preview resampling until the next processed
+            // sample arrives. Only activation/retry changes the hardware generation.
         }
         let _ = self.0.wake.try_send(());
         Ok(())
@@ -378,6 +398,7 @@ impl Source {
             .rev()
             .find(|frame| {
                 frame.at <= now
+                    && frame.size == state.options.size
                     && now.saturating_duration_since(frame.at) <= STALE_AFTER
                     && clock.is_active_at(frame.at)
                     && clock.active_elapsed_duration(frame.at) <= slot

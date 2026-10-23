@@ -82,6 +82,24 @@ void editCachedTranslation(const ImageEditingSource& source) {
     editor.palette()->copyRequested();
     require(QApplication::clipboard()->text() == text->toPlainText(),
             "Copy publishes the translation currently displayed in its editor");
+    const snow_shot::storage::ScreenshotTranslationSettings settings;
+    const auto restoreCopy =
+        qScopeGuard([&] { static_cast<void>(settings.setCopyTranslationResultsAsImage(false)); });
+    require(settings.setCopyTranslationResultsAsImage(true),
+            "enable editor translation image copy");
+    editor.palette()->copyRequested();
+    require(QApplication::clipboard()->mimeData()->hasImage() &&
+                !QApplication::clipboard()->mimeData()->hasText(),
+            "editor Copy publishes the translated document as an image");
+    auto cursor = text->textCursor();
+    cursor.setPosition(0);
+    cursor.setPosition(6, QTextCursor::KeepAnchor);
+    text->setTextCursor(cursor);
+    editor.palette()->copyRequested();
+    require(QApplication::clipboard()->text() == QStringLiteral("Edited") &&
+                !QApplication::clipboard()->mimeData()->hasImage(),
+            "editor Copy preserves selected translation text");
+    require(settings.setCopyTranslationResultsAsImage(false), "restore editor copy preference");
     editor.palette()->ocrRequested();
     require(!text, "switching recognition tools retires the preceding text editor widget");
     editor.palette()->textTranslationRequested();

@@ -9,7 +9,10 @@
 #include "widgets/button.h"
 #include "widgets/input_line_edit.h"
 #include "widgets/modal.h"
+#include "widgets/result.h"
 #include "../src/presentation/imageediting/imageeditingexportcontroller.h"
+#include "spreadsheet_open_test_support.h"
+#include "recognition_workbook_test_support.h"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -77,7 +80,7 @@ QFileDialog* systemDialog(ImageEditingWindow& window) {
         QStringLiteral("screenshotManualSaveDialog"));
 }
 
-void saveWorkflow(bool custom, const QTemporaryDir& directory) {
+void saveWorkflow(bool custom, const QTemporaryDir& directory, bool showResult = false) {
     using Axis = ImageEditingDocument::CropAxis;
     ImageEditingWindow window;
     window.present(source());
@@ -114,7 +117,8 @@ void saveWorkflow(bool custom, const QTemporaryDir& directory) {
     const auto expected = window.document()->image();
     const auto checkpoint = window.document()->checkpoint();
     const QString filename =
-        custom ? QStringLiteral("editor-custom") : QStringLiteral("editor-system");
+        showResult ? QStringLiteral("editor-result")
+                   : (custom ? QStringLiteral("editor-custom") : QStringLiteral("editor-system"));
     const auto destination = directory.filePath(filename + QStringLiteral(".png"));
     window.palette()->saveRequested();
     if (custom) {
@@ -136,6 +140,16 @@ void saveWorkflow(bool custom, const QTemporaryDir& directory) {
     }
     require(window.document()->crop(Axis::Columns, 1, 3),
             "image changes while the captured save is pending");
+    if (showResult) {
+        auto* dialog = customDialog(window);
+        auto* result = dialog->contentWidget()->findChild<adqt::widgets::AdResult*>(
+            QStringLiteral("saveResult"));
+        awaitCondition([&] { return result && result->isVisible(); },
+                       "editor save shows its result");
+        require(exports == 1 && dialog->isOpen() && window.modal()->isOpen(),
+                "result view must keep editor export pending and its owner alive");
+        dialog->reject();
+    }
     awaitCondition([&] { return exports == 2; }, "image file save completes once");
     require(succeeded && QFileInfo::exists(destination), "selected save dialog writes an image");
     const auto saved = QImage(destination).convertToFormat(QImage::Format_ARGB32);
@@ -709,23 +723,61 @@ void runImageEditingConversionAvailabilityTests() {
 #endif
 }
 
+void runImageEditingSpreadsheetOpenTests() {
+    SpreadsheetOpenTestReceiver receiver;
+    ImageEditingWindow window({});
+    auto initial = source();
+    initial.recognition.key = QStringLiteral("editor-open-spreadsheet");
+    SnowShotTableResult table;
+    table.html = QStringLiteral("<table><tr><td>00123</td><td>雪</td></tr></table>");
+    initial.recognition.table = table;
+    window.present(initial);
+    window.palette()->tableRequested();
+    auto* session = window.recognition();
+    require(session && session->active(), "table recognition is active in the image editor");
+    const auto cell = [&](const QString& text) {
+        return session->editWorkflow({{QStringLiteral("action"), QStringLiteral("set_cell")},
+                                      {QStringLiteral("row"), 0},
+                                      {QStringLiteral("column"), 0},
+                                      {QStringLiteral("text"), text}});
+    };
+    require(cell(QString(32768, QLatin1Char('x'))), "prepare an unsupported workbook cell");
+    window.palette()->openSpreadsheetFileRequested();
+    require(session->active() && receiver.calls == 0,
+            "failed spreadsheet export retains recognition in the image editor");
+    require(cell(QStringLiteral("00123")), "restore a supported workbook cell");
+    window.palette()->openSpreadsheetFileRequested();
+    require(receiver.calls == 1 && QFileInfo::exists(receiver.path) && !session->active() &&
+                window.modal()->isOpen() &&
+                window.palette()->activeTool() == ScreenshotToolPalette::Tool::Move,
+            "successful spreadsheet launch returns to image editing without closing the host");
+    require(recognition_workbook_test::sheet(recognition_workbook_test::parts(receiver.path))
+                    .cells.value(QStringLiteral("A1")) == QStringLiteral("00123"),
+            "the editor launches the recognized table as a workbook");
+    window.shutdown();
+    require(QFileInfo::exists(receiver.path), "editor shutdown retains the launched workbook");
+}
+
 void runImageEditingSaveTests() {
     const snow_shot::storage::ScreenshotSettings settings;
     const auto previousDialog = settings.saveAsFileDialog();
     const auto previousDirectory = settings.lastManualSaveDirectory();
     const auto previousFormat = settings.lastManualSaveFormat();
     const auto previousFormatOptions = settings.manualSaveFormatOptions();
+    const bool previousShowResult = settings.showSaveResult();
     const bool nativeDialogsDisabled = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
     const auto restore = qScopeGuard([&] {
         static_cast<void>(settings.setSaveAsFileDialog(previousDialog));
         static_cast<void>(settings.setLastManualSaveDirectory(previousDirectory));
         static_cast<void>(settings.setLastManualSaveState(previousFormat, previousFormatOptions));
+        static_cast<void>(settings.setShowSaveResult(previousShowResult));
         QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, nativeDialogsDisabled);
     });
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QTemporaryDir directory;
     require(directory.isValid() && settings.setLastManualSaveDirectory(directory.path()) &&
-                settings.setLastManualSaveFormat(QStringLiteral("png")),
+                settings.setLastManualSaveFormat(QStringLiteral("png")) &&
+                settings.setShowSaveResult(false),
             "configure isolated image save destinations");
     for (const bool custom : {false, true}) {
         require(settings.setSaveAsFileDialog(custom ? QStringLiteral("snow_shot")
@@ -734,6 +786,11 @@ void runImageEditingSaveTests() {
         saveWorkflow(custom, directory);
         shutdownCancelsSave(custom);
     }
+    require(settings.setSaveAsFileDialog(QStringLiteral("snow_shot")) &&
+                settings.setShowSaveResult(true),
+            "enable editor save result");
+    saveWorkflow(true, directory, true);
+    require(settings.setShowSaveResult(false), "restore save result before other save tests");
     exportCompletionMayDestroyEditor();
     clipboardPublicationMayDestroyEditor();
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION

@@ -4,6 +4,7 @@ param(
     [ValidateSet('x64')][string]$Architecture = 'x64',
     [string]$IdentityPath = (Join-Path $PSScriptRoot '../snow_shot/packaging/msix/store-identity.json'),
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '../artifacts/msix/packages'),
+    [string]$ExpectedVersion,
     [hashtable]$OcrRuntimeArchives = @{},
     [ValidateRange(1, 256)][int]$Parallelism = 4,
     [switch]$SkipBuild,
@@ -31,6 +32,9 @@ $stageResult = @(& (Join-Path $PSScriptRoot 'package-snow-shot.ps1') @parameters
 if ($stageResult.Count -ne 1) { throw 'The audited Store staging operation returned no unique stage.' }
 $stageResult = $stageResult[0]
 $audit = Assert-SnowMsixAuditedStage -Stage $stageResult.StoreStage -AuditPath $stageResult.AuditPath -Architecture $Architecture
+if ($ExpectedVersion -and $audit.PackageVersion -cne $ExpectedVersion) {
+    throw "Store package version '$($audit.PackageVersion)' does not match release version '$ExpectedVersion'. Rebuild the Store preset without -SkipBuild."
+}
 $version = ConvertTo-SnowMsixVersion $audit.PackageVersion
 $packageStage = Join-Path $work $Architecture
 $null = New-Item -ItemType Directory -Path $packageStage

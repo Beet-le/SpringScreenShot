@@ -974,6 +974,11 @@ void ImageEditingWindow::Impl::bindRecognition() {
     SESSION_ACTION(tableMergeRequested, mergeTableSelection);
     SESSION_ACTION(tableSplitRequested, splitTableSelection);
     SESSION_ACTION(tableResetRequested, resetTable);
+    QObject::connect(palette, &ScreenshotToolPalette::openSpreadsheetFileRequested, &q, [this] {
+        const QPointer<ImageEditingWindow> lifetime(&q);
+        if (session && session->openSpreadsheetFile() && lifetime)
+            drawing(ImageEditingCanvas::Mode::Pan);
+    });
     SESSION_ACTION(textEditRequested, beginTextEditing);
     SESSION_ACTION(textTranslateRequested, beginTextTranslation);
     SESSION_ACTION(textResetRequested, resetTextEditing);

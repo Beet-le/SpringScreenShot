@@ -8,6 +8,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QJsonDocument>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 
 #include <cstdlib>
@@ -188,6 +189,8 @@ int main(int argc, char** argv) {
                 .initialize({directory.filePath(QStringLiteral("bin")), directory.path(), 60000})
                 .success,
             "initialize isolated Speech Bubble configuration");
+    const auto shutdownStorage =
+        qScopeGuard([] { snow_shot::storage::ApplicationStorage::instance().shutdown(); });
     defaultsPersistIndependently();
     toolParticipatesInConfiguration();
     mcpRoutesShapeStylesExplicitly();

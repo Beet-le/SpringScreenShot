@@ -55,6 +55,9 @@ pub struct SnowRecordingEffectsConfig {
     pub webcam_source: *const snow_webcam::Source,
     pub webcam_size: u32,
     pub webcam_shape: u32,
+    pub webcam_offset_left: u32,
+    pub webcam_offset_bottom: u32,
+    pub record_mouse_scrolling: u32,
 }
 #[repr(C)]
 pub struct SnowRecordingEffectsTile {
@@ -118,7 +121,9 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
         5 => std::mem::offset_of!(SnowRecordingEffectsConfig, canvas_scale),
         6 => std::mem::offset_of!(SnowRecordingEffectsConfig, highlight_radius),
         7 => std::mem::offset_of!(SnowRecordingEffectsConfig, webcam_source),
-        8 => std::mem::size_of::<SnowRecordingEffectsConfig>(),
+        8 => std::mem::offset_of!(SnowRecordingEffectsConfig, webcam_offset_left),
+        9 => std::mem::offset_of!(SnowRecordingEffectsConfig, record_mouse_scrolling),
+        10 => std::mem::size_of::<SnowRecordingEffectsConfig>(),
         _ => return Err("unsupported effects configuration version".into()),
     };
     if unsafe { *header.add(1) } != size as u32 {
@@ -137,6 +142,7 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
     let canvas = preview_canvas_dimensions(raw.width, raw.height, canvas_scale)?;
     if raw.show_keyboard > 1
         || (raw.version >= 4 && raw.record_mouse_clicks > 1)
+        || (raw.version >= 10 && raw.record_mouse_scrolling > 1)
         || (raw.version == 1 && raw.trail_duration_ms != 0)
         || (raw.version >= 3 && !(32..=128).contains(&raw.keyboard_size))
         || raw.label_count > 256
@@ -147,7 +153,7 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
     let mut labels = std::collections::BTreeMap::new();
     for index in 0..raw.label_count as usize {
         let label = unsafe { &*raw.labels.add(index) };
-        if (label.virtual_key > 255 && !(0x200..=0x204).contains(&label.virtual_key))
+        if (label.virtual_key > 255 && !(0x200..=0x206).contains(&label.virtual_key))
             || label.label_utf8.is_null()
         {
             return Err("invalid key label".into());
@@ -164,6 +170,13 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
         webcam: if raw.version >= 8 {
             unsafe {
                 snow_webcam::config_from_raw(raw.webcam_source, raw.webcam_size, raw.webcam_shape)?
+                    .map(|mut webcam| {
+                        if raw.version >= 9 {
+                            webcam.style.offset_left = raw.webcam_offset_left;
+                            webcam.style.offset_bottom = raw.webcam_offset_bottom;
+                        }
+                        webcam
+                    })
             }
         } else {
             None
@@ -189,9 +202,12 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
             [0; 4]
         },
         record_mouse_clicks: raw.version >= 4 && raw.record_mouse_clicks != 0,
+        record_mouse_scrolling: raw.version >= 10 && raw.record_mouse_scrolling != 0,
         show_keyboard: raw.show_keyboard != 0,
         generation: raw.generation,
-        keyboard: (raw.show_keyboard != 0 || (raw.version >= 4 && raw.record_mouse_clicks != 0))
+        keyboard: (raw.show_keyboard != 0
+            || (raw.version >= 4 && raw.record_mouse_clicks != 0)
+            || (raw.version >= 10 && raw.record_mouse_scrolling != 0))
             .then_some(KeyboardOverlayConfig {
                 font: if raw.version >= 5 && !raw.keyboard_font_family_utf8.is_null() {
                     if raw.keyboard_cjk_font_family_utf8.is_null() {
@@ -500,6 +516,22 @@ pub extern "C" fn snow_recording_effects_last_error() -> *const c_char {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrolling_only_and_previous_abi_layout() {
+        let mut raw = valid();
+        raw.record_mouse_scrolling = 1;
+        let parsed = unsafe { config(&raw) }.unwrap();
+        assert!(parsed.record_mouse_scrolling && parsed.keyboard.is_some());
+        assert!(!parsed.show_keyboard && !parsed.record_mouse_clicks);
+        raw.record_mouse_scrolling = 2;
+        assert!(unsafe { config(&raw) }.is_err());
+        raw.version = 9;
+        raw.struct_size =
+            std::mem::offset_of!(SnowRecordingEffectsConfig, record_mouse_scrolling) as u32;
+        let parsed = unsafe { config(&raw) }.unwrap();
+        assert!(!parsed.record_mouse_scrolling && parsed.keyboard.is_none());
+    }
     use std::time::Duration;
     #[test]
     fn playback_preview_validates_options_and_returns_an_owned_static_frame() {
@@ -718,7 +750,9 @@ mod tests {
             webcam_source: std::ptr::null(),
             webcam_size: 150,
             webcam_shape: 0,
-            version: 8,
+            webcam_offset_left: 48,
+            webcam_offset_bottom: 48,
+            version: 10,
             struct_size: std::mem::size_of::<SnowRecordingEffectsConfig>() as u32,
             x: -1920,
             y: -100,
@@ -740,6 +774,7 @@ mod tests {
             reserved_v3: 0,
             highlight_rgba: 0,
             record_mouse_clicks: 0,
+            record_mouse_scrolling: 0,
             keyboard_font_family_utf8: std::ptr::null(),
             keyboard_cjk_font_family_utf8: std::ptr::null(),
             keyboard_font_weight: 0,
@@ -757,12 +792,26 @@ mod tests {
         let mut raw = valid();
         raw.webcam_source = &source;
         raw.webcam_shape = 1;
+        raw.webcam_offset_left = 300;
+        raw.webcam_offset_bottom = 220;
         let parsed = unsafe { config(&raw) }.unwrap();
         assert_eq!(
             parsed.webcam.as_ref().unwrap().style.shape,
             snow_webcam::WebcamShape::Circle
         );
         assert_eq!(parsed.webcam.as_ref().unwrap().source, source);
+        assert_eq!(parsed.webcam.as_ref().unwrap().style.offset_left, 300);
+        assert_eq!(parsed.webcam.as_ref().unwrap().style.offset_bottom, 220);
+        raw.struct_size -= 1;
+        assert!(unsafe { config(&raw) }.is_err());
+        raw.version = 8;
+        raw.struct_size =
+            std::mem::offset_of!(SnowRecordingEffectsConfig, webcam_offset_left) as u32;
+        let legacy = unsafe { config(&raw) }.unwrap().webcam.unwrap();
+        assert_eq!(
+            (legacy.style.offset_left, legacy.style.offset_bottom),
+            (48, 48)
+        );
         for size in [49, 501] {
             raw.webcam_size = size;
             assert!(unsafe { config(&raw) }.is_err());

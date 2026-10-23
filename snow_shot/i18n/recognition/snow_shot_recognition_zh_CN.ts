@@ -232,6 +232,10 @@
             <translation>部分文字未能翻译</translation>
         </message>
         <message>
+            <source>Some text could not be translated: %1</source>
+            <translation>部分文字未能翻译：%1</translation>
+        </message>
+        <message>
             <source>Table recognition failed</source>
             <translation>表格识别失败</translation>
         </message>
@@ -270,6 +274,10 @@
         <message>
             <source>Translation service is unavailable</source>
             <translation>翻译服务不可用</translation>
+        </message>
+        <message>
+            <source>Unable to copy translation results</source>
+            <translation>无法复制翻译结果</translation>
         </message>
         <message>
             <source>Unable to load Snow Shot vision models</source>

@@ -338,6 +338,7 @@ class ScreenshotToolPalette final : public QWidget,
     void refreshConfirmShortcutHint();
     void refreshShortcutTooltips();
     void setGlobalCanvasClickThrough(bool enabled);
+    void setGlobalCanvasLaserPointer(bool enabled);
     [[nodiscard]] bool canActivateDrawingShortcut(const QString& toolId) const;
     [[nodiscard]] bool canActivateScreenshotShortcut(const QString& actionId);
     [[nodiscard]] bool activateDrawingShortcut(const QString& toolId);
@@ -432,7 +433,9 @@ class ScreenshotToolPalette final : public QWidget,
     void setRecordingMouseHighlightEnabled(bool value);
     [[nodiscard]] bool recordingMouseHighlightEnabled() const;
     void setRecordingRecordMouseClicks(bool value);
+    void setRecordingRecordMouseScrolling(bool value);
     [[nodiscard]] bool recordingRecordMouseClicks() const;
+    [[nodiscard]] bool recordingRecordMouseScrolling() const;
     void setRecordingMouseHighlightColor(const QColor& value);
     [[nodiscard]] QColor recordingMouseHighlightColor() const;
     void setRecordingMouseHighlightRadius(int value);
@@ -490,6 +493,7 @@ class ScreenshotToolPalette final : public QWidget,
 
   signals:
     void globalCanvasClickThroughRequested();
+    void globalCanvasLaserPointerRequested();
     void globalCanvasExitRequested();
     void undoRequested();
     void redoRequested();
@@ -546,6 +550,7 @@ class ScreenshotToolPalette final : public QWidget,
     void tableMergeRequested();
     void tableSplitRequested();
     void tableResetRequested();
+    void openSpreadsheetFileRequested();
     void showOriginalImageRequested(bool show);
     void textEditRequested();
     void textTranslateRequested();
@@ -631,6 +636,7 @@ class ScreenshotToolPalette final : public QWidget,
     void recordingKeyboardVisibleChanged(bool visible);
     void recordingMouseHighlightEnabledChanged(bool value);
     void recordingRecordMouseClicksChanged(bool value);
+    void recordingRecordMouseScrollingChanged(bool value);
     void recordingMouseHighlightColorChanged(const QColor& value);
     void recordingMouseHighlightRadiusChanged(int value);
     void recordingCursorVisibleChanged(bool visible);
@@ -979,6 +985,8 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdButton* m_tableMergeButton = nullptr;
     adqt::widgets::AdButton* m_tableSplitButton = nullptr;
     adqt::widgets::AdButton* m_tableResetButton = nullptr;
+    adqt::widgets::AdButton* m_openSpreadsheetFileButton = nullptr;
+    QFrame* m_openSpreadsheetFileSeparator = nullptr;
     adqt::widgets::AdSelect* m_recognitionModelSelect = nullptr;
     QSpacerItem* m_recognitionModelSpacer = nullptr;
     ScreenshotRecognitionModelState m_tableRecognitionModelState;
@@ -1057,12 +1065,14 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdPopover* m_recordCursorPopover = nullptr;
     QPointer<adqt::widgets::AdCheckbox> m_recordHighlightCheckbox;
     QPointer<adqt::widgets::AdCheckbox> m_recordClicksCheckbox;
+    QPointer<adqt::widgets::AdCheckbox> m_recordScrollingCheckbox;
     adqt::widgets::AdColorPicker* m_recordHighlightColorPicker = nullptr;
     QLabel* m_recordHighlightSwatch = nullptr;
     adqt::widgets::AdInputNumber* m_recordHighlightRadiusInput = nullptr;
     int m_recordingMouseHighlightRadius = 41;
     bool m_recordingMouseHighlightEnabled = false;
     bool m_recordingRecordMouseClicks = false;
+    bool m_recordingRecordMouseScrolling = false;
     QColor m_recordingMouseHighlightColor{255, 255, 0, 128};
     QLabel* m_recordMouseTrailIcon = nullptr;
     QLabel* m_recordMouseClickIcon = nullptr;
@@ -1072,6 +1082,7 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdButton* m_copyButton = nullptr;
     adqt::widgets::AdButton* m_confirmButton = nullptr;
     adqt::widgets::AdButton* m_globalCanvasClickThroughButton = nullptr;
+    adqt::widgets::AdButton* m_globalCanvasLaserPointerButton = nullptr;
     adqt::widgets::AdButton* m_globalCanvasExitButton = nullptr;
     QLabel* m_selectionOpacityIcon = nullptr;
     adqt::widgets::AdSlider* m_selectionOpacitySlider = nullptr;

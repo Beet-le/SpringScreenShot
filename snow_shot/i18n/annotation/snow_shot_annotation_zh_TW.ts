@@ -716,6 +716,10 @@
             <translation>LaTeX 專用模型</translation>
         </message>
         <message>
+            <source>Laser pointer</source>
+            <translation>雷射筆</translation>
+        </message>
+        <message>
             <source>Layout compaction disabled</source>
             <translation>已停用緊湊配置</translation>
         </message>
@@ -880,6 +884,10 @@
             <translation>開啟錄製資料夾</translation>
         </message>
         <message>
+            <source>Open spreadsheet file</source>
+            <translation>開啟試算表檔案</translation>
+        </message>
+        <message>
             <source>Outlined circle</source>
             <translation>輪廓圓形</translation>
         </message>
@@ -993,7 +1001,11 @@
         </message>
         <message>
             <source>Record mouse clicks</source>
-            <translation>記錄滑鼠點擊</translation>
+            <translation>錄製滑鼠按鍵</translation>
+        </message>
+        <message>
+            <source>Record mouse scrolling</source>
+            <translation>錄製滑鼠捲動</translation>
         </message>
         <message>
             <source>Record screen</source>
@@ -1566,6 +1578,14 @@
         <message>
             <source>Could not change canvas click-through.</source>
             <translation>無法切換畫布的滑鼠穿透狀態。</translation>
+        </message>
+        <message>
+            <source>Could not show the laser pointer: %1</source>
+            <translation>無法顯示雷射筆：%1</translation>
+        </message>
+        <message>
+            <source>The laser pointer is unavailable.</source>
+            <translation>雷射筆無法使用。</translation>
         </message>
     </context>
 </TS>

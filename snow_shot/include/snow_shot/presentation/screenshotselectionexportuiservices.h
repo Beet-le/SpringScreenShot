@@ -15,6 +15,7 @@
 #include <QSet>
 #include <QHash>
 #include <QPointer>
+#include <QStringList>
 #include <functional>
 #include <memory>
 
@@ -116,6 +117,9 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
     void restorePersistedWindows();
     // Returns whether restoration was queued; completion and failures are asynchronous.
     bool restoreRecord(const QString& id, bool activateGroup = true);
+    // Validates the whole selection before activating its common group once.
+    // Mixed groups or missing records are rejected without partial restoration.
+    bool restoreRecords(const QStringList& ids);
     void restoreLastClosedWindow();
     void showAllWindows();
     bool hideOtherWindows(const QString& exceptId);

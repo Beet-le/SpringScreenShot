@@ -991,8 +991,10 @@ void runImageEditingCloseTests();
 void runImageEditingSourceTests();
 void runImageEditingSmartEraseTests();
 void runImageEditingSaveTests();
+void runImageEditingSpreadsheetOpenTests();
 void runImageEditingConversionAvailabilityTests();
 void runImageEditingCanvasTests();
+void runImageEditingTextPreferencesTests();
 void runImageEditingDocumentTests();
 void runImageEditingTranslationTests();
 void runImageEditingBranchTests();
@@ -1003,6 +1005,11 @@ void runImageEditingTests() {
         QStringLiteral(":/recording-test-fonts/SnowRecordingTestSans-Regular.ttf"));
     require(font >= 0, "editor fixtures load the bundled font");
     QApplication::setFont(QFont(QFontDatabase::applicationFontFamilies(font).first(), 12));
+    if (QApplication::arguments().contains(
+            QStringLiteral("--image-editing-text-preferences-only"))) {
+        runImageEditingTextPreferencesTests();
+        return;
+    }
     if (QApplication::arguments().contains(QStringLiteral("--image-editing-translation-only"))) {
         runImageEditingTranslationTests();
         return;
@@ -1021,6 +1028,10 @@ void runImageEditingTests() {
     }
     if (QApplication::arguments().contains(QStringLiteral("--image-editing-save-only"))) {
         runImageEditingSaveTests();
+        return;
+    }
+    if (QApplication::arguments().contains(QStringLiteral("--spreadsheet-open-only"))) {
+        runImageEditingSpreadsheetOpenTests();
         return;
     }
     if (QApplication::arguments().contains(

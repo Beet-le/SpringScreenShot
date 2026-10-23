@@ -2915,10 +2915,11 @@ void renderSceneItemsImpl(const SceneRenderRequest& request) {
                 }
             }
             if (!copiedBackgroundRows) {
-                // Spotlight is part of the entering backdrop, including the clear color.
-                const bool initializedBaseline = !plan.restorationIndices.empty() || hasSpotlight
-                                                     ? request.clearBackgroundEnabled
-                                                     : request.enableFilterTileCache;
+                // Retained sources include the entering backdrop, but caching must not
+                // introduce a clear color when the host owns a transparent background.
+                const bool initializedBaseline = request.clearBackgroundEnabled &&
+                                                 (!plan.restorationIndices.empty() ||
+                                                  hasSpotlight || request.enableFilterTileCache);
                 scene.fill(initializedBaseline ? toQColor(displayInfo.clear_color)
                                                : Qt::transparent);
             }
