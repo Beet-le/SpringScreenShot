@@ -1858,6 +1858,7 @@ set(PROJECT_CXX_SOURCES
     src/presentation/capture/directcaptureworkflow.cpp
     src/presentation/capture/directcapturehistory.cpp
     src/presentation/capture/camerashuttersound.cpp
+    include/snow_shot/app/usagereportservice.h
     src/app/applicationcontroller.cpp
     src/app/usagereportservice.cpp
     src/app/updateconfirmationdialog.cpp
@@ -3054,6 +3055,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-usage-report-tests
         tests/usage_report_tests.cpp
+        include/snow_shot/app/usagereportservice.h
         src/app/usagereportservice.cpp
     )
     target_include_directories(snow-shot-usage-report-tests PRIVATE include)
