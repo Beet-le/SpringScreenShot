@@ -187,6 +187,12 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
             result.document.insert(QStringLiteral("screenshot_selection"), screenshotSelection);
             result.dirty = !replaceAll;
         }
+        QJsonObject legacyTelemetry = result.document.value(QStringLiteral("telemetry")).toObject();
+        if (legacyTelemetry.contains(QStringLiteral("daily_usage_upload"))) {
+            legacyTelemetry.remove(QStringLiteral("daily_usage_upload"));
+            result.document.insert(QStringLiteral("telemetry"), legacyTelemetry);
+            result.dirty = !replaceAll;
+        }
     }
     QSet<QString> defaultedShortcutKeys;
 

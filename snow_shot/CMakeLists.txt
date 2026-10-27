@@ -1836,6 +1836,8 @@ set(PROJECT_HEADERS
     include/snow_shot/presentation/styles/themecolorscheme.h
     include/snow_shot/presentation/floatingtoolbarcontroller.h
     include/snow_shot/presentation/systemtraycontroller.h
+    include/snow_shot/telemetry/usageevents.h
+    include/snow_shot/telemetry/usagetelemetry.h
 )
 
 add_library(snow_shot_print STATIC src/presentation/services/screenshotprintservice.cpp)
@@ -1893,9 +1895,7 @@ set(PROJECT_CXX_SOURCES
     src/presentation/capture/directcaptureworkflow.cpp
     src/presentation/capture/directcapturehistory.cpp
     src/presentation/capture/camerashuttersound.cpp
-    include/snow_shot/app/usagereportservice.h
     src/app/applicationcontroller.cpp
-    src/app/usagereportservice.cpp
     src/app/updateconfirmationdialog.cpp
     src/app/mcp/screenshotmcpsession.cpp
     src/app/mcp/screenshotmcpserver.cpp
@@ -2075,6 +2075,8 @@ set(PROJECT_CXX_SOURCES
     src/presentation/recording/screenrecordingshortcutcontroller.cpp
     src/presentation/recording/screenrecordinggeometry.cpp
     src/presentation/recording/screenrecordingtoolbarwindow.cpp
+    src/telemetry/usageevents.cpp
+    src/telemetry/usagetelemetry.cpp
 )
 if(APPLE)
     list(APPEND PROJECT_CXX_SOURCES
@@ -3105,16 +3107,25 @@ if(SNOW_SHOT_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
-    add_executable(snow-shot-usage-report-tests
-        tests/usage_report_tests.cpp
-        include/snow_shot/app/usagereportservice.h
-        src/app/usagereportservice.cpp
-    )
-    target_include_directories(snow-shot-usage-report-tests PRIVATE include)
-    target_link_libraries(snow-shot-usage-report-tests PRIVATE
-        snow_shot_storage snow_shot_diagnostics Qt6::Core)
-    add_test(NAME snow-shot-usage-report-tests COMMAND snow-shot-usage-report-tests)
-    set_tests_properties(snow-shot-usage-report-tests PROPERTIES LABELS "unit" TIMEOUT 30
+    add_executable(snow-shot-diagnostics-event-tap-tests tests/diagnostics_event_tap_tests.cpp)
+    target_include_directories(snow-shot-diagnostics-event-tap-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_link_libraries(snow-shot-diagnostics-event-tap-tests PRIVATE snow_shot_diagnostics)
+    add_test(NAME snow-shot-diagnostics-event-tap-tests
+        COMMAND snow-shot-diagnostics-event-tap-tests)
+    set_tests_properties(snow-shot-diagnostics-event-tap-tests PROPERTIES LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+    add_executable(snow-shot-usage-telemetry-tests
+        tests/usage_telemetry_tests.cpp
+        src/telemetry/usageevents.cpp
+        src/telemetry/usagetelemetry.cpp)
+    target_include_directories(snow-shot-usage-telemetry-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_link_libraries(snow-shot-usage-telemetry-tests PRIVATE
+        snow_shot_diagnostics Qt6::Network Qt6::Core)
+    add_test(NAME snow-shot-usage-telemetry-tests COMMAND snow-shot-usage-telemetry-tests)
+    set_tests_properties(snow-shot-usage-telemetry-tests PROPERTIES LABELS "unit" TIMEOUT 60
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
     add_executable(snow-shot-main-window-skin-codec-tests tests/main_window_skin_codec_tests.cpp)

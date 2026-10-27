@@ -180,7 +180,6 @@ enum class SettingsSwitchBinding {
     DrawingDeleteTextAfterCursor,
     DrawingRememberLastUsedTool,
     DrawingAlwaysShowFirstToolbarGroupButton,
-    DailyUsageUpload,
 };
 
 struct SettingsSwitchDefinition {

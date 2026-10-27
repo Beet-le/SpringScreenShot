@@ -1021,8 +1021,6 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::DrawingSettings().rememberLastUsedTool();
     case SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton:
         return storage::DrawingSettings().alwaysShowFirstToolbarGroupButton();
-    case SettingsSwitchBinding::DailyUsageUpload:
-        return storage::TelemetrySettings().dailyUsageUpload();
     }
     return false;
 }
@@ -1242,9 +1240,6 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::ShowOriginalImagePreview) {
         return storage::TextRecognitionSettings().setShowOriginalImagePreview(value);
     }
-    if (binding == SettingsSwitchBinding::DailyUsageUpload) {
-        return storage::TelemetrySettings().setDailyUsageUpload(value);
-    }
     if (binding == SettingsSwitchBinding::ShowTextHighlighting) {
         return storage::TextRecognitionSettings().setShowTextHighlighting(value);
     }
@@ -1430,7 +1425,6 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
     case SettingsSwitchBinding::DrawingRememberLastUsedTool:
     case SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton:
-    case SettingsSwitchBinding::DailyUsageUpload:
         return false;
     }
     return storage::ApplicationStorage::instance().requestCaptureHistoryPolicy(policy);
@@ -3018,12 +3012,8 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
         });
     case SettingsSectionReset::Network:
         return applySelectValue(
-                   SettingsSelectBinding::Proxy,
-                   storage::ConfigurationSchema::defaultValue(QStringLiteral("network/proxy"))) &&
-               storage::TelemetrySettings().setDailyUsageUpload(
-                   storage::ConfigurationSchema::defaultValue(
-                       QStringLiteral("telemetry/daily_usage_upload"))
-                       .toBool());
+            SettingsSelectBinding::Proxy,
+            storage::ConfigurationSchema::defaultValue(QStringLiteral("network/proxy")));
     case SettingsSectionReset::SystemSettings: {
 #ifdef Q_OS_MACOS
         return storage::ApplicationStorage::instance().configuration().setValues({

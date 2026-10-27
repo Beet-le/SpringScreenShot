@@ -379,14 +379,6 @@ bool TextRecognitionSettings::setShowOriginalImagePreview(bool enabled) const {
                             enabled);
 }
 
-bool TelemetrySettings::dailyUsageUpload() const {
-    return cache().value(QStringLiteral("telemetry/daily_usage_upload")).toBool();
-}
-
-bool TelemetrySettings::setDailyUsageUpload(bool enabled) const {
-    return cache().setValue(QStringLiteral("telemetry/daily_usage_upload"), enabled);
-}
-
 bool TextRecognitionSettings::showTextHighlighting() const {
     return cache().value(QStringLiteral("text_recognition/show_text_highlighting")).toBool();
 }

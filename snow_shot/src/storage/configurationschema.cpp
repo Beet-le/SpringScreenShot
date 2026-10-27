@@ -146,7 +146,7 @@ QStringList defaultActionToolbarHidden() {
                     QStringLiteral("convert-to-html"),
                     QStringLiteral("text-translation"),
                     QStringLiteral("table-recognition")};
-    ids.removeIf([](const QString& id) { return !presentation::editionActionToolAvailable(id); });
+    ids.removeIf([](const QString& id) { return !app::editionActionToolAvailable(id); });
     return ids;
 }
 
@@ -344,7 +344,6 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("none"), QStringLiteral("system")}},
-    {QStringLiteral("telemetry/daily_usage_upload"), true, ConfigurationValueKind::Boolean},
     {QStringLiteral("text_recognition/resident_process"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("text_recognition/model_hot_start"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("text_recognition/model_type"),

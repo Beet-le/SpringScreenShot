@@ -12,7 +12,7 @@
 #include "snow_shot/app/featureavailability.h"
 #include "snow_shot/app/applicationinputguard.h"
 #include "snow_shot/app/launchcommands.h"
-#include "snow_shot/app/usagereportservice.h"
+#include "snow_shot/telemetry/usagetelemetry.h"
 #include "snow_shot/presentation/apppermissionservice.h"
 #ifdef Q_OS_MACOS
 #include "snow_shot/platform/macos/applicationactivation.h"
@@ -365,9 +365,6 @@ class ApplicationController::Impl {
         ocrRecognition = std::make_unique<ScreenshotOcrRecognitionService>(ocrOptions, &q);
         auto& configuration = applicationStorage.configuration();
         updates = new update::UpdateService(update::defaultUpdateServiceOptions(), &app);
-#ifdef Q_OS_WIN
-        usageReport = new UsageReportService(UsageReportService::Options{}, &app);
-#endif
         updates->setProgressAppearance(
             presentation::styles::ThemeManager::instance().updateProgressAppearance());
         QObject::connect(
@@ -1471,10 +1468,6 @@ class ApplicationController::Impl {
         }
         started = true;
         updates->start();
-#ifdef Q_OS_WIN
-        if (usageReport != nullptr)
-            usageReport->start();
-#endif
 
 #ifdef Q_OS_MACOS
         permissions.setMicrophoneEnabled(storage::RecordingSettings().microphoneEnabled());
@@ -1625,6 +1618,11 @@ class ApplicationController::Impl {
                     kTrayMenuOptionsKey)));
         }
 #endif
+        if (key == u"network/proxy") {
+            // Kept independent of the updater so the collector follows the same setting even when
+            // the update service is unavailable in this build.
+            snow_shot::telemetry::setUseSystemProxy(value.toString() == u"system");
+        }
         if (key == u"updates/mode" && updates != nullptr) {
             updates->setMode(value.toString());
         } else if (key == u"network/proxy" && updates != nullptr) {
@@ -2235,7 +2233,6 @@ class ApplicationController::Impl {
     std::unique_ptr<StoreUpdateLifecycle> storeLifecycle;
     update::UpdateService* updates = nullptr;
 #ifdef Q_OS_WIN
-    UsageReportService* usageReport = nullptr;
     QStringList deferredShellFilePaths;
     bool deferredShellForeground = false;
     QStringList deferredStorageShellFilePaths;

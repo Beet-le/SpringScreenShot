@@ -22,6 +22,7 @@
 #include "widgets/platform_compatibility.h"
 #include "snow_shot/presentation/components/screenshothistorypagewidget.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/telemetry/usagetelemetry.h"
 #include "snow_shot/update/startupupdate.h"
 #include "snow_shot/diagnostics/diagnostics.h"
 #include "snow_shot/diagnostics/ffmpegdiagnostics.h"
@@ -530,6 +531,18 @@ int main(int argc, char* argv[]) {
             snow_shot::diagnostics::DiagnosticsService::instance().shutdown();
         }
     } diagnosticsLifetime;
+    // Declared after diagnosticsLifetime so reverse-order destruction stops the collector while
+    // diagnostics can still write the final lines. The tap is installed here, before
+    // diagnostics.initialize(), because session recovery is queued to a worker thread there and
+    // its unexpected-termination event would otherwise be missed.
+    struct TelemetryLifetime {
+        TelemetryLifetime() {
+            snow_shot::telemetry::installDiagnosticTap();
+        }
+        ~TelemetryLifetime() {
+            snow_shot::telemetry::stop();
+        }
+    } telemetryLifetime;
     snow_shot::storage::StorageInitializationOptions storageOptions;
     storageOptions.resolvedDirectory =
         std::make_shared<snow_shot::storage::StorageDirectorySelection>(
@@ -567,6 +580,11 @@ int main(int argc, char* argv[]) {
     QGuiApplication::setApplicationDisplayName(snow_shot::app::edition::productName());
     QApplication app(argc, argv);
     adqt::widgets::initializePlatformCompatibility(app);
+    // Runs before QApplication is destroyed so the sender can still use the network stack and
+    // the event loop. The guard above calls stop() a second time, which is a no-op.
+    QObject::connect(
+        &app, &QCoreApplication::aboutToQuit, &app, [] { snow_shot::telemetry::stop(); },
+        Qt::DirectConnection);
     snow_shot::diagnostics::logEvent(QStringLiteral("snow_shot.app"),
                                      QStringLiteral("application.platform"),
                                      {{QStringLiteral("backend"), QGuiApplication::platformName()},
@@ -636,6 +654,17 @@ int main(int argc, char* argv[]) {
 
     static_cast<void>(
         snow_shot::storage::ApplicationStorage::instance().initialize(storageOptions));
+    // Only reached by the instance that won the single-instance lock, so a forwarded launch never
+    // contributes usage samples. Everything before this point is shared with the forwarder.
+    static_cast<void>(snow_shot::telemetry::start(
+        {.userId = {},
+         .appName = snow_shot::app::edition::registryName(),
+         .appVersion = QStringLiteral(SNOW_DIAGNOSTICS_VERSION),
+         .sessionId = diagnostics.status().sessionId,
+         .useSystemProxy = snow_shot::storage::ApplicationStorage::instance()
+                               .configuration()
+                               .value(QStringLiteral("network/proxy"))
+                               .toString() == u"system"}));
     struct StorageLifetime {
         ~StorageLifetime() {
             snow_shot::storage::ApplicationStorage::instance().shutdown();

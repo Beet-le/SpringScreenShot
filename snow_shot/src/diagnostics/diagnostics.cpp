@@ -18,6 +18,7 @@
 #include <QUuid>
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
@@ -37,6 +38,24 @@ QtMessageHandler previousHandler = nullptr;
 bool consoleOutput = true;
 thread_local bool insideHandler = false;
 thread_local bool insideRecord = false;
+// Two atomics rather than an atomic<EventTap>: the sink is read on every record() call,
+// including the hot qt.message path, so it must not take a lock or copy a struct.
+std::atomic<EventTap::Sink> eventTapSink{nullptr};
+std::atomic<void*> eventTapContext{nullptr};
+
+void deliverToEventTap(QtMsgType level, const QString& category, const QString& event,
+                       const QJsonObject& fields) noexcept {
+    const EventTap::Sink sink = eventTapSink.load(std::memory_order_acquire);
+    if (sink == nullptr)
+        return;
+    // The sink contract already forbids throwing, but a third-party sink is still a foreign
+    // body running on a tooling path. Swallow anything it does so record() keeps its
+    // guarantee that diagnostics can never be taken down by an observer.
+    try {
+        sink(eventTapContext.load(std::memory_order_acquire), level, category, event, fields);
+    } catch (...) {
+    }
+}
 
 bool linked(const QString& path) {
     const QFileInfo info(path);
@@ -1177,6 +1196,10 @@ void DiagnosticsService::record(QtMsgType level, const QString& category, const 
                 insideRecord = false;
             }
         } reset;
+        // Deliberately ahead of the running/stopping gate and the queue lock: usage counting
+        // must survive a dead log directory, and an outside observer must never be able to
+        // widen the critical section or influence what gets dropped from the queue.
+        deliverToEventTap(level, category, event, fields);
         const auto session = sessionSnapshot();
         auto& impl = *session;
         std::lock_guard<std::mutex> lock(impl.mutex);
@@ -1350,6 +1373,17 @@ QString DiagnosticsService::sanitize(QString text) {
         text.replace(QDir::toNativeSeparators(home), QStringLiteral("<home>"), Qt::CaseInsensitive);
     }
     return text;
+}
+
+void setEventTap(EventTap tap) noexcept {
+    if (tap.sink == nullptr) {
+        // Publish the removal first so no reader can pair a stale sink with a cleared context.
+        eventTapSink.store(nullptr, std::memory_order_release);
+        eventTapContext.store(nullptr, std::memory_order_release);
+        return;
+    }
+    eventTapContext.store(tap.context, std::memory_order_release);
+    eventTapSink.store(tap.sink, std::memory_order_release);
 }
 
 void logEvent(const QString& category, const QString& event, const QJsonObject& fields,

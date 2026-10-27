@@ -3860,10 +3860,6 @@
             <translation>選取範圍、截圖輔助線與標註工具</translation>
         </message>
         <message>
-            <source>Send an anonymous daily count of feature usage to the server.</source>
-            <translation>向伺服器傳送匿名的每日功能使用次數統計。</translation>
-        </message>
-        <message>
             <source>Serial number</source>
             <translation>序號</translation>
         </message>
@@ -4172,14 +4168,6 @@
             <translation>智慧選取</translation>
         </message>
         <message>
-            <source>Spring ScreenShot</source>
-            <translation>Spring ScreenShot</translation>
-        </message>
-        <message>
-            <source>Spring ScreenShot server</source>
-            <translation>Spring ScreenShot 伺服器</translation>
-        </message>
-        <message>
             <source>Snowflake</source>
             <translation>雪花</translation>
         </message>
@@ -4230,6 +4218,14 @@
         <message>
             <source>Spotlight</source>
             <translation>聚光燈</translation>
+        </message>
+        <message>
+            <source>Spring ScreenShot</source>
+            <translation>Spring ScreenShot</translation>
+        </message>
+        <message>
+            <source>Spring ScreenShot server</source>
+            <translation>Spring ScreenShot 伺服器</translation>
         </message>
         <message>
             <source>Stack annotation tools</source>
@@ -4574,10 +4570,6 @@
         <message>
             <source>Updates</source>
             <translation>更新</translation>
-        </message>
-        <message>
-            <source>Upload daily usage summary</source>
-            <translation>上傳每日使用摘要</translation>
         </message>
         <message>
             <source>Upload to Cloud</source>
@@ -5482,4 +5474,3 @@ Unavailable: %2</source>
         </message>
     </context>
 </TS>
-

@@ -126,6 +126,23 @@ void logEvent(const QString& category, const QString& event, const QJsonObject& 
               QtMsgType level = QtInfoMsg) noexcept;
 std::shared_ptr<CrashCollector> makeCrashCollector();
 
+// Optional observer for events that reach the diagnostics pipeline. The sink runs on the
+// thread that recorded the event, before the record is encoded and queued for the log file,
+// so it never perturbs log ordering or the queue's drop policy. The sink runs while the
+// recorder's re-entrancy guard is already set, so it may call logEvent() without recursing.
+//
+// Contract for the sink: it must be noexcept, must stay far away from blocking work, and
+// must not assume an event loop exists (worker threads and early startup both record events).
+struct EventTap {
+    using Sink = void (*)(void* context, QtMsgType level, const QString& category,
+                          const QString& event, const QJsonObject& fields) noexcept;
+    Sink sink = nullptr;
+    void* context = nullptr;
+};
+
+// Installs or clears the process-wide tap. A default-constructed tap uninstalls.
+void setEventTap(EventTap tap) noexcept;
+
 } // namespace snow_shot::diagnostics
 
 Q_DECLARE_METATYPE(snow_shot::diagnostics::DiagnosticsStatus)

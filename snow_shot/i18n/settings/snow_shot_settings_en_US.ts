@@ -3860,10 +3860,6 @@
             <translation>Selection, capture guides and annotation tools</translation>
         </message>
         <message>
-            <source>Send an anonymous daily count of feature usage to the server.</source>
-            <translation>Send an anonymous daily count of feature usage to the server.</translation>
-        </message>
-        <message>
             <source>Serial number</source>
             <translation>Serial number</translation>
         </message>
@@ -4172,14 +4168,6 @@
             <translation>Smart selection</translation>
         </message>
         <message>
-            <source>Spring ScreenShot</source>
-            <translation>Spring ScreenShot</translation>
-        </message>
-        <message>
-            <source>Spring ScreenShot server</source>
-            <translation>Spring ScreenShot server</translation>
-        </message>
-        <message>
             <source>Snowflake</source>
             <translation>Snowflake</translation>
         </message>
@@ -4230,6 +4218,14 @@
         <message>
             <source>Spotlight</source>
             <translation>Spotlight</translation>
+        </message>
+        <message>
+            <source>Spring ScreenShot</source>
+            <translation>Spring ScreenShot</translation>
+        </message>
+        <message>
+            <source>Spring ScreenShot server</source>
+            <translation>Spring ScreenShot server</translation>
         </message>
         <message>
             <source>Stack annotation tools</source>
@@ -4574,10 +4570,6 @@
         <message>
             <source>Updates</source>
             <translation>Updates</translation>
-        </message>
-        <message>
-            <source>Upload daily usage summary</source>
-            <translation>Upload daily usage summary</translation>
         </message>
         <message>
             <source>Upload to Cloud</source>
@@ -5482,4 +5474,3 @@ Unavailable: %2</translation>
         </message>
     </context>
 </TS>
-
