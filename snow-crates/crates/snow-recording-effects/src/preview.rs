@@ -1115,6 +1115,7 @@ mod tests {
         style.offset_bottom = 120;
         style.size = 260;
         style.shape = snow_webcam::WebcamShape::Circle;
+        style.orientation = snow_webcam::WebcamOrientation::MirroredClockwise90;
         assert!(preview.update_webcam_layout(&next));
         assert!(preview.config == next);
         assert_eq!(preview.pending_keys.len(), pending);

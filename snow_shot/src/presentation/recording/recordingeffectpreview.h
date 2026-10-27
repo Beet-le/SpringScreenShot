@@ -30,7 +30,8 @@ class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRend
                    int highlightRadius = 41, uint32_t playbackOverlay = 0,
                    const QColor& progressBarColor = QColor(22, 119, 255),
                    SnowWebcam* webcam = nullptr, int webcamSize = 150, uint32_t webcamShape = 0,
-                   const QPoint& webcamOffset = QPoint(48, 48), bool recordMouseScrolling = false);
+                   const QPoint& webcamOffset = QPoint(48, 48), bool recordMouseScrolling = false,
+                   uint32_t webcamOrientation = 0);
     void setEligible(bool eligible);
     void setStatusPrompts(bool enabled, const QString& format, bool microphone, bool speaker);
     void stopAndClear(bool present = false);
@@ -82,6 +83,7 @@ class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRend
     int m_webcamSize = 150;
     QPoint m_webcamOffset{48, 48};
     uint32_t m_webcamShape = 0;
+    uint32_t m_webcamOrientation = 0;
     bool m_eligible = false;
     bool m_running = false;
     bool m_sessionEnding = false;

@@ -159,15 +159,13 @@ RecordingEffectPreview::~RecordingEffectPreview() {
     delete m_statusPrompt;
 }
 
-void RecordingEffectPreview::configure(const QRect& capture, const QSize& output,
-                                       const QColor& trail, const QColor& click, bool keyboard,
-                                       int trailDurationMs, const QColor& keyboardBackground,
-                                       const QColor& keyboardForeground, int keyboardSize,
-                                       const QColor& highlight, bool recordMouseClicks,
-                                       int highlightRadius, uint32_t playbackOverlay,
-                                       const QColor& progressBarColor, SnowWebcam* webcam,
-                                       int webcamSize, uint32_t webcamShape,
-                                       const QPoint& webcamOffset, bool recordMouseScrolling) {
+void RecordingEffectPreview::configure(
+    const QRect& capture, const QSize& output, const QColor& trail, const QColor& click,
+    bool keyboard, int trailDurationMs, const QColor& keyboardBackground,
+    const QColor& keyboardForeground, int keyboardSize, const QColor& highlight,
+    bool recordMouseClicks, int highlightRadius, uint32_t playbackOverlay,
+    const QColor& progressBarColor, SnowWebcam* webcam, int webcamSize, uint32_t webcamShape,
+    const QPoint& webcamOffset, bool recordMouseScrolling, uint32_t webcamOrientation) {
     if (m_sessionEnding)
         return;
     const bool sameScene =
@@ -180,7 +178,7 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
         m_playbackOverlay == playbackOverlay && m_progressBarColor == progressBarColor &&
         m_webcam == webcam;
     if (sameScene && m_webcamSize == webcamSize && m_webcamShape == webcamShape &&
-        m_webcamOffset == webcamOffset) {
+        m_webcamOffset == webcamOffset && m_webcamOrientation == webcamOrientation) {
         return;
     }
     if (sameScene && webcam) {
@@ -209,6 +207,7 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
     m_webcamSize = webcamSize;
     m_webcamOffset = webcamOffset;
     m_webcamShape = webcamShape;
+    m_webcamOrientation = webcamOrientation;
     updateWebcamControl();
     m_keyboardSize = keyboardSize;
     m_trailDurationMs = trailDurationMs;
@@ -338,7 +337,8 @@ void RecordingEffectPreview::synchronize() {
                                       m_webcamShape,
                                       static_cast<uint32_t>(m_webcamOffset.x()),
                                       static_cast<uint32_t>(m_webcamOffset.y()),
-                                      static_cast<uint32_t>(m_recordMouseScrolling)};
+                                      static_cast<uint32_t>(m_recordMouseScrolling),
+                                      m_webcamOrientation};
     font.applyTo(config);
     QString error;
     const bool success = m_running ? m_source->configure(config, error)

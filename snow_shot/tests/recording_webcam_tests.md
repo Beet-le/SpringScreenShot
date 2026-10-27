@@ -36,17 +36,33 @@ bottom-left. A completed gesture saves position and size; Escape or interruption
 restores the initial layout. Startup locks editing before taking its snapshot.
 Fitting first reduces offsets, then size, without changing saved preferences.
 The 32-DIP semi-transparent black control is UI-only and shrinks for tiny regions.
-Webcam metadata v2 stores offsets; v1 remains readable at the original 48 px inset.
+The orientation toolbar follows the image in setup, using clockwise/counterclockwise
+90-degree steps and horizontal/vertical flips of the currently displayed image.
+Its four icon actions have translated tooltips and accessible names. It floats
+6 DIP above the image, falls below at the top screen edge, and stays on screen
+even for tiny capture regions. Move/resize gestures temporarily disable the row;
+startup, recording, pause, playback, camera failure and close hide it. The saved
+orientation is frozen with the session's other webcam preferences.
+
+Webcam metadata v3 stores orientation; v2 stores offsets and defaults to identity;
+v1 remains readable with identity orientation at the original 48 px inset.
 
 GPU capture does not read the desktop back to the CPU; it uploads a compact camera texture
 only when the camera image changes.
 
-Direct C configuration v14 and preview v9 retain the camera source and offsets.
+Direct C configuration v16 and preview v11 add orientation (quarter-turns in bits
+0..1, horizontal reflection before rotation in bit 2). Direct v15 and preview v10
+retain their original sizes, including tail padding, and use identity orientation.
+Direct v14 and preview v9 retain the camera source and offsets.
 Direct v13 and preview v8 retain the camera at the default inset; earlier layouts
 remain accepted with the camera disabled. Deferred bundles optionally
 contain `WebcamVideo`, `WebcamIndex`, and versioned `WebcamMetadata` assets. Their
 timestamps and availability transitions use active recording time. Playback,
 trim, speed changes, and export reuse the same camera replay and renderer.
+Orientation is fused into the shared resampling/mask pass. Sampling coordinates,
+pixel buffers, masks and placement-only textures are reused; changing orientation
+does not restart the device or clear the current preview. Deferred camera video
+remains untransformed, and replay applies its metadata orientation exactly once.
 
 ## Automated checks
 
@@ -93,6 +109,75 @@ in the annotation and recording catalogs for en_US, zh_CN, and zh_TW.
 The two `MacOSBundleMetadata` product-metadata tests in
 `scripts/test-macos-build-support.py` verify the camera usage key and all six
 localized permission resources without requiring macOS.
+
+## Orientation validation and Release sampling cost (2026-10-23)
+
+The focused webcam preview/settings/interaction tests and recording settings
+tests pass. The interaction test also passes with `QT_SCALE_FACTOR` set to
+1, 1.25, 1.5 and 2, and the native Windows webcam gesture test passes. Toolbar
+renders were inspected in light/dark themes at those four scales. Rust tests
+cover all eight orientations with asymmetric pixels, cache reuse, metadata v1/v2
+compatibility, invalid orientation values, C ABI tail padding, CPU/GPU agreement,
+and oriented playback/export markers through rewinds, trimming and speed changes.
+The application builds; changed C++ files pass clang-format, selected Rust
+packages pass Clippy with warnings denied, and translation catalog checks pass.
+Native macOS and ARM64 validation were unavailable on this x64 Windows host.
+
+A paired Release harness includes the original sampling implementation from
+`fc8f669b583cb889b8b20057013a02e8d41aa07f` and the updated implementation in the
+same executable, using three samples of 1,000 fresh frames per case, retained
+buffers, and black-boxed input/output. It uses the performance profile's
+optimization level 3, fat LTO and one codegen unit. On a Ryzen 9 5950X, median
+500 px preparation times in microseconds were:
+
+| Shape | Original identity | New identity | Clockwise 90° | Horizontal flip | Mirror + clockwise 90° |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Square | 1144.22 | 173.54 | 221.18 | 194.34 | 219.19 |
+| Circle | 1130.93 | 688.78 | 693.36 | 660.19 | 758.85 |
+
+These are sampling-pass measurements, excluding camera capture, composition and
+encoding. At the default 150 px size, identity preparation measured 17.35 µs
+(square) and 62.01 µs (circle), versus 98.11 µs and 101.25 µs originally. Row
+iterators bound each source pixel once; opaque squares skip alpha multiplication.
+Orientation does not add another image pass, and unchanged styles/frames keep the
+existing cache behavior. The source harness and CSV are retained under
+`build/webcam-orientation-kernel-benchmark.rs` and
+`build/webcam-orientation-kernel-final.csv`.
+
+The realtime benchmark accepts `--webcam-orientation 0..7`; its webcam metadata
+report records that selection. End-to-end runs use `windows-msvc-performance`,
+1280×720 at 30 fps, synthetic 500 px square/circle cameras, CPU and hardware
+encoding, and three eight-second samples after a warmup. Baseline and updated
+disabled/identity cases are compared alongside orientations 1, 4 and 5. Raw
+recordings, CSVs and executable hashes are retained under
+`build/webcam-orientation-performance/`.
+
+All 24 end-to-end cases completed. The following are per-case medians; private
+memory is peak committed process memory in MiB, and process CPU uses 100% for one
+logical core (including the synthetic workload, capture and encoding).
+
+| Pipeline / camera | CPU %, original → new | Encoded frames/s, original → new | Private MiB, original → new |
+| --- | ---: | ---: | ---: |
+| CPU / disabled | 54.38 → 47.59 | 21.38 → 21.75 | 226.17 → 226.53 |
+| CPU / square identity | 88.91 → 94.78 | 29.88 → 30.00 | 234.57 → 235.76 |
+| CPU / circle identity | 98.10 → 83.78 | 29.88 → 29.88 | 237.32 → 236.75 |
+| GPU / disabled | 15.25 → 10.65 | 29.88 → 29.88 | 90.10 → 87.11 |
+| GPU / square identity | 43.54 → 27.00 | 30.00 → 30.00 | 114.97 → 114.53 |
+| GPU / circle identity | 54.90 → 32.52 | 30.00 → 30.00 | 114.09 → 115.77 |
+
+All updated camera cases, including rotations/reflections, had median encoded
+rates of 29.875–30.000 fps. Peak-private-memory medians increased by at most
+2.30 MiB over the corresponding original camera/encoder configuration. Disabled
+runs showed lower source-driven encoded-frame rates in both builds.
+
+Whole-process CPU results varied substantially, so the sampling-pass timings
+above should not be read as whole-recording speedups. A single CPU square sample
+encoded 28.375 fps; a reverse-order repeat (three 12-second samples after a
+two-second warmup) did not reproduce that result. Both builds measured 29.833 fps
+median in the repeat; process CPU medians were 90.574% original and 91.072% new.
+The repeat's updated samples ranged from 29.833 to 29.917 fps. Its recordings and
+reports use the `cpu-square-{baseline,updated}-repeat` subdirectories alongside
+the full matrix and `summary.json`.
 
 ## Windows Release performance results
 

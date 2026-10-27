@@ -236,6 +236,7 @@ SequenceNumberSolidSquare(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ShapeDiamond(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ShapeEllipse(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ShapeRectangle(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef ShapeThoughtBubble(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ShowLeaderLine(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef SourceRegionOutline(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef TableRecognition(const adqt::icons::IconColors& colors = {});

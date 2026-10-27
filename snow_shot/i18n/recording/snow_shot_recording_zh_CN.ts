@@ -215,12 +215,28 @@
     <context>
         <name>RecordingWebcamControl</name>
         <message>
+            <source>Flip horizontally</source>
+            <translation>水平翻转</translation>
+        </message>
+        <message>
+            <source>Flip vertically</source>
+            <translation>垂直翻转</translation>
+        </message>
+        <message>
             <source>Move webcam</source>
             <translation>移动摄像头画面</translation>
         </message>
         <message>
             <source>Resize webcam</source>
             <translation>调整摄像头画面大小</translation>
+        </message>
+        <message>
+            <source>Rotate clockwise</source>
+            <translation>顺时针旋转</translation>
+        </message>
+        <message>
+            <source>Rotate counterclockwise</source>
+            <translation>逆时针旋转</translation>
         </message>
     </context>
     <context>

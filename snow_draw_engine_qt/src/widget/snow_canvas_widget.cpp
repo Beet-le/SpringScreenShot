@@ -32,6 +32,7 @@
 #include "snow_canvas_widget_text_interaction.h"
 #include "snow_draw_engine_qt/snow_canvas_custom_renderer.h"
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
+#include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_draw_engine_qt/snow_canvas_wheel_input.h"
 
 #include <QBitmap>
@@ -185,7 +186,8 @@ bool magnifierSamplesDamage(const SnowCanvasSceneItem& item,
 std::uint64_t sceneCacheContentKey(const SceneDisplayInfo& sceneInfo,
                                    const SnowCanvasCustomRenderer* customRenderer,
                                    bool clearBackgroundEnabled, double devicePixelRatio,
-                                   const QSize& widgetSize) {
+                                   const QSize& widgetSize,
+                                   SnowCanvasRenderContext::Purpose purpose) {
     std::size_t key = 1469598103934665603ull;
     const auto hashCombine = [&key](std::size_t value) {
         key ^= value;
@@ -208,6 +210,7 @@ std::uint64_t sceneCacheContentKey(const SceneDisplayInfo& sceneInfo,
     hashCombine(std::hash<double>{}(devicePixelRatio));
     hashCombine(static_cast<std::size_t>(widgetSize.width()));
     hashCombine(static_cast<std::size_t>(widgetSize.height()));
+    hashCombine(static_cast<std::size_t>(purpose));
     return static_cast<std::uint64_t>(key);
 }
 
@@ -538,9 +541,11 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool beginSelectedText(const QPointF& viewPosition, bool requireSerialBoundText);
 
     void paintEvent(QPaintEvent* event);
-    bool paint(QPainter& painter, const QRegion& exposedRegion);
+    bool paint(QPainter& painter, const QRegion& exposedRegion,
+               SnowCanvasRenderContext::Purpose purpose = SnowCanvasRenderContext::Purpose::Widget);
     snow_canvas_compositor::Frame buildPaintFrame() const;
-    SnowCanvasRenderContext renderContext(QPainter& painter, const QRegion& exposedRegion) const;
+    SnowCanvasRenderContext renderContext(QPainter& painter, const QRegion& exposedRegion,
+                                          SnowCanvasRenderContext::Purpose purpose) const;
     void renderBeforeCanvas(QPainter& painter, const SnowCanvasRenderContext& context) const;
     void renderAfterCanvas(QPainter& painter, const SnowCanvasRenderContext& context) const;
     bool canBeginPointerInteraction(const QMouseEvent& event) const;
@@ -1088,8 +1093,9 @@ SnowCanvasStyleToolbarState SnowCanvasWidget::Impl::canvasStyleToolbarState() co
                                  0.0, &arrowText, &arrowTextStyle, &foundArrow) == SNOW_OK &&
                              foundArrow != 0;
     if (textInteraction.isActive()) {
-        if (textInteraction.session().arrowId().generation != 0 ||
-            textInteraction.session().bubbleId().generation != 0) {
+        if (!textInteraction.session().isDistanceValue() &&
+            (textInteraction.session().arrowId().generation != 0 ||
+             textInteraction.session().bubbleId().generation != 0)) {
             state.source = SnowCanvasStyleToolbarSource::SelectedText;
         }
         state.textStyle = snow_canvas_types::toCanvasTextStyle(textInteraction.currentTextStyle());
@@ -1255,6 +1261,12 @@ bool SnowCanvasWidget::Impl::setCanvasDistanceStyle(const SnowCanvasDistanceStyl
                                                     quint32 properties) {
     if (!snow_canvas_types::validDistanceStyle(style))
         return false;
+    const QPointer<SnowCanvasWidget> lifetime(&widget);
+    if (textInteraction.session().isDistanceValue()) {
+        commitText(false);
+        if (!lifetime)
+            return false;
+    }
     return applyMutation([&]() {
         return snow_canvas_commands::setDistanceStylePatch(
             runtimeBinding.engine(), runtimeBinding.viewportHandle(),
@@ -1693,6 +1705,11 @@ bool SnowCanvasWidget::Impl::handleContextMenu(QContextMenuEvent* event) {
 void SnowCanvasWidget::Impl::setInteractionEnabled(bool enabled) {
     if (!enabled) {
         const QPointer<SnowCanvasWidget> lifetime(&widget);
+        if (textInteraction.session().isDistanceValue()) {
+            static_cast<void>(cancelActiveTextEditing());
+            if (!lifetime)
+                return;
+        }
         if (tabletGestureActive) {
             handleFocusOut();
             if (!lifetime) {
@@ -2698,6 +2715,21 @@ void SnowCanvasWidget::Impl::syncAfterEngineMutation(bool emitSignals) {
     const auto publicationEpoch = statePublicationEpoch;
     const auto engineLease = runtimeBinding.retainEngine();
     distanceCreationPixelScale.reset();
+    if (hasViewport() && textInteraction.session().isDistanceValue()) {
+        SnowTextElementInfo info{};
+        SnowTextStyle style{};
+        std::uint8_t active = 0;
+        if (snow_viewport_get_active_text_draft_presentation(runtimeBinding.engine(),
+                                                             runtimeBinding.viewportHandle(), &info,
+                                                             &style, &active) == SNOW_OK &&
+            active == 0) {
+            static_cast<void>(textInteraction.cancel(runtimeBinding.engine(),
+                                                     runtimeBinding.viewportHandle(),
+                                                     displayState.displayCache()));
+            if (!lifetime || statePublicationEpoch != publicationEpoch)
+                return;
+        }
+    }
     std::uint8_t captureActive = 0;
     if (hasViewport() &&
         snow_runtime_has_pointer_capture(runtimeBinding.engine(), &captureActive) == SNOW_OK) {
@@ -3056,7 +3088,8 @@ void SnowCanvasWidget::Impl::paintEvent(QPaintEvent* event) {
     paint(painter, exposedRegion);
 }
 
-bool SnowCanvasWidget::Impl::paint(QPainter& painter, const QRegion& exposedRegion) {
+bool SnowCanvasWidget::Impl::paint(QPainter& painter, const QRegion& exposedRegion,
+                                   SnowCanvasRenderContext::Purpose purpose) {
     if (!hasExposedRect(exposedRegion, widget.rect())) {
         return false;
     }
@@ -3071,7 +3104,7 @@ bool SnowCanvasWidget::Impl::paint(QPainter& painter, const QRegion& exposedRegi
                             Qt::IntersectClip);
     snow_canvas_compositor::Frame frame = buildPaintFrame();
     if (canvasContentIsVisible) {
-        const SnowCanvasRenderContext tileContext = renderContext(painter, exposedRegion);
+        const SnowCanvasRenderContext tileContext = renderContext(painter, exposedRegion, purpose);
         const QList<SnowCanvasBaseImageSource> baseImageSources =
             installedCustomRenderer != nullptr ? installedCustomRenderer->baseImageSources()
                                                : QList<SnowCanvasBaseImageSource>{};
@@ -3118,7 +3151,7 @@ bool SnowCanvasWidget::Impl::paint(QPainter& painter, const QRegion& exposedRegi
         if (!referenceRendered) {
             sceneRequest.filterTileContentKey = sceneCacheContentKey(
                 cache.sceneInfo(), installedCustomRenderer, canvasClearBackgroundEnabled,
-                painterDevicePixelRatio(painter, widget), widget.size());
+                painterDevicePixelRatio(painter, widget), widget.size(), purpose);
             if (!hasFilter(frame.sceneItems, frame.sceneItemCount)) {
                 snow_canvas_compositor::clearSurface(painter, frame);
                 renderBeforeCanvas(painter, tileContext);
@@ -3131,20 +3164,20 @@ bool SnowCanvasWidget::Impl::paint(QPainter& painter, const QRegion& exposedRegi
         snow_canvas_compositor::renderDocumentDecorations(painter, frame);
         painter.restore();
     } else {
-        const SnowCanvasRenderContext context = renderContext(painter, exposedRegion);
+        const SnowCanvasRenderContext context = renderContext(painter, exposedRegion, purpose);
         snow_canvas_compositor::clearSurface(painter, frame);
         renderBeforeCanvas(painter, context);
     }
     painter.restore();
     // The image bounds constrain document pixels, while selection controls and
     // inline editing affordances must remain visible beyond those bounds.
-    if (canvasContentIsVisible) {
+    if (canvasContentIsVisible && purpose == SnowCanvasRenderContext::Purpose::Widget) {
         painter.save();
         snow_canvas_compositor::renderEditorOverlays(painter, frame);
         textInteraction.renderEditorOverlay(painter, widget.font(), cache);
         painter.restore();
     }
-    const SnowCanvasRenderContext context = renderContext(painter, exposedRegion);
+    const SnowCanvasRenderContext context = renderContext(painter, exposedRegion, purpose);
     renderAfterCanvas(painter, context);
 
     return true;
@@ -3182,14 +3215,16 @@ void SnowCanvasWidget::Impl::updateWatermarkPresentationInfo() const {
     }
 }
 
-SnowCanvasRenderContext SnowCanvasWidget::Impl::renderContext(QPainter& painter,
-                                                              const QRegion& exposedRegion) const {
+SnowCanvasRenderContext
+SnowCanvasWidget::Impl::renderContext(QPainter& painter, const QRegion& exposedRegion,
+                                      SnowCanvasRenderContext::Purpose purpose) const {
     const SceneDisplayInfo& sceneInfo = displayState.displayCache().sceneInfo();
     return SnowCanvasRenderContext{
         widget.rect(),
         exposedRegion.intersected(widget.rect()),
         ::canvasToViewTransform(sceneInfo),
         painterDevicePixelRatio(painter, widget),
+        purpose,
     };
 }
 
@@ -3215,6 +3250,27 @@ void SnowCanvasWidget::Impl::renderAfterCanvas(QPainter& painter,
 
 void SnowCanvasWidget::paintEvent(QPaintEvent* event) {
     m_impl->paintEvent(event);
+}
+
+QImage SnowCanvasWidget::renderContentToImage(const QSize& physicalSize) {
+    if (physicalSize.isEmpty() || size().isEmpty() || !m_impl->hasViewport())
+        return {};
+    QImage image = snowCanvasAllocateZeroedImage(physicalSize, QImage::Format_ARGB32_Premultiplied);
+    if (image.isNull())
+        return {};
+    const qreal scaleX = qreal(physicalSize.width()) / width();
+    const qreal scaleY = qreal(physicalSize.height()) / height();
+    const qreal dpr = qMax(scaleX, scaleY);
+    image.setDevicePixelRatio(dpr);
+    {
+        QPainter painter(&image);
+        painter.scale(scaleX / dpr, scaleY / dpr);
+        if (!m_impl->paint(painter, QRegion(rect()),
+                           SnowCanvasRenderContext::Purpose::ContentSnapshot))
+            return {};
+    }
+    image.setDevicePixelRatio(1.0);
+    return image;
 }
 
 bool SnowCanvasWidget::event(QEvent* event) {
@@ -3332,9 +3388,21 @@ bool SnowCanvasWidget::Impl::handleMousePress(QMouseEvent* event,
     restoredSelectionForNextTextToolPress = false;
     bool canDispatchAfterTextCommit = true;
     if (plan.shouldCommitTextEditor) {
+        const bool dismissSelection =
+            event->button() == Qt::LeftButton && !plan.shouldRestoreSelectionOnCommit &&
+            displayState.snapshot().styleToolbarState.selected_element_count != 0;
         const SnowCanvasWidgetTextInteraction::CommitResult commitResult =
             commitText(true, plan.shouldRestoreSelectionOnCommit);
         if (!lifetime) {
+            return false;
+        }
+        // Bound-label commits retain selection for keyboard and focus workflows.
+        // An outside click also dismisses the selection that existed before the
+        // commit, without overriding automatic selection of newly created text.
+        if (dismissSelection && !applyMutation([&]() {
+                return snow_canvas_commands::clearSelection(runtimeBinding.engine(),
+                                                            runtimeBinding.viewportHandle());
+            })) {
             return false;
         }
         if (plan.dispatchAfterCommitRequiresRestoredSelection) {
@@ -3392,6 +3460,17 @@ bool SnowCanvasWidget::Impl::handleMousePress(QMouseEvent* event,
         event, pointerInput != nullptr
                    ? *pointerInput
                    : snow_canvas_input::makePointerInput(*event, SNOW_POINTER_EVENT_DOWN));
+    if (handled && event->button() == Qt::LeftButton) {
+        auto draft = textInteraction.beginRequestedDistanceValue(
+            runtimeBinding.engine(), runtimeBinding.viewportHandle(), displayState.displayCache(),
+            event);
+        if (!syncChangedViewports(draft.firstChangedViewports.get()))
+            return false;
+        if (draft.started) {
+            static_cast<void>(publishStateChange(StateNotification::StyleToolbar));
+            return true;
+        }
+    }
     if (handled && plan.shouldBeginText && plan.allowCreateText) {
         const SnowTextStyle textStyle = displayState.snapshot().styleToolbarState.text_style;
         SnowCanvasWidgetTextInteraction::BeginResult draft =
@@ -3898,7 +3977,9 @@ bool SnowCanvasWidget::Impl::handleWheel(QWheelEvent* event) {
         snow_canvas_text_editor_input::planFontSizeWheel(
             snow_canvas_text_editor_input::FontSizeWheelRequest{
                 true,
-                textInteraction.isActive() ? SnowCanvasTool::Text : canvasTool(),
+                textInteraction.session().isDistanceValue() ? SnowCanvasTool::Distance
+                : textInteraction.isActive()                ? SnowCanvasTool::Text
+                                                            : canvasTool(),
                 event->modifiers(),
                 event->pixelDelta().y(),
                 event->angleDelta().y(),

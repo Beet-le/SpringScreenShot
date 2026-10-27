@@ -426,6 +426,56 @@ pub unsafe extern "C" fn snow_runtime_end_presentation_update_ex(
 /// If `runtime` is non-null, it must be a live handle returned by `snow_runtime_create`.
 /// `out_changed_viewports` must be valid for writes.
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_runtime_set_automatically_select_newly_created_elements_ex(
+    runtime: SnowRuntime,
+    enabled: u8,
+    out_changed_viewports: *mut SnowChangedViewportList,
+) -> SnowError {
+    ffi_error(|| {
+        if out_changed_viewports.is_null() || enabled > 1 {
+            return SnowError::InvalidArgument;
+        }
+
+        ffi_status(with_runtime_impl_mut(runtime, |state| {
+            let result = state
+                .runtime
+                .set_automatically_select_newly_created_elements(enabled != 0)
+                .map_err(SnowError::from)?;
+            write_changed_viewports(out_changed_viewports, result.changed_viewports);
+            Ok(())
+        }))
+    })
+}
+
+/// # Safety
+/// If `runtime` is non-null, it must be a live handle returned by `snow_runtime_create`.
+/// `out_changed_viewports` must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_runtime_set_automatic_selection_excluded_tools_ex(
+    runtime: SnowRuntime,
+    tools: u64,
+    out_changed_viewports: *mut SnowChangedViewportList,
+) -> SnowError {
+    ffi_error(|| {
+        if out_changed_viewports.is_null() {
+            return SnowError::InvalidArgument;
+        }
+
+        ffi_status(with_runtime_impl_mut(runtime, |state| {
+            let result = state
+                .runtime
+                .set_automatic_selection_excluded_tools(snow_active_tool_mask_to_rust(tools))
+                .map_err(SnowError::from)?;
+            write_changed_viewports(out_changed_viewports, result.changed_viewports);
+            Ok(())
+        }))
+    })
+}
+
+/// # Safety
+/// If `runtime` is non-null, it must be a live handle returned by `snow_runtime_create`.
+/// `out_changed_viewports` must be valid for writes.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn snow_runtime_set_quick_selection_disabled_tools_ex(
     runtime: SnowRuntime,
     tools: u64,
@@ -859,6 +909,75 @@ pub unsafe extern "C" fn snow_changed_viewports_get(
 #[cfg(test)]
 mod session_tests {
     use super::*;
+
+    #[test]
+    fn automatic_selection_policy_rejects_invalid_ffi_arguments() {
+        unsafe {
+            let mut runtime = std::ptr::null_mut();
+            assert_eq!(snow_runtime_create(&mut runtime), SnowError::Ok);
+            let mut changed = std::ptr::null_mut();
+            assert_eq!(
+                snow_runtime_set_automatically_select_newly_created_elements_ex(
+                    runtime,
+                    1,
+                    &mut changed
+                ),
+                SnowError::Ok
+            );
+            snow_changed_viewports_destroy(changed);
+            assert_eq!(
+                snow_runtime_set_automatically_select_newly_created_elements_ex(
+                    runtime,
+                    2,
+                    &mut changed
+                ),
+                SnowError::InvalidArgument
+            );
+            assert_eq!(
+                snow_runtime_set_automatically_select_newly_created_elements_ex(
+                    runtime,
+                    0,
+                    std::ptr::null_mut()
+                ),
+                SnowError::InvalidArgument
+            );
+            assert_eq!(
+                snow_runtime_set_automatically_select_newly_created_elements_ex(
+                    std::ptr::null_mut(),
+                    0,
+                    &mut changed
+                ),
+                SnowError::InvalidArgument
+            );
+            assert_eq!(
+                snow_runtime_set_automatic_selection_excluded_tools_ex(
+                    runtime,
+                    (1_u64 << SnowActiveTool::FreeDraw as u32)
+                        | (1_u64 << SnowActiveTool::PenFilter as u32),
+                    &mut changed
+                ),
+                SnowError::Ok
+            );
+            snow_changed_viewports_destroy(changed);
+            assert_eq!(
+                snow_runtime_set_automatic_selection_excluded_tools_ex(
+                    runtime,
+                    0,
+                    std::ptr::null_mut()
+                ),
+                SnowError::InvalidArgument
+            );
+            assert_eq!(
+                snow_runtime_set_automatic_selection_excluded_tools_ex(
+                    std::ptr::null_mut(),
+                    0,
+                    &mut changed
+                ),
+                SnowError::InvalidArgument
+            );
+            snow_runtime_destroy(runtime);
+        }
+    }
 
     #[test]
     fn current_content_bytes_are_owned_and_reject_bad_input() {

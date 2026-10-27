@@ -423,6 +423,105 @@ void arrowRatioEditsRenderAndRoundTrip() {
     }
 }
 
+void arrowOutlineEditsRenderAndRoundTrip() {
+    for (const auto shaft : {SnowCanvasArrowShaftType::Plain, SnowCanvasArrowShaftType::Tapered}) {
+        for (const double outlineWidth : {2.0, 8.0, 72.0}) {
+            SnowCanvasRuntime runtime;
+            SnowCanvasWidget canvas(runtime);
+            canvas.resize(600, 360);
+            canvas.show();
+            QApplication::processEvents();
+            require(canvas.setCanvasTool(SnowCanvasTool::Arrow),
+                    "activate outline width test arrow");
+            SnowCanvasShapeStyle style;
+            style.stroke = Qt::red;
+            style.strokeWidth = 2.0;
+            style.startArrowhead = SnowCanvasArrowhead::Triangle;
+            style.endArrowhead = SnowCanvasArrowhead::Triangle;
+            style.arrowShaftType = shaft;
+            require(canvas.setCanvasShapeStylePatch(style,
+                                                    SnowCanvasShapeStylePropertyStrokeColor |
+                                                        SnowCanvasShapeStylePropertyStrokeWidth |
+                                                        SnowCanvasShapeStylePropertyStartArrowhead |
+                                                        SnowCanvasShapeStylePropertyEndArrowhead |
+                                                        SnowCanvasShapeStylePropertyArrowShaftType,
+                                                    SnowCanvasShapeKind::Arrow),
+                    "configure outline width test arrow");
+            createArrow(canvas, runtime);
+            const auto render = [&]() {
+                return runtime.renderToImage(QRectF(-300, -180, 600, 360), QSize(600, 360), {});
+            };
+            const QImage original = render();
+            mouse(canvas, QEvent::MouseButtonPress, {30.0, 120.0}, Qt::LeftButton, Qt::LeftButton);
+            mouse(canvas, QEvent::MouseMove, {550.0, 240.0}, Qt::NoButton, Qt::LeftButton);
+            mouse(canvas, QEvent::MouseButtonRelease, {550.0, 240.0}, Qt::LeftButton, Qt::NoButton);
+            require(canvas.canvasStyleToolbarState().source ==
+                        SnowCanvasStyleToolbarSource::SelectedArrow,
+                    "outline width test selects the arrow");
+            style.arrowOutlineWidth = outlineWidth;
+            style.arrowOutlineColor = QColor(12, 120, 250, 180);
+            require(
+                canvas.setCanvasShapeStylePatch(style,
+                                                SnowCanvasShapeStylePropertyArrowOutlineWidth |
+                                                    SnowCanvasShapeStylePropertyArrowOutlineColor,
+                                                SnowCanvasShapeKind::Arrow),
+                "edit selected outline width");
+            const auto arrow = payload(runtime, QStringLiteral("Arrow"));
+            require(arrow.value(QStringLiteral("arrow_outline_width")).toDouble() == outlineWidth &&
+                        arrow.value(QStringLiteral("stroke_width")).toDouble() == 2.0 &&
+                        canvas.canvasStyleToolbarState().shapeStyle.arrowOutlineWidth ==
+                            outlineWidth &&
+                        canvas.canvasStyleToolbarState().shapeStyle.arrowOutlineColor ==
+                            style.arrowOutlineColor,
+                    "outline width crosses Qt and FFI without changing stroke width");
+            const QImage resized = render();
+            require(!original.isNull() && !resized.isNull() && original != resized,
+                    "outline width changes exported endpoint geometry");
+            SnowCanvasRuntime restored;
+            require(restored.restoreDocumentSession(runtime.serializeDocumentSession()) &&
+                        payload(restored, QStringLiteral("Arrow")) == arrow,
+                    "outline width round-trips through the document session");
+            require(canvas.undo() &&
+                        payload(runtime, QStringLiteral("Arrow"))
+                                .value(QStringLiteral("arrow_outline_width"))
+                                .toDouble() == 0.0 &&
+                        render() == original,
+                    "undo restores outline width and original pixels");
+            require(canvas.redo() && render() == resized, "redo restores outlined arrow pixels");
+            require(restored.renderToImage(QRectF(-300, -180, 600, 360), QSize(600, 360), {}) ==
+                        resized,
+                    "restored documents export the same outline pixels");
+            require(canvas.setCanvasTool(SnowCanvasTool::Arrow),
+                    "activate outlined creation defaults");
+            require(
+                canvas.setCanvasShapeStylePatch(style,
+                                                SnowCanvasShapeStylePropertyArrowOutlineWidth |
+                                                    SnowCanvasShapeStylePropertyArrowOutlineColor,
+                                                SnowCanvasShapeKind::Arrow),
+                "configure outline on new arrows");
+            mouse(canvas, QEvent::MouseButtonPress, {70.0, 280.0}, Qt::LeftButton, Qt::LeftButton);
+            mouse(canvas, QEvent::MouseMove, {490.0, 280.0}, Qt::NoButton, Qt::LeftButton);
+            mouse(canvas, QEvent::MouseButtonRelease, {490.0, 280.0}, Qt::LeftButton, Qt::NoButton);
+            const auto arrows = records(runtime, QStringLiteral("Arrow"));
+            require(arrows.size() == 2, "outline defaults create a second arrow");
+            for (const auto& record : arrows) {
+                const auto data = record.toObject()
+                                      .value(QStringLiteral("data"))
+                                      .toObject()
+                                      .value(QStringLiteral("Arrow"))
+                                      .toObject();
+                require(data.value(QStringLiteral("arrow_outline_width")).toDouble() ==
+                                outlineWidth &&
+                            data.value(QStringLiteral("arrow_outline_color"))
+                                    .toObject()
+                                    .value(QStringLiteral("a"))
+                                    .toInt() == 180,
+                        "created and edited arrows carry the same independent outline style");
+            }
+        }
+    }
+}
+
 void arrowRatioFallbackRendering() {
     for (const SnowArrowhead head : {SNOW_ARROWHEAD_TRIANGLE, SNOW_ARROWHEAD_CIRCLE}) {
         for (const double width : {1.0, 2.0, 8.0}) {
@@ -1474,6 +1573,11 @@ int main(int argc, char** argv) {
     }
 #endif
     QApplication app(argc, argv);
+    if (QCoreApplication::arguments().contains(QStringLiteral("--arrow-outline-only"))) {
+        arrowOutlineEditsRenderAndRoundTrip();
+        return 0;
+    }
+
     if (app.arguments().contains(QStringLiteral("--delete-text-only"))) {
         deleteKeyRemovesEditedText();
         enabledDeleteKeepsEditedTextAndItsOwner();
@@ -1487,6 +1591,7 @@ int main(int argc, char** argv) {
         return 0;
     arrowLabelRemeasuresAfterHostFontChange();
     arrowRatioEditsRenderAndRoundTrip();
+    arrowOutlineEditsRenderAndRoundTrip();
     arrowRatioFallbackRendering();
     taperedShaftsRenderAndRoundTrip();
     if (app.arguments().contains(QStringLiteral("--shafts-only")))

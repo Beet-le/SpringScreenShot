@@ -136,6 +136,7 @@ class ScreenshotRecognitionWindow final : public QWidget {
     void clearOcrSelection();
     void clearTextSelection();
     [[nodiscard]] bool textSelectionActive() const;
+    // Only the active result page contributes a selection; no selection returns null.
     [[nodiscard]] std::unique_ptr<QMimeData> textSelectionClipboardMimeData() const;
     void updateOcrText(int lineIndex, const QString& text);
     void clearOcrPresentation();
@@ -308,6 +309,8 @@ class ScreenshotRecognitionWindow final : public QWidget {
     adqt::widgets::AdSpin* m_textEditorSpin = nullptr;
 #if SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION
     QTextBrowser* m_qrBrowser = nullptr;
+    QString m_qrSource;
+    QVector<qsizetype> m_qrSourceOffsets;
     bool m_qrDetectLinks = true;
 #else
     static constexpr QWidget* m_qrBrowser = nullptr;

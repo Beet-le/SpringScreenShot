@@ -218,6 +218,7 @@ impl Engine {
             .advance_serial_number_counters_for_insertions(&self.model, self.model.paint_order());
         self.scene_cache = Default::default();
         self.scene_cache.sync(&self.model, None);
+        self.invalidate_retained_viewports();
         self.refresh_all_viewports()
     }
 }

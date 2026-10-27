@@ -3,6 +3,7 @@
 #include "snow_shot/presentation/screenshotselectiontoolbarwidget.h"
 #include "snow_shot/presentation/screenshotcanvastoolstyles.h"
 #include "snow_shot/presentation/screenshotcanvascolorsamplerwindow.h"
+#include "snow_shot/presentation/screenshotcanvascolorsampler.h"
 #include "snow_shot/platform/screenshotnative.h"
 #ifdef Q_OS_MACOS
 #import <AppKit/AppKit.h>
@@ -1977,6 +1978,77 @@ void startupPickerUsesResolvedOwnerWithoutSamplingNativeCursor() {
     storage.shutdown();
 }
 
+void canvasSamplerExcludesScreenshotSelectionUi() {
+    NoopOverlayEventSink sink;
+    SnowCanvasRuntime runtime;
+    ScreenshotOverlayWindow overlay(sink, new SnowCanvasWidget(runtime));
+    overlay.setCaptureGeometry(QRect(0, 0, 160, 100));
+    overlay.show();
+    auto& canvas = *overlay.canvas();
+    require(canvas.setViewportCamera(80, 50, 1), "configure the sampling test viewport");
+    QImage image(160, 100, QImage::Format_ARGB32_Premultiplied);
+    image.fill(QColor(180, 160, 140));
+    overlay.setScreenshotImage(image, image.rect());
+    overlay.setScreenshotMaskVisible(true);
+    overlay.setScreenshotMaskColor(QColor(0, 0, 0, 180));
+    overlay.setScreenshotSelection(QRectF(40, 25, 80, 50), true, 0);
+    overlay.setScreenshotSelectionBorderColor(Qt::cyan);
+    overlay.setScreenshotSelectionBorderVisible(true);
+    require(
+        !runtime
+             .applyAnnotationTransaction(QByteArrayLiteral(
+                 R"({"version":1,"operations":[{"type":"rectangle","bounds":[65,40,30,20],"style":{"fill":[255,0,0,255]}}]})"))
+             .isEmpty(),
+        "create an annotation that the eyedropper must preserve");
+    const QImage decorated = canvas.grab().toImage();
+    require(decorated.pixelColor(10, 50) != image.pixelColor(10, 50),
+            "the regression fixture must visibly darken pixels outside the selection");
+    require(decorated.pixelColor(40, 50) != image.pixelColor(40, 50),
+            "the regression fixture must visibly paint the selection border");
+    ScreenshotCanvasColorSampler sampler;
+    const QRect physicalBounds(-160, 200, 160, 100);
+    require(sampler.ensureContentSnapshot(canvas, physicalBounds),
+            "capture screenshot content without selection UI");
+    for (const QPoint point : {QPoint(10, 50), QPoint(40, 50), QPoint(45, 50), QPoint(119, 50)}) {
+        const QImage preview = sampler.previewAtPhysicalPoint(physicalBounds.topLeft() + point);
+        for (int y = 0; y < preview.height(); ++y)
+            for (int x = 0; x < preview.width(); ++x)
+                require(preview.pixelColor(x, y) == image.pixelColor(point + QPoint(x - 3, y - 3)),
+                        "the entire eyedropper preview must exclude selection mask and border");
+    }
+    require(sampler.previewAtPhysicalPoint(physicalBounds.topLeft() + QPoint(80, 50))
+                    .pixelColor(3, 3) == QColor(Qt::red),
+            "sampling must retain annotations over the original screenshot");
+    require(canvas.grab().toImage() == decorated,
+            "sampling must leave the visible selection mask and border intact");
+    require(sampler.ensureSnapshot(canvas, physicalBounds) &&
+                sampler.previewAtPhysicalPoint(physicalBounds.topLeft() + QPoint(10, 50))
+                        .pixelColor(3, 3) == decorated.pixelColor(10, 50),
+            "widget sampling must not reuse a screenshot content snapshot");
+    require(sampler.ensureContentSnapshot(canvas, physicalBounds) &&
+                sampler.previewAtPhysicalPoint(physicalBounds.topLeft() + QPoint(10, 50))
+                        .pixelColor(3, 3) == image.pixelColor(10, 50),
+            "content sampling must not reuse a decorated widget snapshot");
+    require(
+        !runtime
+             .applyAnnotationTransaction(QByteArrayLiteral(
+                 R"({"version":1,"operations":[{"type":"spotlight","bounds":[70,40,20,20],"style":{"color":[0,0,255,255],"opacity":0.5,"corner_radius":0}}]})"))
+             .isEmpty(),
+        "create a Spotlight effect constrained to the screenshot selection");
+    const QImage spotlight = canvas.grab().toImage();
+    require(spotlight.pixelColor(55, 50) != image.pixelColor(55, 50),
+            "the regression fixture must visibly tint pixels inside the selection");
+    sampler.reset();
+    require(sampler.ensureContentSnapshot(canvas, physicalBounds) &&
+                sampler.previewAtPhysicalPoint(physicalBounds.topLeft() + QPoint(10, 50))
+                        .pixelColor(3, 3) == image.pixelColor(10, 50) &&
+                sampler.previewAtPhysicalPoint(physicalBounds.topLeft() + QPoint(55, 50))
+                        .pixelColor(3, 3) == spotlight.pixelColor(55, 50),
+            "sampling must preserve Spotlight's selection-relative bounds and displayed colors");
+    require(canvas.grab().toImage() == spotlight,
+            "sampling document effects must leave the visible screenshot unchanged");
+}
+
 void canvasSamplerFollowsSessionOwner() {
     QWidget overlay(nullptr, Qt::Tool | Qt::WindowStaysOnTopHint);
     QWidget canvas(&overlay);
@@ -2291,6 +2363,7 @@ int main(int argc, char** argv) {
     }
     canvasSamplingSessionReleasesTargetsAndCommitsAfterCleanup();
     canvasSamplerFollowsSessionOwner();
+    canvasSamplerExcludesScreenshotSelectionUi();
     if (application.arguments().contains(QStringLiteral("--canvas-sampler-only")))
         return 0;
     auxiliaryWindowsPreserveOwnerStacking();

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "canvas_automatic_selection_test_support.h"
+#include "snow_shot/presentation/screenshotoverlaywindow.h"
 #include "snow_shot/presentation/screenshotcontroller.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
@@ -220,6 +222,28 @@ int runScreenshotControllerClipboardTests(int argc, char** argv) {
                 settings.setShowBorderByDefault(true) && settings.setShowShadowByDefault(false),
             "clipboard controller settings must be isolated and deterministic");
     static_cast<void>(snow_shot::presentation::styles::ThemeManager::instance());
+    if (application.arguments().contains(QStringLiteral("--automatic-selection-tests"))) {
+        canvas_automatic_selection_test::exercise([](auto verify) {
+            ScreenshotController controller;
+            controller.prewarmResources();
+            SnowCanvasWidget* canvas = nullptr;
+            waitUntil(
+                [&] {
+                    for (auto* widget : QApplication::topLevelWidgets()) {
+                        if (auto* overlay = qobject_cast<ScreenshotOverlayWindow*>(widget)) {
+                            canvas = overlay->canvas();
+                            if (canvas)
+                                return true;
+                        }
+                    }
+                    return false;
+                },
+                "prewarmed screenshot controller owns a canvas");
+            verify(*canvas);
+        });
+        storage.shutdown();
+        return 0;
+    }
     {
         ScreenshotController controller;
         combinedCopiesPreserveImagePlacementAndAppearance(controller);

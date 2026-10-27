@@ -68,7 +68,9 @@
 #include <QMimeData>
 #include <QTimer>
 #include <QWindow>
+#include <QScreen>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <future>
@@ -213,6 +215,23 @@ struct StartAttemptResult {
     QString error;
 };
 
+// The start worker only publishes success and queues a GUI-thread commit. Keeping
+// this independent of the controller also covers a window retired during startup.
+struct RecordingAreaHistoryCommit {
+    QRect rectangle;
+    QPointer<snow_shot::storage::ConfigurationStore> configuration;
+    std::atomic_bool started{false};
+    bool committed = false; // GUI thread only.
+    bool saved = false;     // GUI thread only.
+
+    void commit() {
+        if (committed || !started.load() || !configuration)
+            return;
+        committed = true;
+        saved = snow_shot::storage::RecordingAreaHistorySettings::append(*configuration, rectangle);
+    }
+};
+
 QString captureError() {
     const char* error = snow_recording_last_error_message();
     const QString message = QString::fromUtf8(error != nullptr ? error : "");
@@ -286,6 +305,7 @@ struct ScreenRecordingController::Impl {
         webcamSize = settings.webcamSize();
         webcamOffset = QPoint(settings.webcamOffsetLeft(), settings.webcamOffsetBottom());
         webcamShape = settings.webcamShape();
+        webcamOrientation = settings.webcamOrientation();
         keyboardBackgroundColor = settings.keyboardBackgroundColor();
         keyboardForegroundColor = settings.keyboardForegroundColor();
         mouseClickColor = settings.mouseClickColor();
@@ -303,6 +323,10 @@ struct ScreenRecordingController::Impl {
         QObject::connect(&snow_shot::storage::ApplicationStorage::instance().configuration(),
                          &snow_shot::storage::ConfigurationStore::valueChanged, &owner,
                          [this](const QString& key, const QJsonValue&) {
+                             if (key == QStringLiteral("screen_recording/area_history")) {
+                                 areaHistoryIndex = -1;
+                                 return;
+                             }
                              if (key == QStringLiteral("screen_recording/show_status_prompts")) {
                                  syncPreview();
                                  return;
@@ -311,7 +335,8 @@ struct ScreenRecordingController::Impl {
                                  key == QStringLiteral("screen_recording/webcam_size") ||
                                  key == QStringLiteral("screen_recording/webcam_shape") ||
                                  key == QStringLiteral("screen_recording/webcam_offset_left") ||
-                                 key == QStringLiteral("screen_recording/webcam_offset_bottom")) {
+                                 key == QStringLiteral("screen_recording/webcam_offset_bottom") ||
+                                 key == QStringLiteral("screen_recording/webcam_orientation")) {
                                  // Saved preferences belong to the next editable session. Keep
                                  // the refresh pending while recording or automation owns options.
                                  webcamSettingsRefreshPending = true;
@@ -469,6 +494,7 @@ struct ScreenRecordingController::Impl {
         }
         setCaptureActivity(true);
         cancelPendingStart();
+        areaHistoryIndex = -1;
         refreshWebcamSettings();
         if (!automationOwned && !automationNextStart) {
             const snow_shot::storage::RecordingSettings settings;
@@ -541,6 +567,9 @@ struct ScreenRecordingController::Impl {
         SNOW_SHOT_RECORDING_PERF_MILESTONE("open.toolbar_connected");
         uiSession->shortcuts =
             std::make_unique<ScreenRecordingShortcutController>(*areaWindow, *toolbarWindow);
+        uiSession->shortcuts->setAreaHistoryActions(
+            [this] { return canNavigateAreaHistory(); },
+            [this](bool previous) { navigateAreaHistory(previous); });
         SNOW_SHOT_RECORDING_PERF_MILESTONE("open.shortcuts_created");
 
         sessionStatus = ScreenshotToolPalette::RecordingSessionStatus::idle();
@@ -623,6 +652,33 @@ struct ScreenRecordingController::Impl {
                                  snow_shot::storage::RecordingSettings().setWebcamLayout(size,
                                                                                          offset);
                          });
+        QObject::connect(areaWindow, &ScreenRecordingAreaWindow::webcamOrientationRequested,
+                         uiSession->connections.get(), [this](int action) {
+                             if (!recordingOptionsEditable())
+                                 return;
+                             const int quarterTurns = webcamOrientation & 3;
+                             const int mirror = webcamOrientation & 4;
+                             int next = webcamOrientation;
+                             switch (action) {
+                             case 0:
+                                 next = ((quarterTurns + 1) & 3) | mirror;
+                                 break;
+                             case 1:
+                                 next = ((quarterTurns + 3) & 3) | mirror;
+                                 break;
+                             case 2:
+                                 next = ((4 - quarterTurns) & 3) | (mirror ^ 4);
+                                 break;
+                             case 3:
+                                 next = ((6 - quarterTurns) & 3) | (mirror ^ 4);
+                                 break;
+                             default:
+                                 return;
+                             }
+                             setOption(webcamOrientation, next);
+                             snow_shot::storage::RecordingSettings().setWebcamOrientation(next);
+                             syncPreview();
+                         });
         QObject::connect(palette, &ScreenshotToolPalette::recordingKeyboardSizeChanged,
                          uiSession->connections.get(), [this](int value) {
                              setOption(keyboardSize, value);
@@ -641,6 +697,8 @@ struct ScreenRecordingController::Impl {
                                  return;
                              }
                              setOption(recordingRegion, region);
+                             if (!restoringAreaHistory)
+                                 areaHistoryIndex = -1;
                              updateCaptureRegion();
                              syncPreview();
                              toolbarWindow->placeForRecordingRegion(region);
@@ -1096,6 +1154,44 @@ struct ScreenRecordingController::Impl {
                                notify);
     }
 
+    bool canNavigateAreaHistory() const {
+        return recordingOptionsEditable() && !sessionEnding && !trimRequested && !trimSession &&
+               uiSession && areaWindow->canRestoreRecordingRegion() &&
+               toolbarWindow->palette()->recordingExportSettingsVisible();
+    }
+
+    void navigateAreaHistory(bool previous) {
+        if (!canNavigateAreaHistory())
+            return;
+        const auto entries = snow_shot::storage::RecordingAreaHistorySettings().entries();
+        if (areaHistoryIndex >= entries.size())
+            areaHistoryIndex = -1;
+        if (areaHistoryIndex < 0 && !previous)
+            return;
+        const qsizetype step = previous ? -1 : 1;
+        qsizetype index = areaHistoryIndex < 0 ? entries.size() - 1 : areaHistoryIndex + step;
+        for (; index >= 0 && index < entries.size(); index += step) {
+            const auto& entry = entries.at(index);
+            if (entry.coordinateSpace != snow_shot::storage::recordingAreaCoordinateSpace())
+                continue;
+            bool onDesktop = false;
+            for (auto* screen : QGuiApplication::screens()) {
+#ifdef Q_OS_MACOS
+                const QRect bounds = screen->geometry();
+#else
+                const QRect bounds = ScreenshotGeometryMapper::physicalRectForScreen(*screen);
+#endif
+                onDesktop = onDesktop || bounds.intersects(entry.rectangle);
+            }
+            if (!onDesktop)
+                continue;
+            const QScopedValueRollback<bool> restoring(restoringAreaHistory, true);
+            if (areaWindow->restoreRecordingRegion(entry.rectangle))
+                areaHistoryIndex = index;
+            return;
+        }
+    }
+
     void scheduleStart() {
         if (webcamFailed) {
             snow_webcam_retry(webcam.get());
@@ -1124,6 +1220,10 @@ struct ScreenRecordingController::Impl {
                 return;
             }
             sessionStatus = ScreenshotToolPalette::RecordingSessionStatus::starting();
+            pendingAreaHistory = std::make_shared<RecordingAreaHistoryCommit>();
+            pendingAreaHistory->rectangle = recordingRegion;
+            pendingAreaHistory->configuration =
+                &snow_shot::storage::ApplicationStorage::instance().configuration();
             discardPendingStart = false;
             automationRevision = snow_shot::presentation::nextAutomationRevision();
             syncUi();
@@ -1219,6 +1319,7 @@ struct ScreenRecordingController::Impl {
                 static_cast<uint32_t>(webcamOffset.x()),
                 static_cast<uint32_t>(webcamOffset.y()),
                 static_cast<uint32_t>(recordMouseScrolling),
+                static_cast<uint32_t>(webcamOrientation),
             };
             sessionLoopAnimatedImages = config.loop_animated_images != 0;
             const QDateTime outputTimestamp = QDateTime::currentDateTime();
@@ -1243,8 +1344,8 @@ struct ScreenRecordingController::Impl {
                 snow_shot::runtime::trackRuntimeWork(
                     [config, excludedWindowIds, directories, baseName, extension, keyboard,
                      keyboardFont, requestedPath, previewRetirement, deferred = sessionDeferred,
-                     overlay, barColor, recovery = startupRecovery,
-                     webcamLease = webcam]() mutable -> StartAttemptResult {
+                     overlay, barColor, recovery = startupRecovery, webcamLease = webcam,
+                     areaHistory = pendingAreaHistory]() mutable -> StartAttemptResult {
                         Q_UNUSED(webcamLease);
                         if (previewRetirement.valid())
                             previewRetirement.wait();
@@ -1291,6 +1392,12 @@ struct ScreenRecordingController::Impl {
                             result.error = captureError();
                             return result;
                         }
+                        areaHistory->started.store(true);
+                        if (areaHistory->configuration) {
+                            QMetaObject::invokeMethod(
+                                areaHistory->configuration,
+                                [areaHistory] { areaHistory->commit(); }, Qt::QueuedConnection);
+                        }
                         return result;
                     }));
             startPollTimer.start();
@@ -1304,6 +1411,11 @@ struct ScreenRecordingController::Impl {
         }
         startPollTimer.stop();
         StartAttemptResult result = startFuture.get();
+        if (pendingAreaHistory) {
+            pendingAreaHistory->commit();
+            if (pendingAreaHistory->saved)
+                areaHistoryIndex = -1;
+        }
         if (discardPendingStart) {
             discardPendingStart = false;
             recordingSession = std::move(result.session);
@@ -1897,6 +2009,7 @@ struct ScreenRecordingController::Impl {
             {QStringLiteral("webcam_offset_left"), webcamOffset.x()},
             {QStringLiteral("webcam_offset_bottom"), webcamOffset.y()},
             {QStringLiteral("webcam_shape"), webcamShape},
+            {QStringLiteral("webcam_orientation"), webcamOrientation},
             {QStringLiteral("record_mouse_clicks"), recordMouseClicks},
             {QStringLiteral("record_mouse_scrolling"), recordMouseScrolling},
             {QStringLiteral("mouse_highlight"), mouseHighlightEnabled},
@@ -2172,6 +2285,7 @@ struct ScreenRecordingController::Impl {
         setOption(webcamSize, saved.webcamSize());
         setOption(webcamOffset, QPoint(saved.webcamOffsetLeft(), saved.webcamOffsetBottom()));
         setOption(webcamShape, saved.webcamShape());
+        setOption(webcamOrientation, saved.webcamOrientation());
         if (enabledChanged) {
             webcamFailed = false;
             if (webcamEnabled)
@@ -2307,7 +2421,8 @@ struct ScreenRecordingController::Impl {
                 ? SNOW_RECORDING_PLAYBACK_OVERLAY_PLAYBACK_TIME
                 : SNOW_RECORDING_PLAYBACK_OVERLAY_PROGRESS_BAR,
             progressBarColor, webcamEnabled && !webcamFailed ? webcam.get() : nullptr, webcamSize,
-            webcamShape == QStringLiteral("circle") ? 1u : 0u, webcamOffset, recordMouseScrolling);
+            webcamShape == QStringLiteral("circle") ? 1u : 0u, webcamOffset, recordMouseScrolling,
+            static_cast<uint32_t>(webcamOrientation));
         const bool audioSupported = outputFormat == QStringLiteral("mp4");
         uiSession->preview->setStatusPrompts(
             snow_shot::storage::RecordingSettings().showStatusPrompts(), outputFormat,
@@ -2436,6 +2551,9 @@ struct ScreenRecordingController::Impl {
     QString postProcessingEffect = QStringLiteral("progress_bar");
     QColor progressBarColor{22, 119, 255};
     std::future<StartAttemptResult> startFuture;
+    std::shared_ptr<RecordingAreaHistoryCommit> pendingAreaHistory;
+    qsizetype areaHistoryIndex = -1;
+    bool restoringAreaHistory = false;
     std::shared_ptr<snow_shot::presentation::recording::StartupRecovery> startupRecovery =
         std::make_shared<snow_shot::presentation::recording::StartupRecovery>();
     ScreenshotToolPalette::RecordingSessionStatus sessionStatus =
@@ -2447,6 +2565,7 @@ struct ScreenRecordingController::Impl {
     int webcamSize = 150;
     QPoint webcamOffset{48, 48};
     QString webcamShape = QStringLiteral("square");
+    int webcamOrientation = 0;
     bool webcamSettingsRefreshPending = false;
     std::shared_ptr<SnowWebcam> webcam;
     bool webcamFailed = false;
@@ -2694,6 +2813,10 @@ void ScreenRecordingController::prepareForSessionEnd(int timeoutMs) {
                 session.reset();
         },
         timeoutMs));
+    // Session-end preservation may block the GUI event loop, so drain the
+    // successful-start commit directly before application storage is flushed.
+    if (s.pendingAreaHistory)
+        s.pendingAreaHistory->commit();
 }
 
 void ScreenRecordingController::offerRecordingRecovery() {
@@ -2832,6 +2955,7 @@ bool ScreenRecordingController::startAutomation(const QRect& region, const QJson
     s.webcamSize = options.value(QStringLiteral("webcam_size")).toInt(settings.webcamSize());
     s.webcamOffset = QPoint(settings.webcamOffsetLeft(), settings.webcamOffsetBottom());
     s.webcamShape = options.value(QStringLiteral("webcam_shape")).toString(settings.webcamShape());
+    s.webcamOrientation = settings.webcamOrientation();
     s.recordMouseClicks =
         options.value(QStringLiteral("record_mouse_clicks")).toBool(settings.recordMouseClicks());
     s.recordMouseScrolling = options.value(QStringLiteral("record_mouse_scrolling"))

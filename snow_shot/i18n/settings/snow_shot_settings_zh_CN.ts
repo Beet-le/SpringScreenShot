@@ -1444,6 +1444,10 @@
             <translation>保存录制内容后自动退出屏幕录制。</translation>
         </message>
         <message>
+            <source>Automatically select newly created elements</source>
+            <translation>自动选中新创建的元素</translation>
+        </message>
+        <message>
             <source>Autostart</source>
             <translation>开机自启</translation>
         </message>
@@ -2244,6 +2248,10 @@
             <translation>距离标注</translation>
         </message>
         <message>
+            <source>Do not automatically select elements created with these tools.</source>
+            <translation>不自动选中使用这些工具创建的元素。</translation>
+        </message>
+        <message>
             <source>Double-click Action</source>
             <translation>双击操作</translation>
         </message>
@@ -3028,6 +3036,10 @@
             <translation>下一帧</translation>
         </message>
         <message>
+            <source>Next recording area</source>
+            <translation>下一个录制区域</translation>
+        </message>
+        <message>
             <source>Next screenshot history</source>
             <translation>下一条截图历史</translation>
         </message>
@@ -3338,6 +3350,10 @@
         <message>
             <source>Previous frame</source>
             <translation>上一帧</translation>
+        </message>
+        <message>
+            <source>Previous recording area</source>
+            <translation>上一个录制区域</translation>
         </message>
         <message>
             <source>Previous screenshot history</source>
@@ -3798,6 +3814,10 @@
         <message>
             <source>Select dark theme tray icon</source>
             <translation>选择深色主题托盘图标</translation>
+        </message>
+        <message>
+            <source>Select each newly created element while keeping the current drawing tool active.</source>
+            <translation>选中每个新创建的元素，同时保持当前绘图工具处于启用状态。</translation>
         </message>
         <message>
             <source>Select image save directory</source>
@@ -4450,6 +4470,10 @@
         <message>
             <source>Toolbar size</source>
             <translation>工具栏尺寸</translation>
+        </message>
+        <message>
+            <source>Tools excluded from automatic selection</source>
+            <translation>禁止自动选中元素的工具</translation>
         </message>
         <message>
             <source>Tools that forbid quick selection of same-type elements</source>

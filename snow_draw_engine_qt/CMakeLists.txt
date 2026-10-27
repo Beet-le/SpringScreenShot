@@ -274,6 +274,14 @@ endif()
 
 if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     enable_testing()
+    add_executable(snow-canvas-abi-layout-tests tests/snow_canvas_abi_layout_tests.cpp)
+    target_include_directories(snow-canvas-abi-layout-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    set_target_properties(snow-canvas-abi-layout-tests PROPERTIES
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    add_test(NAME snow-canvas-abi-layout-tests COMMAND snow-canvas-abi-layout-tests)
+    set_tests_properties(snow-canvas-abi-layout-tests PROPERTIES LABELS "unit" TIMEOUT 30)
+
     add_executable(snow-canvas-snapping-tests tests/snow_canvas_snapping_tests.cpp)
     target_include_directories(snow-canvas-snapping-tests PRIVATE
         ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
@@ -294,6 +302,36 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         LABELS "unit" TIMEOUT 60
         ENVIRONMENT "${_snow_canvas_pressure_mask_qpa_environment}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    if(MSVC AND WIN32)
+        # Compile the production atlas independently so unrelated renderer TLS
+        # initializers cannot obscure its behavior before CRT startup.
+        add_executable(snow-canvas-pressure-mask-startup-tests
+            tests/snow_canvas_pressure_mask_startup_tests.cpp
+            ../test-support/windows_early_tls.cpp
+            src/rendering/snow_canvas_pressure_mask_atlas.cpp)
+        target_include_directories(snow-canvas-pressure-mask-startup-tests PRIVATE
+            ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../test-support"
+            "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+        target_link_libraries(snow-canvas-pressure-mask-startup-tests PRIVATE Qt6::Widgets)
+        add_test(NAME snow-canvas-pressure-mask-startup-tests
+            COMMAND snow-canvas-pressure-mask-startup-tests)
+        set_tests_properties(snow-canvas-pressure-mask-startup-tests PROPERTIES
+            LABELS "unit;windows" TIMEOUT 30
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        add_executable(snow-canvas-watermark-startup-tests
+            tests/snow_canvas_watermark_startup_tests.cpp
+            ../test-support/windows_early_tls.cpp)
+        target_include_directories(snow-canvas-watermark-startup-tests PRIVATE
+            ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../test-support"
+            "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+        target_link_libraries(snow-canvas-watermark-startup-tests PRIVATE snow_draw_engine_qt_canvas)
+        add_test(NAME snow-canvas-watermark-startup-tests COMMAND snow-canvas-watermark-startup-tests)
+        set_tests_properties(snow-canvas-watermark-startup-tests PROPERTIES
+            LABELS "unit;windows" TIMEOUT 30
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_executable(snow-canvas-pressure-brush-render-tests
         tests/snow_canvas_pressure_brush_render_tests.cpp)
     target_include_directories(snow-canvas-pressure-brush-render-tests PRIVATE
@@ -410,6 +448,15 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         LABELS "unit"
     )
 
+    add_executable(snow-canvas-automatic-selection-tests tests/snow_canvas_automatic_selection_tests.cpp)
+    target_link_libraries(snow-canvas-automatic-selection-tests PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-automatic-selection-tests)
+    add_test(NAME snow-canvas-automatic-selection-tests COMMAND snow-canvas-automatic-selection-tests -platform offscreen)
+    set_tests_properties(snow-canvas-automatic-selection-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+    add_test(NAME snow-canvas-text-dismiss-tests
+        COMMAND snow-canvas-automatic-selection-tests --text-dismiss-only -platform offscreen)
+    set_tests_properties(snow-canvas-text-dismiss-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+
     add_executable(snow-canvas-quick-selection-tests tests/snow_canvas_quick_selection_tests.cpp)
     target_link_libraries(snow-canvas-quick-selection-tests PRIVATE snow_draw_engine_qt_canvas)
     snow_shot_import_offscreen_platform(snow-canvas-quick-selection-tests)
@@ -450,6 +497,10 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     add_test(NAME snow-canvas-text-delete-input-tests
         COMMAND snow-canvas-text-draft-tests --delete-text-only -platform offscreen)
     set_tests_properties(snow-canvas-text-delete-input-tests PROPERTIES LABELS unit TIMEOUT 30)
+
+    add_test(NAME snow-canvas-text-input-tests
+        COMMAND snow-canvas-text-draft-tests --text-input-only -platform offscreen)
+    set_tests_properties(snow-canvas-text-input-tests PROPERTIES LABELS unit TIMEOUT 30)
 
     add_executable(snow-canvas-text-emphasis-tests tests/snow_canvas_text_emphasis_tests.cpp)
     target_include_directories(snow-canvas-text-emphasis-tests PRIVATE
@@ -492,6 +543,10 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     target_link_libraries(snow-canvas-arrow-text-tests PRIVATE snow_draw_engine_qt_canvas)
     qt_import_plugins(snow-canvas-arrow-text-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
     add_test(NAME snow-canvas-arrow-text-tests COMMAND snow-canvas-arrow-text-tests)
+    add_test(NAME snow-canvas-arrow-outline-rendering-tests COMMAND snow-canvas-stroke-rendering-tests --arrow-outline-only -platform offscreen)
+    set_tests_properties(snow-canvas-arrow-outline-rendering-tests PROPERTIES LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
+    add_test(NAME snow-canvas-arrow-outline-tests COMMAND snow-canvas-arrow-text-tests --arrow-outline-only -platform offscreen)
+    set_tests_properties(snow-canvas-arrow-outline-tests PROPERTIES LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
     add_test(NAME snow-canvas-text-delete-tests
         COMMAND snow-canvas-arrow-text-tests --delete-text-only -platform offscreen)
     set_tests_properties(snow-canvas-text-delete-tests PROPERTIES LABELS unit TIMEOUT 60)

@@ -215,12 +215,28 @@
     <context>
         <name>RecordingWebcamControl</name>
         <message>
+            <source>Flip horizontally</source>
+            <translation>Flip horizontally</translation>
+        </message>
+        <message>
+            <source>Flip vertically</source>
+            <translation>Flip vertically</translation>
+        </message>
+        <message>
             <source>Move webcam</source>
             <translation>Move webcam</translation>
         </message>
         <message>
             <source>Resize webcam</source>
             <translation>Resize webcam</translation>
+        </message>
+        <message>
+            <source>Rotate clockwise</source>
+            <translation>Rotate clockwise</translation>
+        </message>
+        <message>
+            <source>Rotate counterclockwise</source>
+            <translation>Rotate counterclockwise</translation>
         </message>
     </context>
     <context>

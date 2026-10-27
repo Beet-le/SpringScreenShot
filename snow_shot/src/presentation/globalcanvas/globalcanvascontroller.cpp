@@ -1,6 +1,7 @@
 #include "snow_shot/presentation/screenshotcanvastools.h"
 #include "snow_shot/presentation/canvashistoryshortcuts.h"
 #include "snow_shot/presentation/canvastexteditingpreferences.h"
+#include "snow_shot/presentation/canvasdrawingpreferences.h"
 #include "snow_shot/presentation/globalcanvascontroller.h"
 #include "snow_shot/presentation/crosshaircursor.h"
 #include "globalcanvasplatform.h"
@@ -153,21 +154,12 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
                 }
             }
         });
+        bindCanvasDrawingPreferences(runtime, *this);
         auto& storage = storage::ApplicationStorage::instance();
         if (storage.isInitialized()) {
-            const auto applyDrawingPreferences = [this]() {
-                const auto disabledTools = screenshotQuickSelectionDisabledTools(
-                    storage::DrawingSettings().quickSelectionDisabledTools());
-                if (!runtime.setQuickSelectionDisabledTools(disabledTools)) {
-                    qWarning("Failed to apply full-screen canvas quick-selection preferences");
-                }
-            };
-            applyDrawingPreferences();
             connect(&storage.configuration(), &storage::ConfigurationStore::valueChanged, this,
-                    [this, applyDrawingPreferences](const QString& key, const QJsonValue&) {
-                        if (key == QStringLiteral("drawing/quick_selection_disabled_tools")) {
-                            applyDrawingPreferences();
-                        } else if (key.startsWith(QStringLiteral("drawing_shortcuts/"))) {
+                    [this](const QString& key, const QJsonValue&) {
+                        if (key.startsWith(QStringLiteral("drawing_shortcuts/"))) {
                             reloadShortcuts();
                         } else if (key == QStringLiteral("screenshot_toolbar/layout")) {
                             palette->setToolbarLayout(storage::ScreenshotToolbarSettings().layout(

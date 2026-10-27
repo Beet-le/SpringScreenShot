@@ -3280,6 +3280,8 @@ ScreenshotOcrTextLayer* ScreenshotCanvasRenderer::ensureOcrTextLayer() {
 void ScreenshotCanvasRenderer::renderBeforeCanvas(QPainter& painter,
                                                   const SnowCanvasRenderContext& context) {
     paintBackground(painter, context, false);
+    if (context.purpose == SnowCanvasRenderContext::Purpose::ContentSnapshot)
+        return;
     if (m_renderMode == RenderMode::PinnedResult && m_pinnedResultStyle.region) {
         const auto content = context.canvasToViewTransform.mapRect(m_pinnedContentCanvasRect);
         const qreal scale =
@@ -3778,6 +3780,8 @@ void ScreenshotCanvasRenderer::paintPinnedRegionEffects(QPainter& painter,
 
 void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
                                                  const SnowCanvasRenderContext& context) {
+    if (context.purpose == SnowCanvasRenderContext::Purpose::ContentSnapshot)
+        return;
     if (m_renderMode == RenderMode::PinnedResult) {
         const QRectF viewport = pinnedViewportForContext(context).intersected(context.viewportRect);
         if (m_pinnedViewportRect) {

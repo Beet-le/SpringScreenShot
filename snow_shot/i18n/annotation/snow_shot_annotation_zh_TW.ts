@@ -128,6 +128,22 @@
             <translation>箭頭</translation>
         </message>
         <message>
+            <source>Arrow outline color %1</source>
+            <translation>箭頭描邊顏色 %1</translation>
+        </message>
+        <message>
+            <source>Arrow outline color transparent</source>
+            <translation>箭頭描邊顏色透明</translation>
+        </message>
+        <message>
+            <source>Arrow outline width</source>
+            <translation>箭頭描邊寬度</translation>
+        </message>
+        <message>
+            <source>Arrow outline width %1px</source>
+            <translation>箭頭描邊寬度 %1px</translation>
+        </message>
+        <message>
             <source>Arrow ratio (scroll to adjust)</source>
             <translation>箭頭比例（捲動調整）</translation>
         </message>
@@ -1454,6 +1470,10 @@
         <message>
             <source>Text translation</source>
             <translation>文字翻譯</translation>
+        </message>
+        <message>
+            <source>Thought Bubble</source>
+            <translation>思考氣泡</translation>
         </message>
         <message>
             <source>Translation settings</source>

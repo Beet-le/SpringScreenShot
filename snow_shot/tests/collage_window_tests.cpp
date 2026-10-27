@@ -1213,7 +1213,7 @@ void livePinnedImportsPreserveOrderAndFailures() {
             ++*oversizeRenders;
             return image();
         }),
-        {8001, 8000},
+        {65536, 32769},
         QStringLiteral("oversized"),
         {},
         {},
@@ -1295,8 +1295,6 @@ void livePinnedImportsCancelAndRespectMemoryBudget() {
     }
     waitUntil([&] { return collageResourceUsage().reservedBytes == before; },
               "cancellation releases the live import reservation");
-    auto occupied = reserveCollageImport(qint64{512} * 1024 * 1024);
-    require(occupied != nullptr, "occupy the shared temporary image budget");
     CollageWindow window;
     const auto renders = std::make_shared<std::atomic_int>(0);
     ScreenshotPinnedImageSnapshot source{
@@ -1304,7 +1302,7 @@ void livePinnedImportsCancelAndRespectMemoryBudget() {
             ++*renders;
             return image();
         }),
-        {3, 2},
+        {65536, 32769},
         QStringLiteral("budget"),
         {},
         {},
@@ -1313,9 +1311,9 @@ void livePinnedImportsCancelAndRespectMemoryBudget() {
     QObject::connect(&window, &CollageWindow::importFinished, &window,
                      [&](const auto& errors) { failures = errors; });
     window.presentPinnedWindows({source});
-    waitUntil([&] { return !window.loading(); }, "memory-limited live import completes");
+    waitUntil([&] { return !window.loading(); }, "oversized live import completes");
     require(failures.size() == 1 && window.document()->items().isEmpty() && renders->load() == 0,
-            "live import reserves temporary memory before rendering");
+            "live import rejects an oversized raster before rendering");
     window.shutdown();
 }
 

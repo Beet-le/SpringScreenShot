@@ -1391,6 +1391,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ShapeThoughtBubble",
+      "name": "shape-thought-bubble",
+      "source": "../src/presentation/components/icons/resources/shape-thought-bubble.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "ShowLeaderLine",
       "name": "show-leader-line",
       "source": "../src/presentation/components/icons/resources/show-leader-line.svg",

@@ -9,7 +9,7 @@ mod tests;
 mod windows;
 
 use crossbeam_channel::{Sender, bounded};
-pub use snow_recording_model::{WebcamShape, WebcamStyle};
+pub use snow_recording_model::{WebcamOrientation, WebcamShape, WebcamStyle};
 use std::collections::VecDeque;
 use std::sync::{
     Arc, Mutex,

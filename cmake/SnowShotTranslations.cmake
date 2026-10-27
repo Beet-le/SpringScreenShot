@@ -100,6 +100,7 @@ function(snow_shot_add_translations target)
             snow_shot_administrator
             snow_shot
             snow_shot_storage
+            snow_shot_shortcuts
             snow_shot_clipboard_files
             snow_shot_collage_core
             snow_shot_collage

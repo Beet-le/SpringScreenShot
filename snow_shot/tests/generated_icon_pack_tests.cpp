@@ -589,6 +589,71 @@ void spreadsheetIconFollowsAntDesign() {
         require(preview.save(path), "save spreadsheet icon visual inspection sheet");
 }
 
+void thoughtBubbleIconFollowsAntDesign() {
+    namespace icons = snow_shot::presentation::icons::custom;
+    const auto ref = icons::outlined::ShapeThoughtBubble();
+    const auto* descriptor = ref.descriptor();
+    require(descriptor && descriptor->colorModel == adqt::icons::IconColorModel::Monochrome,
+            "thought bubble uses the monochrome theme pipeline");
+    const QByteArray svg(descriptor->svg.data(), static_cast<qsizetype>(descriptor->svg.size()));
+    require(svg.contains("viewBox=\"0 0 1024 1024\"") && svg.contains("stroke-width=\"72\"") &&
+                svg.contains("__ADQT_SLOT_PRIMARY__"),
+            "thought bubble follows the Ant Design grid and outline weight");
+    const QRect bounds = alphaBounds(render(ref, QSize(1024, 1024)).toImage());
+    require(bounds.left() >= 64 && bounds.top() >= 64 && bounds.right() < 960 &&
+                bounds.bottom() < 960,
+            "thought bubble keeps the Ant Design safe margin");
+    QImage preview(440, 256, QImage::Format_ARGB32_Premultiplied);
+    preview.fill(Qt::white);
+    QPainter painter(&preview);
+    const QList<QColor> colors{QColor("#262626"), QColor("#f0f0f0"), QColor("#1677ff"),
+                               QColor("#bfbfbf")};
+    for (int row = 0; row < colors.size(); ++row) {
+        const QColor color = colors[row];
+        painter.fillRect(QRect(0, row * 64, 440, 64), row == 1 ? QColor("#141414") : Qt::white);
+        int column = 0;
+        for (int size : {14, 16, 20, 32}) {
+            for (qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+                const QImage pixels = render(icons::outlined::ShapeThoughtBubble(
+                                                 adqt::icons::IconColors::primary(color)),
+                                             QSize(size, size), dpr)
+                                          .toImage();
+                require(!alphaBounds(pixels).isEmpty(),
+                        "thought bubble remains legible at menu sizes");
+                for (int y = 0; y < pixels.height(); ++y) {
+                    for (int x = 0; x < pixels.width(); ++x) {
+                        const QColor pixel = pixels.pixelColor(x, y);
+                        if (pixel.alpha() > 128)
+                            require(qAbs(pixel.red() - color.red()) <= 2 &&
+                                        qAbs(pixel.green() - color.green()) <= 2 &&
+                                        qAbs(pixel.blue() - color.blue()) <= 2,
+                                    "thought bubble inherits menu foreground color at every DPI");
+                    }
+                }
+            }
+            painter.drawPixmap(
+                12 + column * 108, row * 64 + (64 - size) / 2,
+                render(icons::outlined::ShapeDiamond(adqt::icons::IconColors::primary(color)),
+                       QSize(size, size)));
+            painter.drawPixmap(
+                48 + column++ * 108, row * 64 + (64 - size) / 2,
+                render(icons::outlined::ShapeThoughtBubble(adqt::icons::IconColors::primary(color)),
+                       QSize(size, size)));
+        }
+    }
+    painter.end();
+    adqt::icons::IconRenderRequest disabled;
+    disabled.logicalSize = QSize(20, 20);
+    disabled.mode = QIcon::Disabled;
+    adqt::icons::IconStatePalette palette;
+    palette.set(QIcon::Disabled, QIcon::Off, adqt::icons::IconColors::primary(colors.last()));
+    require(containsOpaqueColor(adqt::icons::renderIconPixmap(ref, disabled, palette).toImage(),
+                                colors.last()),
+            "thought bubble supports the menu's disabled palette");
+    if (const auto path = qEnvironmentVariable("SNOW_THOUGHT_BUBBLE_ICON_PREVIEW"); !path.isEmpty())
+        require(preview.save(path), "save thought bubble icon visual inspection sheet");
+}
+
 void revealIconFollowsAntDesign() {
     namespace icons = snow_shot::presentation::icons::custom;
     const auto ref = icons::outlined::RevealInFolder();
@@ -937,6 +1002,11 @@ void borderFillIconMatchesToolbarGeometry() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
+        if (application.arguments().contains(QStringLiteral("--thought-bubble-only"))) {
+            thoughtBubbleIconFollowsAntDesign();
+            return 0;
+        }
+        thoughtBubbleIconFollowsAntDesign();
         spreadsheetIconFollowsAntDesign();
         if (application.arguments().contains(QStringLiteral("--spreadsheet-only")))
             return 0;

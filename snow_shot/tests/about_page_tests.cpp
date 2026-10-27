@@ -711,7 +711,7 @@ void traySettingsAndFunctionNavigation() {
                 backend.selectValue(middle).toString() == QStringLiteral("screenshot_fixed"),
             "tray reset must restore distinct defaults");
     for (const auto& action :
-         {QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
+         {QStringLiteral("none"), QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
           QStringLiteral("screenshot_copy"), QStringLiteral("screenshot_fixed"),
           QStringLiteral("open_function_settings")}) {
         const auto previousMiddle = backend.selectValue(middle);

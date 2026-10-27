@@ -50,6 +50,16 @@ fn clear_last_error() {
     });
 }
 
+// Live meters and the current recording backend also use this entry point
+// when the legacy macOS recording interface is disabled.
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub extern "C" fn snow_recording_macos_set_microphone_diagnostic_callback(
+    callback: Option<snow_macos::microphone::MicrophoneDiagnosticCallback>,
+) {
+    snow_macos::microphone::set_diagnostic_callback(callback);
+}
+
 fn parse_capture_backend(value: u8) -> Result<CaptureBackendKind, String> {
     match value {
         0 => Ok(CaptureBackendKind::Auto),
@@ -530,6 +540,7 @@ pub struct SnowCaptureDirectRecordingConfig {
     webcam_offset_left: u32,
     webcam_offset_bottom: u32,
     record_mouse_scrolling: u32,
+    webcam_orientation: u32,
 }
 
 #[repr(C)]
@@ -539,7 +550,13 @@ struct SnowCaptureDirectRecordingConfigHeader {
     struct_size: u32,
 }
 
-pub const DIRECT_RECORDING_CONFIG_VERSION: u32 = 15;
+pub const DIRECT_RECORDING_CONFIG_VERSION: u32 = 16;
+const DIRECT_RECORDING_CONFIG_V15_FIELDS_SIZE: usize =
+    std::mem::offset_of!(SnowCaptureDirectRecordingConfig, webcam_orientation);
+const DIRECT_RECORDING_CONFIG_V15_SIZE: u32 = (DIRECT_RECORDING_CONFIG_V15_FIELDS_SIZE
+    .div_ceil(std::mem::align_of::<SnowCaptureDirectRecordingConfig>())
+    * std::mem::align_of::<SnowCaptureDirectRecordingConfig>())
+    as u32;
 // Version 8 ended with four padding bytes now occupied by quality.
 const DIRECT_RECORDING_CONFIG_V8_SIZE: u32 = 256;
 const DIRECT_RECORDING_CONFIG_V4_FIELDS_SIZE: usize =
@@ -580,6 +597,8 @@ fn direct_config_size(version: u32) -> Result<u32, String> {
         14 => Ok(
             std::mem::offset_of!(SnowCaptureDirectRecordingConfig, record_mouse_scrolling) as u32,
         ),
+        // v16 occupies the former v15 tail padding, without changing sizeof.
+        15 => Ok(DIRECT_RECORDING_CONFIG_V15_SIZE),
         DIRECT_RECORDING_CONFIG_VERSION => Ok(DIRECT_RECORDING_CONFIG_SIZE),
         _ => Err(format!(
             "unsupported direct recording config version: {version}"
@@ -1077,6 +1096,11 @@ fn parse_direct_recording_config(
             value => return Err(format!("invalid recording audio mode: {value}")),
         }
     };
+    let orientation = snow_webcam::WebcamOrientation::from_raw(if config.version >= 16 {
+        config.webcam_orientation
+    } else {
+        0
+    })?;
     let direct = DirectRecordingConfig {
         webcam: if config.version >= 13 {
             unsafe {
@@ -1086,6 +1110,7 @@ fn parse_direct_recording_config(
                     config.webcam_shape,
                 )?
                 .map(|mut webcam| {
+                    webcam.style.orientation = orientation;
                     if config.version >= 14 {
                         webcam.style.offset_left = config.webcam_offset_left;
                         webcam.style.offset_bottom = config.webcam_offset_bottom;
@@ -1173,6 +1198,9 @@ unsafe fn read_direct_recording_config(
         DIRECT_RECORDING_CONFIG_V1_FIELDS_SIZE
     } else if header.version == 4 {
         DIRECT_RECORDING_CONFIG_V4_FIELDS_SIZE
+    } else if header.version == 15 {
+        // Do not import the old caller's uninitialized tail padding as orientation.
+        DIRECT_RECORDING_CONFIG_V15_FIELDS_SIZE
     } else {
         required_size as usize
     };
@@ -1924,12 +1952,13 @@ mod tests {
 
     #[test]
     fn direct_recording_exclusion_abi_layout() {
-        assert_eq!(DIRECT_RECORDING_CONFIG_VERSION, 15);
+        assert_eq!(DIRECT_RECORDING_CONFIG_VERSION, 16);
         assert_eq!(
             std::mem::offset_of!(SnowCaptureDirectRecordingConfig, exclusions),
             192
         );
         assert_eq!(DIRECT_RECORDING_CONFIG_SIZE, 304);
+        assert_eq!(direct_config_size(15).unwrap(), 304);
         assert_eq!(direct_config_size(14).unwrap(), 296);
         assert_eq!(direct_config_size(13).unwrap(), 288);
         assert_eq!(direct_config_size(12).unwrap(), 272);
@@ -2335,6 +2364,7 @@ mod tests {
             webcam_shape: 0,
             webcam_offset_left: 48,
             webcam_offset_bottom: 48,
+            webcam_orientation: 0,
             exclusions: Default::default(),
             audio_mode: 0,
             system_audio_gain_db: 0,
@@ -2395,6 +2425,7 @@ mod tests {
         raw.webcam_size = 500;
         raw.webcam_offset_left = 300;
         raw.webcam_offset_bottom = 220;
+        raw.webcam_orientation = 7;
         raw.webcam_shape = 1;
         let parsed =
             parse_direct_recording_config(&unsafe { read_direct_recording_config(&raw) }.unwrap())
@@ -2402,6 +2433,27 @@ mod tests {
         assert_eq!(parsed.webcam.as_ref().unwrap().style.size, 500);
         assert_eq!(parsed.webcam.as_ref().unwrap().style.offset_left, 300);
         assert_eq!(parsed.webcam.as_ref().unwrap().style.offset_bottom, 220);
+        assert_eq!(parsed.webcam.as_ref().unwrap().style.orientation as u32, 7);
+        raw.webcam_orientation = 8;
+        assert!(parse_direct_recording_config(&raw).is_err());
+        raw.version = 15;
+        assert_eq!(
+            unsafe { read_direct_recording_config(&raw) }
+                .unwrap()
+                .webcam_orientation,
+            0
+        );
+        assert_eq!(
+            parse_direct_recording_config(&raw)
+                .unwrap()
+                .webcam
+                .unwrap()
+                .style
+                .orientation as u32,
+            0
+        );
+        raw.version = 16;
+        raw.webcam_orientation = 7;
         raw.struct_size -= 1;
         assert!(unsafe { read_direct_recording_config(&raw) }.is_err());
         raw.version = 13;

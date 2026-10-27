@@ -1,3 +1,4 @@
+#include "canvas_automatic_selection_test_support.h"
 #include "angle_wheel_host_test_support.h"
 #include "canvas_text_editing_preferences_test_support.h"
 #include "../../test-support/canvas_quick_selection_test_support.h"
@@ -33,6 +34,7 @@
 #include <QScreen>
 #include <QTemporaryDir>
 #include <QTranslator>
+#include "theme/theme_manager.h"
 #include <QWheelEvent>
 #include <QTimer>
 #include <QWindow>
@@ -2005,6 +2007,81 @@ void recordingAngleWheel() {
     require(widthWheelRequests == 0, "recording angle wheel bypasses ordinary style adjustment");
 }
 
+void webcamOrientationToolbarGeometryAndAppearance() {
+    QWidget host;
+    host.setGeometry(100, 100, 400, 300);
+    host.show();
+    RecordingWebcamControl control(&host);
+    control.present(QRectF(100, 100, 150, 150), QSize(400, 300), 150, {}, {}, false);
+    control.show();
+    QApplication::processEvents();
+    auto* toolbar =
+        control.findChild<QWidget*>(QStringLiteral("screenRecordingWebcamOrientationToolbar"));
+    auto* action = toolbar->findChild<QAbstractButton*>(
+        QStringLiteral("screenRecordingWebcamRotateClockwise"));
+    const qreal aboveGap = control.mapToGlobal(QPointF()).y() - (toolbar->y() + toolbar->height());
+    require(aboveGap >= 6 && aboveGap < 7,
+            "orientation row preserves six DIP clearance when aligned to whole widget coordinates");
+    const QPoint initial = toolbar->pos();
+    host.move(host.pos() + QPoint(20, 10));
+    QApplication::processEvents();
+    require(toolbar->pos() == initial + QPoint(20, 10), "floating controls follow their owner");
+    int requests = 0;
+    QObject::connect(&control, &RecordingWebcamControl::orientationRequested, &control,
+                     [&](int) { ++requests; });
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+    QCoreApplication::sendEvent(action, &press);
+    QCoreApplication::sendEvent(action, &release);
+    require(requests == 1, "keyboard activation invokes orientation once");
+    const QRect available = QGuiApplication::primaryScreen()->availableGeometry();
+    host.move(available.topLeft());
+    control.present(QRectF(0, 0, 20, 20), QSize(20, 20), 150, {}, {}, true);
+    QApplication::processEvents();
+    const qreal belowGap = toolbar->y() - control.mapToGlobal(QPointF(0, 20)).y();
+    require(available.contains(toolbar->geometry()) && belowGap >= 6 && belowGap < 7,
+            "tiny top-edge webcams put a usable row below the image");
+    host.move(available.bottomRight() - QPoint(10, 10));
+    QApplication::processEvents();
+    require(available.contains(toolbar->geometry()), "bottom-right placement clamps to the screen");
+    for (const char* screenSignal : {"geometryChanged", "availableGeometryChanged"}) {
+        toolbar->move(available.bottomRight() + QPoint(100, 100));
+        require(QMetaObject::invokeMethod(QGuiApplication::primaryScreen(), screenSignal,
+                                          Qt::DirectConnection, Q_ARG(QRect, available)),
+                "notify a screen geometry change");
+        require(available.contains(toolbar->geometry()),
+                "display changes restore the floating row to its current screen bounds");
+    }
+
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto originalConfig = themes.config();
+    const QString output = qEnvironmentVariable("SNOW_WEBCAM_ORIENTATION_PREVIEW_DIR");
+    if (!output.isEmpty())
+        require(QDir().mkpath(output), "create webcam preview output directory");
+    for (const bool dark : {false, true}) {
+        themes.setPreset(dark ? adqt::theme::ThemeScheme::Dark : adqt::theme::ThemeScheme::Light);
+        QApplication::processEvents();
+        for (const qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+            QImage image((toolbar->size() * dpr).expandedTo(QSize(1, 1)),
+                         QImage::Format_ARGB32_Premultiplied);
+            image.setDevicePixelRatio(dpr);
+            image.fill(Qt::transparent);
+            toolbar->render(&image);
+            require(imageHasVisiblePixel(image),
+                    "toolbar renders in both themes at fractional DPI");
+            if (!output.isEmpty())
+                require(image.save(QDir(output).filePath(
+                            QStringLiteral("webcam-%1-%2.png")
+                                .arg(dark ? QStringLiteral("dark") : QStringLiteral("light"))
+                                .arg(dpr))),
+                        "save webcam orientation visual fixture");
+        }
+    }
+    themes.setConfig(originalConfig);
+    host.hide();
+    require(!toolbar->isVisible(), "hiding the owner retires its floating toolbar");
+}
+
 void webcamSetupGestures() {
     for (qreal scale : {1.0, 1.25, 1.5, 2.0}) {
         ScreenRecordingAreaWindow area;
@@ -2037,6 +2114,48 @@ void webcamSetupGestures() {
         present();
         auto* control = area.findChild<RecordingWebcamControl*>();
         auto* button = area.findChild<QToolButton*>(QStringLiteral("screenRecordingWebcamResize"));
+        auto* toolbar =
+            control->findChild<QWidget*>(QStringLiteral("screenRecordingWebcamOrientationToolbar"));
+        require(toolbar && toolbar->isWindow() && toolbar->isVisible(),
+                "orientation toolbar floats above the webcam without capture-region clipping");
+        const std::array<const char*, 4> actionNames{
+            "screenRecordingWebcamRotateClockwise", "screenRecordingWebcamRotateCounterclockwise",
+            "screenRecordingWebcamFlipHorizontal", "screenRecordingWebcamFlipVertical"};
+        const std::array<QString, 4> actionLabels{
+            QStringLiteral("Rotate clockwise"), QStringLiteral("Rotate counterclockwise"),
+            QStringLiteral("Flip horizontally"), QStringLiteral("Flip vertically")};
+        int orientationAction = -1;
+        QObject::connect(&area, &ScreenRecordingAreaWindow::webcamOrientationRequested, &area,
+                         [&](int action) { orientationAction = action; });
+        std::array<QAbstractButton*, 4> actions{};
+        for (std::size_t i = 0; i < actions.size(); ++i) {
+            actions[i] = toolbar->findChild<QAbstractButton*>(QString::fromLatin1(actionNames[i]));
+            require(actions[i] && actions[i]->toolTip() == actionLabels[i] &&
+                        actions[i]->accessibleName() == actionLabels[i] &&
+                        actions[i]->focusPolicy() == Qt::StrongFocus,
+                    "orientation actions have translated labels and keyboard focus");
+            actions[i]->click();
+            require(orientationAction == static_cast<int>(i), "each button dispatches its action");
+        }
+        require(QGuiApplication::primaryScreen()->availableGeometry().contains(toolbar->geometry()),
+                "orientation row fits on screen even when capture begins off screen");
+        class WebcamTranslator final : public QTranslator {
+          public:
+            QString translate(const char* context, const char* source, const char*,
+                              int) const override {
+                if (QByteArray(context) == "RecordingWebcamControl")
+                    return QStringLiteral("translated:") + QString::fromUtf8(source);
+                return {};
+            }
+        } translator;
+        QCoreApplication::installTranslator(&translator);
+        QEvent languageChange(QEvent::LanguageChange);
+        QCoreApplication::sendEvent(control, &languageChange);
+        require(actions[0]->toolTip() == QStringLiteral("translated:Rotate clockwise") &&
+                    actions[3]->accessibleName() == QStringLiteral("translated:Flip vertically"),
+                "visible orientation actions retranslate without recreating the camera");
+        QCoreApplication::removeTranslator(&translator);
+        QCoreApplication::sendEvent(control, &languageChange);
         require(control && control->isVisible() && button && button->width() == 32 &&
                     control->rect().contains(button->geometry()),
                 "webcam resize button fits its top-right corner");
@@ -2053,6 +2172,7 @@ void webcamSetupGestures() {
         send(*control, QEvent::MouseButtonPress, origin, Qt::LeftButton, Qt::LeftButton);
         require(control->interacting() && QWidget::mouseGrabber() == control,
                 "webcam dragging retains mouse capture");
+        require(!toolbar->isEnabled(), "orientation actions are disabled during webcam gestures");
         send(*control, QEvent::MouseMove, origin + QPointF(40 / scale, -20 / scale), Qt::NoButton,
              Qt::LeftButton);
         require(
@@ -2061,6 +2181,7 @@ void webcamSetupGestures() {
         send(*control, QEvent::MouseButtonRelease, origin + QPointF(40 / scale, -20 / scale),
              Qt::LeftButton, Qt::NoButton);
         require(commits == 1 && !control->interacting(), "release commits one webcam layout");
+        require(toolbar->isEnabled(), "orientation actions resume after a gesture");
         origin = button->mapToGlobal(QPointF(button->rect().center()));
         send(*button, QEvent::MouseButtonPress, origin, Qt::LeftButton, Qt::LeftButton);
         send(*control, QEvent::MouseMove, origin + QPointF(80 / scale, -40 / scale), Qt::NoButton,
@@ -2130,6 +2251,10 @@ void webcamSetupGestures() {
         }
         area.setRecordingState(ScreenshotToolPalette::RecordingState::Recording);
         require(!control->isVisible(), "recording hides webcam editing controls");
+        require(!toolbar->isVisible(), "recording hides the floating orientation row");
+        orientationAction = -1;
+        QMetaObject::invokeMethod(actions[0], "clicked", Qt::DirectConnection, Q_ARG(bool, false));
+        require(orientationAction == -1, "a delayed click cannot escape setup eligibility");
         area.setRecordingState(ScreenshotToolPalette::RecordingState::Paused);
         require(!control->isVisible(), "paused recordings keep webcam editing locked");
         area.setRecordingState(ScreenshotToolPalette::RecordingState::Idle);
@@ -2151,6 +2276,7 @@ void webcamSetupGestures() {
                 "the resize button takes input priority over region controls in tiny regions");
         area.setWebcamOverlay({});
         require(!control->isVisible(), "disabled webcam releases its input surface");
+        require(!toolbar->isVisible(), "camera disable also hides its floating controls");
     }
 }
 
@@ -2179,6 +2305,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--webcam-only"))) {
+        webcamOrientationToolbarGeometryAndAppearance();
         webcamSetupGestures();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
@@ -2190,6 +2317,15 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--right-quick-selection-only"))) {
         recordingRightQuickSelection();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--automatic-selection-only"))) {
+        canvas_automatic_selection_test::exercise([](auto verify) {
+            ScreenRecordingAreaWindow area;
+            area.setInputMode(ScreenRecordingAreaWindow::InputMode::Drawing);
+            verify(*area.canvas());
+        });
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }

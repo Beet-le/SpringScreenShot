@@ -8,6 +8,37 @@ pub enum WebcamShape {
     Circle,
 }
 
+/// Clockwise quarter-turns in bits 0..1, horizontal reflection before rotation in bit 2.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WebcamOrientation {
+    #[default]
+    Identity,
+    Clockwise90,
+    Clockwise180,
+    Clockwise270,
+    Mirrored,
+    MirroredClockwise90,
+    MirroredClockwise180,
+    MirroredClockwise270,
+}
+
+impl WebcamOrientation {
+    pub fn from_raw(value: u32) -> Result<Self, String> {
+        match value {
+            0 => Ok(Self::Identity),
+            1 => Ok(Self::Clockwise90),
+            2 => Ok(Self::Clockwise180),
+            3 => Ok(Self::Clockwise270),
+            4 => Ok(Self::Mirrored),
+            5 => Ok(Self::MirroredClockwise90),
+            6 => Ok(Self::MirroredClockwise180),
+            7 => Ok(Self::MirroredClockwise270),
+            _ => Err("invalid webcam orientation".into()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebcamStyle {
     pub size: u32,
@@ -15,6 +46,7 @@ pub struct WebcamStyle {
     /// Preferred distances from the recording region's left and bottom edges.
     pub offset_left: u32,
     pub offset_bottom: u32,
+    pub orientation: WebcamOrientation,
 }
 
 impl Default for WebcamStyle {
@@ -24,6 +56,7 @@ impl Default for WebcamStyle {
             shape: WebcamShape::Square,
             offset_left: 48,
             offset_bottom: 48,
+            orientation: WebcamOrientation::Identity,
         }
     }
 }
@@ -75,7 +108,7 @@ impl WebcamMetadata {
     }
 }
 
-const MAGIC: &[u8; 9] = b"SNOWCAM\0\x02";
+const MAGIC: &[u8; 9] = b"SNOWCAM\0\x03";
 
 // Bincode is positional: decode the original layout explicitly instead of adding
 // serde defaults, which cannot distinguish new fields from the old fps/timeline.
@@ -87,6 +120,20 @@ struct WebcamStyleV1 {
 #[derive(Serialize, Deserialize)]
 struct WebcamMetadataV1 {
     style: WebcamStyleV1,
+    fps: u32,
+    duration_ms: u64,
+    visibility: Vec<(u64, bool)>,
+}
+#[derive(Serialize, Deserialize)]
+struct WebcamStyleV2 {
+    size: u32,
+    shape: WebcamShape,
+    offset_left: u32,
+    offset_bottom: u32,
+}
+#[derive(Serialize, Deserialize)]
+struct WebcamMetadataV2 {
+    style: WebcamStyleV2,
     fps: u32,
     duration_ms: u64,
     visibility: Vec<(u64, bool)>,
@@ -107,7 +154,7 @@ pub fn read_metadata(mut input: impl std::io::Read) -> crate::Result<WebcamMetad
     use bincode::Options;
     let mut magic = [0; MAGIC.len()];
     input.read_exact(&mut magic)?;
-    if magic[..8] != MAGIC[..8] || !matches!(magic[8], 1 | 2) {
+    if magic[..8] != MAGIC[..8] || !matches!(magic[8], 1..=3) {
         return Err(crate::RecordingModelError::Decode(
             "unsupported webcam metadata".into(),
         ));
@@ -129,6 +176,22 @@ pub fn read_metadata(mut input: impl std::io::Read) -> crate::Result<WebcamMetad
             duration_ms: old.duration_ms,
             visibility: old.visibility,
         }
+    } else if magic[8] == 2 {
+        let old: WebcamMetadataV2 = options
+            .deserialize_from(input)
+            .map_err(|e| crate::RecordingModelError::Decode(e.to_string()))?;
+        WebcamMetadata {
+            style: WebcamStyle {
+                size: old.style.size,
+                shape: old.style.shape,
+                offset_left: old.style.offset_left,
+                offset_bottom: old.style.offset_bottom,
+                orientation: WebcamOrientation::Identity,
+            },
+            fps: old.fps,
+            duration_ms: old.duration_ms,
+            visibility: old.visibility,
+        }
     } else {
         options
             .deserialize_from(input)
@@ -143,6 +206,15 @@ pub fn read_metadata(mut input: impl std::io::Read) -> crate::Result<WebcamMetad
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn webcam_orientation_rejects_unknown_values() {
+        for raw in 0..8 {
+            assert_eq!(WebcamOrientation::from_raw(raw).unwrap() as u32, raw);
+        }
+        for raw in [8, 9, 255, u32::MAX] {
+            assert!(WebcamOrientation::from_raw(raw).is_err());
+        }
+    }
     #[test]
     fn webcam_offsets_fit_without_changing_the_preferred_layout() {
         let style = WebcamStyle {
@@ -168,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn webcam_metadata_reads_v1_and_round_trips_v2_offsets() {
+    fn webcam_metadata_reads_v1_v2_and_round_trips_v3_orientation() {
         let old = WebcamMetadataV1 {
             style: WebcamStyleV1 {
                 size: 220,
@@ -186,13 +258,37 @@ mod tests {
             (48, 48)
         );
         assert_eq!(metadata.style.size, 220);
+        assert_eq!(metadata.style.orientation, WebcamOrientation::Identity);
+        let old_v2 = WebcamMetadataV2 {
+            style: WebcamStyleV2 {
+                size: 220,
+                shape: WebcamShape::Circle,
+                offset_left: 370,
+                offset_bottom: 240,
+            },
+            fps: 30,
+            duration_ms: 1000,
+            visibility: vec![(0, true)],
+        };
+        let mut v2 = b"SNOWCAM\0\x02".to_vec();
+        bincode::serialize_into(&mut v2, &old_v2).unwrap();
+        let decoded = read_metadata(v2.as_slice()).unwrap();
+        assert_eq!(decoded.style.orientation, WebcamOrientation::Identity);
+        assert_eq!(
+            (decoded.style.offset_left, decoded.style.offset_bottom),
+            (370, 240)
+        );
         metadata.style.offset_left = 370;
         metadata.style.offset_bottom = 240;
+        metadata.style.orientation = WebcamOrientation::MirroredClockwise270;
         let mut current = MAGIC.to_vec();
         bincode::serialize_into(&mut current, &metadata).unwrap();
         let decoded = read_metadata(current.as_slice()).unwrap();
         assert_eq!(decoded.style, metadata.style);
-        for bytes in [&bytes, &current] {
+        let mut invalid = current.clone();
+        invalid[25..29].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(read_metadata(invalid.as_slice()).is_err());
+        for bytes in [&bytes, &v2, &current] {
             for len in 0..bytes.len() {
                 assert!(read_metadata(&bytes[..len]).is_err());
             }
@@ -208,6 +304,7 @@ mod tests {
                 shape: WebcamShape::Square,
                 offset_left: 48,
                 offset_bottom: 48,
+                orientation: WebcamOrientation::Identity,
             }
         );
         assert_eq!(style.placement((800, 600)), (48, 402, 150));
@@ -233,7 +330,7 @@ mod tests {
         ] {
             assert_eq!(restored.visible_at(at), expected);
         }
-        bytes[8] = 3;
+        bytes[8] = 4;
         assert!(read_metadata(bytes.as_slice()).is_err());
         metadata.visibility.push((800, false));
         assert!(metadata.validate().is_err());

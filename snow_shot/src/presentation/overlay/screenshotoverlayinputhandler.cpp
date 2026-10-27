@@ -1400,6 +1400,10 @@ void ScreenshotOverlayInputHandler::executeConfiguredCompletionAction(const QStr
         actionId = QStringLiteral("quick_save");
     } else if (action == QStringLiteral("pin")) {
         actionId = QStringLiteral("pin_to_screen");
+    } else if (action == QStringLiteral("ocr")) {
+        actionId = QStringLiteral("text_recognition");
+    } else if (action == QStringLiteral("ocr_copy")) {
+        actionId = QStringLiteral("text_recognition_copy");
     } else {
         return;
     }

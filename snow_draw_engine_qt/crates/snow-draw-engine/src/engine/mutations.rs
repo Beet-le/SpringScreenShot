@@ -108,6 +108,7 @@ impl Engine {
         let ApplyTransactionCommand {
             mut transaction,
             history_undo_snapshot,
+            created_selection_target,
         } = command;
         if transaction.is_empty() {
             return Ok(MutationResult::default());
@@ -151,6 +152,10 @@ impl Engine {
                 &self.model,
                 &following_numeric_types,
             );
+        }
+        // Selection follows successful creation only, never previews or failed transactions.
+        if let Some(id) = created_selection_target {
+            self.editor.select_created_element(&self.model, id);
         }
         let mutation_result = self.finish_document_change(&redo_snapshot, &apply_result.changes);
         let mut owners = HashMap::new();
@@ -210,6 +215,11 @@ impl Engine {
         changes: &snow_draw_engine_document::DocumentDelta,
     ) -> MutationResult {
         self.scene_cache.sync(&self.model, Some(changes));
+        for slot in self.viewports.values_mut() {
+            if let Some(retained) = &mut slot.retained {
+                retained.get_mut().document_changed(changes);
+            }
+        }
         self.editor
             .sync_arrow_text_cache_after_document_change(&self.model, changes);
         self.editor
@@ -268,6 +278,7 @@ mod tests {
                     ApplyTransactionCommand {
                         transaction,
                         history_undo_snapshot: None,
+                        created_selection_target: None,
                     },
                 )
                 .unwrap();

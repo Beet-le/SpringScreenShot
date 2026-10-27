@@ -32,9 +32,15 @@ fn add_webcam(fixture: &Fixture, shape: snow_recording_model::WebcamShape) {
         (15, [10, 240, 10, 255]),
         (27, [10, 10, 240, 255]),
     ] {
-        encoder
-            .push_rgba_frame_at_pts(pts, &color.repeat(50 * 50))
-            .unwrap();
+        let mut pixels = color.repeat(50 * 50);
+        // An off-center white marker proves replay applies orientation exactly once.
+        for y in 32..42 {
+            for x in 32..42 {
+                pixels[(y * 50 + x) * 4..(y * 50 + x + 1) * 4]
+                    .copy_from_slice(&[245, 245, 245, 255]);
+            }
+        }
+        encoder.push_rgba_frame_at_pts(pts, &pixels).unwrap();
     }
     encoder.finish_at_duration_ms(1001).unwrap();
     let camera_index = root.join("camera.index");
@@ -54,6 +60,7 @@ fn add_webcam(fixture: &Fixture, shape: snow_recording_model::WebcamShape) {
                 shape,
                 offset_left: 17,
                 offset_bottom: 31,
+                orientation: snow_recording_model::WebcamOrientation::MirroredClockwise90,
             },
             fps: 30,
             duration_ms: 1001,
@@ -143,6 +150,14 @@ fn webcam_deferred_formats_replay_gaps_rewinds_and_retries_on_source_time() {
                 .unwrap()
                 .unwrap();
             let held = replay.frame_at(200, &cancel).unwrap().unwrap();
+            assert_eq!(
+                replay.style().orientation,
+                snow_recording_model::WebcamOrientation::MirroredClockwise90
+            );
+            assert!(
+                held.rgba[(36 * 50 + 36) * 4 + 1] > 180,
+                "camera track retains its untransformed marker"
+            );
             assert!(
                 Arc::ptr_eq(&held, &replay.frame_at(499, &cancel).unwrap().unwrap()),
                 "held camera samples reuse conversion and overlay caches"
@@ -174,6 +189,11 @@ fn webcam_deferred_formats_replay_gaps_rewinds_and_retries_on_source_time() {
                     preview[((124 * 240 + 42) * 4) + channel] > 200,
                     "trim preview camera at {at}"
                 );
+                let marker = (111 * 240 + 29) * 4;
+                assert!(
+                    preview[marker..marker + 3].iter().all(|c| *c > 180),
+                    "oriented marker must survive preview and backward seeks at {at}"
+                );
             }
             render_bundle(
                 &fixture.bundle,
@@ -185,6 +205,13 @@ fn webcam_deferred_formats_replay_gaps_rewinds_and_retries_on_source_time() {
             .unwrap();
             let (frames, width, _, _) = decode_frames(&fixture.config.output_path);
             let center = ((124 * width + 42) * 4) as usize;
+            let marker = ((111 * width + 29) * 4) as usize;
+            assert!(
+                frames.last().unwrap()[marker..marker + 3]
+                    .iter()
+                    .all(|c| *c > 170),
+                "{format:?}: export must apply the saved orientation"
+            );
             assert!(
                 frames
                     .iter()
@@ -229,6 +256,17 @@ fn webcam_deferred_formats_replay_gaps_rewinds_and_retries_on_source_time() {
             let center = ((124 * width + 42) * 4) as usize;
             assert!(retimed.first().unwrap()[center] > 200);
             assert!(retimed.last().unwrap()[center + 1] > 200);
+            let marker = ((111 * width + 29) * 4) as usize;
+            assert!(
+                retimed.first().unwrap()[marker..marker + 3]
+                    .iter()
+                    .all(|c| *c > 170)
+            );
+            assert!(
+                retimed.last().unwrap()[marker..marker + 3]
+                    .iter()
+                    .all(|c| *c > 170)
+            );
         }
     }
 }

@@ -466,9 +466,12 @@ Maintainer setup:
 
 1. Use a GitHub account with a fork of `microsoft/winget-pkgs` (WinGetCreate can also
    create the fork). Complete any upstream contributor requirements when prompted.
-2. Create a **classic** personal access token with `public_repo` scope. Fine-grained
+2. Create a **classic** personal access token with `public_repo` and `workflow` scopes. Fine-grained
    tokens are not supported by WinGetCreate. Store it as the repository Actions secret
    `WINGET_CREATE_GITHUB_TOKEN`; the default Actions token cannot submit cross-repository PRs.
+   WinGetCreate synchronizes the account's fork before opening a PR. The `workflow` scope
+   lets that synchronization include upstream changes under `.github/workflows/`, even
+   though the Snow Shot submission itself only adds manifests.
 3. Publish a release or manually run **Snow Shot WinGet** with its tag. The workflow
    uploads manifests before validation/submission, validates them using WinGet, and
    submits with WinGetCreate 1.12.13.0 (verified against its pinned SHA-256).
@@ -480,6 +483,13 @@ available. Retry the workflow after correcting credentials or validation errors.
 Runs are serialized per version across both tag styles. Already merged versions and
 matching open PRs are reported and skipped; closed, unmerged submissions can be retried.
 GitHub lookup failures stop submission instead of treating a failed lookup as absence.
+Before invoking WinGetCreate, submission verifies the token's repository and `workflow`
+scopes using the same read-only check as the credential verification script. If older
+credentials have only `public_repo`, add `workflow` to that PAT (or replace the repository
+secret with a PAT that has both scopes), then rerun **Snow Shot WinGet** for the tag.
+WinGetCreate 1.12.13.0 reports HTTP 422 from fork synchronization only as
+"The forked repository could not be synced with the upstream commits." A missing
+`workflow` scope can cause that response when the fork is behind upstream workflow changes.
 This workflow does not publish application releases.
 
 For local generation and validation (PowerShell 7, WinGet 1.29.380 or newer, and

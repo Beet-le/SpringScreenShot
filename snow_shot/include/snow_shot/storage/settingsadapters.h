@@ -10,6 +10,7 @@
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/selectiontransitionanimation.h"
 #include "snow_shot/storage/persistedwindowgeometry.h"
+#include "snow_shot/storage/recordingareahistory.h"
 
 #include <QColor>
 #include <QPoint>
@@ -301,6 +302,10 @@ class ScreenshotSettings final {
 
 class DrawingSettings final {
   public:
+    [[nodiscard]] bool automaticallySelectNewlyCreatedElements() const;
+    bool setAutomaticallySelectNewlyCreatedElements(bool enabled) const;
+    [[nodiscard]] QStringList automaticSelectionExcludedTools() const;
+    [[nodiscard]] bool setAutomaticSelectionExcludedTools(const QStringList& tools) const;
     [[nodiscard]] QStringList quickSelectionDisabledTools() const;
     bool setQuickSelectionDisabledTools(const QStringList& tools) const;
     [[nodiscard]] bool deleteTextAfterCursor() const;
@@ -380,6 +385,14 @@ class PinToScreenShortcutSettings final {
                       const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingMap allShortcuts() const;
     bool setAllShortcutsAtomic(const shortcuts::ShortcutBindingMap& shortcutsByAction) const;
+};
+
+class RecordingAreaHistorySettings final {
+  public:
+    // Oldest first; duplicate rectangles represent separate recording starts.
+    [[nodiscard]] QVector<RecordingAreaHistoryEntry> entries() const;
+    bool append(const QRect& rectangle) const;
+    static bool append(class ConfigurationStore& configuration, const QRect& rectangle);
 };
 
 class ScreenRecordingShortcutSettings final {
@@ -530,6 +543,8 @@ class RecordingSettings final {
     bool setWebcamLayout(int size, const QPoint& offset) const;
     [[nodiscard]] QString webcamShape() const;
     bool setWebcamShape(const QString& shape) const;
+    [[nodiscard]] int webcamOrientation() const;
+    bool setWebcamOrientation(int orientation) const;
     [[nodiscard]] bool showKeyboard() const;
     bool setShowKeyboard(bool show) const;
     [[nodiscard]] bool mouseHighlightEnabled() const;

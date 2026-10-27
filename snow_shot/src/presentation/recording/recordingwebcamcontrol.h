@@ -2,8 +2,10 @@
 
 #include <QPointF>
 #include <QWidget>
+#include <array>
 
 class QToolButton;
+class QAbstractButton;
 
 // An input surface only: the camera image continues to use the shared renderer.
 class RecordingWebcamControl final : public QWidget {
@@ -21,6 +23,8 @@ class RecordingWebcamControl final : public QWidget {
     void layoutPreviewed(int size, const QPoint& offset);
     void layoutCommitted(int size, const QPoint& offset);
     void interactionChanged();
+    // Clockwise, counterclockwise, horizontal flip, vertical flip, in toolbar order.
+    void orientationRequested(int action);
 
   protected:
     bool event(QEvent* event) override;
@@ -36,7 +40,10 @@ class RecordingWebcamControl final : public QWidget {
     void updateInteraction(const QPointF& point);
     void releaseInteraction();
     void retranslateUi();
+    void updateToolbar();
     QToolButton* m_resize;
+    QWidget* m_toolbar;
+    std::array<QAbstractButton*, 4> m_orientationButtons{};
     QRectF m_bounds;
     QSize m_region;
     QPoint m_offset;

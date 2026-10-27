@@ -11,7 +11,7 @@ pub mod trim;
 pub mod video_index;
 pub mod webcam;
 pub use trim::{FixedFrameTimeline, PlaybackSpeed, RetimedFrameTiming, TrimRange};
-pub use webcam::{WebcamShape, WebcamStyle};
+pub use webcam::{WebcamOrientation, WebcamShape, WebcamStyle};
 
 pub use artifact::{
     AudioSampleFormat, AudioTrackManifest, AudioTrackRole, LocalRecordingPaths, PauseInterval,

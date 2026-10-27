@@ -2689,6 +2689,12 @@ std::unique_ptr<QMimeData> ScreenshotRecognitionSessionController::recognitionCl
                                                                          m_conversion->source());
     }
 #endif
+    // Result widgets own their text and table selections. Resolve those before falling
+    // back to complete cached results; conversion Copy above intentionally exports source.
+    if (m_active && !originalImageTranslationActive() && content()) {
+        if (auto selected = content()->textSelectionClipboardMimeData())
+            return selected;
+    }
     auto mimeData = std::make_unique<QMimeData>();
 #if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
     if (m_mode == Mode::Latex) {
@@ -2729,10 +2735,6 @@ std::unique_ptr<QMimeData> ScreenshotRecognitionSessionController::recognitionCl
         if (originalImageTranslationActive() && presentation && presentation->hasTextSelection()) {
             mimeData->setText(presentation->selectedText());
             return mimeData;
-        }
-        if (!originalImageTranslationActive() && content()) {
-            if (auto selected = content()->textSelectionClipboardMimeData())
-                return selected;
         }
         if (snow_shot::storage::ScreenshotTranslationSettings().copyTranslationResultsAsImage()) {
             const QImage image =

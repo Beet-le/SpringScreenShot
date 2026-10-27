@@ -23,9 +23,11 @@
 #include "antd_icons.h"
 
 #include <QApplication>
+#include <QTranslator>
 #include <QCoreApplication>
 #include <QDir>
 #include <QEvent>
+#include <QEnterEvent>
 #include <QFont>
 #include <QFrame>
 #include <QElapsedTimer>
@@ -2003,6 +2005,45 @@ void speechBubbleReusesShapeControlsWithIndependentStyles() {
                 palette.creationStyleDefaults().rectangle.shape ==
                     SnowCanvasRectangleShape::Rectangle,
             "the shared shape selector routes to independent Speech Bubble defaults");
+    auto* thought = group->button(3);
+    require(thought != nullptr && group->buttons().size() == 4,
+            "Thought Bubble is the fourth Speech Bubble type after Diamond");
+    require(thought->accessibleName() == QStringLiteral("Thought Bubble"),
+            "Thought Bubble has an accessible English label");
+    class BubbleTranslator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            if (qstrcmp(context, "ScreenshotToolPalette") == 0 &&
+                qstrcmp(source, "Thought Bubble") == 0)
+                return QStringLiteral("Translated thought bubble");
+            return {};
+        }
+    } translator;
+    require(QApplication::installTranslator(&translator), "install bubble label translator");
+    flushEvents();
+    require(thought->accessibleName() == QStringLiteral("Translated thought bubble"),
+            "Thought Bubble retranslates on LanguageChange");
+    QApplication::removeTranslator(&translator);
+    flushEvents();
+    const int beforeThought = edits;
+    thought->click();
+    require(edits == beforeThought + 1 && palette.creationStyleDefaults().speechBubble.shape ==
+                                              SnowCanvasRectangleShape::ThoughtBubble,
+            "Thought Bubble updates the independent bubble style exactly once");
+    auto* radius =
+        row->findChild<QWidget*>(QStringLiteral("screenshotSelectionCornerRadiusButton"));
+    require(radius != nullptr && radius->isHidden(),
+            "Thought Bubble hides the inapplicable corner-radius editor");
+    const auto storedRadii = palette.creationStyleDefaults().speechBubble.cornerRadii;
+    diamond->click();
+    require(!radius->isHidden() &&
+                palette.creationStyleDefaults().speechBubble.cornerRadii == storedRadii,
+            "switching back restores the corner-radius editor and its requested values");
+    thought->click();
     const auto shapeBefore = palette.creationStyleDefaults().rectangle;
     require(palette.stepStrokeWidth(1) &&
                 palette.creationStyleDefaults().speechBubble.strokeWidth != 4 &&
@@ -2011,6 +2052,13 @@ void speechBubbleReusesShapeControlsWithIndependentStyles() {
     const auto bubble = palette.creationStyleDefaults().speechBubble;
     for (int pass = 0; pass < 8; ++pass) {
         palette.setActiveTool(Tool::Shape);
+        auto* regularRow =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotRectangleStyleControls"));
+        auto* regularSelector =
+            regularRow->findChild<QWidget*>(QStringLiteral("screenshotShapeButtonGroup"));
+        auto* regularGroup = regularSelector->findChild<adqt::widgets::AdRadioButtonGroup*>();
+        require(regularGroup != nullptr && regularGroup->button(3) == nullptr,
+                "Thought Bubble never leaks into the regular Shape selector");
         palette.setActiveTool(Tool::Line);
         palette.setActiveTool(Tool::SpeechBubble);
         flushEvents();
@@ -2035,6 +2083,57 @@ void speechBubbleReusesShapeControlsWithIndependentStyles() {
                 palette.creationStyleDefaults().rectangle.strokeWidth ==
                     options.styleDefaults.rectangle.strokeWidth,
             "resetting preferences retains the active Speech Bubble editor family");
+    if (const auto path = qEnvironmentVariable("SNOW_THOUGHT_BUBBLE_TOOLBAR_PREVIEW");
+        !path.isEmpty()) {
+        auto& manager = snow_shot::presentation::styles::ThemeManager::instance();
+        const auto appearance = manager.themeColorScheme().appearance;
+        auto* selector =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotSpeechBubbleStyleControls"))
+                ->findChild<QWidget*>(QStringLiteral("screenshotShapeButtonGroup"));
+        auto* radios = selector->findChild<adqt::widgets::AdRadioButtonGroup*>();
+        auto* bubbleRadio = radios->button(3);
+        QImage preview(1000, 480, QImage::Format_ARGB32_Premultiplied);
+        preview.fill(Qt::white);
+        QPainter sheet(&preview);
+        int previewRow = 0;
+        for (auto theme : {snow_shot::presentation::styles::ThemeAppearance::Light,
+                           snow_shot::presentation::styles::ThemeAppearance::Dark}) {
+            manager.setThemeAppearance(theme);
+            for (int previewState = 0; previewState < 4; ++previewState, ++previewRow) {
+                selector->setEnabled(true);
+                radios->setCheckedId(previewState >= 2 ? 3 : 2);
+                QEvent leave(QEvent::Leave);
+                QApplication::sendEvent(bubbleRadio, &leave);
+                if (previewState == 1) {
+                    const QPointF center = bubbleRadio->rect().center();
+                    QEnterEvent enter(center, center, bubbleRadio->mapToGlobal(center.toPoint()));
+                    QApplication::sendEvent(bubbleRadio, &enter);
+                }
+                selector->setEnabled(previewState != 3);
+                flushEvents();
+                const auto scheme = manager.themeColorScheme();
+                sheet.fillRect(0, previewRow * 60, 1000, 60, scheme.map.colorBgContainer);
+                sheet.setPen(scheme.map.colorText);
+                sheet.drawText(
+                    8, previewRow * 60 + 35,
+                    QStringList{"Normal", "Hover", "Selected", "Disabled"}.at(previewState));
+                int column = 0;
+                for (qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+                    QImage image(
+                        QSize(qCeil(selector->width() * dpr), qCeil(selector->height() * dpr)),
+                        QImage::Format_ARGB32_Premultiplied);
+                    image.setDevicePixelRatio(dpr);
+                    image.fill(scheme.map.colorBgContainer);
+                    selector->render(&image);
+                    sheet.drawImage(QPointF(100 + column++ * 220, previewRow * 60 + 14), image);
+                }
+            }
+        }
+        sheet.end();
+        selector->setEnabled(true);
+        manager.setThemeAppearance(appearance);
+        require(preview.save(path), "save actual Thought Bubble toolbar states at fractional DPI");
+    }
 }
 } // namespace
 

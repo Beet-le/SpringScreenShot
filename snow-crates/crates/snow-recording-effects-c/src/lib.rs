@@ -58,7 +58,13 @@ pub struct SnowRecordingEffectsConfig {
     pub webcam_offset_left: u32,
     pub webcam_offset_bottom: u32,
     pub record_mouse_scrolling: u32,
+    pub webcam_orientation: u32,
 }
+const EFFECTS_CONFIG_V10_FIELDS_SIZE: usize =
+    std::mem::offset_of!(SnowRecordingEffectsConfig, webcam_orientation);
+const EFFECTS_CONFIG_V10_SIZE: usize = EFFECTS_CONFIG_V10_FIELDS_SIZE
+    .div_ceil(std::mem::align_of::<SnowRecordingEffectsConfig>())
+    * std::mem::align_of::<SnowRecordingEffectsConfig>();
 #[repr(C)]
 pub struct SnowRecordingEffectsTile {
     pub x: u32,
@@ -123,17 +129,30 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
         7 => std::mem::offset_of!(SnowRecordingEffectsConfig, webcam_source),
         8 => std::mem::offset_of!(SnowRecordingEffectsConfig, webcam_offset_left),
         9 => std::mem::offset_of!(SnowRecordingEffectsConfig, record_mouse_scrolling),
-        10 => std::mem::size_of::<SnowRecordingEffectsConfig>(),
+        // v11 occupies v10 tail padding; its original sizeof is still required.
+        10 => EFFECTS_CONFIG_V10_SIZE,
+        11 => std::mem::size_of::<SnowRecordingEffectsConfig>(),
         _ => return Err("unsupported effects configuration version".into()),
     };
     if unsafe { *header.add(1) } != size as u32 {
         return Err("unsupported effects configuration version or size".into());
     }
     let mut value: SnowRecordingEffectsConfig = unsafe { std::mem::zeroed() };
+    // The old caller's tail padding is not an initialized orientation field.
+    let copy_size = if version == 10 {
+        EFFECTS_CONFIG_V10_FIELDS_SIZE
+    } else {
+        size
+    };
     unsafe {
-        std::ptr::copy_nonoverlapping(raw.cast::<u8>(), (&raw mut value).cast::<u8>(), size);
+        std::ptr::copy_nonoverlapping(raw.cast::<u8>(), (&raw mut value).cast::<u8>(), copy_size);
     }
     let raw = &value;
+    let orientation = snow_webcam::WebcamOrientation::from_raw(if raw.version >= 11 {
+        raw.webcam_orientation
+    } else {
+        0
+    })?;
     let canvas_scale = if raw.version >= 6 {
         raw.canvas_scale
     } else {
@@ -171,6 +190,7 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
             unsafe {
                 snow_webcam::config_from_raw(raw.webcam_source, raw.webcam_size, raw.webcam_shape)?
                     .map(|mut webcam| {
+                        webcam.style.orientation = orientation;
                         if raw.version >= 9 {
                             webcam.style.offset_left = raw.webcam_offset_left;
                             webcam.style.offset_bottom = raw.webcam_offset_bottom;
@@ -752,7 +772,8 @@ mod tests {
             webcam_shape: 0,
             webcam_offset_left: 48,
             webcam_offset_bottom: 48,
-            version: 10,
+            webcam_orientation: 0,
+            version: 11,
             struct_size: std::mem::size_of::<SnowRecordingEffectsConfig>() as u32,
             x: -1920,
             y: -100,
@@ -794,6 +815,7 @@ mod tests {
         raw.webcam_shape = 1;
         raw.webcam_offset_left = 300;
         raw.webcam_offset_bottom = 220;
+        raw.webcam_orientation = 5;
         let parsed = unsafe { config(&raw) }.unwrap();
         assert_eq!(
             parsed.webcam.as_ref().unwrap().style.shape,
@@ -802,6 +824,22 @@ mod tests {
         assert_eq!(parsed.webcam.as_ref().unwrap().source, source);
         assert_eq!(parsed.webcam.as_ref().unwrap().style.offset_left, 300);
         assert_eq!(parsed.webcam.as_ref().unwrap().style.offset_bottom, 220);
+        assert_eq!(parsed.webcam.as_ref().unwrap().style.orientation as u32, 5);
+        raw.webcam_orientation = 8;
+        assert!(unsafe { config(&raw) }.is_err());
+        raw.version = 10;
+        assert_eq!(raw.struct_size as usize, EFFECTS_CONFIG_V10_SIZE);
+        assert_eq!(
+            unsafe { config(&raw) }
+                .unwrap()
+                .webcam
+                .unwrap()
+                .style
+                .orientation as u32,
+            0
+        );
+        raw.version = 11;
+        raw.webcam_orientation = 5;
         raw.struct_size -= 1;
         assert!(unsafe { config(&raw) }.is_err());
         raw.version = 8;

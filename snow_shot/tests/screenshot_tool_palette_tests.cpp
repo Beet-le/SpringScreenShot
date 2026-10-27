@@ -13560,6 +13560,134 @@ void distanceActualValueUpdatesTheCanvasAndUndo() {
             "resizing an annotation should refresh its actual value while preserving its scale");
     require(canvas.undo() && value->displayText() == QStringLiteral("25.125"),
             "undoing geometry should refresh the actual value without changing style");
+
+    mouse(QEvent::MouseButtonPress, {100, 200}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {100, 200}, Qt::LeftButton, Qt::NoButton);
+    require(canvas.hasActiveTextEditing() && value->isVisible() &&
+                canvas.canvasStyleToolbarState().source ==
+                    SnowCanvasStyleToolbarSource::SelectedDistance,
+            "inline editing must retain the distance controls in the sub-toolbar");
+    const auto key = [&canvas](int code, Qt::KeyboardModifiers modifiers,
+                               const QString& text = {}) {
+        QKeyEvent event(QEvent::KeyPress, code, modifiers, text);
+        QApplication::sendEvent(&canvas, &event);
+        QApplication::processEvents();
+    };
+    key(Qt::Key_A, Qt::ControlModifier);
+    key(Qt::Key_2, Qt::NoModifier, QStringLiteral("20"));
+    key(Qt::Key_Return, Qt::NoModifier);
+    require(!canvas.hasActiveTextEditing() && value->isVisible() &&
+                value->displayText() == QStringLiteral("20") &&
+                record(QStringLiteral("Text")).value(QStringLiteral("text")).toString() ==
+                    QStringLiteral("20.000 mm"),
+            "inline commit synchronizes the distance toolbar value");
+}
+
+void arrowOutlineEditorMatchesTextStroke() {
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    require(language.setLanguage(QStringLiteral("en_US")), "outline fixture uses English");
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(language.setLanguage(QStringLiteral("en_US"))); });
+    ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Arrow);
+    palette.show();
+    QCoreApplication::processEvents();
+    const auto pickerForArrow = [&]() {
+        return qobject_cast<adqt::widgets::AdColorPicker*>(
+            controlWithAccessibleName(palette, "Arrow outline width"));
+    };
+    auto* picker = pickerForArrow();
+    require(picker != nullptr && picker->alphaChannelEnabled(),
+            "outline uses the alpha-enabled shared picker");
+    require(picker->triggerContent()->accessibleDescription() == QStringLiteral("0px") &&
+                picker->triggerContent()->cursor().shape() == Qt::SplitVCursor,
+            "outline starts at 0px and uses the text stroke adjustment cursor");
+    const auto initial = palette.creationStyleDefaults().arrow;
+    require(initial.arrowOutlineWidth == 0 && initial.arrowOutlineColor == QColor(0xff, 0xcc, 0xc7),
+            "outline defaults match text stroke");
+    auto* controls = palette.findChild<QWidget*>(QStringLiteral("screenshotArrowStyleControls"));
+    auto* root = styleEditorRoot(controls, "arrow-outline");
+    auto* ratio = palette.findChild<QWidget*>(QStringLiteral("screenshotArrowRatioButton"));
+    require(root != nullptr && ratio != nullptr &&
+                hasOnlySpacingBetween(controls->layout(), root, ratio, 4),
+            "outline has the text stroke trailing spacing before ratio");
+    SnowCanvasShapeStyle emitted;
+    quint32 properties = 0;
+    int changes = 0;
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&](const SnowCanvasShapeStyle& value, quint32 changed, SnowCanvasShapeKind kind) {
+            require(kind == SnowCanvasShapeKind::Arrow, "outline only targets arrows");
+            emitted = value;
+            properties = changed;
+            ++changes;
+        });
+    const auto wheel = [&](int delta) {
+        const QPoint local = picker->rect().center();
+        QWheelEvent event(QPointF(local), picker->mapToGlobal(local), QPoint(), QPoint(0, delta),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        require(palette.handleToolbarWheel(&event), "outline consumes hover wheel");
+    };
+    wheel(120);
+    require(emitted.arrowOutlineWidth == 1 && emitted.strokeWidth == initial.strokeWidth &&
+                properties == SnowCanvasShapeStylePropertyArrowOutlineWidth,
+            "outline wheel edits only outline width");
+    for (int i = 0; i < 80; ++i)
+        wheel(120);
+    require(emitted.arrowOutlineWidth == 72, "outline width clamps to 72px");
+    const int atMaximum = changes;
+    wheel(120);
+    require(changes == atMaximum, "clamped outline width emits no edit");
+    for (int i = 0; i < 80; ++i)
+        wheel(-120);
+    require(emitted.arrowOutlineWidth == 0, "outline can be disabled with the wheel");
+    picker->setPopupLayerMode(adqt::widgets::AdColorPicker::PopupLayerMode::InWindow);
+    picker->setPopupVisible(true);
+    QCoreApplication::processEvents();
+    auto* popup = picker->findChild<adqt::widgets::AdPopover*>();
+    require(popup != nullptr, "outline picker owns its shared popup");
+    for (const char* label :
+         {"Arrow outline width 2px", "Arrow outline width 4px", "Arrow outline width 8px"})
+        require(popoverButtonWithTooltip(popup, label) != nullptr,
+                "outline shares the text stroke width shortcuts");
+    clickPopoverStyleControl(popup, "Arrow outline width 4px");
+    require(emitted.arrowOutlineWidth == 4 &&
+                properties == SnowCanvasShapeStylePropertyArrowOutlineWidth,
+            "outline preset dispatches only width");
+    clickPopoverStyleControl(popup, "Arrow outline color transparent");
+    require(emitted.arrowOutlineColor.alpha() == 0 && emitted.arrowOutlineWidth == 4 &&
+                properties == SnowCanvasShapeStylePropertyArrowOutlineColor,
+            "transparent outline retains its width");
+    auto* widthPreset = popoverButtonWithTooltip(popup, "Arrow outline width 4px");
+    require(language.setLanguage(QStringLiteral("zh_CN")),
+            "outline translates to Simplified Chinese");
+    QCoreApplication::processEvents();
+    require(widthPreset->toolTip() == QStringLiteral("箭头描边宽度 4px"),
+            "open outline popup retranslates");
+    require(language.setLanguage(QStringLiteral("zh_TW")),
+            "outline translates to Traditional Chinese");
+    QCoreApplication::processEvents();
+    require(widthPreset->toolTip() == QStringLiteral("箭頭描邊寬度 4px"),
+            "outline uses Traditional Chinese");
+    require(language.setLanguage(QStringLiteral("en_US")), "restore English for mixed values");
+    picker->setPopupVisible(false);
+    SnowCanvasStyleToolbarState selected;
+    selected.source = SnowCanvasStyleToolbarSource::SelectedArrow;
+    selected.shapeStyle = initial;
+    selected.shapeStyle.arrowOutlineWidth = 2;
+    selected.shapeStyleMixed =
+        SnowCanvasShapeStyleMixedArrowOutlineColor | SnowCanvasShapeStyleMixedArrowOutlineWidth;
+    palette.setStyleToolbarState(selected);
+    require(picker->property("mixed").toBool(), "mixed outline colors are displayed");
+    wheel(120);
+    require(properties == SnowCanvasShapeStylePropertyArrowOutlineWidth &&
+                emitted.arrowOutlineWidth == 3 && picker->property("mixed").toBool(),
+            "width edit leaves mixed outline color intact");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Arrow);
+    QCoreApplication::processEvents();
+    picker = pickerForArrow();
+    require(picker != nullptr && palette.creationStyleDefaults().arrow.arrowOutlineWidth == 3,
+            "outline survives editor reuse and tool switching");
 }
 
 void arrowRatioEditorAdjustsAndResets() {
@@ -13588,11 +13716,13 @@ void arrowRatioEditorAdjustsAndResets() {
             rowWidgets.push_back(widget);
     }
     const qsizetype ratioIndex = rowWidgets.indexOf(editor);
-    require(ratioIndex >= 2 && ratioIndex + 1 < rowWidgets.size() &&
-                rowWidgets.at(ratioIndex - 2) == rootInRow(arrowType) &&
-                qobject_cast<QFrame*>(rowWidgets.at(ratioIndex - 1)) != nullptr &&
+    require(ratioIndex >= 3 && ratioIndex + 1 < rowWidgets.size() &&
+                rowWidgets.at(ratioIndex - 3) == rootInRow(arrowType) &&
+                qobject_cast<QFrame*>(rowWidgets.at(ratioIndex - 2)) != nullptr &&
+                rowWidgets.at(ratioIndex - 1) ==
+                    rootInRow(controlWithAccessibleName(palette, "Arrow outline width")) &&
                 rowWidgets.at(ratioIndex + 1) == rootInRow(start),
-            "arrow type, separator, ratio, and start arrowhead must be consecutive");
+            "arrow type, separator, outline, ratio, and start arrowhead must be consecutive");
     require(editor->cursor().shape() == Qt::SplitVCursor,
             "ratio uses the same adjustment cursor as rounded corners");
     const auto wheel = [&palette, &editor](int delta) {
@@ -17546,6 +17676,7 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
     using Rendering = SnowCanvasStrokeRenderingStyle;
     const auto product = snow_shot::presentation::screenshotCanvasStyleDefaults();
     require(product.rectangle.strokeRenderingStyle == Rendering::Architect &&
+                product.speechBubble.strokeRenderingStyle == Rendering::Architect &&
                 product.arrow.strokeRenderingStyle == Rendering::Architect &&
                 product.line.strokeRenderingStyle == Rendering::Architect,
             "Architect should remain the default for each supported tool");
@@ -17571,7 +17702,7 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
         return true;
     });
     auto expected = product;
-    for (const auto tool : {Tool::Shape, Tool::Arrow, Tool::Line}) {
+    for (const auto tool : {Tool::Shape, Tool::SpeechBubble, Tool::Arrow, Tool::Line}) {
         QWidget* row = openStrokeRenderingRow(palette, tool);
         require(!row->isHidden(), "supported tools should expose stroke rendering controls");
         const auto buttons = strokeRenderingButtons(row);
@@ -17584,16 +17715,18 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
         const int index = tool == Tool::Arrow ? 2 : 1;
         buttons.at(index)->click();
         const auto style = static_cast<Rendering>(index);
-        auto& expectedStyle = tool == Tool::Arrow  ? expected.arrow
-                              : tool == Tool::Line ? expected.line
-                                                   : expected.rectangle;
+        auto& expectedStyle = tool == Tool::Arrow          ? expected.arrow
+                              : tool == Tool::Line         ? expected.line
+                              : tool == Tool::SpeechBubble ? expected.speechBubble
+                                                           : expected.rectangle;
         expectedStyle.strokeRenderingStyle = style;
         require(commits == before + 1 &&
                     properties == SnowCanvasShapeStylePropertyStrokeRenderingStyle &&
                     emitted.strokeRenderingStyle == style &&
-                    kind == (tool == Tool::Arrow  ? SnowCanvasShapeKind::Arrow
-                             : tool == Tool::Line ? SnowCanvasShapeKind::Line
-                                                  : SnowCanvasShapeKind::Rectangle) &&
+                    kind == (tool == Tool::Arrow          ? SnowCanvasShapeKind::Arrow
+                             : tool == Tool::Line         ? SnowCanvasShapeKind::Line
+                             : tool == Tool::SpeechBubble ? SnowCanvasShapeKind::SpeechBubble
+                                                          : SnowCanvasShapeKind::Rectangle) &&
                     palette.creationStyleDefaults() == expected,
                 "a rendering choice should emit one property and remember only its tool");
         buttons.at(index)->click();
@@ -17610,7 +17743,8 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
              {Tool::FreeDraw, Tool::SpeechBubble, Tool::Shape, Tool::Arrow, Tool::Line}) {
             QWidget* row = openStrokeRenderingRow(palette, tool);
             const auto buttons = strokeRenderingButtons(row);
-            const bool supported = tool == Tool::Shape || tool == Tool::Arrow || tool == Tool::Line;
+            const bool supported = tool == Tool::Shape || tool == Tool::SpeechBubble ||
+                                   tool == Tool::Arrow || tool == Tool::Line;
             require(
                 row->isHidden() != supported,
                 "reused stroke editors should expose rendering styles only for supported tools");
@@ -17713,16 +17847,19 @@ void serialNumberStrokeRenderingControlsRespectBadgeTypes() {
 
 void strokeRenderingMixedSelectionResolvesOneProperty() {
     using Tool = ScreenshotToolPalette::Tool;
-    for (const auto tool : {Tool::Shape, Tool::Arrow, Tool::Line}) {
+    for (const auto tool : {Tool::Shape, Tool::SpeechBubble, Tool::Arrow, Tool::Line}) {
         ScreenshotToolPalette::Options options;
         options.showLineTool = true;
+        options.showSpeechBubbleTool = true;
         ScreenshotToolPalette palette(options);
         QWidget* row = openStrokeRenderingRow(palette, tool);
         const auto buttons = strokeRenderingButtons(row);
         SnowCanvasStyleToolbarState state;
         state.source = tool == Tool::Arrow  ? SnowCanvasStyleToolbarSource::SelectedArrow
                        : tool == Tool::Line ? SnowCanvasStyleToolbarSource::SelectedLine
-                                            : SnowCanvasStyleToolbarSource::SelectedRectangle;
+                       : tool == Tool::SpeechBubble
+                           ? SnowCanvasStyleToolbarSource::SelectedSpeechBubble
+                           : SnowCanvasStyleToolbarSource::SelectedRectangle;
         state.shapeStyle.strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Artist;
         state.shapeStyle.strokeStyle = SnowCanvasStrokeStyle::Dashed;
         state.shapeStyleMixed =
@@ -17763,6 +17900,7 @@ void strokeRenderingPreferencesRoundTripAndRejectUnknownValues() {
         qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
     auto defaults = screenshotCanvasStyleDefaults();
     defaults.rectangle.strokeRenderingStyle = Rendering::Artist;
+    defaults.speechBubble.strokeRenderingStyle = Rendering::Artist;
     defaults.arrow.strokeRenderingStyle = Rendering::Cartoonist;
     defaults.line.strokeRenderingStyle = Rendering::Artist;
     defaults.serialNumber.strokeRenderingStyle = Rendering::Cartoonist;
@@ -17775,7 +17913,8 @@ void strokeRenderingPreferencesRoundTripAndRejectUnknownValues() {
                 canvas.canvasStyleToolbarState().serialNumberStyle.strokeRenderingStyle ==
                     Rendering::Cartoonist,
             "saved sequence stroke type must reach canvas creation state");
-    for (const auto tool : {SnowCanvasTool::Shape, SnowCanvasTool::Arrow, SnowCanvasTool::Line}) {
+    for (const auto tool : {SnowCanvasTool::Shape, SnowCanvasTool::SpeechBubble,
+                            SnowCanvasTool::Arrow, SnowCanvasTool::Line}) {
         require(canvas.setCanvasTool(tool), "activate a tool with restored rendering preferences");
         require(canvas.canvasStyleToolbarState().shapeStyle.strokeRenderingStyle ==
                     (tool == SnowCanvasTool::Arrow ? Rendering::Cartoonist : Rendering::Artist),
@@ -17918,6 +18057,12 @@ void styledDrawTemplatesPersistNormalizeAndRemainInsertable() {
             operation.insert(QStringLiteral("points"),
                              QJsonArray{QJsonArray{0, 0}, QJsonArray{120, 45}});
         }
+        if (kind == QStringLiteral("arrow")) {
+            auto style = operation.value(QStringLiteral("style")).toObject();
+            style.insert(QStringLiteral("arrow_outline_width"), 8);
+            style.insert(QStringLiteral("arrow_outline_color"), QJsonArray{12, 120, 240, 128});
+            operation.insert(QStringLiteral("style"), style);
+        }
         SnowCanvasRuntime source;
         const auto result =
             QJsonDocument::fromJson(source.applyAnnotationTransaction(
@@ -17943,6 +18088,15 @@ void styledDrawTemplatesPersistNormalizeAndRemainInsertable() {
                 "the engine must serialize every template with the same positive schema version");
         currentTemplateVersion = version;
         const auto data = elementData(payload);
+        if (kind == QStringLiteral("arrow")) {
+            require(data.value(QStringLiteral("arrow_outline_width")).toDouble() == 8 &&
+                        data.value(QStringLiteral("arrow_outline_color")).toObject() ==
+                            QJsonObject{{QStringLiteral("r"), 12},
+                                        {QStringLiteral("g"), 120},
+                                        {QStringLiteral("b"), 240},
+                                        {QStringLiteral("a"), 128}},
+                    "arrow templates retain outline width, color, and transparency");
+        }
         require(
             data.value(QStringLiteral("stroke_rendering_style")) ==
                     (kind == QStringLiteral("rectangle") ? QStringLiteral("artist")
@@ -17970,7 +18124,8 @@ void styledDrawTemplatesPersistNormalizeAndRemainInsertable() {
         const auto duplicateData = elementData(duplicatePayload);
         for (const auto& field :
              {QStringLiteral("stroke_rendering_style"), QStringLiteral("stroke_rendering_seed"),
-              QStringLiteral("stroke_style"), QStringLiteral("stroke_width")}) {
+              QStringLiteral("stroke_style"), QStringLiteral("stroke_width"),
+              QStringLiteral("arrow_outline_width"), QStringLiteral("arrow_outline_color")}) {
             require(duplicateData.value(field) == data.value(field),
                     "direct duplication should preserve exact rendering style, seed, pattern, and "
                     "width");
@@ -18009,7 +18164,8 @@ void styledDrawTemplatesPersistNormalizeAndRemainInsertable() {
         const auto inserted = elementData(destination.serializeSelectedDrawTemplate());
         for (const auto& field :
              {QStringLiteral("stroke_rendering_style"), QStringLiteral("stroke_rendering_seed"),
-              QStringLiteral("stroke_style"), QStringLiteral("stroke_width")}) {
+              QStringLiteral("stroke_style"), QStringLiteral("stroke_width"),
+              QStringLiteral("arrow_outline_width"), QStringLiteral("arrow_outline_color")}) {
             require(inserted.value(field) == sourceData.at(index).value(field),
                     "stored template insertion should preserve rendering style, seed, pattern, and "
                     "width");
@@ -18132,6 +18288,8 @@ void arrowShaftEditorPersistsAcrossReopening() {
         qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
     auto defaults = screenshotCanvasStyleDefaults();
     defaults.arrow.arrowRatio = 2.3;
+    defaults.arrow.arrowOutlineWidth = 4.0;
+    defaults.arrow.arrowOutlineColor = QColor(12, 34, 56, 128);
     require(persistScreenshotCanvasToolStyles(defaults), "prepare saved arrow defaults");
     ScreenshotToolPalette::Options options;
     options.styleDefaults = screenshotCanvasToolStyleDefaults();
@@ -18173,6 +18331,8 @@ void arrowShaftEditorPersistsAcrossReopening() {
     freshPalette.setStyleToolbarState(freshCanvas.canvasStyleToolbarState());
     const auto restoredStyle = freshCanvas.canvasStyleToolbarState().shapeStyle;
     require(restoredStyle.arrowShaftType == SnowCanvasArrowShaftType::Tapered &&
+                restoredStyle.arrowOutlineWidth == defaults.arrow.arrowOutlineWidth &&
+                restoredStyle.arrowOutlineColor == defaults.arrow.arrowOutlineColor &&
                 restoredStyle.arrowRatio == defaults.arrow.arrowRatio &&
                 freshPalette.creationStyleDefaults().arrow == options.styleDefaults.arrow,
             "reopening must restore saved shaft and ratio to both palette and canvas");
@@ -20113,7 +20273,14 @@ int main(int argc, char** argv) {
         distanceActualValueUpdatesTheCanvasAndUndo();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--arrow-outline-only"))) {
+        arrowOutlineEditorMatchesTextStroke();
+        arrowRatioEditorAdjustsAndResets();
+        arrowShaftEditorPersistsAcrossReopening();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--arrow-icons-only"))) {
+        arrowOutlineEditorMatchesTextStroke();
         arrowRatioEditorAdjustsAndResets();
         arrowStyleControlsExposeAndEmitAllStyleProperties();
         arrowheadOptionsRetranslateInPlace();

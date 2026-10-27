@@ -1,4 +1,7 @@
 #include "recordingwebcamcontrol.h"
+#include "snow_shot/presentation/components/canvasactiontoolbar.h"
+#include "snow_shot/presentation/components/icons/snowshoticons.h"
+#include "antd_icons.h"
 
 #include <QApplication>
 #include <QEvent>
@@ -6,6 +9,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QToolButton>
+#include <QScreen>
 #include <QtMath>
 #include <algorithm>
 #ifdef Q_OS_WIN
@@ -38,12 +42,50 @@ class ResizeButton final : public QToolButton {
 } // namespace
 
 RecordingWebcamControl::RecordingWebcamControl(QWidget* parent)
-    : QWidget(parent), m_resize(new ResizeButton(this)) {
+    : QWidget(parent), m_resize(new ResizeButton(this)),
+      m_toolbar(new snow_shot::presentation::components::CanvasActionToolbar(this)) {
     setObjectName(QStringLiteral("screenRecordingWebcamControl"));
     m_resize->setObjectName(QStringLiteral("screenRecordingWebcamResize"));
     setAttribute(Qt::WA_NoSystemBackground);
     setCursor(Qt::SizeAllCursor);
     setFocusPolicy(Qt::NoFocus);
+    m_toolbar->setObjectName(QStringLiteral("screenRecordingWebcamOrientationToolbar"));
+    m_toolbar->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
+                              Qt::NoDropShadowWindowHint);
+    m_toolbar->setAttribute(Qt::WA_TranslucentBackground);
+    m_toolbar->setAttribute(Qt::WA_ShowWithoutActivating);
+    m_toolbar->setCursor(Qt::ArrowCursor);
+    auto* toolbar =
+        static_cast<snow_shot::presentation::components::CanvasActionToolbar*>(m_toolbar);
+    const std::array<adqt::icons::IconRef, 4> icons{
+        adqt::icons::antd::outlined::RotateRight(), adqt::icons::antd::outlined::RotateLeft(),
+        snow_shot::presentation::icons::custom::outlined::FlipHorizontal(),
+        snow_shot::presentation::icons::custom::outlined::FlipVertical()};
+    const std::array<const char*, 4> names{
+        "screenRecordingWebcamRotateClockwise", "screenRecordingWebcamRotateCounterclockwise",
+        "screenRecordingWebcamFlipHorizontal", "screenRecordingWebcamFlipVertical"};
+    for (std::size_t i = 0; i < icons.size(); ++i) {
+        auto* button = toolbar->addAction(icons[i], names[i]);
+        button->setCursor(Qt::PointingHandCursor);
+        m_orientationButtons[i] = button;
+        connect(button, &QAbstractButton::clicked, this, [this, i] {
+            if (isVisible() && isEnabled() && !m_interacting && m_toolbar->isVisible())
+                emit orientationRequested(static_cast<int>(i));
+        });
+    }
+    m_toolbar->adjustSize();
+    m_toolbar->hide();
+    const auto observeScreen = [this](QScreen* screen) {
+        connect(screen, &QScreen::geometryChanged, this, [this] { updateToolbar(); });
+        connect(screen, &QScreen::availableGeometryChanged, this, [this] { updateToolbar(); });
+    };
+    for (auto* screen : QGuiApplication::screens())
+        observeScreen(screen);
+    connect(qApp, &QGuiApplication::screenAdded, this, [this, observeScreen](QScreen* screen) {
+        observeScreen(screen);
+        updateToolbar();
+    });
+    connect(qApp, &QGuiApplication::screenRemoved, this, [this] { updateToolbar(); });
     qApp->installEventFilter(this);
     retranslateUi();
     hide();
@@ -53,6 +95,40 @@ void RecordingWebcamControl::retranslateUi() {
     setAccessibleName(tr("Move webcam"));
     m_resize->setToolTip(tr("Resize webcam"));
     m_resize->setAccessibleName(tr("Resize webcam"));
+    const std::array<QString, 4> labels{tr("Rotate clockwise"), tr("Rotate counterclockwise"),
+                                        tr("Flip horizontally"), tr("Flip vertically")};
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+        m_orientationButtons[i]->setToolTip(labels[i]);
+        m_orientationButtons[i]->setAccessibleName(labels[i]);
+    }
+}
+
+void RecordingWebcamControl::updateToolbar() {
+    if (!isVisible()) {
+        m_toolbar->hide();
+        return;
+    }
+    m_toolbar->setEnabled(isEnabled() && !m_interacting);
+    const QRectF body(mapToGlobal(m_bounds.topLeft()), m_bounds.size());
+    QScreen* screen = QGuiApplication::screenAt(body.center().toPoint());
+    if (!screen)
+        screen = QGuiApplication::primaryScreen();
+    if (!screen) {
+        m_toolbar->hide();
+        return;
+    }
+    const QRect available = screen->availableGeometry();
+    const QSize toolbarSize = m_toolbar->sizeHint();
+    const int x =
+        std::clamp(qRound(body.center().x() - toolbarSize.width() / 2.0), available.left(),
+                   std::max(available.left(), available.right() + 1 - toolbarSize.width()));
+    int y = qFloor(body.top()) - toolbarSize.height() - 6;
+    if (y < available.top())
+        y = qCeil(body.bottom()) + 6;
+    y = std::clamp(y, available.top(),
+                   std::max(available.top(), available.bottom() + 1 - toolbarSize.height()));
+    m_toolbar->setGeometry(QRect(QPoint(x, y), toolbarSize));
+    m_toolbar->show();
 }
 
 void RecordingWebcamControl::present(const QRectF& bounds, const QSize& region, int size,
@@ -72,6 +148,7 @@ void RecordingWebcamControl::present(const QRectF& bounds, const QSize& region, 
     m_resize->setGeometry(qFloor(m_bounds.right()) - side, qCeil(m_bounds.top()), side, side);
     const QRegion body(m_bounds.toAlignedRect(), circle ? QRegion::Ellipse : QRegion::Rectangle);
     setMask(body | QRegion(m_resize->geometry()));
+    updateToolbar();
     update();
 }
 
@@ -92,6 +169,7 @@ void RecordingWebcamControl::beginInteraction(QMouseEvent* event, bool resize) {
         return;
     }
     m_interacting = true;
+    updateToolbar();
     m_resizing = resize;
     m_changed = false;
     m_initialOffset = m_nextOffset = m_offset;
@@ -145,6 +223,7 @@ void RecordingWebcamControl::releaseInteraction() {
     m_resize->setDown(false);
     if (QWidget::mouseGrabber() == this)
         releaseMouse();
+    updateToolbar();
     emit interactionChanged();
 }
 
@@ -162,10 +241,19 @@ bool RecordingWebcamControl::event(QEvent* event) {
     if (event->type() == QEvent::Hide || event->type() == QEvent::UngrabMouse ||
         (event->type() == QEvent::EnabledChange && !isEnabled()))
         cancelInteraction();
-    return QWidget::event(event);
+    const bool result = QWidget::event(event);
+    if (event->type() == QEvent::Show || event->type() == QEvent::Hide ||
+        event->type() == QEvent::EnabledChange || event->type() == QEvent::Move ||
+        event->type() == QEvent::Resize)
+        updateToolbar();
+    return result;
 }
 
 bool RecordingWebcamControl::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == window() && (event->type() == QEvent::Move || event->type() == QEvent::Resize ||
+                                event->type() == QEvent::ScreenChangeInternal ||
+                                event->type() == QEvent::DevicePixelRatioChange))
+        updateToolbar();
     if (m_escapeRelease && event->type() == QEvent::KeyRelease &&
         static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
         m_escapeRelease = false;

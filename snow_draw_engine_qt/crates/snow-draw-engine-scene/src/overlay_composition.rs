@@ -461,6 +461,7 @@ fn magnifier_source_outline(
                 },
             ]
         }
+        HighlightShape::ThoughtBubble => unreachable!("thought bubbles are not magnifiers"),
         HighlightShape::Diamond => snow_draw_engine_document::RoundedDiamond::new(
             value.width,
             value.height,

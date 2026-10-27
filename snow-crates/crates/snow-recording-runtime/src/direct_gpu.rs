@@ -7,9 +7,12 @@ use snow_recording_effects::surface::{TILE_SIZE, Tile, TileSurface};
 use snow_recording_export::gpu::GpuEncoderFrame;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::core::PCSTR;
 
 use super::*;
+
+#[path = "direct_gpu_cursor.rs"]
+mod cursor;
+use cursor::CursorRenderer;
 
 #[path = "direct_gpu_resize.rs"]
 pub(crate) mod resize;
@@ -246,14 +249,11 @@ pub(super) struct GpuVisualCompositor {
     scratch: [Texture; 2],
     desktop_output: Option<Texture>,
     desktop_revision: Option<DesktopRevision>,
-    cursor_output: Texture,
     overlay: Option<OverlayTexture>,
     webcam: Option<WebcamTexture>,
     webcam_upload: Vec<u8>,
     tiles: TileSurface,
-    cursor_shader: ID3D11ComputeShader,
-    cursor_constants: ID3D11Buffer,
-    cursor_texture: Option<(u64, Texture)>,
+    cursor_renderer: CursorRenderer,
     scaler: Option<AreaScaler>,
     crop_copy: Option<CropCopy>,
     native_desktop: Option<NativeDesktop>,
@@ -285,66 +285,10 @@ impl GpuVisualCompositor {
                 .map_err(gpu_error)
         };
         let scratch = [make()?, make()?];
-        let cursor_output = device
-            .texture(
-                size.0,
-                size.1,
-                DXGI_FORMAT_R8G8B8A8_UNORM,
-                (D3D11_BIND_SHADER_RESOURCE
-                    | D3D11_BIND_UNORDERED_ACCESS
-                    | D3D11_BIND_RENDER_TARGET)
-                    .0 as u32,
-            )
-            .map_err(gpu_error)?;
         processor
-            .check_conversion(DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_NV12)
+            .check_conversion(DXGI_FORMAT_B8G8R8X8_UNORM, DXGI_FORMAT_NV12)
             .map_err(gpu_error)?;
-        let source = include_str!("recording_cursor.hlsl");
-        let mut bytecode = None;
-        let mut errors = None;
-        unsafe {
-            windows::Win32::Graphics::Direct3D::Fxc::D3DCompile(
-                source.as_ptr().cast(),
-                source.len(),
-                None,
-                None,
-                None,
-                PCSTR(c"main".as_ptr().cast()),
-                PCSTR(c"cs_5_0".as_ptr().cast()),
-                0,
-                0,
-                &mut bytecode,
-                Some(&mut errors),
-            )
-            .map_err(gpu_error)?;
-        }
-        let bytecode =
-            bytecode.ok_or_else(|| gpu_error("cursor shader compiler returned no bytecode"))?;
-        let mut cursor_shader = None;
-        let mut cursor_constants = None;
-        unsafe {
-            let bytes = std::slice::from_raw_parts(
-                bytecode.GetBufferPointer().cast::<u8>(),
-                bytecode.GetBufferSize(),
-            );
-            device
-                .device()
-                .CreateComputeShader(bytes, None, Some(&mut cursor_shader))
-                .map_err(gpu_error)?;
-            device
-                .device()
-                .CreateBuffer(
-                    &D3D11_BUFFER_DESC {
-                        ByteWidth: 48,
-                        Usage: D3D11_USAGE_DEFAULT,
-                        BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                        ..Default::default()
-                    },
-                    None,
-                    Some(&mut cursor_constants),
-                )
-                .map_err(gpu_error)?;
-        }
+        let cursor_renderer = CursorRenderer::new(device.clone())?;
         drop(_lock);
         Ok(Self {
             device,
@@ -360,15 +304,11 @@ impl GpuVisualCompositor {
             scratch,
             desktop_output: None,
             desktop_revision: None,
-            cursor_output,
             overlay: None,
             webcam: None,
             webcam_upload: Vec::new(),
             tiles: TileSurface::new(size),
-            cursor_shader: cursor_shader.ok_or_else(|| gpu_error("missing cursor shader"))?,
-            cursor_constants: cursor_constants
-                .ok_or_else(|| gpu_error("missing cursor constants"))?,
-            cursor_texture: None,
+            cursor_renderer,
             scaler: None,
             crop_copy: None,
             native_desktop: None,
@@ -542,19 +482,13 @@ impl GpuVisualCompositor {
                     && c.y < source_size.1 as i32
             })
         {
-            self.highlight(
+            self.cursor_renderer.highlight(
                 &background,
+                &self.scratch[index],
                 scale_point(sample.x, sample.y, source_size, self.size),
                 config.mouse_highlight_rgba,
                 config.mouse_highlight_radius,
             )?;
-            self.processor
-                .blit(
-                    &[self.layer(self.cursor_output.clone(), false)],
-                    self.scratch[index].raw(),
-                    0,
-                )
-                .map_err(gpu_error)?;
             background = self.scratch[index].clone();
             index = 1 - index;
         }
@@ -579,8 +513,15 @@ impl GpuVisualCompositor {
             if cursor.visible
                 && let Some(shape) = shape
             {
-                self.cursor(&background, cursor, &shape, source_size)?;
-                background = self.cursor_output.clone();
+                self.overlay_upload_bytes += self.cursor_renderer.cursor(
+                    &background,
+                    &self.scratch[index],
+                    cursor,
+                    &shape,
+                    source_size,
+                )?;
+                background = self.scratch[index].clone();
+                index = 1 - index;
             }
         }
         if let Some(overlay) = self.upload_overlay(keyboard_tiles)? {
@@ -674,15 +615,14 @@ impl GpuVisualCompositor {
         Ok(self.desktop_output.as_ref().unwrap().clone())
     }
 
-    /// Resize the complete desktop once in RGB. Native recording allocates no
-    /// filtering intermediates; explicit crops use exact loads into existing storage.
+    /// Resize the complete desktop once in RGB. Full native frames need no
+    /// filtering intermediate; explicit crops lazily allocate exact-copy storage.
     fn render_desktop(&mut self, layers: &[VideoLayer], source_size: (u32, u32)) -> Result<usize> {
         #[cfg(test)]
         {
             self.desktop_render_count += 1;
         }
         if source_size.0 <= self.size.0 && source_size.1 <= self.size.1 {
-            self.native_desktop = None;
             self.scaler = None;
             if source_size == self.size {
                 if layers.len() == 1
@@ -693,27 +633,33 @@ impl GpuVisualCompositor {
                     if let Some(copy) = self.crop_copy.as_mut() {
                         copy.clear_views();
                     }
+                    self.native_desktop = None;
                     return composite_desktop(&self.processor, &self.scratch, layers, self.size);
                 }
                 if self.crop_copy.is_none() {
                     self.crop_copy = Some(CropCopy::new(self.device.clone())?);
                 }
+                if self
+                    .native_desktop
+                    .as_ref()
+                    .is_none_or(|desktop| desktop.size != source_size)
+                {
+                    self.native_desktop = Some(NativeDesktop::new(&self.device, source_size)?);
+                }
+                let native = self.native_desktop.as_ref().unwrap().texture.clone();
                 self.crop_copy
                     .as_mut()
                     .unwrap()
-                    .copy_into(layers, &self.cursor_output)?;
+                    .copy_into(layers, &native)?;
                 self.processor
-                    .blit(
-                        &[self.layer(self.cursor_output.clone(), false)],
-                        self.scratch[0].raw(),
-                        0,
-                    )
+                    .blit(&[self.layer(native, false)], self.scratch[0].raw(), 0)
                     .map_err(gpu_error)?;
                 return Ok(0);
             }
             if let Some(copy) = self.crop_copy.as_mut() {
                 copy.clear_views();
             }
+            self.native_desktop = None;
             let mut enlarged = layers.to_vec();
             for layer in &mut enlarged {
                 let left = scale_coordinate(layer.destination.x, source_size.0, self.size.0);
@@ -793,155 +739,6 @@ impl GpuVisualCompositor {
             .blit(&[self.layer(filtered, false)], self.scratch[0].raw(), 0)
             .map_err(|error| gpu_error(format!("filtered desktop pass: {error:#}")))?;
         Ok(0)
-    }
-
-    fn cursor(
-        &mut self,
-        background: &Texture,
-        cursor: &AttachedCursorSample,
-        shape: &CursorShape,
-        source_size: (u32, u32),
-    ) -> Result<()> {
-        if self
-            .cursor_texture
-            .as_ref()
-            .is_none_or(|(id, _)| *id != shape.shape_id.get())
-        {
-            if shape.shape_rgba.len() != shape.width as usize * shape.height as usize * 4 {
-                return Err(gpu_error("invalid cursor shape"));
-            }
-            let texture = self
-                .device
-                .texture(
-                    shape.width,
-                    shape.height,
-                    DXGI_FORMAT_R8G8B8A8_UNORM,
-                    D3D11_BIND_SHADER_RESOURCE.0 as u32,
-                )
-                .map_err(gpu_error)?;
-            unsafe {
-                self.device.context().UpdateSubresource(
-                    texture.raw(),
-                    0,
-                    None,
-                    shape.shape_rgba.as_ptr().cast(),
-                    shape.width * 4,
-                    0,
-                )
-            };
-            self.overlay_upload_bytes += shape.shape_rgba.len() as u64;
-            self.cursor_texture = Some((shape.shape_id.get(), texture));
-        }
-        let origin = scale_point(cursor.x, cursor.y, source_size, self.size);
-        let constants: [i32; 12] = [
-            self.size.0 as i32,
-            self.size.1 as i32,
-            origin.0 - scale_coordinate(shape.hotspot_x as i32, source_size.0, self.size.0),
-            origin.1 - scale_coordinate(shape.hotspot_y as i32, source_size.1, self.size.1),
-            ((u64::from(shape.width) * u64::from(self.size.0) / u64::from(source_size.0)).max(1))
-                as i32,
-            ((u64::from(shape.height) * u64::from(self.size.1) / u64::from(source_size.1)).max(1))
-                as i32,
-            shape.width as i32,
-            shape.height as i32,
-            i32::from(shape.composition_mode == CursorCompositionMode::MaskedColor),
-            0,
-            0,
-            0,
-        ];
-        let mut background_view = None;
-        let mut cursor_view = None;
-        let mut output_view = None;
-        unsafe {
-            self.device
-                .device()
-                .CreateShaderResourceView(background.raw(), None, Some(&mut background_view))
-                .map_err(gpu_error)?;
-            self.device
-                .device()
-                .CreateShaderResourceView(
-                    self.cursor_texture.as_ref().unwrap().1.raw(),
-                    None,
-                    Some(&mut cursor_view),
-                )
-                .map_err(gpu_error)?;
-            self.device
-                .device()
-                .CreateUnorderedAccessView(self.cursor_output.raw(), None, Some(&mut output_view))
-                .map_err(gpu_error)?;
-            let context = self.device.context();
-            context.UpdateSubresource(
-                &self.cursor_constants,
-                0,
-                None,
-                constants.as_ptr().cast(),
-                0,
-                0,
-            );
-            context.CSSetShader(&self.cursor_shader, None);
-            context.CSSetConstantBuffers(0, Some(&[Some(self.cursor_constants.clone())]));
-            context.CSSetShaderResources(0, Some(&[background_view, cursor_view]));
-            context.CSSetUnorderedAccessViews(0, 1, Some(&output_view), None);
-            context.Dispatch(self.size.0.div_ceil(16), self.size.1.div_ceil(16), 1);
-            context.CSSetShaderResources(0, Some(&[None, None]));
-            context.CSSetUnorderedAccessViews(0, 1, Some(&None), None);
-            context.CSSetShader(None, None);
-        }
-        self.device.check().map_err(gpu_error)
-    }
-    fn highlight(
-        &mut self,
-        background: &Texture,
-        center: (i32, i32),
-        color: [u8; 4],
-        radius: u32,
-    ) -> Result<()> {
-        let constants: [i32; 12] = [
-            self.size.0 as i32,
-            self.size.1 as i32,
-            center.0,
-            center.1,
-            i32::from(color[0]),
-            i32::from(color[1]),
-            i32::from(color[2]),
-            i32::from(color[3]),
-            2,
-            radius as i32,
-            0,
-            0,
-        ];
-        let mut background_view = None;
-
-        let mut output_view = None;
-        unsafe {
-            self.device
-                .device()
-                .CreateShaderResourceView(background.raw(), None, Some(&mut background_view))
-                .map_err(gpu_error)?;
-
-            self.device
-                .device()
-                .CreateUnorderedAccessView(self.cursor_output.raw(), None, Some(&mut output_view))
-                .map_err(gpu_error)?;
-            let context = self.device.context();
-            context.UpdateSubresource(
-                &self.cursor_constants,
-                0,
-                None,
-                constants.as_ptr().cast(),
-                0,
-                0,
-            );
-            context.CSSetShader(&self.cursor_shader, None);
-            context.CSSetConstantBuffers(0, Some(&[Some(self.cursor_constants.clone())]));
-            context.CSSetShaderResources(0, Some(&[background_view, None]));
-            context.CSSetUnorderedAccessViews(0, 1, Some(&output_view), None);
-            context.Dispatch(self.size.0.div_ceil(16), self.size.1.div_ceil(16), 1);
-            context.CSSetShaderResources(0, Some(&[None, None]));
-            context.CSSetUnorderedAccessViews(0, 1, Some(&None), None);
-            context.CSSetShader(None, None);
-        }
-        self.device.check().map_err(gpu_error)
     }
 }
 
@@ -1290,7 +1087,18 @@ mod tests {
                 revision: index as u64 + 1,
                 at: Instant::now(),
                 size: 100,
-                rgba: Arc::new([220, 30, index as u8 * 20, 255].repeat(100 * 100)),
+                rgba: Arc::new(
+                    (0..100 * 100)
+                        .flat_map(|pixel| {
+                            [
+                                ((pixel % 100) * 2) as u8,
+                                ((pixel / 100) * 2) as u8,
+                                index as u8 * 20,
+                                255,
+                            ]
+                        })
+                        .collect(),
+                ),
             };
             for state in [&mut cpu_state, &mut gpu_state] {
                 state.webcam.prepare(
@@ -1304,6 +1112,8 @@ mod tests {
                         },
                         offset_left: 32 + index as u32 * 12,
                         offset_bottom: 32 + index as u32 * 6,
+                        orientation: snow_webcam::WebcamOrientation::from_raw(index as u32 % 8)
+                            .unwrap(),
                     },
                     size,
                 );
@@ -1329,7 +1139,7 @@ mod tests {
                 assert_eq!(gpu.overlay_upload_bytes, uploaded_before);
                 assert_eq!(
                     gpu.final_rgb.as_ref().unwrap().desc().Format,
-                    DXGI_FORMAT_R8G8B8A8_UNORM
+                    DXGI_FORMAT_B8G8R8X8_UNORM
                 );
             }
             let final_rgb = gpu.final_rgb.as_ref().unwrap();
@@ -1369,6 +1179,200 @@ mod tests {
         config.prefer_hardware_encoder = true;
         config.format = ExportFormat::Gif;
         assert!(!eligible(&config));
+    }
+
+    #[test]
+    #[ignore = "requires offscreen D3D11 video processing and native H.264/HEVC encoders"]
+    fn hardware_encoded_cursor_transitions_preserve_red_and_blue() -> Result<()> {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+        use windows::core::Interface;
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
+        let adapter = unsafe { factory.EnumAdapters1(0) }
+            .map_err(gpu_error)?
+            .cast()
+            .map_err(gpu_error)?;
+        let device = SharedDevice::create(&adapter).map_err(gpu_error)?;
+        let size = (320, 240);
+        let texture = device
+            .texture(
+                size.0,
+                size.1,
+                DXGI_FORMAT_B8G8R8X8_UNORM,
+                (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE).0 as u32,
+            )
+            .map_err(gpu_error)?;
+        // Saturated asymmetric colors expose a frame-wide swap that grayscale
+        // cursor fixtures and successful codec submission cannot detect.
+        let colors = [
+            [0u8, 0, 255, 255],
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [255, 255, 255, 255],
+        ];
+        let pixels: Vec<_> = (0..size.1)
+            .flat_map(|y| (0..size.0).flat_map(move |x| colors[((y / 120) * 2 + x / 160) as usize]))
+            .collect();
+        {
+            let _lock = device.lock();
+            unsafe {
+                device.context().UpdateSubresource(
+                    texture.raw(),
+                    0,
+                    None,
+                    pixels.as_ptr().cast(),
+                    size.0 * 4,
+                    0,
+                );
+            }
+        }
+        let observation = GpuCapturedFrame::from_layers(
+            vec![VideoLayer {
+                texture,
+                source: Rect::full(size),
+                destination: Rect::full(size),
+                rotation: 0,
+                alpha: false,
+            }],
+            size,
+            snow_capture::FrameMetadata::default(),
+        )?;
+        let directory = tempfile::tempdir()?;
+        for codec in [VideoCodec::H264, VideoCodec::H265] {
+            let path = directory
+                .path()
+                .join(format!("cursor-colors-{codec:?}.mp4"));
+            let mut config = config(path.clone(), CaptureBackendKind::Auto);
+            config.region.width = size.0;
+            config.region.height = size.1;
+            config.codec = codec;
+            config.quality = 90;
+            config.show_keyboard = false;
+            config.mouse_trail_rgba = [0; 4];
+            config.mouse_click_rgba = [0; 4];
+            config.mouse_highlight_radius = 20;
+            let mut encoder = StreamingEncoder::builder(config.streaming_config())
+                .gpu_input(snow_recording_export::gpu::GpuInputConfig {
+                    device: device.clone(),
+                })
+                .create()?;
+            let mut gpu = GpuVisualCompositor::new(device.clone(), size, size, 30)?;
+            let mut state = VisualCompositor::new(size);
+            // Hidden, monochrome, blue alpha, blue masked, highlight, hidden,
+            // blue again: exercise both channel layouts and cached resources.
+            let stages = [0, 1, 2, 3, 4, 0, 2, 0];
+            for (pts, stage) in stages.into_iter().enumerate() {
+                let mode = if stage == 3 {
+                    CursorCompositionMode::MaskedColor
+                } else {
+                    CursorCompositionMode::AlphaBlend
+                };
+                let color = if stage == 1 {
+                    [255, 255, 255, 255]
+                } else {
+                    [0, 0, 255, if stage == 3 { 0 } else { 255 }]
+                };
+                let cursor = AttachedCursorSample {
+                    x: 64,
+                    y: 64,
+                    visible: stage != 0,
+                    shape: CursorShapeState::Embedded(CursorShape::from_rgba(
+                        0,
+                        0,
+                        32,
+                        32,
+                        mode,
+                        color.repeat(32 * 32),
+                    )),
+                };
+                config.mouse_highlight_rgba = if stage == 4 {
+                    [30, 255, 80, 150]
+                } else {
+                    [0; 4]
+                };
+                let surface = encoder
+                    .allocate_gpu_frame()?
+                    .ok_or_else(|| gpu_error("color fixture exhausted encoder surfaces"))?;
+                gpu.compose(
+                    &mut state,
+                    &config,
+                    &observation,
+                    pts as u64 * 1000 / 30,
+                    Some(&cursor),
+                    &surface,
+                )?;
+                assert_eq!(
+                    gpu.final_rgb.as_ref().unwrap().desc().Format,
+                    DXGI_FORMAT_B8G8R8X8_UNORM
+                );
+                encoder.push_gpu_frame_at_pts(pts as u64, surface)?;
+            }
+            let report = encoder.finish_at_pts(stages.len() as u64)?;
+            assert!(
+                report.used_hardware_video_encoder && !report.hardware_fallback,
+                "{report:?}"
+            );
+            let mut media = ffmpeg_next::format::input(&path).map_err(gpu_error)?;
+            let stream = media
+                .streams()
+                .best(ffmpeg_next::media::Type::Video)
+                .ok_or_else(|| gpu_error("missing cursor color video"))?;
+            let video_index = stream.index();
+            let mut decoder =
+                ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())
+                    .map_err(gpu_error)?
+                    .decoder()
+                    .video()
+                    .map_err(gpu_error)?;
+            let mut frame = ffmpeg_next::frame::Video::empty();
+            let mut decoded = 0;
+            let mut observe = |frame: &ffmpeg_next::frame::Video| {
+                assert_eq!(frame.format(), ffmpeg_next::format::Pixel::YUV420P);
+                let sample = |x: usize, y: usize, expected: [u8; 3]| {
+                    let actual = [
+                        frame.data(0)[y * frame.stride(0) + x],
+                        frame.data(1)[(y / 2) * frame.stride(1) + x / 2],
+                        frame.data(2)[(y / 2) * frame.stride(2) + x / 2],
+                    ];
+                    assert!(
+                        actual
+                            .into_iter()
+                            .zip(expected)
+                            .all(|(a, e)| a.abs_diff(e) <= 8),
+                        "{codec:?} frame {decoded} at {x},{y}: {actual:?}, expected {expected:?}"
+                    );
+                };
+                // BT.709 limited-range primary colors, sampled away from edges
+                // and overlays; these must remain unchanged on every frame.
+                sample(24, 24, [63, 102, 240]);
+                sample(280, 24, [32, 240, 118]);
+                sample(24, 200, [173, 42, 26]);
+                sample(280, 200, [235, 128, 128]);
+                sample(
+                    80,
+                    80,
+                    match stages[decoded] {
+                        0 => [63, 102, 240],
+                        1 => [235, 128, 128],
+                        _ => [32, 240, 118],
+                    },
+                );
+                decoded += 1;
+            };
+            for (stream, packet) in media.packets() {
+                if stream.index() == video_index {
+                    decoder.send_packet(&packet).map_err(gpu_error)?;
+                    while decoder.receive_frame(&mut frame).is_ok() {
+                        observe(&frame);
+                    }
+                }
+            }
+            decoder.send_eof().map_err(gpu_error)?;
+            while decoder.receive_frame(&mut frame).is_ok() {
+                observe(&frame);
+            }
+            assert_eq!(decoded, stages.len());
+        }
+        Ok(())
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -1819,7 +1823,10 @@ mod tests {
                 true,
             )?;
             let index = compositor.render_desktop(&[native], output)?;
-            assert!(compositor.scaler.is_none() && compositor.native_desktop.is_none());
+            assert!(compositor.scaler.is_none());
+            // Native crops now own a lazy RGBA buffer instead of borrowing a
+            // permanently allocated cursor output. Full frames release it below.
+            assert_eq!(compositor.native_desktop.as_ref().unwrap().size, output);
             assert_eq!(
                 compositor.crop_copy.as_ref().unwrap().cached_views(),
                 (1, true)
@@ -1849,6 +1856,7 @@ mod tests {
             false,
         )?;
         compositor.render_desktop(&[full_native], output)?;
+        assert!(compositor.native_desktop.is_none());
         assert_eq!(
             compositor.crop_copy.as_ref().unwrap().cached_views(),
             (0, false)
@@ -1863,6 +1871,7 @@ mod tests {
             true,
         )?;
         compositor.render_desktop(&[enlarged], (64, 48))?;
+        assert!(compositor.native_desktop.is_none());
         assert_eq!(
             compositor.crop_copy.as_ref().unwrap().cached_views(),
             (0, false)
@@ -2134,6 +2143,103 @@ mod tests {
 
     #[test]
     #[ignore = "requires offscreen D3D11, a native encoder, and the Release performance preset"]
+    fn hardware_cursor_and_highlight_stage_benchmark() -> Result<()> {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+        use windows::core::Interface;
+        if cfg!(debug_assertions) {
+            panic!("use windows-msvc-performance Release");
+        }
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
+        let adapter = unsafe { factory.EnumAdapters1(0) }
+            .map_err(gpu_error)?
+            .cast()
+            .map_err(gpu_error)?;
+        let device = SharedDevice::create(&adapter).map_err(gpu_error)?;
+        let _lock = device.lock();
+        let directory = tempfile::tempdir()?;
+        for size in [(1920, 1080), (3840, 2160)] {
+            let mut config = config(
+                directory.path().join("cursor.mp4"),
+                CaptureBackendKind::Auto,
+            );
+            config.region.width = size.0;
+            config.region.height = size.1;
+            config.show_cursor = true;
+            config.show_keyboard = false;
+            config.mouse_trail_rgba = [0; 4];
+            config.mouse_click_rgba = [0; 4];
+            let encoder = StreamingEncoder::builder(config.streaming_config())
+                .gpu_input(snow_recording_export::gpu::GpuInputConfig {
+                    device: device.clone(),
+                })
+                .create()?;
+            let surface = encoder.allocate_gpu_frame()?.unwrap();
+            let observation = GpuCapturedFrame::from_layers(
+                vec![downscale_pattern_layer(
+                    &device,
+                    size,
+                    size,
+                    DownscalePattern::Checkerboard,
+                    0,
+                    0,
+                    false,
+                )?],
+                size,
+                snow_capture::FrameMetadata::default(),
+            )?;
+            let cursor = AttachedCursorSample {
+                x: size.0 as i32 / 2,
+                y: size.1 as i32 / 2,
+                visible: true,
+                shape: CursorShapeState::Embedded(CursorShape::from_rgba(
+                    0,
+                    0,
+                    32,
+                    32,
+                    CursorCompositionMode::AlphaBlend,
+                    [20, 80, 240, 160].repeat(32 * 32),
+                )),
+            };
+            let mut compositor = GpuVisualCompositor::new(device.clone(), size, size, 60)?;
+            let mut state = VisualCompositor::new(size);
+            for highlighted in [false, true] {
+                config.mouse_highlight_rgba = if highlighted {
+                    [40, 100, 240, 128]
+                } else {
+                    [0; 4]
+                };
+                time_completed_gpu_batch(&device, 120, || {
+                    compositor.compose(
+                        &mut state,
+                        &config,
+                        &observation,
+                        0,
+                        Some(&cursor),
+                        &surface,
+                    )
+                })?;
+                for sample in 0..10 {
+                    let (gpu_ms, completed_ms) = time_completed_gpu_batch(&device, 240, || {
+                        compositor.compose(
+                            &mut state,
+                            &config,
+                            &observation,
+                            0,
+                            Some(&cursor),
+                            &surface,
+                        )
+                    })?;
+                    eprintln!(
+                        "GPU cursor {size:?} highlight={highlighted} sample={sample} gpu_ms={gpu_ms:.6} completed_ms={completed_ms:.6}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires offscreen D3D11, a native encoder, and the Release performance preset"]
     fn hardware_empty_overlay_stage_benchmark() -> Result<()> {
         use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
         use windows::core::Interface;
@@ -2295,20 +2401,15 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an offscreen D3D11 hardware device"]
-    fn hardware_highlight_shader_matches_cpu_multiply_and_clipping() -> Result<()> {
-        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
-        use windows::core::Interface;
-        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
-        let adapter = unsafe { factory.EnumAdapters1(0) }
-            .map_err(gpu_error)?
-            .cast()
-            .map_err(gpu_error)?;
-        let device = SharedDevice::create(&adapter).map_err(gpu_error)?;
+    fn warp_highlight_shader_matches_cpu_multiply_and_clipping() -> Result<()> {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory4};
+        let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
+        let adapter: IDXGIAdapter = unsafe { factory.EnumWarpAdapter() }.map_err(gpu_error)?;
+        let device = SharedDevice::create_compute(&adapter).map_err(gpu_error)?;
         let _lock = device.lock();
         // Include the complete disk and untouched surrounding pixels, plus
         // partially/fully clipped disks. A small frame can miss these invariants.
-        let size = (128, 112);
+        let size = (129, 113);
         let stride = size.0 as usize * 4;
         let background = device
             .texture(
@@ -2336,93 +2437,111 @@ mod tests {
                 0,
             );
         }
-        let mut compositor = GpuVisualCompositor::new(device.clone(), size, size, 30)?;
-        let mut desc = compositor.cursor_output.desc();
-        desc.Usage = D3D11_USAGE_STAGING;
-        desc.BindFlags = 0;
-        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-        let mut staging = None;
-        unsafe {
-            device
-                .device()
-                .CreateTexture2D(&desc, None, Some(&mut staging))
-        }
-        .map_err(gpu_error)?;
-        let staging = staging.ok_or_else(|| gpu_error("staging texture"))?;
-        for radius in [8, 41, 96, 128] {
-            for center in [
-                (0, 0),
-                (64, 56),
-                (127, 111),
-                (-radius, 56),
-                (64, -radius - 1),
-            ] {
-                for color in [
-                    [255, 255, 0, 128],
-                    [80, 140, 220, 255],
-                    [255, 255, 255, 255],
-                    [0, 0, 0, 0],
+        for format in [DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8X8_UNORM] {
+            let mut renderer = CursorRenderer::new(device.clone())?;
+            let output = device
+                .texture(
+                    size.0,
+                    size.1,
+                    format,
+                    (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
+                )
+                .map_err(gpu_error)?;
+            let mut desc = output.desc();
+            desc.Usage = D3D11_USAGE_STAGING;
+            desc.BindFlags = 0;
+            desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+            let mut staging = None;
+            unsafe {
+                device
+                    .device()
+                    .CreateTexture2D(&desc, None, Some(&mut staging))
+            }
+            .map_err(gpu_error)?;
+            let staging = staging.ok_or_else(|| gpu_error("staging texture"))?;
+            for radius in [8, 41, 96, 128] {
+                for center in [
+                    (0, 0),
+                    (64, 56),
+                    (127, 111),
+                    (-radius, 56),
+                    (64, -radius - 1),
                 ] {
-                    let mut expected = reference.clone();
-                    snow_recording_effects::mouse_effects::draw_highlight_to(
-                        &mut snow_recording_effects::surface::RgbaSurface {
-                            pixels: &mut expected,
-                            dimensions: size,
-                        },
-                        center,
-                        color,
-                        true,
-                        radius as u32,
-                    );
-                    compositor.highlight(&background, center, color, radius as u32)?;
-                    unsafe {
-                        device
-                            .context()
-                            .CopyResource(&staging, compositor.cursor_output.raw());
-                    }
-                    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-                    unsafe {
-                        device
-                            .context()
-                            .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-                    }
-                    .map_err(gpu_error)?;
-                    let mut actual = Vec::new();
-                    for row in 0..size.1 as usize {
-                        actual.extend_from_slice(unsafe {
-                            std::slice::from_raw_parts(
-                                mapped
-                                    .pData
-                                    .cast::<u8>()
-                                    .add(row * mapped.RowPitch as usize),
-                                stride,
-                            )
-                        });
-                    }
-                    unsafe {
-                        device.context().Unmap(&staging, 0);
-                    }
-                    assert_eq!(actual.len(), expected.len());
-                    for (index, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
-                        let pixel = index / 4;
-                        let channel = index % 4;
-                        let x = (pixel % size.0 as usize) as i32 - center.0;
-                        let y = (pixel / size.0 as usize) as i32 - center.1;
-                        let distance = (f64::from(x) + 0.5).hypot(f64::from(y) + 0.5);
-                        let feather = (-radius..radius).contains(&x)
-                            && (-radius..radius).contains(&y)
-                            && distance > f64::from(radius) - 0.5
-                            && distance < f64::from(radius) + 0.5;
-                        // Only feathered RGB values depend on sqrt precision. Alpha,
-                        // the interior, clipped pixels, and identity colors remain exact.
-                        let tolerance = u8::from(
-                            feather && color[3] != 0 && channel < 3 && color[channel] != 255,
+                    for color in [
+                        [255, 255, 0, 128],
+                        [80, 140, 220, 255],
+                        [255, 255, 255, 255],
+                        [0, 0, 0, 0],
+                    ] {
+                        let mut expected = reference.clone();
+                        snow_recording_effects::mouse_effects::draw_highlight_to(
+                            &mut snow_recording_effects::surface::RgbaSurface {
+                                pixels: &mut expected,
+                                dimensions: size,
+                            },
+                            center,
+                            color,
+                            true,
+                            radius as u32,
                         );
-                        assert!(
-                            actual.abs_diff(*expected) <= tolerance,
-                            "highlight {center:?} {color:?} pixel ({x}, {y}) channel {channel}: \
+                        renderer.highlight(&background, &output, center, color, radius as u32)?;
+                        unsafe {
+                            device.context().CopyResource(&staging, output.raw());
+                        }
+                        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                        unsafe {
+                            device
+                                .context()
+                                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                        }
+                        .map_err(gpu_error)?;
+                        let mut actual = Vec::new();
+                        for row in 0..size.1 as usize {
+                            actual.extend_from_slice(unsafe {
+                                std::slice::from_raw_parts(
+                                    mapped
+                                        .pData
+                                        .cast::<u8>()
+                                        .add(row * mapped.RowPitch as usize),
+                                    stride,
+                                )
+                            });
+                        }
+                        unsafe {
+                            device.context().Unmap(&staging, 0);
+                        }
+                        for pixel in actual.chunks_exact_mut(4) {
+                            pixel.swap(0, 2);
+                            // BGRX has no alpha storage; X readback is unspecified.
+                            // Typed sampling treats it as opaque. BGRA above must
+                            // store the shader's alpha exactly, without adjustment.
+                            if format == DXGI_FORMAT_B8G8R8X8_UNORM {
+                                pixel[3] = 255;
+                            }
+                        }
+                        assert_eq!(actual.len(), expected.len());
+                        for (index, (actual, expected)) in actual.iter().zip(&expected).enumerate()
+                        {
+                            let pixel = index / 4;
+                            let channel = index % 4;
+                            let x = (pixel % size.0 as usize) as i32 - center.0;
+                            let y = (pixel / size.0 as usize) as i32 - center.1;
+                            let distance = (f64::from(x) + 0.5).hypot(f64::from(y) + 0.5);
+                            let feather = (-radius..radius).contains(&x)
+                                && (-radius..radius).contains(&y)
+                                && distance > f64::from(radius) - 0.5
+                                && distance < f64::from(radius) + 0.5;
+                            // Only feathered RGB values depend on sqrt precision. Alpha,
+                            // the interior, clipped pixels, and identity colors remain exact.
+                            let tolerance = u8::from(
+                                feather && color[3] != 0 && channel < 3 && color[channel] != 255,
+                            );
+                            assert!(
+                                actual.abs_diff(*expected) <= tolerance,
+                                "highlight {center:?} {color:?} pixel ({x}, {y}) channel {channel}: \
                          {actual} != {expected} (tolerance {tolerance})"
-                        );
+                            );
+                        }
                     }
                 }
             }
@@ -2431,16 +2550,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an offscreen D3D11 hardware device"]
-    fn hardware_cursor_shader_matches_cpu_for_alpha_mask_xor_scaling_and_clipping() -> Result<()> {
-        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
-        use windows::core::Interface;
-        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
-        let adapter = unsafe { factory.EnumAdapters1(0) }
-            .map_err(gpu_error)?
-            .cast()
-            .map_err(gpu_error)?;
-        let device = SharedDevice::create(&adapter).map_err(gpu_error)?;
+    fn warp_cursor_shader_matches_cpu_for_alpha_mask_xor_scaling_and_clipping() -> Result<()> {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory4};
+        let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
+        let adapter: IDXGIAdapter = unsafe { factory.EnumWarpAdapter() }.map_err(gpu_error)?;
+        let device = SharedDevice::create_compute(&adapter).map_err(gpu_error)?;
         let _lock = device.lock();
         let size = (64, 48);
         let background = device
@@ -2475,82 +2589,99 @@ mod tests {
                 0,
             );
         }
-        let mut compositor = GpuVisualCompositor::new(device.clone(), size, size, 30)?;
-        let mut desc = compositor.cursor_output.desc();
-        desc.Usage = D3D11_USAGE_STAGING;
-        desc.BindFlags = 0;
-        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-        let mut staging = None;
-        unsafe {
-            device
-                .device()
-                .CreateTexture2D(&desc, None, Some(&mut staging))
-        }
-        .map_err(gpu_error)?;
-        let staging = staging.ok_or_else(|| gpu_error("staging texture"))?;
-        let mut shapes = [
-            CursorCompositionMode::AlphaBlend,
-            CursorCompositionMode::MaskedColor,
-        ]
-        .map(|mode| {
-            CursorShape::from_rgba(
-                2,
-                1,
-                4,
-                3,
-                mode,
-                [
-                    255, 0, 0, 0, 0, 255, 0, 255, 19, 81, 243, 128, 255, 255, 255, 255,
-                ]
-                .repeat(3),
-            )
-        })
-        .to_vec();
-        shapes.push(snow_cursor::crosshair_cursor_shape(32, 32).unwrap());
-        for shape in shapes {
-            for source in [(64, 48), (128, 96), (45, 37)] {
-                for (x, y) in [(-1, -1), (23, 17), (63, 47)] {
-                    let sample = AttachedCursorSample {
-                        x,
-                        y,
-                        visible: true,
-                        shape: CursorShapeState::Embedded(shape.clone()),
-                    };
-                    let mut expected = reference.clone();
-                    draw_cursor(&mut expected, size, source, &sample, &mut None);
-                    compositor.cursor(&background, &sample, &shape, source)?;
-                    unsafe {
-                        device
-                            .context()
-                            .CopyResource(&staging, compositor.cursor_output.raw());
+        for format in [DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8X8_UNORM] {
+            let mut renderer = CursorRenderer::new(device.clone())?;
+            let output = device
+                .texture(
+                    size.0,
+                    size.1,
+                    format,
+                    (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
+                )
+                .map_err(gpu_error)?;
+            let mut desc = output.desc();
+            desc.Usage = D3D11_USAGE_STAGING;
+            desc.BindFlags = 0;
+            desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+            let mut staging = None;
+            unsafe {
+                device
+                    .device()
+                    .CreateTexture2D(&desc, None, Some(&mut staging))
+            }
+            .map_err(gpu_error)?;
+            let staging = staging.ok_or_else(|| gpu_error("staging texture"))?;
+            let mut shapes = [
+                CursorCompositionMode::AlphaBlend,
+                CursorCompositionMode::MaskedColor,
+            ]
+            .map(|mode| {
+                CursorShape::from_rgba(
+                    2,
+                    1,
+                    4,
+                    3,
+                    mode,
+                    [
+                        255, 0, 0, 0, 0, 255, 0, 255, 19, 81, 243, 128, 255, 255, 255, 255,
+                    ]
+                    .repeat(3),
+                )
+            })
+            .to_vec();
+            shapes.push(snow_cursor::crosshair_cursor_shape(32, 32).unwrap());
+            for shape in shapes {
+                for source in [(64, 48), (128, 96), (45, 37)] {
+                    for (x, y) in [(-1, -1), (23, 17), (63, 47)] {
+                        let sample = AttachedCursorSample {
+                            x,
+                            y,
+                            visible: true,
+                            shape: CursorShapeState::Embedded(shape.clone()),
+                        };
+                        let mut expected = reference.clone();
+                        draw_cursor(&mut expected, size, source, &sample, &mut None);
+                        renderer.cursor(&background, &output, &sample, &shape, source)?;
+                        unsafe {
+                            device.context().CopyResource(&staging, output.raw());
+                        }
+                        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                        unsafe {
+                            device
+                                .context()
+                                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                        }
+                        .map_err(gpu_error)?;
+                        let mut actual = Vec::new();
+                        for row in 0..48 {
+                            actual.extend_from_slice(unsafe {
+                                std::slice::from_raw_parts(
+                                    mapped
+                                        .pData
+                                        .cast::<u8>()
+                                        .add(row * mapped.RowPitch as usize),
+                                    256,
+                                )
+                            });
+                        }
+                        unsafe {
+                            device.context().Unmap(&staging, 0);
+                        }
+                        for pixel in actual.chunks_exact_mut(4) {
+                            pixel.swap(0, 2);
+                            // BGRX has no alpha storage; X readback is unspecified.
+                            // Typed sampling treats it as opaque. BGRA above must
+                            // store the shader's alpha exactly, without adjustment.
+                            if format == DXGI_FORMAT_B8G8R8X8_UNORM {
+                                pixel[3] = 255;
+                            }
+                        }
+                        assert_eq!(
+                            actual, expected,
+                            "cursor {:?} at {x},{y}, source {source:?}",
+                            shape.composition_mode
+                        );
                     }
-                    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-                    unsafe {
-                        device
-                            .context()
-                            .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-                    }
-                    .map_err(gpu_error)?;
-                    let mut actual = Vec::new();
-                    for row in 0..48 {
-                        actual.extend_from_slice(unsafe {
-                            std::slice::from_raw_parts(
-                                mapped
-                                    .pData
-                                    .cast::<u8>()
-                                    .add(row * mapped.RowPitch as usize),
-                                256,
-                            )
-                        });
-                    }
-                    unsafe {
-                        device.context().Unmap(&staging, 0);
-                    }
-                    assert_eq!(
-                        actual, expected,
-                        "cursor {:?} at {x},{y}, source {source:?}",
-                        shape.composition_mode
-                    );
                 }
             }
         }

@@ -103,6 +103,9 @@ class SnowCanvasWidgetTextInteraction final {
                                      SnowCanvasDisplayCache& displayCache,
                                      const SnowTextStyle& style, std::uint32_t properties);
 
+    BeginResult beginRequestedDistanceValue(SnowRuntime runtime, SnowViewport viewport,
+                                            SnowCanvasDisplayCache& displayCache,
+                                            QMouseEvent* event);
     BeginResult beginArrow(SnowRuntime runtime, SnowViewport viewport,
                            SnowCanvasDisplayCache& displayCache, const QPointF& viewPosition,
                            bool selected = false);
@@ -176,6 +179,10 @@ class SnowCanvasWidgetTextInteraction final {
                                       bool keepSelection);
 
   private:
+    BeginResult beginSpeechBubbleTarget(SnowRuntime runtime, SnowViewport viewport,
+                                        SnowCanvasDisplayCache& displayCache,
+                                        const SnowTextElementInfo& info, const SnowTextStyle& style,
+                                        bool selectOwner);
     QRegion applyEditorTextStyle(const SnowTextStyle& style,
                                  const SnowCanvasDisplayCache& displayCache, const QFont& baseFont);
     QRegion editingRegion(const SnowCanvasDisplayCache& displayCache, const QFont& baseFont) const;

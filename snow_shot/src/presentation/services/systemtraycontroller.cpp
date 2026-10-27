@@ -103,7 +103,8 @@ QIcon withShortcutsDisabledBadge(const QIcon& base) {
 }
 
 QString normalizedClickAction(const QString& action, const char* defaultAction) {
-    return action == QStringLiteral("screenshot") || action == QStringLiteral("show_main_window") ||
+    return action == QStringLiteral("none") || action == QStringLiteral("screenshot") ||
+                   action == QStringLiteral("show_main_window") ||
                    action == QStringLiteral("screenshot_copy") ||
                    action == QStringLiteral("screenshot_fixed") ||
                    action == QStringLiteral("open_function_settings")
@@ -524,6 +525,9 @@ class SystemTrayController::Impl {
     }
 
     void dispatchClickAction(const QString& action) {
+        if (action == QStringLiteral("none")) {
+            return;
+        }
         if (action == QStringLiteral("show_main_window")) {
             emit q.showMainWindowRequested();
         } else if (action == QStringLiteral("screenshot_copy")) {

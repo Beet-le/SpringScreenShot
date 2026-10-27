@@ -210,6 +210,9 @@ class SnowCanvasWidget : public QWidget {
     // Repaint changed original pixels and magnifier destinations that sample them.
     void updateBaseImageContent(const QRegion& damage);
     [[nodiscard]] QTransform canvasToViewTransform() const;
+    // Paint the current viewport at physicalSize without editor overlays. Hosts receive
+    // ContentSnapshot so they can omit presentation-only selection masks and borders.
+    [[nodiscard]] QImage renderContentToImage(const QSize& physicalSize);
     QRect viewRectForCanvasRect(const QRectF& canvasRect, int paddingPx = 0) const;
 
   public slots:

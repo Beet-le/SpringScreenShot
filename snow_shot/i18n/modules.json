@@ -13,6 +13,7 @@
     "McpDocumentService",
     "QObject",
     "SectionHeaderWidget",
+    "ShortcutDisplayService",
     "SidebarWidget",
     "SnowShotApiClient",
     "SystemTrayController",

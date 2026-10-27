@@ -177,6 +177,7 @@ enum class SettingsSwitchBinding {
     McpEnabled,
     AutoStartAtBoot,
     LaunchAsAdministrator,
+    DrawingAutomaticallySelectNewlyCreatedElements,
     DrawingDeleteTextAfterCursor,
     DrawingRememberLastUsedTool,
     DrawingAlwaysShowFirstToolbarGroupButton,
@@ -200,6 +201,7 @@ enum class SettingsIntegerBinding {
 };
 
 enum class SettingsMultiSelectBinding {
+    DrawingAutomaticSelectionExcludedTools,
     DrawingQuickSelectionDisabledTools,
     TrayMenuOptions,
     ScreenshotAutoSaveAfterExecution,

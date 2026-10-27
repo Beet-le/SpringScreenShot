@@ -16,6 +16,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QDialog>
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -71,6 +72,12 @@ class ScreenshotFloatingToolPaletteWindowTestAccess {
 
 class ScreenRecordingAreaWindowTestAccess {
   public:
+    static void beginRegionDrag(ScreenRecordingAreaWindow& area) {
+        area.beginRegionDrag(area.recordingRegion().topLeft(), Qt::LeftEdge);
+    }
+    static void cancelRegionDrag(ScreenRecordingAreaWindow& area) {
+        area.cancelRegionInteraction();
+    }
     static QByteArray history(const ScreenRecordingAreaWindow& area) {
         return area.m_canvasRuntime->serializeDocumentHistory();
     }
@@ -1131,6 +1138,159 @@ void recordingShortcutsFollowBothWindowsAndConfiguredKeys() {
     press(toolbar, Qt::Key_F10);
     require(shapes == ++before, "recreated shortcut controller must dispatch exactly once");
 }
+void recordingAreaHistoryShortcuts() {
+    using Status = ScreenshotToolPalette::RecordingSessionStatus;
+    namespace storage = snow_shot::storage;
+    ScreenRecordingAreaWindow area;
+    ScreenRecordingToolbarWindow toolbar;
+    area.setRecordingRegion(QRect(30, 30, 320, 240));
+    area.setInputMode(ScreenRecordingAreaWindow::InputMode::Drawing);
+    area.show();
+    toolbar.show();
+    focus(area);
+    drawRectangle(*area.canvas());
+    const auto document = ScreenRecordingAreaWindowTestAccess::history(area);
+    area.setInputMode(ScreenRecordingAreaWindow::InputMode::RegionEditing);
+    int previous = 0;
+    int next = 0;
+    bool eligible = true;
+    ScreenRecordingShortcutController shortcuts(area, toolbar);
+    shortcuts.setAreaHistoryActions([&] { return eligible; },
+                                    [&](bool backwards) {
+                                        if (backwards)
+                                            ++previous;
+                                        else
+                                            ++next;
+                                    });
+    auto* palette = toolbar.palette();
+    auto* settings = palette->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenRecordingExportSettings"));
+    require(settings && palette->recordingExportSettingsVisible(),
+            "Export Settings starts selected");
+    require(storage::DrawingShortcutSettings().setShortcuts(QStringLiteral("shape"),
+                                                            {QStringLiteral("R")}),
+            "drawing shortcut overlaps the area-history key");
+    for (QWidget* receiver : {static_cast<QWidget*>(&area), static_cast<QWidget*>(&toolbar),
+                              static_cast<QWidget*>(area.canvas()), palette->mainPanel()}) {
+        focus(*receiver);
+        press(*receiver, Qt::Key_R);
+    }
+    require(previous == 4 && palette->recordingExportSettingsVisible(),
+            "history keys work in both windows and consume commands without drawing fallback");
+    focus(area);
+    auto rDown = keyEvent(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier);
+    auto rRepeat = keyEvent(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier, true);
+    auto rUp = keyEvent(QEvent::KeyRelease, Qt::Key_R, Qt::NoModifier);
+    QCoreApplication::sendEvent(&area, &rDown);
+    QCoreApplication::sendEvent(&area, &rRepeat);
+    QCoreApplication::sendEvent(&area, &rUp);
+    require(previous == 5, "holding an ordinary history key does not repeat navigation");
+    auto down = keyEvent(QEvent::KeyPress, Qt::Key_Shift, Qt::ShiftModifier);
+    auto up = keyEvent(QEvent::KeyRelease, Qt::Key_Shift, Qt::NoModifier);
+    auto nextDown = keyEvent(QEvent::KeyPress, Qt::Key_R, Qt::ShiftModifier);
+    auto nextRepeat = keyEvent(QEvent::KeyPress, Qt::Key_R, Qt::ShiftModifier, true);
+    auto nextUp = keyEvent(QEvent::KeyRelease, Qt::Key_R, Qt::ShiftModifier);
+    QCoreApplication::sendEvent(&area, &down);
+    require(next == 0, "Shift alone does not activate the default next-area shortcut");
+    QCoreApplication::sendEvent(&area, &nextDown);
+    require(next == 1 && previous == 5 && palette->recordingExportSettingsVisible(),
+            "Shift+R navigates forward on press without previous-area or drawing fallback");
+    QCoreApplication::sendEvent(&area, &nextRepeat);
+    QCoreApplication::sendEvent(&area, &nextUp);
+    QCoreApplication::sendEvent(&area, &up);
+    QCoreApplication::sendEvent(&area, &down);
+    QCoreApplication::sendEvent(&area, &up);
+    require(next == 1, "holding Shift+R or tapping bare Shift does not repeat default navigation");
+    require(storage::ScreenRecordingShortcutSettings().setShortcuts(
+                QStringLiteral("next_recording_area"), {QStringLiteral("Shift")}),
+            "next-area navigation can be rebound to standalone Shift");
+    next = 0;
+    QCoreApplication::sendEvent(&area, &down);
+    require(next == 0, "Shift does not navigate on press");
+    QCoreApplication::sendEvent(&area, &up);
+    require(next == 1, "standalone Shift navigates once on release");
+    QCoreApplication::sendEvent(&area, &down);
+    press(area, Qt::Key_F24, Qt::ShiftModifier);
+    QCoreApplication::sendEvent(&area, &up);
+    require(next == 1, "a Shift chord cancels standalone navigation");
+    QCoreApplication::sendEvent(&area, &down);
+    QMouseEvent mouse(QEvent::MouseButtonPress, QPointF(5, 5), QPointF(5, 5), QPointF(5, 5),
+                      Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
+    QCoreApplication::sendEvent(palette->mainPanel(), &mouse);
+    QCoreApplication::sendEvent(&area, &up);
+    require(next == 1, "a Shift mouse gesture cancels standalone navigation");
+    auto repeat = keyEvent(QEvent::KeyPress, Qt::Key_Shift, Qt::ShiftModifier, true);
+    QCoreApplication::sendEvent(&area, &down);
+    QCoreApplication::sendEvent(&area, &repeat);
+    QCoreApplication::sendEvent(&area, &up);
+    require(next == 2, "holding Shift produces only one navigation");
+    const auto restored = QRect(50, 60, 360, 260);
+    int regionChanges = 0;
+    QObject::connect(&area, &ScreenRecordingAreaWindow::recordingRegionChanged,
+                     [&] { ++regionChanges; });
+    require(area.restoreRecordingRegion(restored) && area.recordingRegion() == restored &&
+                regionChanges == 1 &&
+                ScreenRecordingAreaWindowTestAccess::history(area) == document,
+            "restoring an area emits a geometry change and preserves annotation history");
+    require(area.restoreRecordingRegion(restored) && regionChanges == 1,
+            "a duplicate history stop succeeds without a redundant geometry signal");
+    for (const auto status : {Status::countingDown(), Status::starting(), Status::recording(),
+                              Status::paused(), Status::stopping()}) {
+        palette->setRecordingSession(status);
+        area.setRecordingState(status.state());
+        area.setDrawingBlocked(status.busy());
+        press(area, Qt::Key_Shift, Qt::ShiftModifier);
+        require(next == 2 && !area.restoreRecordingRegion(QRect(10, 10, 200, 200)),
+                "recording and busy states block area restoration and shortcuts");
+    }
+    palette->setRecordingSession(Status::idle());
+    area.setRecordingState(ScreenshotToolPalette::RecordingState::Idle);
+    area.setDrawingBlocked(false);
+    eligible = false;
+    press(area, Qt::Key_Shift, Qt::ShiftModifier);
+    require(next == 2, "controller eligibility blocks scheduled startup and trimming");
+    eligible = true;
+    ScreenRecordingAreaWindowTestAccess::beginRegionDrag(area);
+    press(area, Qt::Key_Shift, Qt::ShiftModifier);
+    require(next == 2 && !area.canRestoreRecordingRegion(), "active region drags block history");
+    ScreenRecordingAreaWindowTestAccess::cancelRegionDrag(area);
+    require(palette->activateDrawingShortcut(QStringLiteral("shape")), "select a drawing tool");
+    press(area, Qt::Key_Shift, Qt::ShiftModifier);
+    require(next == 2 && !palette->recordingExportSettingsVisible(),
+            "history shortcuts require the Export Settings tool");
+    settings->click();
+    area.setInputMode(ScreenRecordingAreaWindow::InputMode::Drawing);
+    press(area, Qt::Key_Shift, Qt::ShiftModifier);
+    require(next == 2, "color sampling and drawing input modes block history");
+    area.setInputMode(ScreenRecordingAreaWindow::InputMode::RegionEditing);
+    QLineEdit editor(&area);
+    editor.show();
+    focus(editor);
+    press(editor, Qt::Key_Shift, Qt::ShiftModifier);
+    require(next == 2, "text entry does not navigate history");
+    editor.hide();
+    focus(area);
+    QDialog modal(&area);
+    modal.setWindowModality(Qt::ApplicationModal);
+    modal.show();
+    QCoreApplication::processEvents();
+    press(area, Qt::Key_Shift, Qt::ShiftModifier);
+    require(next == 2, "modal interactions block history navigation");
+    modal.hide();
+    focus(area);
+    require(
+        storage::ScreenRecordingShortcutSettings().setShortcuts(
+            QStringLiteral("next_recording_area"), {QStringLiteral("F8"), QStringLiteral("Shift")}),
+        "live history shortcut reconfiguration succeeds");
+    press(area, Qt::Key_F8);
+    require(next == 3, "ordinary configured bindings activate on press");
+    require(storage::ScreenRecordingShortcutSettings().setShortcuts(
+                QStringLiteral("next_recording_area"), {}),
+            "disable next area");
+    press(area, Qt::Key_F8);
+    press(area, Qt::Key_Shift, Qt::ShiftModifier);
+    require(next == 3, "disabled bindings stop dispatching immediately");
+}
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -1148,6 +1308,11 @@ int main(int argc, char* argv[]) {
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
     require(storage.initialize({executableDirectory, temporary.path(), 60000}).success,
             "isolated recording shortcut settings must initialize");
+    if (app.arguments().contains(QStringLiteral("--area-history-only"))) {
+        recordingAreaHistoryShortcuts();
+        storage.shutdown();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--auto-hide-shortcuts-only"))) {
         autoHiddenRecordingToolbarRetainsAreaShortcuts();
         storage.shutdown();

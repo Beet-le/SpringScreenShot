@@ -632,6 +632,13 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>ShortcutDisplayService</name>
+        <message>
+            <source>Enter</source>
+            <translation>Enter</translation>
+        </message>
+    </context>
+    <context>
         <name>SidebarWidget</name>
         <message>
             <source>Collapse navigation</source>

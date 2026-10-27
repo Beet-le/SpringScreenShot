@@ -3501,6 +3501,7 @@ void prepareWebcamSettings(bool enabled) {
         configuration.setValues(
             {{QStringLiteral("screen_recording/enable_webcam"), enabled},
              {QStringLiteral("screen_recording/webcam_size"), 150},
+             {QStringLiteral("screen_recording/webcam_orientation"), 0},
              {QStringLiteral("screen_recording/webcam_offset_left"), 48},
              {QStringLiteral("screen_recording/webcam_offset_bottom"), 48},
              {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("square")},
@@ -3637,6 +3638,45 @@ void recordingWebcamGesturesPersistAndFreezeAtStartup() {
         "idle webcam preview exposes its input surface");
     const auto preview = effectSources.back().lock();
     const auto* camera = preview->webcam;
+    const std::array<const char*, 4> orientationNames{
+        "screenRecordingWebcamRotateClockwise", "screenRecordingWebcamRotateCounterclockwise",
+        "screenRecordingWebcamFlipHorizontal", "screenRecordingWebcamFlipVertical"};
+    std::array<QAbstractButton*, 4> orientationButtons{};
+    for (std::size_t i = 0; i < orientationButtons.size(); ++i) {
+        orientationButtons[i] =
+            control->findChild<QAbstractButton*>(QString::fromLatin1(orientationNames[i]));
+        require(orientationButtons[i] != nullptr, "webcam orientation action exists");
+    }
+    // Explicit transition table: every action is relative to the displayed image.
+    const std::array<std::array<int, 4>, 8> transitions{{{1, 3, 4, 6},
+                                                         {2, 0, 7, 5},
+                                                         {3, 1, 6, 4},
+                                                         {0, 2, 5, 7},
+                                                         {5, 7, 0, 2},
+                                                         {6, 4, 3, 1},
+                                                         {7, 5, 2, 0},
+                                                         {4, 6, 1, 3}}};
+    const auto generation = preview->generation;
+    const int previewStarts = preview->starts;
+    for (int orientation = 0; orientation < 8; ++orientation) {
+        for (std::size_t action = 0; action < orientationButtons.size(); ++action) {
+            require(settings.setWebcamOrientation(orientation), "prepare webcam orientation");
+            waitForWebcam(
+                [&] { return preview->webcamOrientation == static_cast<uint32_t>(orientation); },
+                "saved orientation reaches preview");
+            orientationButtons[action]->click();
+            const int expected = transitions[orientation][action];
+            waitForWebcam(
+                [&] { return preview->webcamOrientation == static_cast<uint32_t>(expected); },
+                "orientation action updates the current camera frame");
+            require(settings.webcamOrientation() == expected && preview->webcam == camera &&
+                        preview->generation == generation && preview->starts == previewStarts,
+                    "orientation persists without restarting capture or preview");
+        }
+    }
+    require(settings.setWebcamOrientation(5), "save the recording orientation");
+    waitForWebcam([&] { return preview->webcamOrientation == 5; },
+                  "final orientation reaches preview");
     const QSize initialWindowSize = area->size();
     const QRect initialControl = control->geometry();
     area->resize(90, 70);
@@ -3678,8 +3718,14 @@ void recordingWebcamGesturesPersistAndFreezeAtStartup() {
     waitForWebcam([&] { return controller.isRecording(); },
                   "start recording during an unfinished resize");
     require(lastDirectConfig.webcam_size == 150 && lastDirectConfig.webcam_offset_left == 160 &&
-                lastDirectConfig.webcam_offset_bottom == 110 && !control->isVisible(),
+                lastDirectConfig.webcam_offset_bottom == 110 && !control->isVisible() &&
+                lastDirectConfig.webcam_orientation == 5,
             "startup cancels an unfinished resize before freezing the webcam layout");
+    QMetaObject::invokeMethod(orientationButtons[0], "clicked", Qt::DirectConnection,
+                              Q_ARG(bool, false));
+    emit area->webcamOrientationRequested(0);
+    require(settings.webcamOrientation() == 5 && lastDirectConfig.webcam_orientation == 5,
+            "late orientation clicks cannot change the accepted recording snapshot");
     palette()->recordingCloseRequested();
     waitForIdle(controller);
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
@@ -3799,6 +3845,7 @@ void recordingWebcamPreferencesPreserveSessionSnapshots() {
                      {QStringLiteral("screen_recording/webcam_size"), 300},
                      {QStringLiteral("screen_recording/webcam_offset_left"), 80},
                      {QStringLiteral("screen_recording/webcam_offset_bottom"), 60},
+                     {QStringLiteral("screen_recording/webcam_orientation"), 7},
                      {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("circle")}}),
                 "save the next recording's webcam preferences during an active session");
             const auto options =
@@ -3806,6 +3853,7 @@ void recordingWebcamPreferencesPreserveSessionSnapshots() {
             require(options.value(QStringLiteral("webcam")) == initiallyEnabled &&
                         options.value(QStringLiteral("webcam_size")) == 150 &&
                         options.value(QStringLiteral("webcam_shape")) == QStringLiteral("square") &&
+                        options.value(QStringLiteral("webcam_orientation")) == 0 &&
                         webcamConfigures == configured,
                     "saving preferences must preserve the accepted session's webcam snapshot");
             if (phase == Phase::Starting) {
@@ -3817,7 +3865,8 @@ void recordingWebcamPreferencesPreserveSessionSnapshots() {
             require((lastDirectConfig.webcam_source != nullptr) == initiallyEnabled &&
                         lastDirectConfig.webcam_size == 150 && lastDirectConfig.webcam_shape == 0 &&
                         lastDirectConfig.webcam_offset_left == 48 &&
-                        lastDirectConfig.webcam_offset_bottom == 48,
+                        lastDirectConfig.webcam_offset_bottom == 48 &&
+                        lastDirectConfig.webcam_orientation == 0,
                     "native recording receives the accepted webcam snapshot");
             if (phase == Phase::Paused)
                 palette()->recordingResumeRequested();
@@ -3855,7 +3904,8 @@ void recordingWebcamPreferencesPreserveSessionSnapshots() {
                 (lastDirectConfig.webcam_source != nullptr) == !initiallyEnabled &&
                     lastDirectConfig.webcam_size == 300 && lastDirectConfig.webcam_shape == 1 &&
                     lastDirectConfig.webcam_offset_left == 80 &&
-                    lastDirectConfig.webcam_offset_bottom == 60,
+                    lastDirectConfig.webcam_offset_bottom == 60 &&
+                    lastDirectConfig.webcam_orientation == 7,
                 "the next manual recording receives all preferences saved during its predecessor");
             palette()->recordingCloseRequested();
             waitForIdle(controller);
@@ -3868,6 +3918,8 @@ void recordingWebcamAutomationOptionsStayIsolated() {
     prepareWebcamSettings(false);
     require(snow_shot::storage::RecordingSettings().setWebcamLayout(150, QPoint(90, 70)),
             "save non-default offsets for automation to inherit");
+    require(snow_shot::storage::RecordingSettings().setWebcamOrientation(5),
+            "save an orientation for automation to inherit");
     auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
     ScreenRecordingController controller(testEffectsSource);
     QString error;
@@ -3879,13 +3931,15 @@ void recordingWebcamAutomationOptionsStayIsolated() {
             "start with isolated automation webcam options");
     waitForWebcam([&] { return controller.isRecording(); }, "start automated webcam fixture");
     require(lastDirectConfig.webcam_offset_left == 90 &&
-                lastDirectConfig.webcam_offset_bottom == 70,
+                lastDirectConfig.webcam_offset_bottom == 70 &&
+                lastDirectConfig.webcam_orientation == 5,
             "automation inherits saved webcam offsets");
     require(configuration.setValues(
                 {{QStringLiteral("screen_recording/enable_webcam"), true},
                  {QStringLiteral("screen_recording/webcam_size"), 300},
                  {QStringLiteral("screen_recording/webcam_offset_left"), 80},
                  {QStringLiteral("screen_recording/webcam_offset_bottom"), 60},
+                 {QStringLiteral("screen_recording/webcam_orientation"), 3},
                  {QStringLiteral("screen_recording/webcam_shape"), QStringLiteral("square")}}),
             "save manual preferences while automation owns recording");
     const auto saved = configuration.snapshot();
@@ -3910,7 +3964,8 @@ void recordingWebcamAutomationOptionsStayIsolated() {
                   "start a manual session after automation");
     require(lastDirectConfig.webcam_source && lastDirectConfig.webcam_size == 300 &&
                 lastDirectConfig.webcam_shape == 0 && lastDirectConfig.webcam_offset_left == 80 &&
-                lastDirectConfig.webcam_offset_bottom == 60 && configuration.snapshot() == saved,
+                lastDirectConfig.webcam_offset_bottom == 60 &&
+                lastDirectConfig.webcam_orientation == 3 && configuration.snapshot() == saved,
             "manual startup restores current saved options without overwriting preferences");
     palette()->recordingCloseRequested();
     waitForIdle(controller);
@@ -7039,6 +7094,207 @@ void recordingSessionEndPreservation() {
     }
 }
 
+void recordingAreaHistoryTests() {
+    using namespace snow_shot::storage;
+    auto& configuration = ApplicationStorage::instance().configuration();
+    const auto historyKey = QStringLiteral("screen_recording/area_history");
+    const RecordingAreaHistorySettings history;
+    const RecordingSettings settings;
+    require(settings.setStartDelaySeconds(0) && settings.setPostProcessingEnabled(false) &&
+                settings.setDeleteFilesOnRecordingClose(false) &&
+                settings.setAutoExitAfterRecordingEnds(false),
+            "configure recording area tests");
+    const QRect first(20, 20, 301, 201);
+    const QRect second(60, 60, 321, 241);
+    const QRect current(100, 100, 351, 251);
+    const auto space = recordingAreaCoordinateSpace();
+    const auto otherSpace = space == QStringLiteral("desktop_points")
+                                ? QStringLiteral("physical_pixels")
+                                : QStringLiteral("desktop_points");
+    require(configuration.setValue(
+                historyKey,
+                QJsonArray{recordingAreaToJson({first, space}), recordingAreaToJson({first, space}),
+                           recordingAreaToJson({second, space}),
+                           recordingAreaToJson({current, otherSpace}),
+                           recordingAreaToJson({QRect(100000, 100000, 300, 200), space})}),
+            "seed chronological history with duplicate and unavailable areas");
+    const auto key = [](ScreenRecordingAreaWindow* area, Qt::Key value,
+                        Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        area->activateInput();
+        QCoreApplication::processEvents();
+        PhysicalKeyEvent down(QEvent::KeyPress, value, modifiers);
+        PhysicalKeyEvent up(QEvent::KeyRelease, value, modifiers);
+        QApplication::sendEvent(area, &down);
+        QApplication::sendEvent(area, &up);
+    };
+    const auto wait = [](const auto& condition) {
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!condition() && deadline.elapsed() < 5000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            QThread::msleep(1);
+        }
+        require(condition(), "recording area fixture must complete its asynchronous operation");
+    };
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(current);
+        auto* area = recordingAreaWindow();
+        auto* controls = palette();
+        require(history.entries().size() == 5, "opening a recording window does not save an area");
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == current, "Next does nothing before browsing");
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == second, "Previous selects newest usable entry, skipping "
+                                                   "unavailable coordinate spaces and displays");
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == first, "Previous moves toward older starts");
+        key(area, Qt::Key_R);
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == first, "Previous stops at the oldest entry");
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == first, "duplicates remain separate navigation stops");
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == second, "Next moves toward newer starts");
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == second, "Next stops at the newest usable entry");
+        require(area->restoreRecordingRegion(current), "simulate an idle region edit");
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == current,
+                "manual region changes reset the history cursor");
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == second && history.entries().size() == 5,
+                "browsing restarts at the newest entry without appending history");
+        controller.startRecording();
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        waitForRecording(controller);
+        require(history.entries().size() == 6 && history.entries().last().rectangle == second,
+                "successful startup saves the selected area exactly once");
+#ifndef Q_OS_MACOS
+        require(lastDirectConfig.width == 322 && lastDirectConfig.height == 242,
+                "recording uses compatible even capture dimensions while history preserves odd "
+                "selection dimensions");
+#endif
+        controls->recordingPauseRequested();
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == second && history.entries().size() == 6,
+                "paused recording cannot navigate or append history");
+        controls->recordingResumeRequested();
+        require(history.entries().size() == 6, "resume does not append another start");
+        controls->recordingCloseRequested();
+        wait([&] { return !controller.isRecording(); });
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(current);
+        auto* area = recordingAreaWindow();
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == second, "reopened windows browse saved recording areas");
+        key(area, Qt::Key_R);
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == first, "browse older history before a failed start");
+        ErrorObserver errors;
+        qApp->installEventFilter(&errors);
+        for (int failure = 0; failure < 2; ++failure) {
+            failStart = failure == 0;
+            failStartOperation = failure == 1;
+            controller.startRecording();
+            wait([&] { return errors.shown == failure + 1 && !palette()->recordingBusy(); });
+            require(history.entries().size() == 6,
+                    "failed backend creation or start does not save an area");
+            if (failure == 0) {
+                key(area, Qt::Key_R, Qt::ShiftModifier);
+                require(area->recordingRegion() == second,
+                        "failed startup preserves the existing history navigation cursor");
+            }
+        }
+        failStart = false;
+        failStartOperation = false;
+        qApp->removeEventFilter(&errors);
+        require(settings.setStartDelaySeconds(10), "enable countdown");
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(current);
+        controller.startRecording();
+        auto* area = recordingAreaWindow();
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == current && history.entries().size() == 6,
+                "countdown blocks navigation and does not save an area");
+        palette()->recordingCloseRequested();
+    }
+    require(settings.setStartDelaySeconds(0), "disable countdown");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        std::promise<void> releaseStart;
+        sessionCreateGate = releaseStart.get_future().share();
+        sessionCreateEntered = false;
+        auto controller = std::make_unique<ScreenRecordingController>(testEffectsSource);
+        controller->open(current);
+        controller->startRecording();
+        wait([] { return sessionCreateEntered.load(); });
+        auto* area = recordingAreaWindow();
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == current && history.entries().size() == 6,
+                "pending backend startup freezes navigation and has not saved history yet");
+        controller.reset();
+        releaseStart.set_value();
+        wait([&] { return history.entries().size() == 7; });
+        require(history.entries().last().rectangle == current,
+                "a successful start after controller destruction still commits its selected area");
+        sessionCreateGate = {};
+    }
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(first);
+        controller.startRecording();
+        waitForRecording(controller);
+        require(history.entries().size() == 8, "every successful recording appends a new entry");
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        require(configuration.setValue(historyKey, QJsonArray{}), "clear fixture history");
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(current);
+        auto* area = recordingAreaWindow();
+        key(area, Qt::Key_R);
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == current && palette()->recordingExportSettingsVisible(),
+                "empty history leaves both geometry and the selected tool unchanged");
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(current);
+        configuration.suspendWrites(true);
+        const auto resumeWrites = qScopeGuard([&] { configuration.suspendWrites(false); });
+        controller.startRecording();
+        waitForRecording(controller);
+        require(history.entries().isEmpty(),
+                "a history persistence failure does not interrupt successful recording");
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        std::promise<void> releaseStart;
+        sessionCreateGate = releaseStart.get_future().share();
+        sessionCreateEntered = false;
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(first);
+        controller.startRecording();
+        wait([] { return sessionCreateEntered.load(); });
+        releaseStart.set_value();
+        controller.prepareForSessionEnd(3000);
+        require(history.entries().size() == 1 && history.entries().last().rectangle == first,
+                "terminal preservation commits successful startup without processing GUI events");
+        QCoreApplication::processEvents();
+        require(history.entries().size() == 1,
+                "queued and terminal startup completion cannot save the same start twice");
+        sessionCreateGate = {};
+    }
+}
+
 template <typename Application> int runRecordingControllerTests(Application& app) {
     QTemporaryDir temporary;
     require(temporary.isValid(), "temporary storage must exist");
@@ -7108,6 +7364,10 @@ template <typename Application> int runRecordingControllerTests(Application& app
     QApplication::setFont(testFont);
     QFontDatabase::setApplicationFallbackFontFamilies(QChar::Script_Han,
                                                       {QStringLiteral("Snow Recording Test Han")});
+    if (app.arguments().contains(QStringLiteral("--area-history-only"))) {
+        recordingAreaHistoryTests();
+        return 0;
+    }
     const QString preservationPrefix = QStringLiteral("--store-preservation-case=");
     for (const auto& argument : app.arguments()) {
         if (argument.startsWith(preservationPrefix)) {

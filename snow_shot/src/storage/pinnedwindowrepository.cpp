@@ -321,24 +321,32 @@ QByteArray encodeImage(const QImage& image, const QString& compression) {
     return image_codec::encodePng(image, level);
 }
 
-QImage decodeImage(const QString& path, const QString& suffix = QStringLiteral("png"),
-                   const std::function<bool(qint64)>& allocationCheck = {},
-                   const std::function<bool()>& cancelled = {}, bool firstFrameOnly = false) {
-    if (cancelled && cancelled())
-        return {};
-    snow::image::Format format = snow::image::Format::png;
-    const QString normalized = suffix.toLower();
-    if (normalized == QStringLiteral("gif")) {
-        format = snow::image::Format::gif;
-    } else if (normalized == QStringLiteral("jpg") || normalized == QStringLiteral("jpeg")) {
-        format = snow::image::Format::jpeg;
-    } else if (normalized == QStringLiteral("webp")) {
-        format = snow::image::Format::webp;
-    } else if (normalized == QStringLiteral("jxl")) {
-        format = snow::image::Format::jxl;
-    } else if (normalized == QStringLiteral("avif")) {
-        format = snow::image::Format::avif;
+QImage decodeImageBytes(const QByteArray& bytes, snow::image::Format format,
+                        const std::function<bool(qint64)>& allocationCheck,
+                        const std::function<bool()>& cancelled, bool firstFrameOnly) {
+    if (allocationCheck || cancelled || firstFrameOnly) {
+        const auto size = image_codec::inspectSize(bytes, format);
+        // Admission and first-frame previews share the repository's decoded RGBA limit.
+        // Check before multiplying so oversized dimensions cannot overflow byte estimates.
+        if (size.isEmpty() || qint64(size.width()) > kMaximumImageBytes / 4 / size.height())
+            return {};
+        const qint64 pixels = static_cast<qint64>(size.width()) * size.height();
+        if ((allocationCheck && !allocationCheck(2 * bytes.size() + 8 * pixels)) ||
+            (cancelled && cancelled()))
+            return {};
+        auto image = firstFrameOnly ? image_codec::decodeFirstFrame(bytes, format)
+                                    : image_codec::decode(bytes, format, nullptr);
+        return cancelled && cancelled() ? QImage{} : std::move(image);
     }
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    return image_codec::decodeBgra(bytes, format);
+#else
+    return image_codec::decode(bytes, format, nullptr);
+#endif
+}
+
+QImage decodeImage(const QString& path, const std::function<bool(qint64)>& allocationCheck = {},
+                   const std::function<bool()>& cancelled = {}, bool firstFrameOnly = false) {
     if (allocationCheck || cancelled || firstFrameOnly) {
         QFile file(path);
         const auto encodedBytes = file.size();
@@ -349,27 +357,13 @@ QImage decodeImage(const QString& path, const QString& suffix = QStringLiteral("
         const auto bytes = file.read(encodedBytes + 1);
         if (bytes.size() != encodedBytes || (cancelled && cancelled()))
             return {};
-        const auto size = image_codec::inspectSize(bytes, format);
-        // Admission and first-frame previews share the repository's decoded RGBA limit.
-        // Check before multiplying so oversized dimensions cannot overflow byte estimates.
-        if (size.isEmpty() || qint64(size.width()) > kMaximumImageBytes / 4 / size.height())
-            return {};
-        const qint64 pixels = static_cast<qint64>(size.width()) * size.height();
-        if ((allocationCheck && !allocationCheck(2 * encodedBytes + 8 * pixels)) ||
-            (cancelled && cancelled()))
-            return {};
-        auto image = firstFrameOnly ? image_codec::decodeFirstFrame(bytes, format)
-                                    : image_codec::decode(bytes, format, "mcp-pinned-source");
-        return cancelled && cancelled() ? QImage{} : std::move(image);
+        return decodeImageBytes(bytes, snow::image::Format::png, allocationCheck, cancelled,
+                                firstFrameOnly);
     }
 #if defined(Q_OS_WIN) || defined(_WIN32)
-    // The GIF codec publishes RGBA8; unlike the existing still-image formats,
-    // it cannot satisfy the Windows BGRA output request directly.
-    if (format == snow::image::Format::gif)
-        return snow_shot::image_codec::decodeFile(path, format);
-    return snow_shot::image_codec::decodeFileBgra(path, format);
+    return image_codec::decodeFileBgra(path, snow::image::Format::png);
 #else
-    return snow_shot::image_codec::decodeFile(path, format);
+    return image_codec::decodeFile(path, snow::image::Format::png);
 #endif
 }
 
@@ -964,9 +958,8 @@ bool loadPayloads(const QString& root, const QJsonObject& payloads, PinnedWindow
         if (sourceOnly) {
             const auto previewName = payloads.value(QStringLiteral("image")).toString();
             if (record->image.isNull())
-                record->image =
-                    decodeImage(QDir(directory).filePath(previewName), QStringLiteral("png"),
-                                allocationCheck, cancelled, true);
+                record->image = decodeImage(QDir(directory).filePath(previewName), allocationCheck,
+                                            cancelled, true);
             if (record->image.isNull() || record->image.sizeInBytes() > kMaximumImageBytes)
                 return false;
         }
@@ -994,8 +987,8 @@ bool loadPayloads(const QString& root, const QJsonObject& payloads, PinnedWindow
     } else if (record->sourceKind == PinnedWindowSourceKind::ImageData) {
         const QString fileName = payloads.value(QStringLiteral("image")).toString();
         if (record->image.isNull())
-            record->image = decodeImage(QDir(directory).filePath(fileName), QStringLiteral("png"),
-                                        allocationCheck, cancelled, sourceOnly);
+            record->image = decodeImage(QDir(directory).filePath(fileName), allocationCheck,
+                                        cancelled, sourceOnly);
         if (record->image.isNull() || record->image.sizeInBytes() > kMaximumImageBytes) {
             return false;
         }
@@ -1009,10 +1002,7 @@ bool loadPayloads(const QString& root, const QJsonObject& payloads, PinnedWindow
         // partial patch and APNG may have a separate poster outside playback.
         // Decode only that initial frame and retain playback metadata on full
         // restore; management previews release the temporary source owner.
-        const auto suffix = QFileInfo(imagePath).suffix().toLower();
-        if ((!sourceOnly || record->image.isNull()) && !record->animationSource &&
-            (suffix == QStringLiteral("gif") || suffix == QStringLiteral("webp") ||
-             suffix == QStringLiteral("png") || suffix == QStringLiteral("apng"))) {
+        if ((!sourceOnly || record->image.isNull()) && !record->animationSource) {
             QFile file(imagePath);
             const auto bytes = file.size();
             if (bytes <= 0 || bytes > kMaximumImageBytes ||
@@ -1042,9 +1032,12 @@ bool loadPayloads(const QString& root, const QJsonObject& payloads, PinnedWindow
                 if (!sourceOnly && animationSource->isAnimated())
                     record->animationSource = std::move(animationSource);
             }
+            // Original files may have misleading suffixes. Inspect and decode the same bytes
+            // already read for animation detection, without reopening the source file.
+            if (record->image.isNull())
+                record->image = decodeImageBytes(encoded, snow::image::Format::unknown,
+                                                 allocationCheck, cancelled, sourceOnly);
         }
-        if (record->image.isNull())
-            record->image = decodeImage(imagePath, suffix, allocationCheck, cancelled, sourceOnly);
         if (record->image.isNull() || record->image.sizeInBytes() > kMaximumImageBytes)
             return false;
     }

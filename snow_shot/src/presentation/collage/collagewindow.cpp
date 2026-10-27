@@ -734,8 +734,9 @@ struct CollageWindow::Impl {
                         if (extensions.contains(QFileInfo(path).suffix().toLower()))
                             images.append(path);
                     }
-                    *files =
-                        ScreenshotClipboardContentReader::snapshotLocalFiles(images, cancelled);
+                    *files = ScreenshotClipboardContentReader::snapshotLocalFiles(
+                        images, cancelled,
+                        ScreenshotClipboardContentReader::FilePurpose::ImageImport);
                     selection->paths.clear();
                 }
                 if (cancelled())

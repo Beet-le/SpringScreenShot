@@ -470,6 +470,31 @@ void builtInCatalogIsCompleteAndValid() {
                     QStringLiteral("screenshot.middle-mouse-button-action") &&
                 quickModificationSection->items.at(5).id == quickModification->id,
             "quick selection modification must immediately follow middle mouse button action");
+    const std::pair<QString, QString> pointerActions[] = {
+        {QStringLiteral("copy"), QStringLiteral("Copy to clipboard")},
+        {QStringLiteral("save"), QStringLiteral("Save as file")},
+        {QStringLiteral("quick_save"), QStringLiteral("Quick save")},
+        {QStringLiteral("pin"), QStringLiteral("Pin to screen")},
+        {QStringLiteral("ocr"), QStringLiteral("Text recognition")},
+        {QStringLiteral("ocr_copy"), QStringLiteral("Copy after text recognition")},
+        {QStringLiteral("none"), QStringLiteral("None")},
+    };
+    for (const QString& itemId : {QStringLiteral("screenshot.double-click-action"),
+                                  QStringLiteral("screenshot.middle-mouse-button-action")}) {
+        const auto* item = catalog.item(
+            {QStringLiteral("screenshots"), QStringLiteral("screenshot-settings"), itemId});
+        require(item != nullptr, "Screenshots must expose both pointer action settings");
+        const auto& options = std::get<settings::SettingsSelectDefinition>(item->payload).options;
+        require(options.size() == 7, "both pointer action settings must expose seven choices");
+        for (qsizetype index = 0; index < options.size(); ++index) {
+            require(options.at(index).value == pointerActions[index].first &&
+                        options.at(index).label.translated() == pointerActions[index].second &&
+                        storage::ConfigurationSchema::normalize(item->configurationKey,
+                                                                options.at(index).value.toString())
+                            .valid,
+                    "pointer actions must share ordered, translated, schema-supported choices");
+        }
+    }
     const auto* selectionResizeMode =
         catalog.item({QStringLiteral("screenshots"), QStringLiteral("screenshot-settings"),
                       QStringLiteral("screenshot.selection-resize-mode")});
@@ -1084,9 +1109,9 @@ void builtInCatalogIsCompleteAndValid() {
                 settings::SettingsSwitchBinding::DrawingDeleteTextAfterCursor &&
             storage::ConfigurationSchema::defaultValue(deleteTextAfterCursor->configurationKey)
                 .toBool() &&
-            drawingSettingsSection.items.at(0).id ==
+            drawingSettingsSection.items.at(2).id ==
                 QStringLiteral("drawing.quick-selection-disabled-tools") &&
-            drawingSettingsSection.items.at(1).id == deleteTextAfterCursor->id,
+            drawingSettingsSection.items.at(3).id == deleteTextAfterCursor->id,
         "the default-on Delete text switch must immediately follow quick selection");
     require(
         firstToolbarGroupButton != nullptr &&
@@ -1097,10 +1122,44 @@ void builtInCatalogIsCompleteAndValid() {
                 settings::SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton &&
             !storage::ConfigurationSchema::defaultValue(firstToolbarGroupButton->configurationKey)
                  .toBool() &&
-            drawingSettingsSection.items.size() == 6 &&
-            drawingSettingsSection.items.at(2).id == rememberLastUsedTool->id &&
-            drawingSettingsSection.items.at(3).id == firstToolbarGroupButton->id,
+            drawingSettingsSection.items.size() == 8 &&
+            drawingSettingsSection.items.at(4).id == rememberLastUsedTool->id &&
+            drawingSettingsSection.items.at(5).id == firstToolbarGroupButton->id,
         "the default-off first toolbar group button switch must follow Remember last used tool");
+    const auto* automaticSelection =
+        catalog.item({QStringLiteral("screenshots"), QStringLiteral("drawing-settings"),
+                      QStringLiteral("drawing.automatically-select-newly-created-elements")});
+    require(
+        automaticSelection != nullptr &&
+            automaticSelection->title.translated() ==
+                QStringLiteral("Automatically select newly created elements") &&
+            automaticSelection->configurationKey ==
+                QStringLiteral("drawing/automatically_select_newly_created_elements") &&
+            std::get<settings::SettingsSwitchDefinition>(automaticSelection->payload).binding ==
+                settings::SettingsSwitchBinding::DrawingAutomaticallySelectNewlyCreatedElements &&
+            !storage::ConfigurationSchema::defaultValue(automaticSelection->configurationKey)
+                 .toBool() &&
+            drawingSettingsSection.items.at(0).id == automaticSelection->id,
+        "the default-off automatic selection switch must come first");
+    const auto& exclusions = drawingSettingsSection.items.at(1);
+    require(
+        exclusions.id == QStringLiteral("drawing.automatic-selection-excluded-tools") &&
+            exclusions.title.translated() ==
+                QStringLiteral("Tools excluded from automatic selection") &&
+            exclusions.configurationKey ==
+                QStringLiteral("drawing/automatic_selection_excluded_tools") &&
+            std::get<settings::SettingsMultiSelectDefinition>(exclusions.payload).binding ==
+                settings::SettingsMultiSelectBinding::DrawingAutomaticSelectionExcludedTools &&
+            storage::ConfigurationSchema::defaultValue(exclusions.configurationKey).toArray() ==
+                QJsonArray{QStringLiteral("free-draw"), QStringLiteral("pen-filter"),
+                           QStringLiteral("text"), QStringLiteral("speech-bubble")},
+        "automatic selection exclusions must follow the switch and include the four default tools");
+    const auto* exclusionField = settings::builtInSettingsRegistry().fieldForMultiSelect(
+        settings::SettingsMultiSelectBinding::DrawingAutomaticSelectionExcludedTools);
+    require(
+        exclusionField != nullptr && exclusionField->definition->id == exclusions.id &&
+            exclusionField->reset == settings::SettingsSectionReset::DrawingQuickSelection,
+        "automatic selection exclusions must have a registered resettable multi-select binding");
     const auto& paletteRegistry = settings::builtInSettingsRegistry();
     for (const auto binding : {settings::SettingsColorPaletteBinding::StrokeColors,
                                settings::SettingsColorPaletteBinding::FillColors}) {
@@ -1130,12 +1189,16 @@ void builtInCatalogIsCompleteAndValid() {
         std::get<settings::SettingsSelectDefinition>(traySection.items.at(6).payload);
     require(leftTray.binding == settings::SettingsSelectBinding::TrayLeftClickAction &&
                 middleTray.binding == settings::SettingsSelectBinding::TrayMiddleClickAction &&
-                leftTray.options.size() == 5 && middleTray.options.size() == 5,
-            "tray selectors must expose independent bindings and five options");
-    const QStringList trayActionValues{
-        QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
-        QStringLiteral("screenshot_copy"), QStringLiteral("screenshot_fixed"),
-        QStringLiteral("open_function_settings")};
+                leftTray.options.size() == 6 && middleTray.options.size() == 6,
+            "tray selectors must expose independent bindings and six options");
+    const QStringList trayActionValues{QStringLiteral("none"),
+                                       QStringLiteral("screenshot"),
+                                       QStringLiteral("show_main_window"),
+                                       QStringLiteral("screenshot_copy"),
+                                       QStringLiteral("screenshot_fixed"),
+                                       QStringLiteral("open_function_settings")};
+    require(leftTray.options.constFirst().label.translated() == QStringLiteral("None"),
+            "tray selectors must offer None as the first option");
     for (int index = 0; index < trayActionValues.size(); ++index) {
         require(leftTray.options.at(index).value == trayActionValues.at(index) &&
                     middleTray.options.at(index).value == trayActionValues.at(index) &&
@@ -1518,13 +1581,16 @@ void builtInCatalogIsCompleteAndValid() {
                                                        QStringLiteral("pin-to-screen-shortcuts"));
     const auto* recordingShortcuts = catalog.section(QStringLiteral("shortcuts-mouse"),
                                                      QStringLiteral("screen-recording-shortcuts"));
-    require(recordingShortcuts != nullptr && recordingShortcuts->items.size() == 4 &&
+    require(recordingShortcuts != nullptr && recordingShortcuts->items.size() == 6 &&
                 recordingShortcuts->reset ==
                     settings::SettingsSectionReset::ScreenRecordingShortcuts,
             "recording shortcuts must expose a resettable settings section");
-    const QStringList recordingActions = {
-        QStringLiteral("export"), QStringLiteral("toggle_recording"),
-        QStringLiteral("copy_to_clipboard"), QStringLiteral("end_recording")};
+    const QStringList recordingActions = {QStringLiteral("export"),
+                                          QStringLiteral("toggle_recording"),
+                                          QStringLiteral("copy_to_clipboard"),
+                                          QStringLiteral("end_recording"),
+                                          QStringLiteral("previous_recording_area"),
+                                          QStringLiteral("next_recording_area")};
     for (qsizetype index = 0; index < recordingActions.size(); ++index) {
         const auto& item = recordingShortcuts->items.at(index);
         require(item.id ==
@@ -1535,6 +1601,11 @@ void builtInCatalogIsCompleteAndValid() {
                         settings::SettingsLocalShortcutScope::ScreenRecording,
                 "recording shortcut fields must use stable IDs and a dedicated local scope");
     }
+    require(recordingShortcuts->items.at(4).title.translated() ==
+                    QStringLiteral("Previous recording area") &&
+                recordingShortcuts->items.at(5).title.translated() ==
+                    QStringLiteral("Next recording area"),
+            "recording area history labels must identify their direction");
     const bool everyHotkeySectionUsesTwoColumns =
         applicationShortcutsPage != nullptr &&
         std::all_of(

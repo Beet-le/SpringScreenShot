@@ -2,6 +2,7 @@
 #include "snow_shot/presentation/screenshotmanualsave.h"
 #include "snow_shot/presentation/crosshaircursor.h"
 #include "snow_shot/presentation/canvastexteditingpreferences.h"
+#include "snow_shot/presentation/canvasdrawingpreferences.h"
 #include "snow_shot/presentation/collagedocument.h"
 #include "snow_shot/presentation/screenshotmessageservice.h"
 #include "snow_shot/presentation/components/confirmationskipbutton.h"
@@ -1226,23 +1227,7 @@ ScreenshotPinnedWindow::ScreenshotPinnedWindow(QWidget* parent)
     });
 
     auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
-    if (applicationStorage.isInitialized()) {
-        const auto applyDrawingPreferences = [this]() {
-            const auto tools = snow_shot::presentation::screenshotQuickSelectionDisabledTools(
-                snow_shot::storage::DrawingSettings().quickSelectionDisabledTools());
-            if (!m_runtime.setQuickSelectionDisabledTools(tools)) {
-                qWarning("Failed to apply pinned annotation quick-selection preferences");
-            }
-        };
-        applyDrawingPreferences();
-        connect(&applicationStorage.configuration(),
-                &snow_shot::storage::ConfigurationStore::valueChanged, this,
-                [applyDrawingPreferences](const QString& key, const QJsonValue&) {
-                    if (key == QStringLiteral("drawing/quick_selection_disabled_tools")) {
-                        applyDrawingPreferences();
-                    }
-                });
-    }
+    snow_shot::presentation::bindCanvasDrawingPreferences(m_runtime, *this);
 
     createUi();
     setAcceptDrops(true);
@@ -1691,7 +1676,22 @@ void ScreenshotPinnedWindow::registerWindowShortcuts() {
     copy.id = QStringLiteral("pinned.ocr.copy");
     copy.keyCombinations = standardKeyCombinations(QKeySequence::Copy);
     copy.priority = ShortcutManager::StandardPriority::WindowCommand;
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    copy.canActivate = [this, ocrCommandsAllowed](const auto& context) {
+        // LaTeX Copy must use the session's exact source; QTextEdit's native Copy
+        // normalizes whitespace in its display document.
+        if (!m_closing && m_ocrMode && m_recognitionSession && m_recognitionSession->active() &&
+            m_recognitionSession->mode() == ScreenshotRecognitionSessionController::Mode::Latex &&
+            m_recognitionContent && context.focusWidget &&
+            (context.focusWidget == m_recognitionContent ||
+             m_recognitionContent->isAncestorOf(context.focusWidget))) {
+            return true;
+        }
+        return ocrCommandsAllowed(context);
+    };
+#else
     copy.canActivate = ocrCommandsAllowed;
+#endif
     copy.activate = [this](const auto&) {
         copyEditToolbarContent();
         return true;

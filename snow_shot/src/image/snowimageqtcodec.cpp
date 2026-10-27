@@ -352,7 +352,8 @@ QImage decodeBytes(const QByteArray& encoded, snow::image::Format expectedFormat
                    bool firstFrameOnly = false) {
     const uint32_t bridgeExpectedFormat = bridgeFormat(expectedFormat);
     if (!backendAbiIsCompatible() || encoded.isEmpty() ||
-        bridgeExpectedFormat == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN) {
+        (bridgeExpectedFormat == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN &&
+         expectedFormat != snow::image::Format::unknown)) {
         return {};
     }
 
@@ -384,7 +385,8 @@ bool inspectBytes(const QByteArray& encoded, snow::image::Format expectedFormat,
                   const QSize& expectedSize) {
     const uint32_t bridgeExpectedFormat = bridgeFormat(expectedFormat);
     if (!backendAbiIsCompatible() || encoded.isEmpty() || !expectedSize.isValid() ||
-        bridgeExpectedFormat == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN) {
+        (bridgeExpectedFormat == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN &&
+         expectedFormat != snow::image::Format::unknown)) {
         return false;
     }
 
@@ -872,6 +874,10 @@ QImage decodeFirstFrame(const QByteArray& encoded, snow::image::Format expectedF
     return decodeBytes(encoded, expectedFormat, 0, QImage::Format_RGBA8888, true);
 }
 
+QImage decodeBgra(const QByteArray& encoded, snow::image::Format expectedFormat) {
+    return decodeBgraBytes(encoded, expectedFormat);
+}
+
 QImage readManagedImage(QImageReader& reader) {
     const auto fallback = [&reader] {
         QImage image = reader.read();
@@ -920,7 +926,8 @@ QImage decodeIconFile(const QString& path, uint32_t preferredExtent) {
 QSize inspectSize(const QByteArray& encoded, snow::image::Format expectedFormat) {
     const auto format = bridgeFormat(expectedFormat);
     if (!backendAbiIsCompatible() || encoded.isEmpty() ||
-        format == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN)
+        (format == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN &&
+         expectedFormat != snow::image::Format::unknown))
         return {};
     SnowShotImageCodecImageInfo information{};
     std::array<char, kBackendErrorCapacity> backendError{};
@@ -937,7 +944,8 @@ QSize inspectSize(const QByteArray& encoded, snow::image::Format expectedFormat)
 QSize inspectCanvasSize(const QByteArray& encoded, snow::image::Format expectedFormat) {
     const auto format = bridgeFormat(expectedFormat);
     if (!backendAbiIsCompatible() || encoded.isEmpty() ||
-        format == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN)
+        (format == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN &&
+         expectedFormat != snow::image::Format::unknown))
         return {};
     SnowShotImageCodecImageInfo information{};
     std::array<char, kBackendErrorCapacity> error{};

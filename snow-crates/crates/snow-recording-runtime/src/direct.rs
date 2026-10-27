@@ -3752,6 +3752,7 @@ mod tests {
             let style = snow_webcam::WebcamStyle {
                 size: 50,
                 shape: snow_webcam::WebcamShape::Circle,
+                orientation: snow_webcam::WebcamOrientation::MirroredClockwise90,
                 offset_left: 17,
                 offset_bottom: 31,
             };

@@ -13,6 +13,7 @@
 #include <QTimer>
 #include <QTranslator>
 #include <QUrl>
+#include <QtEndian>
 
 #include <stdexcept>
 #include <iostream>
@@ -33,6 +34,83 @@ void write(const QString& path, const QByteArray& bytes) {
     QFile file(path);
     require(file.open(QIODevice::WriteOnly), "text fixture cannot be written");
     require(file.write(bytes) == bytes.size(), "text fixture write failed");
+}
+
+void requireClassicZipWorkbook(const QString& path) {
+    // Read the ZIP records directly: minizip accepts ZIP64 local headers that older Excel
+    // versions reject, even when the central directory only contains 32-bit sizes.
+    const QByteArray bytes = read(path);
+    const auto word = [&](qsizetype offset) {
+        require(offset >= 0 && offset + 2 <= bytes.size(), "truncated ZIP word");
+        return qFromLittleEndian<quint16>(bytes.constData() + offset);
+    };
+    const auto dword = [&](qsizetype offset) {
+        require(offset >= 0 && offset + 4 <= bytes.size(), "truncated ZIP dword");
+        return qFromLittleEndian<quint32>(bytes.constData() + offset);
+    };
+    const auto checkExtraFields = [&](qsizetype offset, quint16 length) {
+        const qsizetype end = offset + length;
+        require(end <= bytes.size(), "truncated ZIP extra fields");
+        while (offset < end) {
+            require(offset + 4 <= end && word(offset) != 0x0001,
+                    "Excel workbook entries must not require ZIP64 extra fields");
+            offset += 4 + word(offset + 2);
+            require(offset <= end, "invalid ZIP extra field length");
+        }
+    };
+
+    const qsizetype end = bytes.lastIndexOf(QByteArray::fromHex("504b0506"));
+    require(end >= 0 && end + 22 + word(end + 20) == bytes.size(),
+            "workbook must end with a classic ZIP end record");
+    const quint16 count = word(end + 10);
+    require(word(end + 4) == 0 && word(end + 6) == 0 && count > 0 && count < 0xffff &&
+                word(end + 8) == count,
+            "workbook must be a single-disk classic ZIP archive");
+    qsizetype central = dword(end + 16);
+    require(central + dword(end + 12) == end,
+            "the central directory must be followed directly by the classic end record");
+    qsizetype nextLocal = 0;
+    for (quint16 index = 0; index < count; ++index) {
+        require(dword(central) == 0x02014b50 && word(central + 6) <= 20,
+                "workbook central directory must support ZIP 2.0 readers");
+        const quint16 flags = word(central + 8);
+        require((flags & ~quint16(0x080e)) == 0 && word(central + 10) == 8 &&
+                    word(central + 34) == 0,
+                "workbook parts must use unencrypted, single-disk DEFLATE");
+        const quint32 crc = dword(central + 16);
+        const quint32 compressed = dword(central + 20);
+        const quint32 uncompressed = dword(central + 24);
+        require(compressed < 0xffffffff && uncompressed < 0xffffffff,
+                "workbook sizes must fit classic ZIP fields");
+        const quint16 nameLength = word(central + 28);
+        const quint16 extraLength = word(central + 30);
+        checkExtraFields(central + 46 + nameLength, extraLength);
+        const qsizetype local = dword(central + 42);
+        require(local == nextLocal && dword(local) == 0x04034b50 && word(local + 4) <= 20,
+                "workbook local headers must support ZIP 2.0 readers without ZIP64");
+        require(word(local + 6) == flags && word(local + 8) == 8 &&
+                    word(local + 26) == nameLength &&
+                    bytes.mid(local + 30, nameLength) == bytes.mid(central + 46, nameLength),
+                "local and central ZIP entry metadata must agree");
+        const quint16 localExtraLength = word(local + 28);
+        checkExtraFields(local + 30 + nameLength, localExtraLength);
+        require(dword(local + 18) < 0xffffffff && dword(local + 22) < 0xffffffff,
+                "local ZIP sizes must not use ZIP64 sentinels");
+        nextLocal = local + 30 + nameLength + localExtraLength + compressed;
+        if (flags & 0x0008) {
+            require(dword(nextLocal) == 0x08074b50 && dword(nextLocal + 4) == crc &&
+                        dword(nextLocal + 8) == compressed && dword(nextLocal + 12) == uncompressed,
+                    "streamed workbook parts must have matching 32-bit data descriptors");
+            nextLocal += 16;
+        } else {
+            require(dword(local + 14) == crc && dword(local + 18) == compressed &&
+                        dword(local + 22) == uncompressed,
+                    "non-streamed workbook parts must have matching CRC and sizes");
+        }
+        central += 46 + nameLength + extraLength + word(central + 32);
+    }
+    require(central == end && nextLocal == dword(end + 16),
+            "all workbook ZIP entries must end at the central directory");
 }
 
 void savesConversionPairsWithExactSource() {
@@ -76,6 +154,7 @@ void savesRealWorkbookWithLiteralCellsAndSpans() {
         snapshot, directory.filePath(QStringLiteral("表格.png")));
     require(saved.succeeded() && saved.path.endsWith(QStringLiteral("表格.xlsx")),
             "table saves must normalize to an Excel extension");
+    requireClassicZipWorkbook(saved.path);
     require(QDir(directory.path()).entryList(QDir::Files).size() == 1 &&
                 ScreenshotRecognitionFileExport::outputPaths(saved.path, snapshot.kind) ==
                     QStringList{saved.path},
@@ -209,6 +288,7 @@ void workbookPreservesColumnWidths() {
     auto snapshot = tableSnapshot();
     snapshot.tableColumnWidths = {92, 203, 350};
     const auto verify = [&](const QString& path) {
+        requireClassicZipWorkbook(path);
         const auto package = recognition_workbook_test::parts(path);
         requireDefaultWorkbookFonts(package);
         const auto sheet = recognition_workbook_test::sheet(package);

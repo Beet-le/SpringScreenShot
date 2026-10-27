@@ -832,6 +832,61 @@ endif()
                                   'PROPERTY;SNOW_RUST_BUNDLE_OVERRIDE;snow_diagnostics_test', lines)
 
 
+class MacOSMinizipExports(unittest.TestCase):
+    def test_system_dependencies_do_not_retain_the_package_builders_sdk(self):
+        managed_cmake = ROOT / '.tools/macos-dev/bin/cmake'
+        cmake = str(managed_cmake) if managed_cmake.is_file() else shutil.which('cmake')
+        self.assertIsNotNone(cmake)
+        port = ROOT / 'cmake/vcpkg-overlay-ports/minizip-ng/portfile.cmake'
+        sdks = ('/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk',
+                '/Applications/Xcode Beta.app/Contents/Developer/Platforms/'
+                'MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk')
+        for sdk in sdks:
+            for linkage in ('STATIC', 'SHARED'):
+                with self.subTest(sdk=sdk, linkage=linkage), \
+                        tempfile.TemporaryDirectory(prefix='snow minizip export ') as directory:
+                    root = Path(directory)
+                    package = root / 'package/share/minizip-ng'
+                    package.mkdir(parents=True)
+                    exported = package / 'minizip-ng.cmake'
+                    dependencies = [
+                        'compression', f'{sdk}/usr/lib/libbz2.tbd',
+                        f'{sdk}/System/Library/Frameworks/CoreFoundation.framework',
+                        f'{sdk}/System/Library/Frameworks/Security.framework',
+                        'ZLIB::ZLIB', '/vendor/Custom.framework',
+                    ]
+                    exported.write_text(f'''add_library(MINIZIP::minizip-ng {linkage} IMPORTED)
+set_target_properties(MINIZIP::minizip-ng PROPERTIES
+    INTERFACE_LINK_LIBRARIES "{';'.join(dependencies)}")
+''')
+                    mocks = ''.join(f'function({command})\nendfunction()\n' for command in
+                                    ('vcpkg_from_github', 'vcpkg_check_features',
+                                     'vcpkg_cmake_configure', 'vcpkg_cmake_install',
+                                     'vcpkg_fixup_pkgconfig', 'vcpkg_cmake_config_fixup',
+                                     'vcpkg_copy_pdbs', 'vcpkg_install_copyright'))
+                    (root / 'CMakeLists.txt').write_text(f'''
+cmake_minimum_required(VERSION 4.2)
+project(snow_minizip_export_contract LANGUAGES NONE)
+set(VCPKG_TARGET_IS_OSX TRUE)
+set(CURRENT_PACKAGES_DIR "${{CMAKE_CURRENT_SOURCE_DIR}}/package")
+{mocks}
+include([==[{port.as_posix()}]==])
+add_library(BZip2::BZip2 INTERFACE IMPORTED)
+add_library(ZLIB::ZLIB INTERFACE IMPORTED)
+include("${{CURRENT_PACKAGES_DIR}}/share/minizip-ng/minizip-ng.cmake")
+get_target_property(dependencies MINIZIP::minizip-ng INTERFACE_LINK_LIBRARIES)
+file(WRITE "${{CMAKE_CURRENT_BINARY_DIR}}/dependencies.txt" "${{dependencies}}")
+''')
+                    result = subprocess.run([cmake, '-S', str(root), '-B', str(root / 'build')],
+                                            text=True, capture_output=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    actual = (root / 'build/dependencies.txt').read_text().split(';')
+                    self.assertEqual(actual, [
+                        'compression', 'BZip2::BZip2', '-framework CoreFoundation',
+                        '-framework Security', 'ZLIB::ZLIB', '/vendor/Custom.framework',
+                    ])
+
+
 class MacOSFFmpegBuild(unittest.TestCase):
     def run_build(self, architectures, fail_archive_probe=False, fail_build=False,
                   include_program=True):

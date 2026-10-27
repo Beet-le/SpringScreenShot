@@ -30,6 +30,7 @@ struct RecordingEffectTestState {
     const SnowWebcam* webcam = nullptr;
     uint32_t webcamSize = 0;
     uint32_t webcamShape = 0;
+    uint32_t webcamOrientation = 0;
     QPoint webcamOffset;
     bool fail = false;
     bool autoPublish = true;
@@ -90,6 +91,7 @@ class RecordingEffectTestSource final : public RecordingEffectsSource {
         state->webcam = config.webcam_source;
         state->webcamSize = config.webcam_size;
         state->webcamShape = config.webcam_shape;
+        state->webcamOrientation = config.webcam_orientation;
         state->webcamOffset = QPoint(static_cast<int>(config.webcam_offset_left),
                                      static_cast<int>(config.webcam_offset_bottom));
         state->output = QSize(qRound(config.width * config.canvas_scale),

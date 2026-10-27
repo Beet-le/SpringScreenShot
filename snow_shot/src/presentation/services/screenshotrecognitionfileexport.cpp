@@ -94,6 +94,10 @@ QByteArray tableWorkbook(const ScreenshotTableDocument& document,
         mz_zip_file entry{};
         entry.filename = name;
         entry.compression_method = MZ_COMPRESS_METHOD_DEFLATE;
+        // The workbook fits a 32-bit memory stream. Unknown entry sizes make minizip emit
+        // ZIP64 local headers even for tiny parts, which older Excel versions reject.
+        entry.uncompressed_size = bytes.size();
+        entry.zip64 = MZ_ZIP64_DISABLE;
         return mz_zip_writer_add_buffer(writer, bytes.constData(),
                                         static_cast<int32_t>(bytes.size()), &entry) == MZ_OK;
     };

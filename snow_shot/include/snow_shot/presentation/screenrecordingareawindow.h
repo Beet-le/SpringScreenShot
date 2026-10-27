@@ -42,6 +42,8 @@ class ScreenRecordingAreaWindow final : public QWidget {
     // Desktop points on macOS; physical desktop pixels on Windows.
     void setRecordingRegion(const QRect& region);
     [[nodiscard]] QRect recordingRegion() const;
+    [[nodiscard]] bool canRestoreRecordingRegion() const;
+    bool restoreRecordingRegion(const QRect& region);
     void setRecordingState(ScreenshotToolPalette::RecordingState state);
     void setInputMode(InputMode mode);
     [[nodiscard]] InputMode inputMode() const;
@@ -72,6 +74,7 @@ class ScreenRecordingAreaWindow final : public QWidget {
   signals:
     void webcamLayoutPreviewed(int size, const QPoint& offset);
     void webcamLayoutCommitted(int size, const QPoint& offset);
+    void webcamOrientationRequested(int action);
     void recordingRegionChanged(const QRect& region);
     void regionInteractionStarted();
     void regionInteractionFinished();
@@ -104,7 +107,6 @@ class ScreenRecordingAreaWindow final : public QWidget {
     void setRegionCursor(Qt::Edges edges);
     [[nodiscard]] int minimumRegionExtent() const;
     void updateRegionCursor(const QPointF& position);
-    void applyQuickSelectionPreferences();
     void applyNativePassThrough(bool enabled);
     [[nodiscard]] bool regionEditingEnabled() const;
     [[nodiscard]] bool drawingEnabled() const;

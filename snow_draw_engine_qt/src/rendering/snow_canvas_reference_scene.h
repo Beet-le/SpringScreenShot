@@ -37,6 +37,7 @@ class SnowCanvasReferenceScene final {
     QRegion m_pendingDamage;
     std::uint64_t m_spotlightFingerprint = 0;
     std::uint64_t m_backgroundRevision = 0;
+    SnowCanvasRenderContext::Purpose m_renderPurpose = SnowCanvasRenderContext::Purpose::Widget;
     SnowCanvasCustomRenderer* m_backgroundRenderer = nullptr;
     QFont m_font;
     QPainter::RenderHints m_renderHints;

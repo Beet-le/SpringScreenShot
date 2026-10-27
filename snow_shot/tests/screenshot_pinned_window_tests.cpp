@@ -1,3 +1,4 @@
+#include "canvas_automatic_selection_test_support.h"
 #include "snow_shot/presentation/imageeditingdocument.h"
 #include "snow_shot/presentation/imageeditingwindow.h"
 #include "snow_shot/app/supportedpinfiles.h"
@@ -38,6 +39,7 @@
 #include "close_release_native_test_support.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
 #include "snow_shot/presentation/collagedocument.h"
+#include "../src/presentation/collage/collageresourcebudget_p.h"
 #include "snow_shot/presentation/screenshotanimationplayback.h"
 #include "../src/image/snowimageqtcodec.h"
 #include "pinned_animation_fixtures.h"
@@ -137,6 +139,7 @@
 #include <QGraphicsView>
 #include <QImage>
 #include <QInputMethodEvent>
+#include <QItemSelectionModel>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -2611,6 +2614,189 @@ void pinnedOriginalImagePreviewSupportsTranslationModes() {
         window.close();
     }
 #endif
+}
+
+void pinnedRecognitionCopyPreservesSelection() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    using Mode = ScreenshotRecognitionSessionController::Mode;
+    const auto selectText = [](QGraphicsView& layer, int start, int end) {
+        QGraphicsTextItem* item = nullptr;
+        for (auto* candidate : layer.scene()->items())
+            if (auto* text = dynamic_cast<QGraphicsTextItem*>(candidate))
+                item = text;
+        require(item != nullptr, "formatted recognition owns a text item");
+        QTextCursor cursor(item->document());
+        cursor.setPosition(start);
+        cursor.setPosition(end, QTextCursor::KeepAnchor);
+        item->setTextCursor(cursor);
+    };
+    const auto verifyCopy = [](ScreenshotPinnedWindow& window, QWidget& receiver,
+                               const QString& expected, bool html) {
+        window.activateWindow();
+        receiver.setFocus();
+        QApplication::processEvents();
+        QApplication::clipboard()->setText(QStringLiteral("stale"));
+        sendShortcut(receiver, Qt::Key_C, Qt::ControlModifier);
+        PhysicalKeyEvent release(QEvent::KeyRelease, Qt::Key_C, Qt::ControlModifier);
+        QApplication::sendEvent(&receiver, &release);
+        const QByteArray copyDetails =
+            QJsonDocument(QJsonObject{{QStringLiteral("command"), QStringLiteral("Ctrl+C")},
+                                      {QStringLiteral("receiver"), receiver.objectName()},
+                                      {QStringLiteral("expected"), expected},
+                                      {QStringLiteral("actual"), QApplication::clipboard()->text()},
+                                      {QStringLiteral("html"),
+                                       QApplication::clipboard()->mimeData()->hasHtml()}})
+                .toJson(QJsonDocument::Compact);
+        require(QApplication::clipboard()->text() == expected &&
+                    (!html || QApplication::clipboard()->mimeData()->hasHtml()),
+                copyDetails.constData());
+        QApplication::clipboard()->setText(QStringLiteral("toolbar clipboard sentinel"));
+        Access::copyEditToolbarContent(window);
+        require(QApplication::clipboard()->text() == expected &&
+                    (!html || QApplication::clipboard()->mimeData()->hasHtml()),
+                "toolbar Copy must preserve the selected recognition fragment and format");
+        QApplication::clipboard()->setText(QStringLiteral("menu clipboard sentinel"));
+        Access::copyCurrentViewport(window);
+        require(QApplication::clipboard()->text() == expected &&
+                    (!html || QApplication::clipboard()->mimeData()->hasHtml()),
+                "pinned menu Copy must preserve the selected recognition fragment and format");
+        auto* content = window.findChild<ScreenshotRecognitionWindow*>(
+            QStringLiteral("screenshotPinnedRecognitionContent"));
+        QApplication::clipboard()->setText(QStringLiteral("local clipboard sentinel"));
+        require(content && content->copyVisibleContentToClipboard() &&
+                    QApplication::clipboard()->text() == expected &&
+                    (!html || QApplication::clipboard()->mimeData()->hasHtml()),
+                "local recognition Copy must match the selected recognition fragment and format");
+        QApplication::clipboard()->setText(QStringLiteral("automation clipboard sentinel"));
+        const auto mime = Access::automationClipboard(window);
+        require(mime && mime->text() == expected && (!html || mime->hasHtml()) &&
+                    QApplication::clipboard()->text() ==
+                        QStringLiteral("automation clipboard sentinel"),
+                "automation Copy must match the selected recognition fragment and format");
+        require(window.isVisible(), "copying recognition must keep the pin open");
+    };
+
+    for (const bool html : {false, true}) {
+        auto config = cachedOcrPinConfig(nullptr);
+        config.recognitionResults = {};
+        config.formattedTextDocument = std::make_shared<QTextDocument>();
+        if (html)
+            config.formattedTextDocument->setHtml(
+                QStringLiteral("<p><b>Selectable</b> pinned text</p>"));
+        else
+            config.formattedTextDocument->setPlainText(QStringLiteral("Selectable pinned text"));
+        config.formattedPlainText = config.formattedTextDocument->toPlainText();
+        ScreenshotPinnedWindow window;
+        auto* session = Access::hiddenSelectionOffscreen(window, config);
+        session->activate(Mode::Text);
+        auto* layer = window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+        require(layer && layer->isVisible(), "active recognition displays the pinned document");
+        selectText(*layer, 1, 7);
+        verifyCopy(window, *layer, QStringLiteral("electa"), true);
+        require(session->active(), "selection copy must keep recognition active");
+        selectText(*layer, 0, 0);
+        QApplication::clipboard()->setText(QStringLiteral("whole document clipboard sentinel"));
+        Access::copyEditToolbarContent(window);
+        require(QApplication::clipboard()->text() == config.formattedPlainText,
+                "recognition Copy without a selection retains the complete document");
+
+        session->beginTextEditing();
+        auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+        require(editor && editor->isVisible(), "recognition exposes the text editor");
+        QTextCursor cursor(editor->document());
+        cursor.setPosition(1);
+        cursor.setPosition(7, QTextCursor::KeepAnchor);
+        editor->setTextCursor(cursor);
+        verifyCopy(window, *editor, QStringLiteral("electa"), false);
+    }
+
+    auto config = cachedOcrPinConfig(nullptr);
+    const QStringList qrContents{QStringLiteral("first\u00a0payload\r\ncontinued\r"),
+                                 QStringLiteral("\u00a0https://example.com/\r\n")};
+    const QString qrSource = qrContents.join(QLatin1Char('\n'));
+    config.recognitionResults.qr = ScreenshotQrRecognitionResult{qrContents, {}, {}};
+    SnowShotTableResult table;
+    table.html = QStringLiteral("<table><tr><td>First</td><td>Second</td><td></td></tr></table>");
+    config.recognitionResults.table = table;
+    const QString latexSource = QStringLiteral("x\u00a0+y\r\n+z\u2028+w\u2029+1\n");
+    config.recognitionResults.latex = SnowShotLatexResult{latexSource, {}, {}, 0};
+    ScreenshotPinnedWindow window;
+    auto* session = Access::hiddenSelectionOffscreen(window, config);
+    session->activate(Mode::Qr);
+    auto* browser = window.findChild<QTextBrowser*>(QStringLiteral("screenshotQrContents"));
+    require(browser && browser->isVisible(), "cached QR recognition is visible");
+    require(browser->textCursor().hasSelection() && browser->toPlainText() != qrSource,
+            "QR results automatically select payloads with display-normalized whitespace");
+    verifyCopy(window, *browser, qrSource, false);
+    QTextCursor cursor(browser->document());
+    cursor.setPosition(0);
+    cursor.setPosition(5, QTextCursor::KeepAnchor);
+    browser->setTextCursor(cursor);
+    verifyCopy(window, *browser, QStringLiteral("first"), false);
+    cursor.setPosition(5);
+    cursor.setPosition(6, QTextCursor::KeepAnchor);
+    browser->setTextCursor(cursor);
+    verifyCopy(window, *browser, QStringLiteral("\u00a0"), false);
+    const QString qrRawText = browser->document()->toRawText();
+    const int qrParagraphPosition = static_cast<int>(qrRawText.indexOf(QChar::ParagraphSeparator));
+    require(qrParagraphPosition >= 0, "QR copy fixture contains a normalized CRLF paragraph");
+    cursor.setPosition(qrParagraphPosition);
+    cursor.setPosition(qrParagraphPosition + 1, QTextCursor::KeepAnchor);
+    browser->setTextCursor(cursor);
+    verifyCopy(window, *browser, QStringLiteral("\r\n"), false);
+    const int qrPayloadBoundary =
+        static_cast<int>(qrRawText.indexOf(QChar::ParagraphSeparator, qrParagraphPosition + 1));
+    require(qrPayloadBoundary > qrParagraphPosition,
+            "QR copy fixture ends the first payload with a standalone carriage return");
+    cursor.setPosition(qrPayloadBoundary);
+    cursor.setPosition(qrPayloadBoundary + 1, QTextCursor::KeepAnchor);
+    browser->setTextCursor(cursor);
+    verifyCopy(window, *browser, QStringLiteral("\r"), false);
+    cursor.setPosition(qrPayloadBoundary + 1);
+    cursor.setPosition(qrPayloadBoundary + 2, QTextCursor::KeepAnchor);
+    browser->setTextCursor(cursor);
+    verifyCopy(window, *browser, QStringLiteral("\n"), false);
+    cursor.movePosition(QTextCursor::End);
+    cursor.setPosition(qrParagraphPosition, QTextCursor::KeepAnchor);
+    browser->setTextCursor(cursor);
+    verifyCopy(window, *browser, QStringLiteral("\r\ncontinued\r\n") + qrContents.last(), false);
+    cursor.clearSelection();
+    browser->setTextCursor(cursor);
+    verifyCopy(window, *browser, qrSource, false);
+
+    session->activate(Mode::Table);
+    auto* tableView = window.findChild<QTableView*>(QStringLiteral("snowShotRecognizedTable"));
+    require(tableView && tableView->isVisible(), "cached table recognition is visible");
+    tableView->selectionModel()->select(tableView->model()->index(0, 1),
+                                        QItemSelectionModel::ClearAndSelect);
+    verifyCopy(window, *tableView, QStringLiteral("Second"), true);
+    tableView->selectionModel()->select(tableView->model()->index(0, 2),
+                                        QItemSelectionModel::ClearAndSelect);
+    verifyCopy(window, *tableView, QString(), true);
+    tableView->clearSelection();
+    verifyCopy(window, *tableView, QStringLiteral("First\tSecond\t"), true);
+
+    session->activate(Mode::Latex);
+    auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor && editor->isVisible(), "cached LaTeX source is visible");
+    cursor = QTextCursor(editor->document());
+    cursor.setPosition(0);
+    cursor.setPosition(1, QTextCursor::KeepAnchor);
+    editor->setTextCursor(cursor);
+    verifyCopy(window, *editor, QStringLiteral("x"), false);
+    cursor.select(QTextCursor::Document);
+    editor->setTextCursor(cursor);
+    verifyCopy(window, *editor, latexSource, false);
+    const int paragraphPosition =
+        static_cast<int>(editor->document()->toRawText().indexOf(QChar::ParagraphSeparator));
+    require(paragraphPosition >= 0, "LaTeX copy fixture contains a normalized CRLF paragraph");
+    cursor.setPosition(paragraphPosition);
+    cursor.setPosition(paragraphPosition + 1, QTextCursor::KeepAnchor);
+    editor->setTextCursor(cursor);
+    verifyCopy(window, *editor, QStringLiteral("\r\n"), false);
+    cursor.clearSelection();
+    editor->setTextCursor(cursor);
+    verifyCopy(window, *editor, latexSource, false);
 }
 
 void pinnedRecognitionContextMenuCopiesLocally() {
@@ -23003,7 +23189,8 @@ void pinnedImageStitchingTextAndDeferredContent() {
     require(ready && Access::recognition(text), "formatted pin initializes its text session");
     Access::recognition(text)->activate(ScreenshotRecognitionSessionController::Mode::Text);
     waitForUi(20);
-    auto occupied = snow_shot::presentation::reserveCollageImport(qint64{512} * 1024 * 1024);
+    auto occupied =
+        snow_shot::presentation::collage_detail::reserveWorking(qint64{512} * 1024 * 1024);
     require(occupied != nullptr, "occupy the shared rasterization budget before OCR capture");
     const auto rejected = text.stitchingSnapshot();
     require(!rejected.source.isValid() && !rejected.error.isEmpty(),
@@ -26927,6 +27114,36 @@ int main(int argc, char* argv[]) {
             pinnedLinearCreationConsumesRightClick();
             return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--automatic-selection-only"))) {
+            canvas_automatic_selection_test::exercise([](auto verify) {
+                auto* screen = QGuiApplication::primaryScreen();
+                ScreenshotPinnedWindow pin;
+                pin.setAttribute(Qt::WA_DeleteOnClose, false);
+                QImage image(400, 300, QImage::Format_ARGB32_Premultiplied);
+                image.fill(Qt::white);
+                ScreenshotPinnedWindow::Config config;
+                config.screen = screen;
+                config.nativeGeometry = physicalPinGeometry(*screen, QPoint(40, 40), image.size());
+                config.canvasSourceRect = QRectF(QPointF(), QSizeF(image.size()));
+                config.initialWindowSize = image.size();
+                config.imageSource =
+                    ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+                config.automaticTextRecognition = false;
+                config.enableEditing = true;
+                require(pin.present(config), "present pin for automatic selection");
+                waitForUi(30);
+                ScreenshotPinnedWindowTestAccess::editSelectionOffscreen(pin, true);
+                auto* editController = pin.findChild<ScreenshotPinnedEditController*>();
+                require(editController != nullptr && editController->toolbarWindow() != nullptr,
+                        "pin owns annotation toolbar");
+                editController->toolbarWindow()->palette()->shapeRequested();
+                auto* canvas = pin.findChild<SnowCanvasWidget*>();
+                require(canvas != nullptr, "pinned window creates an annotation canvas");
+                verify(*canvas);
+                pin.close();
+            });
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--delete-text-after-cursor-only"))) {
             canvas_text_editing_preferences_test::exercise([](auto verify) {
                 ScreenshotPinnedWindow pin;
@@ -27276,6 +27493,10 @@ int main(int argc, char* argv[]) {
         }
         if (app.arguments().contains(QStringLiteral("--recognition-context-menu-only"))) {
             pinnedRecognitionContextMenuCopiesLocally();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--recognition-selection-copy-only"))) {
+            pinnedRecognitionCopyPreservesSelection();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--cached-ocr-provider-only"))) {

@@ -2,6 +2,7 @@
 #include "snow_shot/presentation/windowcloseshortcut.h"
 #include "snow_shot/presentation/screenrecordingareawindow.h"
 #include "snow_shot/presentation/canvastexteditingpreferences.h"
+#include "snow_shot/presentation/canvasdrawingpreferences.h"
 #include "snow_shot/presentation/screenshotstylebinding.h"
 
 #include <numbers>
@@ -134,17 +135,7 @@ ScreenRecordingAreaWindow::ScreenRecordingAreaWindow(QWidget* parent)
             [this]() { m_angleWheelSteps.reset(); });
     snow_shot::presentation::applyScreenshotCanvasToolStyles(
         *m_canvas, snow_shot::presentation::screenshotCanvasToolStyleDefaults());
-    applyQuickSelectionPreferences();
-    auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
-    if (applicationStorage.isInitialized()) {
-        connect(&applicationStorage.configuration(),
-                &snow_shot::storage::ConfigurationStore::valueChanged, this,
-                [this](const QString& key, const QJsonValue&) {
-                    if (key == QStringLiteral("drawing/quick_selection_disabled_tools")) {
-                        applyQuickSelectionPreferences();
-                    }
-                });
-    }
+    snow_shot::presentation::bindCanvasDrawingPreferences(*m_canvasRuntime, *this);
     applyInputMode();
 }
 
@@ -191,20 +182,26 @@ void ScreenRecordingAreaWindow::setPreviewFrame(const QImage& frame) {
     update(m_selectionRect.toAlignedRect());
 }
 
-void ScreenRecordingAreaWindow::applyQuickSelectionPreferences() {
-    auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
-    if (!applicationStorage.isInitialized() || m_canvasRuntime == nullptr) {
-        return;
-    }
-    const auto tools = snow_shot::presentation::screenshotQuickSelectionDisabledTools(
-        snow_shot::storage::DrawingSettings().quickSelectionDisabledTools());
-    if (!m_canvasRuntime->setQuickSelectionDisabledTools(tools)) {
-        qWarning("Failed to apply screen recording drawing quick-selection preferences");
-    }
-}
-
 QRect ScreenRecordingAreaWindow::recordingRegion() const {
     return m_recordingRegion;
+}
+
+bool ScreenRecordingAreaWindow::canRestoreRecordingRegion() const {
+    return regionEditingEnabled() && !m_trimming && !m_regionDragActive &&
+           !(m_webcamControl && m_webcamControl->interacting()) &&
+           m_gestureButton == Qt::NoButton && QApplication::mouseButtons() == Qt::NoButton;
+}
+
+bool ScreenRecordingAreaWindow::restoreRecordingRegion(const QRect& requestedRegion) {
+    if (!canRestoreRecordingRegion())
+        return false;
+    const QRect region =
+        snow_shot::presentation::recording::screenRecordingNormalizedRegion(requestedRegion);
+    if (!region.isValid() || region.isEmpty())
+        return false;
+    cancelWebcamInteraction();
+    applyRegionDragGeometry(region);
+    return true;
 }
 
 void ScreenRecordingAreaWindow::setRecordingRegion(const QRect& requestedRegion) {
@@ -366,6 +363,12 @@ void ScreenRecordingAreaWindow::setWebcamOverlay(const QRectF& bounds, const QSi
                     &ScreenRecordingAreaWindow::webcamLayoutPreviewed);
             connect(m_webcamControl, &RecordingWebcamControl::layoutCommitted, this,
                     &ScreenRecordingAreaWindow::webcamLayoutCommitted);
+            connect(m_webcamControl, &RecordingWebcamControl::orientationRequested, this,
+                    [this](int action) {
+                        if (m_webcamVisible && regionEditingEnabled() && !m_trimming &&
+                            !countdownActive() && isVisible() && !m_webcamControl->interacting())
+                            emit webcamOrientationRequested(action);
+                    });
             connect(m_webcamControl, &RecordingWebcamControl::interactionChanged, this,
                     [this] { updateNativeMouseRouting(regionPointer(QCursor::pos())); });
         }

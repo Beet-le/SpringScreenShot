@@ -15,7 +15,7 @@ typedef struct SnowRecordingEffectsKeyLabel {
     const char* label_utf8;
 } SnowRecordingEffectsKeyLabel;
 
-#define SNOW_RECORDING_EFFECTS_CONFIG_VERSION 10u
+#define SNOW_RECORDING_EFFECTS_CONFIG_VERSION 11u
 typedef struct SnowRecordingEffectsConfig {
     uint32_t version;
     uint32_t struct_size;
@@ -56,6 +56,9 @@ typedef struct SnowRecordingEffectsConfig {
     uint32_t webcam_offset_bottom;
     /* Version 10: vertical scroll labels, independent of clicks and keyboard. */
     uint32_t record_mouse_scrolling;
+    /* Version 11: clockwise quarter-turns in bits 0..1; reflect horizontally before
+       rotation in bit 2. Values 0..7; older configurations use identity (0). */
+    uint32_t webcam_orientation;
 } SnowRecordingEffectsConfig;
 
 typedef struct SnowRecordingEffectsTile {

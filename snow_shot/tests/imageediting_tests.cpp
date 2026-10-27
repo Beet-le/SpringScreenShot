@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "canvas_automatic_selection_test_support.h"
 #include "snow_shot/presentation/imageeditingdocument.h"
 #include "snow_shot/presentation/imageeditingwindow.h"
 #include "snow_shot/presentation/imageeditingcanvas.h"
@@ -1006,6 +1007,33 @@ void runImageEditingTests() {
     require(font >= 0, "editor fixtures load the bundled font");
     QApplication::setFont(QFont(QFontDatabase::applicationFontFamilies(font).first(), 12));
     if (QApplication::arguments().contains(
+            QStringLiteral("--image-editing-automatic-selection-only"))) {
+        canvas_automatic_selection_test::exercise([](auto verify) {
+            ImageEditingWindow window;
+            window.present(source());
+            window.canvas()->setMode(ImageEditingCanvas::Mode::Draw);
+            verify(*window.canvas());
+            require(snow_shot::storage::DrawingSettings().setAutomaticSelectionExcludedTools({}),
+                    "enable automatic selection for every image-editor drawing tool");
+            // Reload without another settings notification to exercise retained runtime policy.
+            window.present(source());
+            window.canvas()->setMode(ImageEditingCanvas::Mode::Draw);
+            auto& canvas = *window.canvas();
+            require(canvas.setCanvasTool(SnowCanvasTool::Shape), "activate shape after reload");
+            canvas_automatic_selection_test::mouse(canvas, QEvent::MouseButtonPress, {60, 60},
+                                                   Qt::LeftButton, Qt::LeftButton);
+            canvas_automatic_selection_test::mouse(canvas, QEvent::MouseMove, {160, 120},
+                                                   Qt::NoButton, Qt::LeftButton);
+            canvas_automatic_selection_test::mouse(canvas, QEvent::MouseButtonRelease, {160, 120},
+                                                   Qt::LeftButton, Qt::NoButton);
+            require(window.document()->runtime().selectedElementIds().size() == 1,
+                    "document reload preserves the image-editor automatic selection preference");
+            require(canvas.undo(), "remove the reloaded document's test shape");
+            window.shutdown();
+        });
+        return;
+    }
+    if (QApplication::arguments().contains(
             QStringLiteral("--image-editing-text-preferences-only"))) {
         runImageEditingTextPreferencesTests();
         return;
@@ -1071,15 +1099,50 @@ void runImageEditingTests() {
         QCoreApplication::setAttribute(nativeSiblings);
         const auto restoreNativeSiblings = qScopeGuard(
             [&] { QCoreApplication::setAttribute(nativeSiblings, previousNativeSiblings); });
-        const auto requireToolbarOpen = [](const ImageEditingWindow& editor) {
+        const auto requireEditorOpen = [](const ImageEditingWindow& editor) {
+            auto* surface = editor.canvas()->window();
+            require(surface->isVisible() && surface->windowHandle() &&
+                        surface->windowHandle()->isVisible(),
+                    "the image editor surface opens with its floating toolbar");
+#if defined(Q_OS_WIN)
+            if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+                const auto hwnd = reinterpret_cast<HWND>(surface->winId());
+                require(IsWindow(hwnd) && IsWindowVisible(hwnd),
+                        "the native image editor surface is visible when its toolbar opens");
+            }
+#endif
             auto* toolbar = editor.palette()->window();
             require(toolbar->isVisible() && editor.palette()->mainPanel()->isVisible() &&
                         toolbar->windowHandle() && toolbar->windowHandle()->isVisible(),
                     "main editing toolbar opens immediately without a resize or user interaction");
         };
+        {
+            ImageEditingWindow loading;
+            std::function<void(QImage)> deliver;
+            bool loaded = false;
+            QObject::connect(&loading, &ImageEditingWindow::loaded, &loading,
+                             [&](bool success) { loaded = success; });
+            loading.presentSource(ScreenshotExportSource::fromImageLoader(
+                [&](QObject*, std::function<void(QImage)> callback) {
+                    deliver = std::move(callback);
+                    return true;
+                }));
+            requireEditorOpen(loading);
+            awaitCondition([&] { return bool(deliver); }, "fresh editor starts loading");
+            requireEditorOpen(loading);
+            auto* message = statusMessage(loading);
+            require(message, "fresh editor shows loading feedback");
+            QPointer<QWidget> loadingNotice = message->noticeWidget();
+            std::exchange(deliver, {})(source().image);
+            awaitCondition([&] { return loaded; }, "fresh editor finishes loading");
+            requireEditorOpen(loading);
+            awaitCondition([&] { return !loadingNotice; }, "loading feedback finishes closing");
+            requireEditorOpen(loading);
+            loading.shutdown();
+        }
         ImageEditingWindow window;
         window.present(source());
-        requireToolbarOpen(window);
+        requireEditorOpen(window);
         QApplication::processEvents();
         if (nativeToolbar) {
             std::function<void(QImage)> deliver;
@@ -1123,7 +1186,7 @@ void runImageEditingTests() {
                         "native move/resize exit restores the editing toolbar");
             }
 #endif
-            requireToolbarOpen(window);
+            requireEditorOpen(window);
             window.shutdown();
             return;
         }
@@ -1140,7 +1203,7 @@ void runImageEditingTests() {
             loading.presentSource(ScreenshotExportSource::fromImageLoader(
                 [](QObject*, std::function<void(QImage)>) { return true; }));
             loadingToolbar = loading.palette()->window();
-            requireToolbarOpen(loading);
+            requireEditorOpen(loading);
             loading.shutdown();
         }
         require(!loadingToolbar, "closing the editor releases its independent toolbar");

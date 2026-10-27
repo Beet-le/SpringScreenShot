@@ -1,4 +1,5 @@
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
@@ -60,6 +61,12 @@ typedef struct SnowMacRecordingReport {
 uint8_t snow_recording_macos_input_permission_check(void);
 uint8_t snow_recording_macos_input_permission_request(void);
 uint8_t snow_recording_macos_microphone_permission_check(void);
+/* Native microphone setup/cleanup failures, including exception names/reasons.
+ * The callback runs synchronously on a worker; copy the UTF-8 bytes before
+ * returning. Install before capture starts; callback code must outlive capture.
+ * Pass NULL to disconnect. Applies to both live meters and recording startup. */
+typedef void (*SnowMacMicrophoneDiagnosticCallback)(const uint8_t*, size_t);
+void snow_recording_macos_set_microphone_diagnostic_callback(SnowMacMicrophoneDiagnosticCallback);
 /* The completion runs once on an arbitrary OS queue. Keep callback/context
  * alive until completion. The host main run loop must remain active. */
 SnowMacRecordingStatus

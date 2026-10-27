@@ -147,16 +147,19 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
 
     const auto backgroundRevision =
         request.backgroundRenderer != nullptr ? request.backgroundRenderer->contentRevision() : 0;
+    const auto purpose = request.backgroundContext != nullptr
+                             ? request.backgroundContext->purpose
+                             : SnowCanvasRenderContext::Purpose::Widget;
     auto sourceRequest = request;
     sourceRequest.spotlightCutouts = m_displayCache.spotlightCutouts();
     sourceRequest.spotlightCutoutCount = m_displayCache.spotlightCutoutCount();
     const auto spotlightKey = snow_canvas_renderer::spotlightFingerprint(sourceRequest);
-    const bool fullRebuild = m_image.isNull() || m_spotlightFingerprint != spotlightKey ||
-                             m_backgroundRenderer != request.backgroundRenderer ||
-                             m_backgroundRevision != backgroundRevision ||
-                             m_clearBackgroundEnabled != request.clearBackgroundEnabled ||
-                             m_font != request.painter->font() ||
-                             m_renderHints != request.painter->renderHints();
+    const bool fullRebuild =
+        m_image.isNull() || m_spotlightFingerprint != spotlightKey ||
+        m_backgroundRenderer != request.backgroundRenderer ||
+        m_backgroundRevision != backgroundRevision || m_renderPurpose != purpose ||
+        m_clearBackgroundEnabled != request.clearBackgroundEnabled ||
+        m_font != request.painter->font() || m_renderHints != request.painter->renderHints();
     const QRegion damage = fullRebuild ? QRegion(QRect(QPoint(), m_pixelSize)) : m_pendingDamage;
     const bool rebuild = !damage.isEmpty();
     if (rebuild) {
@@ -174,7 +177,8 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
                                              : Qt::transparent);
         painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
         snow_canvas_renderer::copyPainterFontAndHints(painter, *request.painter);
-        const SnowCanvasRenderContext context{m_image.rect(), damage, sourceTransform(), 1.0};
+        const SnowCanvasRenderContext context{m_image.rect(), damage, sourceTransform(), 1.0,
+                                              purpose};
         snow_canvas_filter_render::RenderWorkspace workspace;
         sourceRequest.painter = &painter;
         sourceRequest.displayInfo = &m_displayCache.sceneInfo();
@@ -199,6 +203,7 @@ bool SnowCanvasReferenceScene::render(SnowRuntime runtime,
         m_pendingDamage = {};
         m_spotlightFingerprint = spotlightKey;
         m_backgroundRevision = backgroundRevision;
+        m_renderPurpose = purpose;
         m_backgroundRenderer = request.backgroundRenderer;
         m_clearBackgroundEnabled = request.clearBackgroundEnabled;
         m_font = request.painter->font();

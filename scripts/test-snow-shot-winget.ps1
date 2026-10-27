@@ -12,6 +12,9 @@ $script:requests = @()
 $script:mode = 'missing'
 $script:downloadFailures = @()
 $script:downloadAttempts = 0
+$script:submissionScopes = @('public_repo', 'workflow')
+$script:credentialRequests = 0
+$script:credentialFailure = $null
 
 function Require($Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
@@ -45,7 +48,16 @@ function Invoke-SnowShotWingetApi([string]$Path) {
         })
     }
 }
-function Invoke-WebRequest([string]$Uri, [string]$OutFile, [int]$TimeoutSec) {
+function Invoke-WebRequest([string]$Uri, [string]$OutFile, [int]$TimeoutSec, [hashtable]$Headers) {
+    if ($Uri -ceq 'https://api.github.com/user') {
+        Require ($Headers.Authorization -ceq 'Bearer fixture-token') 'Credential checks must use the submission token'
+        $script:credentialRequests++
+        if ($script:credentialFailure) { throw $script:credentialFailure }
+        return @{
+            Content = '{"login":"fixture-account"}'
+            Headers = @{ 'X-OAuth-Scopes' = $script:submissionScopes -join ', ' }
+        }
+    }
     Require ($Uri -ceq $script:release.assets[0].browser_download_url) 'Wrong download URL'
     Require (-not (Test-Path -LiteralPath $OutFile)) 'A partial installer download was reused'
     $script:downloadAttempts++
@@ -240,20 +252,81 @@ try {
         Require ($result -match 'https://github.com/microsoft/winget-pkgs/') 'Missing duplicate link'
     }
     Require ($script:submitted -eq 0) 'Duplicate submitted'
+    Require ($script:credentialRequests -eq 0) 'Duplicate submissions must not require credentials'
     $script:mode = 'missing'
     Expect-Failure { Submit-SnowShotWingetManifest 'v1.1.5-beta' $directory 'Invoke-FixtureSubmit' } 'repository secret'
+    Require ($script:credentialRequests -eq 0) 'Missing tokens must fail without authentication requests'
     $env:WINGET_CREATE_GITHUB_TOKEN = 'fixture-token'
+    # A fork can be fast-forwarded through commits that change workflows only with workflow scope.
+    foreach ($scopes in @('public_repo', 'repo')) {
+        $script:submissionScopes = @($scopes)
+        Expect-Failure { Submit-SnowShotWingetManifest 'v1.1.5-beta' $directory 'Invoke-FixtureSubmit' } 'workflow.*WINGET_CREATE_GITHUB_TOKEN'
+        Require ($script:submitted -eq 0) 'Tokens without workflow scope must fail before WinGetCreate'
+    }
+    foreach ($scopes in @('', 'workflow')) {
+        $script:submissionScopes = @($scopes)
+        Expect-Failure { Submit-SnowShotWingetManifest 'v1.1.5-beta' $directory 'Invoke-FixtureSubmit' } 'classic token with public_repo'
+        Require ($script:submitted -eq 0) 'Tokens without repository scope must fail before WinGetCreate'
+    }
+    foreach ($status in @(401, 403, 500)) {
+        $response = [Net.Http.HttpResponseMessage]::new([Net.HttpStatusCode]$status)
+        $script:credentialFailure = [Microsoft.PowerShell.Commands.HttpResponseException]::new('Fixture credential failure', $response)
+        Expect-Failure { Submit-SnowShotWingetManifest 'v1.1.5-beta' $directory 'Invoke-FixtureSubmit' } 'Fixture credential failure'
+        Require ($script:submitted -eq 0) 'Authentication failures must stop submission'
+    }
+    $script:credentialFailure = $null
+    $script:submissionScopes = @('public_repo', 'workflow')
     Submit-SnowShotWingetManifest 'v1.1.5-beta' $directory 'Invoke-FixtureSubmit'
     Require ($script:submitted -eq 1) 'New version not submitted'
+    $script:submissionScopes = @('repo', 'workflow')
+    Submit-SnowShotWingetManifest 'v1.1.5-beta' $directory 'Invoke-FixtureSubmit'
+    Require ($script:submitted -eq 2) 'Full repository scope with workflow must also submit'
+    $requestsBeforeLookupFailure = $script:credentialRequests
     $script:mode = 'rate-limit'
     Expect-Failure { Submit-SnowShotWingetManifest 'v1.1.5-beta' $directory 'Invoke-FixtureSubmit' } 'Fixture HTTP failure'
     $script:mode = 'incomplete'
     Expect-Failure { Submit-SnowShotWingetManifest 'v1.1.5-beta' $directory 'Invoke-FixtureSubmit' } 'incomplete submission search'
-    Require ($script:submitted -eq 1) 'Failed duplicate lookup must not submit'
+    Require ($script:submitted -eq 2) 'Failed duplicate lookup must not submit'
+    Require ($script:credentialRequests -eq $requestsBeforeLookupFailure) 'Failed duplicate lookup must not authenticate'
     $script:mode = 'missing'
     $script:submitExitCode = 1
     Expect-Failure { Submit-SnowShotWingetManifest 'v1.1.5-beta' $directory 'Invoke-FixtureSubmit' } 'submission failed'
     $global:LASTEXITCODE = 0
+    # The standalone read-only check must enforce the same scopes and still validate fork access.
+    & {
+        $script:forkRequests = 0
+        $script:fixtureFork = @{
+            fork = $true
+            parent = @{ full_name = 'microsoft/winget-pkgs' }
+            permissions = @{ push = $true }
+            full_name = 'fixture-account/winget-pkgs'
+        }
+        function Invoke-RestMethod([string]$Uri, [hashtable]$Headers, [string]$Method = 'Get') {
+            Require ($Uri -ceq 'https://api.github.com/repos/fixture-account/winget-pkgs') 'Wrong submission account fork'
+            Require ($Headers.Authorization -ceq 'Bearer fixture-token') 'Fork checks must use the submission token'
+            Require ($Method -ceq 'Get') 'Credential checks must remain read-only'
+            $script:forkRequests++
+            return $script:fixtureFork
+        }
+        $credentialTest = Join-Path $PSScriptRoot 'test-snow-shot-winget-credentials.ps1'
+        $script:submissionScopes = @('public_repo')
+        Expect-Failure { . $credentialTest } 'workflow.*WINGET_CREATE_GITHUB_TOKEN'
+        Require ($script:forkRequests -eq 0) 'Invalid scopes must fail before checking the fork'
+        foreach ($repositoryScope in @('public_repo', 'repo')) {
+            $script:submissionScopes = @($repositoryScope, 'workflow')
+            $result = . $credentialTest
+            Require ($result -match 'PASS:.*fixture-account.*repository and workflow scopes') 'Credential check must report verified scopes'
+            Require (-not ($result -match 'fixture-token')) 'Credential output must not expose the token'
+        }
+        $script:fixtureFork.fork = $false
+        Expect-Failure { . $credentialTest } 'writable fork'
+        $script:fixtureFork.fork = $true
+        $script:fixtureFork.parent.full_name = 'unrelated/winget-pkgs'
+        Expect-Failure { . $credentialTest } 'writable fork'
+        $script:fixtureFork.parent.full_name = 'microsoft/winget-pkgs'
+        $script:fixtureFork.permissions.push = $false
+        Expect-Failure { . $credentialTest } 'writable fork'
+    }
     # Real installer checks and reputation-policy changes must never act on a developer PC.
     $runnerEnvironment = $env:RUNNER_ENVIRONMENT
     $runnerOs = $env:RUNNER_OS

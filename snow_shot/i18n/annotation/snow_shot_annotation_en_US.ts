@@ -128,6 +128,22 @@
             <translation>Arrow</translation>
         </message>
         <message>
+            <source>Arrow outline color %1</source>
+            <translation>Arrow outline color %1</translation>
+        </message>
+        <message>
+            <source>Arrow outline color transparent</source>
+            <translation>Arrow outline color transparent</translation>
+        </message>
+        <message>
+            <source>Arrow outline width</source>
+            <translation>Arrow outline width</translation>
+        </message>
+        <message>
+            <source>Arrow outline width %1px</source>
+            <translation>Arrow outline width %1px</translation>
+        </message>
+        <message>
             <source>Arrow ratio (scroll to adjust)</source>
             <translation>Arrow ratio (scroll to adjust)</translation>
         </message>
@@ -1454,6 +1470,10 @@
         <message>
             <source>Text translation</source>
             <translation>Text translation</translation>
+        </message>
+        <message>
+            <source>Thought Bubble</source>
+            <translation>Thought Bubble</translation>
         </message>
         <message>
             <source>Translation settings</source>

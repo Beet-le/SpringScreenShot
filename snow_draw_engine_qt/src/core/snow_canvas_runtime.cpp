@@ -31,6 +31,8 @@ struct SnowCanvasRuntime::Impl {
     bool restoreDocumentHistoryPreservingEditorStyles(const QByteArray& payload);
     bool clearDocumentPreservingViewports();
     void clearRenderState();
+    bool setAutomaticallySelectNewlyCreatedElements(bool enabled);
+    bool setAutomaticSelectionExcludedTools(const QSet<SnowCanvasTool>& tools);
     bool setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& tools);
     void destroyAsync();
     QImage renderToImage(const QRectF& virtualSelectionRect, const QSize& outputSize,
@@ -160,6 +162,17 @@ bool SnowCanvasRuntime::Impl::clearDocumentPreservingViewports() {
         return false;
     }
     return session.clearDocumentPreservingViewports();
+}
+
+bool SnowCanvasRuntime::Impl::setAutomaticallySelectNewlyCreatedElements(bool enabled) {
+    return hasThreadAccess("setAutomaticallySelectNewlyCreatedElements") &&
+           session.setAutomaticallySelectNewlyCreatedElements(enabled);
+}
+
+bool SnowCanvasRuntime::Impl::setAutomaticSelectionExcludedTools(
+    const QSet<SnowCanvasTool>& tools) {
+    return hasThreadAccess("setAutomaticSelectionExcludedTools") &&
+           session.setAutomaticSelectionExcludedTools(tools);
 }
 
 bool SnowCanvasRuntime::Impl::setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& tools) {
@@ -333,6 +346,14 @@ bool SnowCanvasRuntime::restoreDocumentHistoryPreservingEditorStyles(const QByte
 
 bool SnowCanvasRuntime::clearDocumentPreservingViewports() {
     return m_impl->clearDocumentPreservingViewports();
+}
+
+bool SnowCanvasRuntime::setAutomaticallySelectNewlyCreatedElements(bool enabled) {
+    return m_impl->setAutomaticallySelectNewlyCreatedElements(enabled);
+}
+
+bool SnowCanvasRuntime::setAutomaticSelectionExcludedTools(const QSet<SnowCanvasTool>& tools) {
+    return m_impl->setAutomaticSelectionExcludedTools(tools);
 }
 
 bool SnowCanvasRuntime::setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& tools) {

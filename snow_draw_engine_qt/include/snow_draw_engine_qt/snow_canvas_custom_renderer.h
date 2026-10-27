@@ -25,10 +25,13 @@ struct SnowCanvasFilterRenderReference {
 };
 
 struct SnowCanvasRenderContext {
+    enum class Purpose { Widget, ContentSnapshot };
+
     QRect viewportRect;
     QRegion exposedRegion;
     QTransform canvasToViewTransform;
     qreal devicePixelRatio = 1.0;
+    Purpose purpose = Purpose::Widget;
 };
 
 class SnowCanvasCustomRenderer {

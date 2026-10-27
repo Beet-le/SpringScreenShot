@@ -1,10 +1,15 @@
 #include "snow_shot/diagnostics/diagnostics.h"
 #include "snow_shot/diagnostics/ffmpegdiagnostics.h"
+#include "snow_shot/diagnostics/microphonediagnostics.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QJsonDocument>
 #include <QTemporaryDir>
+#ifdef Q_OS_MACOS
+#include "snow_recording_macos.h"
+#endif
 
 extern "C" {
 #include <libavutil/log.h>
@@ -22,7 +27,8 @@ void require(bool condition, const char* message) {
 }
 void ffmpegErrorsAndRecordingMetadataReachExportedLogs() {
     using namespace snow_shot::diagnostics;
-    QTemporaryDir directory;
+    QTemporaryDir directory(QDir(QDir::tempPath()).canonicalPath() +
+                            QStringLiteral("/snow-recording-diag-XXXXXX"));
     require(directory.isValid(), "diagnostic directory exists");
     DiagnosticsOptions options;
     options.directories = {directory.path()};
@@ -31,6 +37,11 @@ void ffmpegErrorsAndRecordingMetadataReachExportedLogs() {
     options.mirrorToConsole = false;
     auto& service = DiagnosticsService::instance();
     require(service.initialize(options), "diagnostics initialize");
+#ifdef Q_OS_MACOS
+    // The shipping archive disables legacy-capture; the diagnostic entry point
+    // must still be exported for live meters and the current recording backend.
+    snow_recording_macos_set_microphone_diagnostic_callback(recordMicrophoneFailure);
+#endif
     installFfmpegDiagnostics();
     installFfmpegDiagnostics();
     std::thread worker([] {
@@ -40,6 +51,15 @@ void ffmpegErrorsAndRecordingMetadataReachExportedLogs() {
         av_log(nullptr, AV_LOG_INFO, "ordinary codec progress\n");
     });
     worker.join();
+    std::thread microphoneWorker([] {
+        const std::string message =
+            "com.apple.coreaudio.avfaudio (0): microphone install-tap: required condition is "
+            "false: "
+            "format.sampleRate == hwFormat.sampleRate; device=123 hardware=48000Hz/1ch "
+            "output=44100Hz/2ch";
+        recordMicrophoneFailure(reinterpret_cast<const uint8_t*>(message.data()), message.size());
+    });
+    microphoneWorker.join();
     const QJsonObject fields{{QStringLiteral("operation"), QStringLiteral("trim-session")},
                              {QStringLiteral("export_attempt"), 2},
                              {QStringLiteral("stage"), QStringLiteral("exporting")},
@@ -72,6 +92,7 @@ void ffmpegErrorsAndRecordingMetadataReachExportedLogs() {
     require(file.open(QIODevice::ReadOnly), "diagnostic snapshot opens");
     int nativeErrors = 0;
     bool foundRecording = false;
+    bool foundMicrophone = false;
     const auto bytes = file.readAll();
     for (const auto& line : bytes.split('\n')) {
         const auto record = QJsonDocument::fromJson(line).object();
@@ -86,6 +107,17 @@ void ffmpegErrorsAndRecordingMetadataReachExportedLogs() {
                 require(message.contains(QStringLiteral("pts 6144 < dts 7000")) &&
                             !message.contains(QStringLiteral("private-value")),
                         "native timestamp evidence survives secret redaction");
+        } else if (event == QStringLiteral("microphone.native_failed")) {
+            const auto message = record.value(QStringLiteral("message")).toString();
+            require(
+                record.value(QStringLiteral("level")) == QStringLiteral("WARN") &&
+                    message.contains(QStringLiteral("com.apple.coreaudio.avfaudio")) &&
+                    message.contains(QStringLiteral("install-tap")) &&
+                    message.contains(QStringLiteral("format.sampleRate == hwFormat.sampleRate")) &&
+                    message.contains(QStringLiteral("hardware=48000Hz/1ch")) &&
+                    message.contains(QStringLiteral("output=44100Hz/2ch")),
+                "native microphone exception and format evidence reach exported logs");
+            foundMicrophone = true;
         } else if (event == QStringLiteral("recording.trim_export_failed")) {
             require(record.value(QStringLiteral("fields")).toObject() == fields,
                     "recording metadata survives filtering without window content");
@@ -96,11 +128,15 @@ void ffmpegErrorsAndRecordingMetadataReachExportedLogs() {
             foundRecording = true;
         }
     }
-    require(nativeErrors == 2 && foundRecording, "export contains native and application evidence");
+    require(nativeErrors == 2 && foundRecording && foundMicrophone,
+            "export contains native and application evidence");
     require(!bytes.contains("ordinary codec progress"), "progress does not flood file logs");
     require(!bytes.contains("error after forwarding stops"),
             "forwarding stops before logger teardown");
     file.close();
+#ifdef Q_OS_MACOS
+    snow_recording_macos_set_microphone_diagnostic_callback(nullptr);
+#endif
     service.shutdown();
     require(QFile::setPermissions(exported.path, QFileDevice::ReadOwner | QFileDevice::WriteOwner),
             "release the exported fixture's read-only protection before temporary cleanup");

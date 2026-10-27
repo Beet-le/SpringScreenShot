@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "snow_shot/presentation/imageeditingwindow.h"
+#include "snow_shot/presentation/canvasdrawingpreferences.h"
 #include "imageeditingexportcontroller.h"
 #include "snow_shot/presentation/imageeditingcanvas.h"
 #include "snow_shot/presentation/components/canvasactiontoolbar.h"
@@ -298,6 +299,7 @@ struct ImageEditingWindow::Impl {
                 undo(action == QStringLiteral("redo"));
                 return true;
             });
+        bindCanvasDrawingPreferences(document.runtime(), q);
         reloadShortcuts();
         auto& storage = storage::ApplicationStorage::instance();
         if (storage.isInitialized()) {

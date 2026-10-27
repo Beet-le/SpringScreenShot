@@ -198,6 +198,80 @@ void inputMethodCommitReplacementUsesCursorRelativeRange() {
     require(draft.cursorPosition() == 2, "undo should restore cursor before IME replacement");
 }
 
+void draftValidationPreservesSelectionAndHistory() {
+    SnowCanvasTextDraft draft;
+    draft.begin(QStringLiteral("abc"),
+                [](const QString& text) { return !text.contains(QLatin1Char('!')); });
+    draft.setCursorPosition(1);
+    draft.setCursorPosition(2, true);
+    require(!draft.replaceSelection(QStringLiteral("!")) && draft.text() == QStringLiteral("abc") &&
+                draft.selectedText() == QStringLiteral("b"),
+            "rejected replacements preserve the accepted text and selection");
+    require(!draft.undoEdit() && !draft.redoEdit(), "rejected replacements create no history");
+    require(draft.replaceSelection(QStringLiteral("XY")) && draft.text() == QStringLiteral("aXYc"),
+            "accepted replacements update the constrained draft");
+    require(draft.undoEdit() && draft.selectedText() == QStringLiteral("b"),
+            "undo restores the accepted text and selection");
+    require(!draft.replaceSelection(QStringLiteral("!")) && draft.redoEdit() &&
+                draft.text() == QStringLiteral("aXYc"),
+            "a rejected replacement preserves the redo branch");
+
+    draft.begin(QStringLiteral("abc"));
+    require(draft.replaceSelection(QStringLiteral("!")) && draft.text() == QStringLiteral("abc!"),
+            "a new unrestricted draft releases the previous validator");
+}
+
+void draftValidationKeepsImeCompositionIndependent() {
+    SnowCanvasTextDraft draft;
+    draft.begin(QStringLiteral("abc"),
+                [](const QString& text) { return !text.contains(QLatin1Char('!')); });
+    draft.setCursorPosition(1);
+    QInputMethodEvent preedit(QStringLiteral("!"), {});
+    require(draft.handleInputMethodEvent(preedit) && draft.displayText() == QStringLiteral("a!bc"),
+            "composition may contain text that cannot be committed");
+    QInputMethodEvent rejected;
+    rejected.setCommitString(QStringLiteral("!"));
+    require(draft.handleInputMethodEvent(rejected) && !draft.hasPreedit() &&
+                draft.text() == QStringLiteral("abc") && draft.cursorPosition() == 1,
+            "rejecting an IME commit publishes the end of its composition");
+
+    draft.handleInputMethodEvent(preedit);
+    QInputMethodEvent next(QStringLiteral("new"), {});
+    next.setCommitString(QStringLiteral("!"));
+    require(draft.handleInputMethodEvent(next) && draft.displayText() == QStringLiteral("anewbc") &&
+                draft.text() == QStringLiteral("abc"),
+            "a rejected commit still starts the same event's next composition");
+    QInputMethodEvent rejectedReplacement;
+    rejectedReplacement.setCommitString(QStringLiteral("!"), -1, 2);
+    require(draft.handleInputMethodEvent(rejectedReplacement) && !draft.hasPreedit() &&
+                draft.text() == QStringLiteral("abc"),
+            "rejected cursor-relative replacements also release composition");
+    require(!draft.undoEdit(), "rejected IME commits create no undo entries");
+
+    QInputMethodEvent accepted;
+    accepted.setCommitString(QStringLiteral("X"));
+    require(draft.handleInputMethodEvent(accepted) && draft.text() == QStringLiteral("aXbc"),
+            "valid IME input continues after rejection");
+    require(draft.undoEdit() && draft.text() == QStringLiteral("abc") && draft.redoEdit() &&
+                draft.text() == QStringLiteral("aXbc"),
+            "only accepted IME input participates in undo and redo");
+}
+
+void draftHistoryCommandsReportCompositionChanges() {
+    for (const bool redo : {false, true}) {
+        SnowCanvasTextDraft draft;
+        draft.begin(QStringLiteral("abc"));
+        QInputMethodEvent preedit(QStringLiteral("pending"), {});
+        draft.handleInputMethodEvent(preedit);
+        require(redo ? draft.redoEdit() : draft.undoEdit(),
+                "history commands report cleared composition even without an edit entry");
+        require(!draft.hasPreedit() && draft.displayText() == QStringLiteral("abc"),
+                "history commands restore the accepted presentation");
+        require(!(redo ? draft.redoEdit() : draft.undoEdit()),
+                "clearing composition creates no history entry");
+    }
+}
+
 void keyCommandsInsertTextAndReportEditorCommands() {
     SnowCanvasTextDraft draft;
     draft.begin(QStringLiteral("ab"));
@@ -5548,10 +5622,29 @@ void runAutomaticTextWrappingTests() {
     automaticTextWrappingMeasurementsPreserveExcludedPoliciesAndCompleteText();
 }
 
+void runTextDraftInputTests() {
+    replacementNormalizesLineBreaksAndSupportsUndoRedo();
+    cursorPositionReportsOnlyRealStateChanges();
+    inputMethodPreeditDoesNotCommitUntilCommitString();
+    inputMethodCommitReplacementUsesCursorRelativeRange();
+    draftValidationPreservesSelectionAndHistory();
+    draftValidationKeepsImeCompositionIndependent();
+    draftHistoryCommandsReportCompositionChanges();
+    keyCommandsInsertTextAndReportEditorCommands();
+    deleteRequestsElementRemovalWhileBackspaceEditsCharacters();
+    enabledDeleteEditsForwardAndSupportsUndoRedo();
+    keyCommandsDelegateCursorMovement();
+    keyCommandsReportNoChangeForNoopEdits();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    if (app.arguments().contains(QStringLiteral("--text-input-only"))) {
+        runTextDraftInputTests();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--delete-text-only"))) {
         deleteRequestsElementRemovalWhileBackspaceEditsCharacters();
         enabledDeleteEditsForwardAndSupportsUndoRedo();
@@ -5598,15 +5691,7 @@ int main(int argc, char** argv) {
     serialNumberFormattedLabelsRenderAndFitBadges();
     serialNumberGlyphBaselinesRemainCentered();
     serialNumberLabelsIgnoreInheritedTextDecorations();
-    replacementNormalizesLineBreaksAndSupportsUndoRedo();
-    cursorPositionReportsOnlyRealStateChanges();
-    inputMethodPreeditDoesNotCommitUntilCommitString();
-    inputMethodCommitReplacementUsesCursorRelativeRange();
-    keyCommandsInsertTextAndReportEditorCommands();
-    deleteRequestsElementRemovalWhileBackspaceEditsCharacters();
-    enabledDeleteEditsForwardAndSupportsUndoRedo();
-    keyCommandsDelegateCursorMovement();
-    keyCommandsReportNoChangeForNoopEdits();
+    runTextDraftInputTests();
     finishedEditCommitPolicyRequiresViewportAndContent();
     textLayoutMapsDocumentRectsToLocalItemRects();
     resizedAlignedTextKeepsCaretClickAndSelectionGeometryConsistent();

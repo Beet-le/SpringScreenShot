@@ -127,6 +127,7 @@ impl Clarity {
 struct Options {
     webcam_size: Option<u32>,
     webcam_shape: snow_webcam::WebcamShape,
+    webcam_orientation: snow_webcam::WebcamOrientation,
     region_size: Option<(u32, u32)>,
     duration_seconds: u64,
     warmup_seconds: u64,
@@ -192,6 +193,7 @@ bench-stage-timing,bench-compositor-timing,bench-pipeline-timing \
   --region-size <WxH>        source region within the leftmost monitor, at least 528x96\n\
   --webcam-size <px>         add a synthetic moving camera, 50..500 pixels\n\
   --webcam-shape <shape>     square or circle (default: square)\n\
+  --webcam-orientation <n>   quarter-turns in bits 0..1, mirror in bit 2 (0..7)\n\
   --audio                    include system audio in the recording\n\
   --move-interval-ms <n>     simulated mouse move interval (default: {DEFAULT_MOVE_INTERVAL_MS})\n\
   --click-interval-ms <n>    simulated left click interval (default: {DEFAULT_CLICK_INTERVAL_MS})\n\
@@ -217,6 +219,7 @@ fn parse_args() -> Result<Options> {
     let mut options = Options {
         webcam_size: None,
         webcam_shape: snow_webcam::WebcamShape::Square,
+        webcam_orientation: snow_webcam::WebcamOrientation::Identity,
         region_size: None,
         duration_seconds: DEFAULT_DURATION_SECONDS,
         warmup_seconds: DEFAULT_WARMUP_SECONDS,
@@ -270,6 +273,12 @@ fn parse_args() -> Result<Options> {
                     bail!("webcam size must be 50..500");
                 }
                 options.webcam_size = Some(size);
+            }
+            "--webcam-orientation" => {
+                options.webcam_orientation = snow_webcam::WebcamOrientation::from_raw(
+                    next_value("--webcam-orientation", &args, &mut index)?.parse()?,
+                )
+                .map_err(anyhow::Error::msg)?;
             }
             "--webcam-shape" => {
                 options.webcam_shape =
@@ -628,8 +637,8 @@ pub(crate) fn run() -> Result<()> {
     fs::write(
         options.output_directory.join("webcam-metadata.txt"),
         format!(
-            "size={:?}\nshape={:?}\n",
-            options.webcam_size, options.webcam_shape
+            "size={:?}\nshape={:?}\norientation={:?}\n",
+            options.webcam_size, options.webcam_shape, options.webcam_orientation
         ),
     )?;
     let mut rows = Vec::new();
@@ -1017,6 +1026,7 @@ fn run_sample(
                     style: snow_webcam::WebcamStyle {
                         size,
                         shape: options.webcam_shape,
+                        orientation: options.webcam_orientation,
                         ..Default::default()
                     },
                 })

@@ -71,7 +71,13 @@ struct ShadowCache {
     std::size_t bytes = 0;
 };
 
-thread_local ShadowCache g_cache;
+ShadowCache& shadowCacheForCurrentThread() {
+    // Debug iterator tracking can allocate even for an empty vector. Defer
+    // construction until use, after loader TLS initialization has completed.
+    thread_local ShadowCache cache;
+    return cache;
+}
+
 thread_local ScreenshotSelectionShadowDiagnostics g_diagnostics;
 thread_local std::size_t g_liveRegionCacheBytes = 0;
 
@@ -138,18 +144,19 @@ QImage buildShadowAsset(const ShadowKey& key) {
 }
 
 QImage shadowAsset(int physicalRadius, int physicalShadowWidth, const QColor& color, qreal dpr) {
+    auto& cache = shadowCacheForCurrentThread();
     const ShadowKey key{
         std::max(0, physicalRadius),
         std::max(1, physicalShadowWidth),
         color.rgba(),
         quantizedDpr(dpr),
     };
-    ++g_cache.use;
-    for (ShadowCacheEntry& entry : g_cache.entries) {
+    ++cache.use;
+    for (ShadowCacheEntry& entry : cache.entries) {
         if (!(entry.key == key)) {
             continue;
         }
-        entry.lastUsed = g_cache.use;
+        entry.lastUsed = cache.use;
         ++g_diagnostics.cacheHits;
         return entry.image;
     }
@@ -169,22 +176,22 @@ QImage shadowAsset(int physicalRadius, int physicalShadowWidth, const QColor& co
     entry.key = key;
     entry.image = std::move(asset);
     entry.bytes = assetBytes;
-    entry.lastUsed = g_cache.use;
+    entry.lastUsed = cache.use;
 
-    while ((static_cast<int>(g_cache.entries.size()) >= kCacheEntryLimit ||
-            entry.bytes > kCacheByteLimit - g_cache.bytes) &&
-           !g_cache.entries.empty()) {
+    while ((static_cast<int>(cache.entries.size()) >= kCacheEntryLimit ||
+            entry.bytes > kCacheByteLimit - cache.bytes) &&
+           !cache.entries.empty()) {
         const auto leastUsed =
-            std::min_element(g_cache.entries.begin(), g_cache.entries.end(),
+            std::min_element(cache.entries.begin(), cache.entries.end(),
                              [](const ShadowCacheEntry& left, const ShadowCacheEntry& right) {
                                  return left.lastUsed < right.lastUsed;
                              });
-        g_cache.bytes -= leastUsed->bytes;
-        g_cache.entries.erase(leastUsed);
+        cache.bytes -= leastUsed->bytes;
+        cache.entries.erase(leastUsed);
     }
-    g_cache.bytes += entry.bytes;
-    g_cache.entries.push_back(std::move(entry));
-    return g_cache.entries.back().image;
+    cache.bytes += entry.bytes;
+    cache.entries.push_back(std::move(entry));
+    return cache.entries.back().image;
 }
 
 QPainterPath roundedHole(const QRectF& selectionBounds, qreal cornerRadius) {
@@ -1575,9 +1582,10 @@ void ScreenshotResultCompositor::finishLiveSurface(QPainter& painter, const QRec
 
 ScreenshotSelectionShadowDiagnostics
 ScreenshotSelectionShadowRenderer::diagnosticsForCurrentThread() {
+    const auto& cache = shadowCacheForCurrentThread();
     ScreenshotSelectionShadowDiagnostics result = g_diagnostics;
-    result.retainedBytes = g_cache.bytes;
-    result.retainedEntries = g_cache.entries.size();
+    result.retainedBytes = cache.bytes;
+    result.retainedEntries = cache.entries.size();
     result.regionCacheRetainedBytes =
         static_cast<std::size_t>(g_regionCompositionCache.mask.sizeInBytes() +
                                  g_regionCompositionCache.shadow.sizeInBytes()) +
@@ -1592,7 +1600,7 @@ void ScreenshotSelectionShadowRenderer::resetDiagnosticsForCurrentThread() {
 }
 
 void ScreenshotSelectionShadowRenderer::resetCacheForCurrentThread() {
-    g_cache = ShadowCache{};
+    shadowCacheForCurrentThread() = ShadowCache{};
     g_regionPathCache = {};
     g_regionCompositionCache = {};
 }
