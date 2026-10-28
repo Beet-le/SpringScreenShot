@@ -426,6 +426,40 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
 
     SnowCanvasTool canvasTool() const;
     bool setCanvasTool(SnowCanvasTool tool);
+    // Stroke tracking only records a revision when a handler is installed, so hosts that do
+    // not observe strokes never pay for it. The revision is captured before the press is
+    // dispatched and compared after the release, which is the one place a gesture becomes an
+    // undoable document change.
+    SnowCanvasWidget::StrokeCommittedHandler strokeCommitted;
+    quint64 strokeStartRevision = 0;
+    SnowCanvasTool strokeTool = SnowCanvasTool::Select;
+    bool strokeTracking = false;
+    quint64 documentRevision() const {
+        const SnowCanvasRuntime* owner = runtimeBinding.runtimeOwner();
+        return owner != nullptr ? owner->documentRevision() : 0;
+    }
+    void beginStrokeTracking() {
+        strokeTracking = false;
+        if (!strokeCommitted)
+            return;
+        strokeStartRevision = documentRevision();
+        strokeTool = canvasTool();
+        strokeTracking = true;
+    }
+    // The handler is copied because it may destroy the widget; nothing touches members after
+    // the call, matching the re-entrancy contract of the other host callbacks here.
+    void finishStrokeTracking() {
+        if (!strokeTracking)
+            return;
+        strokeTracking = false;
+        const SnowCanvasWidget::StrokeCommittedHandler handler = strokeCommitted;
+        const SnowCanvasTool tool = strokeTool;
+        if (!handler || tool == SnowCanvasTool::Select)
+            return;
+        if (documentRevision() <= strokeStartRevision)
+            return;
+        handler(tool);
+    }
     void setCursorForLayer(SnowCanvasCursorLayer layer, const QCursor& cursor);
     void clearCursorForLayer(SnowCanvasCursorLayer layer);
     void setCrosshairCursorFactory(CrosshairCursorFactory factory);
@@ -3495,6 +3529,9 @@ void SnowCanvasWidget::mousePressEvent(QMouseEvent* event) {
     if (event != nullptr && event->button() == Qt::MiddleButton) {
         m_impl->beginMiddleClickTracking(event->position());
     }
+    if (event != nullptr && event->button() == Qt::LeftButton) {
+        m_impl->beginStrokeTracking();
+    }
     const bool handled = m_impl->handleMousePress(event);
     if (!lifetime) {
         return;
@@ -3612,6 +3649,11 @@ void SnowCanvasWidget::mouseDoubleClickEvent(QMouseEvent* event) {
     const QPointer<SnowCanvasWidget> lifetime(this);
     if (m_impl->suppressTabletMouseEvent(event)) {
         return;
+    }
+    // The second press of a double click arrives here instead of in mousePressEvent, and
+    // creating text that way still ends with a release that should count as a stroke.
+    if (event != nullptr && event->button() == Qt::LeftButton) {
+        m_impl->beginStrokeTracking();
     }
     const bool handled = m_impl->handleMouseDoubleClick(event);
     if (!lifetime) {
@@ -3767,6 +3809,12 @@ void SnowCanvasWidget::mouseReleaseEvent(QMouseEvent* event) {
     if (!lifetime) {
         return;
     }
+    if (event != nullptr && event->button() == Qt::LeftButton) {
+        m_impl->finishStrokeTracking();
+        if (!lifetime) {
+            return;
+        }
+    }
     if (middleClick && !handled) {
         event->accept();
         emit unhandledMiddleClick();
@@ -3812,7 +3860,24 @@ bool SnowCanvasWidget::Impl::suppressTabletMouseEvent(QMouseEvent* event) {
 }
 
 void SnowCanvasWidget::tabletEvent(QTabletEvent* event) {
-    if (m_impl->handleTablet(event)) {
+    const QPointer<SnowCanvasWidget> lifetime(this);
+    const bool press = event != nullptr && event->type() == QEvent::TabletPress;
+    if (press && (event->button() == Qt::LeftButton || (event->buttons() & Qt::LeftButton) != 0)) {
+        m_impl->beginStrokeTracking();
+    }
+    const bool handled = m_impl->handleTablet(event);
+    if (!lifetime) {
+        return;
+    }
+    // An unhandled tablet release leaves the gesture to the synthesized mouse events, which
+    // track it themselves; finishing here would clear the tracking too early.
+    if (handled && event->type() == QEvent::TabletRelease) {
+        m_impl->finishStrokeTracking();
+        if (!lifetime) {
+            return;
+        }
+    }
+    if (handled) {
         return;
     }
     QWidget::tabletEvent(event);
@@ -4213,6 +4278,10 @@ bool SnowCanvasWidget::Impl::handleKeyPress(QKeyEvent* event) {
 
 void SnowCanvasWidget::setCommandKeyResolver(CommandKeyResolver resolver) {
     m_impl->commandKeyResolver = std::move(resolver);
+}
+
+void SnowCanvasWidget::setStrokeCommittedHandler(StrokeCommittedHandler handler) {
+    m_impl->strokeCommitted = std::move(handler);
 }
 
 bool SnowCanvasWidget::deleteTextAfterCursor() const {

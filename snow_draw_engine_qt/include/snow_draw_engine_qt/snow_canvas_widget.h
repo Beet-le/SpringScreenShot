@@ -50,6 +50,12 @@ class SnowCanvasWidget : public QWidget {
     using CommandKeyResolver = std::function<Qt::Key(const QKeyEvent&)>;
     void setCommandKeyResolver(CommandKeyResolver resolver);
 
+    // Notified once per pointer gesture that actually changed the document. Gestures made
+    // with the Select tool, undo/redo and style edits are not strokes and are never
+    // reported. Leaving the handler empty keeps the widget's behaviour unchanged.
+    using StrokeCommittedHandler = std::function<void(SnowCanvasTool)>;
+    void setStrokeCommittedHandler(StrokeCommittedHandler handler);
+
     SnowCanvasTool canvasTool() const;
     bool setCanvasTool(SnowCanvasTool tool);
 

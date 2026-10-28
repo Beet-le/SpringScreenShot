@@ -22,6 +22,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationstore.h"
 #include "snow_shot/storage/settingsadapters.h"
+#include "snow_shot/telemetry/annotationusage.h"
 
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 
@@ -418,12 +419,17 @@ void ScreenshotPinnedEditController::ensureToolbar() {
                 &ScreenshotPinnedEditController::activateResizeWindowTool);
         snow_shot::presentation::bindScreenshotCanvasToolRequests(
             *toolbar, *this, [this](SnowCanvasTool tool) {
+                snow_shot::telemetry::reportAnnotationToolSelected(
+                    tool, snow_shot::telemetry::UsageSurface::Pinned);
                 activateCanvasTool(tool);
                 if (tool == SnowCanvasTool::AutoFilter)
                     m_autoFilterController->validate();
             });
-        connect(toolbar, &ScreenshotToolPalette::filterRequested, this,
-                [this]() { activateCanvasTool(SnowCanvasTool::RectangleFilter); });
+        connect(toolbar, &ScreenshotToolPalette::filterRequested, this, [this]() {
+            snow_shot::telemetry::reportAnnotationToolSelected(
+                SnowCanvasTool::RectangleFilter, snow_shot::telemetry::UsageSurface::Pinned);
+            activateCanvasTool(SnowCanvasTool::RectangleFilter);
+        });
         toolbar->setAutoFilterAvailable(m_autoFilterController->available());
         connect(toolbar, &ScreenshotToolPalette::autoFilterCategoryRequested,
                 m_autoFilterController.get(), &ScreenshotAutoFilterController::fillCategory);

@@ -159,6 +159,35 @@ void displayMetadata() {
     require(found, "display event persisted");
 }
 
+void annotationMetadata() {
+    QTemporaryDir directory(QDir(QDir::tempPath()).canonicalPath() +
+                            QStringLiteral("/snow-diag-XXXXXX"));
+    DiagnosticsService service;
+    require(service.initialize(optionsFor(directory.path())), "annotation logger initializes");
+    auto input = QJsonObject{{QStringLiteral("tool"), QStringLiteral("arrow")},
+                             {QStringLiteral("surface"), QStringLiteral("capture")}};
+    input.insert(QStringLiteral("stroke_points"), 42);
+    service.record(QtInfoMsg, QStringLiteral("snow_shot.annotation"),
+                   QStringLiteral("annotation.stroke_committed"), {}, input);
+    const auto exported = service.exportDay(QDate::currentDate()).get();
+    require(exported.success, "annotation metadata exports");
+    bool found = false;
+    for (const auto& line : read(exported.path).split('\n')) {
+        const auto record = QJsonDocument::fromJson(line).object();
+        if (record.value(QStringLiteral("event")) != QStringLiteral("annotation.stroke_committed"))
+            continue;
+        const auto actual = record.value(QStringLiteral("fields")).toObject();
+        require(actual.value(QStringLiteral("tool")).toString() == QStringLiteral("arrow"),
+                "annotation tool dimension survives export");
+        require(actual.value(QStringLiteral("surface")).toString() == QStringLiteral("capture"),
+                "annotation surface dimension survives export");
+        require(!actual.contains(QStringLiteral("stroke_points")),
+                "annotation content keys stay excluded");
+        found = true;
+    }
+    require(found, "annotation event persisted");
+}
+
 void concurrentRecordsAndSnapshots() {
     QTemporaryDir directory(QDir(QDir::tempPath()).canonicalPath() +
                             QStringLiteral("/snow-diag-XXXXXX"));
@@ -579,6 +608,7 @@ int main(int argc, char** argv) {
         diagnosticTasksDistinguishBackgroundAndRequestedWork();
         scrollingMetadataAndReportCadence();
         displayMetadata();
+        annotationMetadata();
         concurrentRecordsAndSnapshots();
         restartPublishesPreparedSession();
         restartRetainsInFlightReader();

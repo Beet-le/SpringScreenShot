@@ -7,6 +7,7 @@
 #include "snow_shot/presentation/screenshotoverlaywindow.h"
 #include "snow_shot/presentation/windowshortcutmanager.h"
 #include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
+#include "snow_shot/telemetry/annotationusage.h"
 
 #include <algorithm>
 #include <utility>
@@ -91,6 +92,10 @@ ScreenshotOverlayPool::ensureOverlay(ScreenshotOverlayWindow* overlay) const {
     const bool created = overlay == nullptr;
     if (created) {
         auto* canvas = new ScreenshotOverlayCanvasWidget(m_canvasRuntime);
+        canvas->setStrokeCommittedHandler([](SnowCanvasTool tool) {
+            snow_shot::telemetry::reportAnnotationStrokeCommitted(
+                tool, snow_shot::telemetry::UsageSurface::Capture);
+        });
         overlay = new ScreenshotOverlayWindow(m_eventSink, canvas);
         m_shortcutManager.addScopeWindow(overlay);
     }

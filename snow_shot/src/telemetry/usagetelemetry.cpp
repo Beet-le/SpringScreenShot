@@ -229,6 +229,12 @@ class UsageTelemetry final : public QObject {
         const QString feature = usageFeatureName(sample.feature);
         if (!feature.isEmpty())
             record.insert(QStringLiteral("Feature"), feature);
+        const QString tool = usageToolName(sample.tool);
+        if (!tool.isEmpty())
+            record.insert(QStringLiteral("Tool"), tool);
+        const QString surface = usageSurfaceName(sample.surface);
+        if (!surface.isEmpty())
+            record.insert(QStringLiteral("Surface"), surface);
         return QJsonDocument(record).toJson(QJsonDocument::Compact);
     }
 

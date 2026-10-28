@@ -7,6 +7,7 @@
 #include "snow_shot/presentation/screenshotintelligentselectionmodel.h"
 #include "snow_shot/presentation/screenshotinteractionstate.h"
 #include "snow_shot/presentation/screenshotselectionmodel.h"
+#include "snow_shot/telemetry/annotationusage.h"
 #include <QCursor>
 
 #include <utility>
@@ -183,6 +184,8 @@ void ScreenshotToolCommandWorkflow::setCanvasTool(SnowCanvasTool canvasTool) {
     const auto activeTool = snow_shot::presentation::activeToolForCanvasTool(canvasTool);
     if (!activeTool)
         return;
+    snow_shot::telemetry::reportAnnotationToolSelected(canvasTool,
+                                                       snow_shot::telemetry::UsageSurface::Capture);
     m_context.interaction.setCanvasTool(*activeTool);
     m_context.captureState.sessionState = ScreenshotSessionState::Editing;
     m_context.intelligentSelection.clearPress();

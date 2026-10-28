@@ -1837,6 +1837,7 @@ set(PROJECT_HEADERS
     include/snow_shot/presentation/styles/themecolorscheme.h
     include/snow_shot/presentation/floatingtoolbarcontroller.h
     include/snow_shot/presentation/systemtraycontroller.h
+    include/snow_shot/telemetry/annotationusage.h
     include/snow_shot/telemetry/usageevents.h
     include/snow_shot/telemetry/usagetelemetry.h
 )
@@ -2076,6 +2077,7 @@ set(PROJECT_CXX_SOURCES
     src/presentation/recording/screenrecordingshortcutcontroller.cpp
     src/presentation/recording/screenrecordinggeometry.cpp
     src/presentation/recording/screenrecordingtoolbarwindow.cpp
+    src/telemetry/annotationusage.cpp
     src/telemetry/usageevents.cpp
     src/telemetry/usagetelemetry.cpp
 )
@@ -3134,6 +3136,19 @@ if(SNOW_SHOT_BUILD_TESTS)
         snow_shot_diagnostics Qt6::Network Qt6::Core)
     add_test(NAME snow-shot-usage-telemetry-tests COMMAND snow-shot-usage-telemetry-tests)
     set_tests_properties(snow-shot-usage-telemetry-tests PROPERTIES LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+    add_executable(snow-shot-annotation-usage-tests
+        tests/annotation_usage_tests.cpp
+        src/telemetry/annotationusage.cpp
+        src/telemetry/usageevents.cpp)
+    target_include_directories(snow-shot-annotation-usage-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_SOURCE_DIR}/snow_draw_engine_qt/include")
+    target_link_libraries(snow-shot-annotation-usage-tests PRIVATE
+        snow_shot_diagnostics Qt6::Gui Qt6::Core)
+    add_test(NAME snow-shot-annotation-usage-tests COMMAND snow-shot-annotation-usage-tests)
+    set_tests_properties(snow-shot-annotation-usage-tests PROPERTIES LABELS "unit" TIMEOUT 60
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
     add_executable(snow-shot-main-window-skin-codec-tests tests/main_window_skin_codec_tests.cpp)

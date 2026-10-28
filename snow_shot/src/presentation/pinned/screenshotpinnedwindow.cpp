@@ -36,6 +36,7 @@
 #include "snow_shot/presentation/pinnedwindowselectioncontroller.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/pinnedwindowrepository.h"
+#include "snow_shot/telemetry/annotationusage.h"
 
 #include "snow_shot/app/editionfeatures.h"
 
@@ -1069,6 +1070,10 @@ class ScreenshotPinnedCanvasWidget final : public SnowCanvasWidget {
                                  std::function<bool(QPaintEvent*)> animationPaint)
         : SnowCanvasWidget(runtime, parent), m_afterPaint(std::move(afterPaint)),
           m_afterResize(std::move(afterResize)), m_animationPaint(std::move(animationPaint)) {
+        setStrokeCommittedHandler([](SnowCanvasTool tool) {
+            snow_shot::telemetry::reportAnnotationStrokeCommitted(
+                tool, snow_shot::telemetry::UsageSurface::Pinned);
+        });
 #ifdef Q_OS_MACOS
         setCommandKeyResolver(
             [](const QKeyEvent& event) { return snow_shot::shortcuts::commandKey(event); });

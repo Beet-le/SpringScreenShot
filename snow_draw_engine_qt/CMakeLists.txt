@@ -358,6 +358,19 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         ENVIRONMENT "${_snow_canvas_tablet_qpa_environment}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
         LABELS "unit" TIMEOUT 30)
+
+    add_executable(snow-canvas-stroke-commit-tests tests/snow_canvas_stroke_commit_tests.cpp)
+    target_include_directories(snow-canvas-stroke-commit-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-canvas-stroke-commit-tests PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-stroke-commit-tests)
+    add_test(NAME snow-canvas-stroke-commit-tests COMMAND snow-canvas-stroke-commit-tests)
+    snow_shot_offscreen_qpa_environment(_snow_canvas_stroke_commit_qpa_environment)
+    set_tests_properties(snow-canvas-stroke-commit-tests PROPERTIES
+        ENVIRONMENT "${_snow_canvas_stroke_commit_qpa_environment}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        LABELS "unit" TIMEOUT 60)
     add_executable(snow-canvas-lifetime-tests tests/snow_canvas_lifetime_tests.cpp)
     target_include_directories(snow-canvas-lifetime-tests PRIVATE
         ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}

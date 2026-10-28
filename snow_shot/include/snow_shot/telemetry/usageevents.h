@@ -31,6 +31,42 @@ enum class UsageFeature : quint8 {
     Other,
 };
 
+// Annotation tools are a dimension rather than one event per tool: the diagnostics event name
+// stays stable while the tool travels in a field, exactly like request_kind does for API calls.
+enum class UsageTool : quint8 {
+    Unknown,
+    Select,
+    Shape,
+    Arrow,
+    Line,
+    FreeDraw,
+    RectangleHighlight,
+    PenHighlight,
+    Eraser,
+    RectangleFilter,
+    Watermark,
+    Text,
+    SerialNumber,
+    PenFilter,
+    Spotlight,
+    AutoFilter,
+    RectangleEraser,
+    BrushEraser,
+    Distance,
+    Angle,
+    Magnifier,
+    SpeechBubble,
+    Count,
+};
+
+enum class UsageSurface : quint8 {
+    Unknown,
+    Capture,
+    Pinned,
+    ImageEditing,
+    Count,
+};
+
 enum class UsageEvent : quint8 {
     SessionStart,
     SessionCleanShutdown,
@@ -55,6 +91,8 @@ enum class UsageEvent : quint8 {
     PrintSnapshotRequested,
     PrintFailed,
     ApiRequestFinished,
+    AnnotationToolSelected,
+    AnnotationStrokeCommitted,
     Count,
 };
 
@@ -63,6 +101,8 @@ struct UsageSample {
     UsageEvent event = UsageEvent::Count;
     UsageOutcome outcome = UsageOutcome::Unknown;
     UsageFeature feature = UsageFeature::None;
+    UsageTool tool = UsageTool::Unknown;
+    UsageSurface surface = UsageSurface::Unknown;
 };
 static_assert(std::is_trivially_copyable_v<UsageSample>);
 static_assert(sizeof(UsageSample) <= 24, "samples must stay tiny; they live in a fixed ring");
@@ -82,6 +122,8 @@ std::optional<UsageSample> usageSampleForDiagnosticEvent(QtMsgType level, const 
 QString usageEventName(UsageEvent event);
 QString usageOutcomeName(UsageOutcome outcome);
 QString usageFeatureName(UsageFeature feature);
+QString usageToolName(UsageTool tool);
+QString usageSurfaceName(UsageSurface surface);
 
 // Diagnostic event names the catalogue reacts to, in table order. Exposed so the mapping can
 // be verified without a network stack and so the catalogue can be reviewed at a glance.

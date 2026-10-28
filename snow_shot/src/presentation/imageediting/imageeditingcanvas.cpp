@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "snow_shot/presentation/imageeditingcanvas.h"
 #include "snow_shot/presentation/canvastexteditingpreferences.h"
+#include "snow_shot/telemetry/annotationusage.h"
 #include <QPainter>
 #include <QCoreApplication>
 #include <QMouseEvent>
@@ -14,6 +15,10 @@ namespace snow_shot::presentation {
 ImageEditingCanvas::ImageEditingCanvas(ImageEditingDocument& document, QWidget* parent)
     : SnowCanvasWidget(document.runtime(), parent), m_document(document) {
     bindCanvasTextEditingPreferences(*this);
+    setStrokeCommittedHandler([](SnowCanvasTool tool) {
+        snow_shot::telemetry::reportAnnotationStrokeCommitted(
+            tool, snow_shot::telemetry::UsageSurface::ImageEditing);
+    });
     setObjectName(QStringLiteral("imageEditingCanvas"));
     setCustomRenderer(this);
     setClearBackgroundEnabled(false);

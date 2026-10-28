@@ -28,6 +28,7 @@
 #include "snow_shot/presentation/canvashistoryshortcuts.h"
 #include "snow_shot/presentation/pinnedwindowgroupmanager.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/telemetry/annotationusage.h"
 #include "snow_shot/storage/configurationstore.h"
 #include "snow_shot/storage/pinnedwindowrepository.h"
 #include "widgets/modal.h"
@@ -223,6 +224,8 @@ struct ImageEditingWindow::Impl {
         new ScreenshotStyleBinding(*palette, *canvas, &q);
         bindScreenshotCanvasOperations(palette, *canvas, &q);
         bindScreenshotCanvasToolRequests(*palette, q, [this](SnowCanvasTool tool) {
+            snow_shot::telemetry::reportAnnotationToolSelected(
+                tool, snow_shot::telemetry::UsageSurface::ImageEditing);
             drawing(ImageEditingCanvas::Mode::Draw);
             canvas->setCanvasTool(tool);
             if (tool == SnowCanvasTool::AutoFilter)

@@ -349,6 +349,10 @@ struct DiagnosticsService::Impl {
                                            QStringLiteral("thumbnail_visible"),
                                            QStringLiteral("restore_colors"),
                                            QStringLiteral("mode"),
+                                           // Annotation usage dimensions: the tool enum name
+                                           // and the surface it was used on.
+                                           QStringLiteral("tool"),
+                                           QStringLiteral("surface"),
                                            QStringLiteral("dpr"),
                                            QStringLiteral("display_index"),
                                            QStringLiteral("target_is_self"),

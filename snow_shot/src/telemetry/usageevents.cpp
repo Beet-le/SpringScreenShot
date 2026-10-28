@@ -12,13 +12,25 @@ struct EventRule {
     UsageEvent event;
 };
 
+struct ToolRule {
+    const char* name;
+    UsageTool tool;
+};
+
+struct SurfaceRule {
+    const char* name;
+    UsageSurface surface;
+};
+
 // One row per diagnostics event the catalogue counts. Any feature that already records a
 // diagnostics event therefore becomes measurable by adding a single line here, with no
 // change to the recording sites and no extra work in the uploader.
-constexpr std::array<EventRule, 24> kRules{{
+constexpr std::array<EventRule, 26> kRules{{
     {"session.unexpected_termination", UsageEvent::SessionUnexpectedTermination},
     {"capture.finished", UsageEvent::CaptureFinished},
     {"scrolling.started", UsageEvent::ScrollingStarted},
+    {"annotation.tool_selected", UsageEvent::AnnotationToolSelected},
+    {"annotation.stroke_committed", UsageEvent::AnnotationStrokeCommitted},
     {"ocr.submitted", UsageEvent::OcrSubmitted},
     {"ocr.finished", UsageEvent::OcrFinished},
     {"ocr.cancelled", UsageEvent::OcrCancelled},
@@ -40,6 +52,38 @@ constexpr std::array<EventRule, 24> kRules{{
     {"print.snapshot_failed", UsageEvent::PrintFailed},
     {"print.pinned_failed", UsageEvent::PrintFailed},
     {"request.finished", UsageEvent::ApiRequestFinished},
+}};
+
+// Only consulted once an annotation event matched, so the linear scan never runs for the
+// diagnostics traffic that dominates the tap.
+constexpr std::array<ToolRule, 21> kToolRules{{
+    {"select", UsageTool::Select},
+    {"shape", UsageTool::Shape},
+    {"arrow", UsageTool::Arrow},
+    {"line", UsageTool::Line},
+    {"free_draw", UsageTool::FreeDraw},
+    {"rectangle_highlight", UsageTool::RectangleHighlight},
+    {"pen_highlight", UsageTool::PenHighlight},
+    {"eraser", UsageTool::Eraser},
+    {"rectangle_filter", UsageTool::RectangleFilter},
+    {"watermark", UsageTool::Watermark},
+    {"text", UsageTool::Text},
+    {"serial_number", UsageTool::SerialNumber},
+    {"pen_filter", UsageTool::PenFilter},
+    {"spotlight", UsageTool::Spotlight},
+    {"auto_filter", UsageTool::AutoFilter},
+    {"rectangle_eraser", UsageTool::RectangleEraser},
+    {"brush_eraser", UsageTool::BrushEraser},
+    {"distance", UsageTool::Distance},
+    {"angle", UsageTool::Angle},
+    {"magnifier", UsageTool::Magnifier},
+    {"speech_bubble", UsageTool::SpeechBubble},
+}};
+
+constexpr std::array<SurfaceRule, 3> kSurfaceRules{{
+    {"capture", UsageSurface::Capture},
+    {"pinned", UsageSurface::Pinned},
+    {"image_editing", UsageSurface::ImageEditing},
 }};
 
 constexpr QLatin1StringView kDiagnosticsCategoryPrefix("snow_shot");
@@ -75,6 +119,29 @@ std::optional<UsageFeature> featureFromRequestKind(const QString& value) {
         return UsageFeature::None;
     return std::nullopt;
 }
+
+// A sample without a tool would be indistinguishable from every other tool, so an unknown
+// annotation tool is dropped instead of being uploaded anonymously.
+std::optional<UsageTool> toolFromField(const QJsonObject& fields) {
+    const QString value = fields.value(QStringLiteral("tool")).toString();
+    if (value.isEmpty())
+        return std::nullopt;
+    for (const ToolRule& rule : kToolRules) {
+        if (value == QLatin1String(rule.name))
+            return rule.tool;
+    }
+    return std::nullopt;
+}
+
+// The surface is a nice-to-have dimension: an unrecognised value still produces a usable row.
+UsageSurface surfaceFromField(const QJsonObject& fields) {
+    const QString value = fields.value(QStringLiteral("surface")).toString();
+    for (const SurfaceRule& rule : kSurfaceRules) {
+        if (value == QLatin1String(rule.name))
+            return rule.surface;
+    }
+    return UsageSurface::Unknown;
+}
 } // namespace
 
 std::optional<UsageSample> usageSampleForDiagnosticEvent(QtMsgType level, const QString& category,
@@ -108,6 +175,14 @@ std::optional<UsageSample> usageSampleForDiagnosticEvent(QtMsgType level, const 
         if (!feature)
             return std::nullopt;
         sample.feature = *feature;
+    }
+    if (sample.event == UsageEvent::AnnotationToolSelected ||
+        sample.event == UsageEvent::AnnotationStrokeCommitted) {
+        const auto tool = toolFromField(fields);
+        if (!tool)
+            return std::nullopt;
+        sample.tool = *tool;
+        sample.surface = surfaceFromField(fields);
     }
     return sample;
 }
@@ -160,6 +235,10 @@ QString usageEventName(UsageEvent event) {
         return QStringLiteral("print.failed");
     case UsageEvent::ApiRequestFinished:
         return QStringLiteral("api.request_finished");
+    case UsageEvent::AnnotationToolSelected:
+        return QStringLiteral("annotation.tool_selected");
+    case UsageEvent::AnnotationStrokeCommitted:
+        return QStringLiteral("annotation.stroke_committed");
     case UsageEvent::Count:
         break;
     }
@@ -195,6 +274,72 @@ QString usageFeatureName(UsageFeature feature) {
     case UsageFeature::Other:
         return QStringLiteral("other");
     case UsageFeature::None:
+        break;
+    }
+    return {};
+}
+
+QString usageToolName(UsageTool tool) {
+    switch (tool) {
+    case UsageTool::Select:
+        return QStringLiteral("select");
+    case UsageTool::Shape:
+        return QStringLiteral("shape");
+    case UsageTool::Arrow:
+        return QStringLiteral("arrow");
+    case UsageTool::Line:
+        return QStringLiteral("line");
+    case UsageTool::FreeDraw:
+        return QStringLiteral("free_draw");
+    case UsageTool::RectangleHighlight:
+        return QStringLiteral("rectangle_highlight");
+    case UsageTool::PenHighlight:
+        return QStringLiteral("pen_highlight");
+    case UsageTool::Eraser:
+        return QStringLiteral("eraser");
+    case UsageTool::RectangleFilter:
+        return QStringLiteral("rectangle_filter");
+    case UsageTool::Watermark:
+        return QStringLiteral("watermark");
+    case UsageTool::Text:
+        return QStringLiteral("text");
+    case UsageTool::SerialNumber:
+        return QStringLiteral("serial_number");
+    case UsageTool::PenFilter:
+        return QStringLiteral("pen_filter");
+    case UsageTool::Spotlight:
+        return QStringLiteral("spotlight");
+    case UsageTool::AutoFilter:
+        return QStringLiteral("auto_filter");
+    case UsageTool::RectangleEraser:
+        return QStringLiteral("rectangle_eraser");
+    case UsageTool::BrushEraser:
+        return QStringLiteral("brush_eraser");
+    case UsageTool::Distance:
+        return QStringLiteral("distance");
+    case UsageTool::Angle:
+        return QStringLiteral("angle");
+    case UsageTool::Magnifier:
+        return QStringLiteral("magnifier");
+    case UsageTool::SpeechBubble:
+        return QStringLiteral("speech_bubble");
+    case UsageTool::Unknown:
+    case UsageTool::Count:
+        break;
+    }
+    return {};
+}
+
+QString usageSurfaceName(UsageSurface surface) {
+    switch (surface) {
+    case UsageSurface::Capture:
+        return QStringLiteral("capture");
+    case UsageSurface::Pinned:
+        return QStringLiteral("pinned");
+    case UsageSurface::ImageEditing:
+        return QStringLiteral("image_editing");
+    case UsageSurface::Unknown:
+    case UsageSurface::Count:
         break;
     }
     return {};

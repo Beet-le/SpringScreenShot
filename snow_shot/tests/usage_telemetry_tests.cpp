@@ -127,12 +127,19 @@ void recordUsage(const QString& event, const QJsonObject& fields = {}) {
     snow_shot::diagnostics::logEvent(QStringLiteral("snow_shot.test"), event, fields);
 }
 
+// Every catalogued event needs the field its sample depends on, otherwise the mapping test
+// would reject it for the wrong reason.
+QJsonObject requiredFieldsFor(const QString& event) {
+    if (event.startsWith(QStringLiteral("annotation.")))
+        return {{QStringLiteral("tool"), QStringLiteral("arrow")}};
+    return {{QStringLiteral("request_kind"), QStringLiteral("translation")}};
+}
+
 void catalogueMapsDiagnosticsEvents() {
     const QString category = QStringLiteral("snow_shot.test");
     for (const QString& name : trackedDiagnosticEvents()) {
-        const auto sample = usageSampleForDiagnosticEvent(
-            QtInfoMsg, category, name,
-            {{QStringLiteral("request_kind"), QStringLiteral("translation")}}, 7);
+        const auto sample = usageSampleForDiagnosticEvent(QtInfoMsg, category, name,
+                                                          requiredFieldsFor(name), 7);
         require(sample.has_value(), "every catalogued event maps to a sample");
         require(sample->event != UsageEvent::Count, "the catalogue resolves a concrete event");
         require(sample->event != UsageEvent::SessionStart &&
@@ -196,6 +203,97 @@ void catalogueMapsDiagnosticsEvents() {
                  {{QStringLiteral("request_kind"), QStringLiteral("chat_models")}}, 0)
                  .has_value(),
             "catalogue refreshes are not user activity");
+}
+
+void annotationEventsCarryToolAndSurface() {
+    const QString category = QStringLiteral("snow_shot.annotation");
+    const auto selected = usageSampleForDiagnosticEvent(
+        QtInfoMsg, category, QStringLiteral("annotation.tool_selected"),
+        {{QStringLiteral("tool"), QStringLiteral("arrow")},
+         {QStringLiteral("surface"), QStringLiteral("capture")}},
+        11);
+    require(selected.has_value() && selected->event == UsageEvent::AnnotationToolSelected,
+            "tool selection maps to its own event");
+    require(selected->tool == UsageTool::Arrow && selected->surface == UsageSurface::Capture,
+            "tool selection keeps its tool and surface");
+    require(selected->epochMs == 11, "the caller owns the annotation timestamp");
+    require(usageToolName(selected->tool) == QStringLiteral("arrow") &&
+                usageSurfaceName(selected->surface) == QStringLiteral("capture"),
+            "annotation dimensions have stable names");
+
+    const auto committed = usageSampleForDiagnosticEvent(
+        QtInfoMsg, category, QStringLiteral("annotation.stroke_committed"),
+        {{QStringLiteral("tool"), QStringLiteral("pen_filter")},
+         {QStringLiteral("surface"), QStringLiteral("image_editing")}},
+        12);
+    require(committed.has_value() && committed->event == UsageEvent::AnnotationStrokeCommitted &&
+                committed->tool == UsageTool::PenFilter &&
+                committed->surface == UsageSurface::ImageEditing,
+            "stroke commits keep their tool and surface");
+
+    require(!usageSampleForDiagnosticEvent(QtInfoMsg, category,
+                                           QStringLiteral("annotation.stroke_committed"),
+                                           {{QStringLiteral("tool"),
+                                             QStringLiteral("does_not_exist")}},
+                                           0)
+                 .has_value(),
+            "an unknown tool is dropped instead of being counted anonymously");
+    require(!usageSampleForDiagnosticEvent(QtInfoMsg, category,
+                                           QStringLiteral("annotation.tool_selected"), {}, 0)
+                 .has_value(),
+            "an annotation event without a tool is not counted");
+
+    const auto noSurface = usageSampleForDiagnosticEvent(
+        QtInfoMsg, category, QStringLiteral("annotation.tool_selected"),
+        {{QStringLiteral("tool"), QStringLiteral("text")}}, 0);
+    require(noSurface.has_value() && noSurface->surface == UsageSurface::Unknown,
+            "a missing surface still produces a countable sample");
+    require(usageSurfaceName(noSurface->surface).isEmpty(),
+            "an unknown surface is omitted rather than guessed");
+
+    QSet<QString> toolNames;
+    for (quint8 index = 1; index < static_cast<quint8>(UsageTool::Count); ++index) {
+        const QString name = usageToolName(static_cast<UsageTool>(index));
+        require(!name.isEmpty(), "every catalogued tool has a name");
+        require(!toolNames.contains(name), "tool names are unique");
+        toolNames.insert(name);
+    }
+    require(toolNames.size() == 21, "the catalogue covers every annotation tool");
+}
+
+void annotationSamplesReachTheBatchWithTheirDimensions() {
+    FakeSeqServer server;
+    require(server.listen(), "the stand-in collector listens");
+    require(start(fastOptions(server.endpoint())), "usage telemetry starts");
+    recordUsage(QStringLiteral("annotation.tool_selected"),
+                {{QStringLiteral("tool"), QStringLiteral("arrow")},
+                 {QStringLiteral("surface"), QStringLiteral("capture")}});
+    recordUsage(QStringLiteral("annotation.stroke_committed"),
+                {{QStringLiteral("tool"), QStringLiteral("eraser")}});
+    require(waitFor([&] { return !server.requests.isEmpty(); }), "a batch reaches the collector");
+
+    bool sawSelected = false;
+    bool sawCommitted = false;
+    for (const QByteArray& line : linesOf(bodyOf(server.requests.first()))) {
+        const QJsonObject record = QJsonDocument::fromJson(line).object();
+        const QString eventName = record.value(QStringLiteral("EventName")).toString();
+        if (eventName == QStringLiteral("annotation.tool_selected")) {
+            sawSelected = true;
+            require(record.value(QStringLiteral("Tool")).toString() == QStringLiteral("arrow"),
+                    "the batch carries the selected tool");
+            require(record.value(QStringLiteral("Surface")).toString() ==
+                        QStringLiteral("capture"),
+                    "the batch carries the surface");
+        } else if (eventName == QStringLiteral("annotation.stroke_committed")) {
+            sawCommitted = true;
+            require(record.value(QStringLiteral("Tool")).toString() == QStringLiteral("eraser"),
+                    "the batch carries the committed tool");
+            require(!record.contains(QStringLiteral("Surface")),
+                    "an unknown surface is omitted from the record");
+        }
+    }
+    require(sawSelected && sawCommitted, "both annotation events reach the collector");
+    stop();
 }
 
 void batchesSamplesIntoOneClefRequest() {
@@ -332,6 +430,8 @@ int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     try {
         catalogueMapsDiagnosticsEvents();
+        annotationEventsCarryToolAndSurface();
+        annotationSamplesReachTheBatchWithTheirDimensions();
         batchesSamplesIntoOneClefRequest();
         rejectedBatchesBackOff();
         unreachableCollectorIsSilent();
