@@ -2,6 +2,7 @@
 #include "snow_shot/presentation/imageeditingcanvas.h"
 #include "snow_shot/presentation/canvastexteditingpreferences.h"
 #include "snow_shot/telemetry/annotationusage.h"
+#include "snow_draw_engine_qt/snow_canvas_overlay_style.h"
 #include <QPainter>
 #include <QCoreApplication>
 #include <QMouseEvent>
