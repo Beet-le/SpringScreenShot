@@ -67,6 +67,7 @@
 #include <QProcessEnvironment>
 #ifdef Q_OS_WIN
 #include "toolbar_capture_exclusion_native_tests.h"
+#include "../src/platform/windows/captureexclusioncomposition.h"
 #endif
 #include <QElapsedTimer>
 #include <QThread>
@@ -1108,6 +1109,146 @@ void requireToolbarAboveArea(ScreenRecordingAreaWindow* area) {
             "recording toolbar must retain the area as its transient owner");
     area->setInputMode(previousInputMode);
 }
+
+void recordingToolbarOwnershipSurvivesSurfaceRecreation() {
+    QWidget firstOwner;
+    QWidget secondOwner;
+    ScreenRecordingToolbarWindow toolbar;
+    const auto setOwner = [&](QWidget* owner) {
+        toolbar.setTransientOwnerWindow(owner);
+        toolbar.setAutoHideControlOwner(owner);
+        QWidget* edge = toolbar.autoHideControlWindow();
+        require(!edge->isVisible() && !edge->parentWidget() &&
+                    edge->windowHandle()->transientParent() ==
+                        (owner ? owner->windowHandle() : nullptr),
+                "the hidden auto-hide control must follow owner changes and detachment");
+    };
+    const auto recreate = [&](QWidget* expectedOwner) {
+        const QPointer<QWindow> previousSurface(toolbar.windowHandle());
+        toolbar.releaseNativeSurface();
+        require(previousSurface.isNull() && toolbar.internalWinId() == 0,
+                "surface retirement must not recreate a toolbar while restoring ownership");
+        // Qt's composition transition creates the replacement directly, without
+        // calling the toolbar's explicit restoreNativeSurface() entry point.
+        static_cast<void>(toolbar.winId());
+        require(!toolbar.isVisible() && toolbar.parentWidget() == nullptr &&
+                    toolbar.windowHandle()->transientParent() ==
+                        (expectedOwner ? expectedOwner->windowHandle() : nullptr),
+                "implicit surface recreation must preserve the current transient owner");
+#ifdef Q_OS_WIN
+        if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+            require(GetWindow(reinterpret_cast<HWND>(toolbar.winId()), GW_OWNER) ==
+                        (expectedOwner ? reinterpret_cast<HWND>(expectedOwner->winId()) : nullptr),
+                    "implicit surface recreation must preserve the current native owner");
+        }
+#endif
+    };
+    setOwner(&firstOwner);
+    recreate(&firstOwner);
+    setOwner(&secondOwner);
+    recreate(&secondOwner);
+    setOwner(nullptr);
+    recreate(nullptr);
+    auto owner = std::make_unique<QWidget>();
+    setOwner(owner.get());
+    owner.reset();
+    recreate(nullptr);
+}
+
+#ifdef Q_OS_WIN
+void recordingCaptureExclusionPreservesToolbarStacking() {
+    namespace composition = snow_shot::platform::windows::detail;
+    require(QGuiApplication::platformName() == QStringLiteral("windows"),
+            "toolbar stacking regression requires native Windows surfaces");
+    const snow_shot::storage::RecordingSettings settings;
+    require(settings.setAutoHideToolbar(false) && settings.setStartDelaySeconds(0),
+            "keep the recording toolbar visible and start without a countdown");
+    const QRect screen =
+        ScreenshotGeometryMapper::physicalRectForScreen(*QGuiApplication::primaryScreen());
+    for (const bool captureToolbar : {true, false}) {
+        require(settings.setCaptureToolbarInRecording(captureToolbar), "set toolbar capture");
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(QRect(screen.topLeft() + QPoint(80, 80), QSize(640, 360)));
+        auto* toolbar = qobject_cast<ScreenRecordingToolbarWindow*>(palette()->window());
+        ScreenRecordingAreaWindow* area = nullptr;
+        for (auto* widget : QApplication::topLevelWidgets()) {
+            if (auto* candidate = qobject_cast<ScreenRecordingAreaWindow*>(widget))
+                area = candidate;
+        }
+        require(toolbar && area && !toolbar->parentWidget(),
+                "recording must use its real parentless toolbar and area");
+        controller.startRecording();
+        waitForRecording(controller);
+        const bool nativeFallback = composition::usesCaptureExclusionComposition(toolbar);
+        std::cout << "capture_toolbar=" << captureToolbar
+                  << " native_composition_fallback=" << nativeFallback << std::endl;
+        if (!captureToolbar) {
+            if (QCoreApplication::arguments().contains(
+                    QStringLiteral("--require-native-composition-fallback"))) {
+                require(nativeFallback, "this run must exercise the OS-triggered fallback");
+            }
+            // Newer Windows versions can accept affinity on raster surfaces.
+            // Exercise the same production transition on those hosts as well.
+            if (!nativeFallback) {
+                require(composition::applyCaptureExclusionCompositionFallback(toolbar),
+                        "exercise the production composition transition");
+                require(snow_shot::platform::setWindowExcludedFromCapture(toolbar, true),
+                        "replacement surface must retain capture exclusion");
+            }
+            QWidget* edge = toolbar->autoHideControlWindow();
+            if (!composition::usesCaptureExclusionComposition(edge)) {
+                require(composition::applyCaptureExclusionCompositionFallback(edge),
+                        "exercise the hidden auto-hide control's composition transition");
+                require(snow_shot::platform::setWindowExcludedFromCapture(edge, true),
+                        "replacement auto-hide control must retain capture exclusion");
+            }
+            require(!edge->isVisible() &&
+                        edge->windowHandle()->transientParent() == area->windowHandle() &&
+                        GetWindow(reinterpret_cast<HWND>(edge->winId()), GW_OWNER) ==
+                            reinterpret_cast<HWND>(area->winId()),
+                    "composition must preserve the hidden auto-hide control's owner");
+        }
+        DWORD affinity = WDA_NONE;
+        const DWORD expectedAffinity = captureToolbar ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE;
+        require(GetWindowDisplayAffinity(reinterpret_cast<HWND>(toolbar->winId()), &affinity) &&
+                    affinity == expectedAffinity,
+                "toolbar stacking must preserve the requested capture policy");
+        for (int presentation = 0; presentation < 2; ++presentation) {
+            if (presentation != 0) {
+                toolbar->hide();
+                toolbar->showWithoutActivating();
+            }
+            requireToolbarAboveArea(area);
+            area->setInputMode(ScreenRecordingAreaWindow::InputMode::Drawing);
+            auto* button = toolbar->findChild<adqt::widgets::AdButton*>(
+                QStringLiteral("screenRecordingPause"));
+            require(button && button->isVisible(), "recording pause button must be available");
+            const QPoint target = area->mapToGlobal(area->rect().center());
+            toolbar->move(toolbar->pos() + target - button->mapToGlobal(button->rect().center()));
+            toolbar->repaint();
+            area->raise();
+            area->activateInput();
+            QCoreApplication::processEvents();
+            const HWND toolbarHandle = reinterpret_cast<HWND>(toolbar->winId());
+            const QPoint local = button->mapTo(toolbar, button->rect().center());
+            POINT point{qRound(local.x() * toolbar->devicePixelRatioF()),
+                        qRound(local.y() * toolbar->devicePixelRatioF())};
+            require(ClientToScreen(toolbarHandle, &point), "map the overlapping button to desktop");
+            require(GetAncestor(WindowFromPoint(point), GA_ROOT) == toolbarHandle,
+                    "the overlapping toolbar button must receive native mouse input");
+        }
+        palette()->recordingStopRequested();
+        waitForIdle(controller);
+        requireToolbarAboveArea(area);
+        require(GetWindowDisplayAffinity(reinterpret_cast<HWND>(toolbar->winId()), &affinity) &&
+                    affinity == WDA_NONE,
+                "stopping must restore capture visibility without losing toolbar ownership");
+        palette()->recordingCloseRequested();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+    std::cout << "recording toolbar capture-exclusion stacking passed\n";
+}
+#endif
 
 void recordingExpandsSmallSelectionsOnOpenAndReopen() {
     ScreenRecordingController controller(testEffectsSource);
@@ -2358,6 +2499,53 @@ void recordingStartupFailureAllowsRetry() {
             "restore recording defaults");
 }
 
+void recordingToolbarAutoHideFollowsSession() {
+    const snow_shot::storage::RecordingSettings settings;
+    const bool savedAutoHide = settings.autoHideToolbar();
+    const auto restore = qScopeGuard([&] {
+        require(settings.setAutoHideToolbar(savedAutoHide), "restore lifecycle auto-hide setting");
+    });
+    require(settings.setAutoHideToolbar(true) && settings.setStartDelaySeconds(0),
+            "enable auto-hide for controller lifecycle coverage");
+    ScreenRecordingController controller(testEffectsSource);
+    controller.open({80, 80, 320, 240});
+    auto* toolbar = qobject_cast<ScreenRecordingToolbarWindow*>(palette()->window());
+    require(toolbar != nullptr, "recording lifecycle has a toolbar");
+    const QRect monitor = toolbar->screen()->geometry();
+    const QRect row = toolbar->paletteHost()->mainToolbarContentRect();
+    const QPoint position(monitor.left() - row.left(), toolbar->contentPosition().y());
+    toolbar->paletteHost()->dragStarted(row.translated(toolbar->contentPosition()).center());
+    toolbar->moveContentTo(position);
+    toolbar->paletteHost()->dragFinished(position);
+    const auto outside = [&] {
+        setRecordingToolbarAutoHideTestCursor(*toolbar, monitor.bottomRight() + QPoint(100, 100));
+    };
+    auto* retreat = toolbar->findChild<QTimer*>(QStringLiteral("recordingToolbarRetreatTimer"));
+    outside();
+    require(retreat && !retreat->isActive() && toolbar->isVisible(),
+            "opening the recording UI must keep its idle toolbar expanded");
+    controller.startRecording();
+    waitForRecording(controller);
+    for (int iteration = 0; iteration < 2; ++iteration) {
+        outside();
+        require(retreat->isActive(), "the controller enables auto-hide while recording");
+        retreat->stop();
+        require(QMetaObject::invokeMethod(retreat, "timeout", Qt::DirectConnection) &&
+                    !toolbar->isVisible() && toolbar->autoHideControlWindow()->isVisible(),
+                "active recording can collapse its toolbar");
+        toolbar->palette()->recordingPauseRequested();
+        QCoreApplication::processEvents();
+        require(toolbar->isVisible() && !toolbar->autoHideControlWindow()->isVisible() &&
+                    !retreat->isActive(),
+                "pausing through the controller reveals its toolbar and disables retreat");
+        toolbar->palette()->recordingResumeRequested();
+        QCoreApplication::processEvents();
+    }
+    toolbar->palette()->recordingCloseRequested();
+    waitForIdle(controller);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
 void recordingCaptureExclusionWiring() {
     using snow_shot::storage::RecordingSettings;
     const RecordingSettings settings;
@@ -2391,10 +2579,10 @@ void recordingCaptureExclusionWiring() {
 #endif
             failStart = failure == 1;
             failStartOperation = failure == 2;
-            const bool holdCollapsedStart = !captureToolbar && !fail;
+            const bool holdAutoHideStart = !captureToolbar && !fail;
             std::promise<void> releaseStart;
-            if (holdCollapsedStart) {
-                require(settings.setAutoHideToolbar(true), "enable the collapsed-start fixture");
+            if (holdAutoHideStart) {
+                require(settings.setAutoHideToolbar(true), "enable auto-hide before startup");
                 const QRect monitor = toolbar->screen()->geometry();
                 const QRect row = toolbar->paletteHost()->mainToolbarContentRect();
                 toolbar->moveContentTo(
@@ -2403,25 +2591,23 @@ void recordingCaptureExclusionWiring() {
                                                       monitor.bottomRight() + QPoint(100, 100));
                 auto* retreat =
                     toolbar->findChild<QTimer*>(QStringLiteral("recordingToolbarRetreatTimer"));
-                require(retreat != nullptr && retreat->isActive(),
-                        "collapsed-start fixture schedules retreat at the monitor edge");
-                retreat->stop();
+                require(retreat != nullptr && !retreat->isActive(),
+                        "an idle toolbar must not schedule retreat at the monitor edge");
                 require(QMetaObject::invokeMethod(retreat, "timeout", Qt::DirectConnection) &&
-                            !toolbar->isVisible() && edgeControl->isVisible(),
-                        "recording can start while its toolbar is already collapsed");
+                            toolbar->isVisible() && !edgeControl->isVisible(),
+                        "a stale retreat must not collapse the toolbar before recording");
                 sessionCreateEntered = false;
                 sessionCreateGate = releaseStart.get_future().share();
             }
             controller.startRecording();
-            if (holdCollapsedStart) {
+            if (holdAutoHideStart) {
                 QElapsedTimer deadline;
                 deadline.start();
                 while (!sessionCreateEntered && deadline.elapsed() < 3000)
                     QCoreApplication::processEvents(
                         QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents, 25);
                 require(sessionCreateEntered && toolbar->isVisible() && !edgeControl->isVisible(),
-                        "capture policy transition reveals a collapsed toolbar before native "
-                        "startup, including when native exclusion is unavailable");
+                        "the toolbar stays expanded during native startup with auto-hide enabled");
                 releaseStart.set_value();
                 sessionCreateGate = {};
                 require(settings.setAutoHideToolbar(false),
@@ -3541,7 +3727,8 @@ void webcamPreviewRetainsFramesAcrossLayoutUpdates() {
     const QImage initial = previewImage(*area.canvas());
     state->autoPublish = false;
     for (int step = 0; step < 40; ++step) {
-        configure(150 + step, QPoint(48 + step, 48 + step), step % 2, &camera);
+        configure(150 + step, QPoint(48 + step, 48 + step), static_cast<uint32_t>(step % 2),
+                  &camera);
         require(preview.hasFrame(),
                 "layout updates retain the camera until its replacement arrives");
         pumpPreview();
@@ -3665,7 +3852,7 @@ void recordingWebcamGesturesPersistAndFreezeAtStartup() {
                 [&] { return preview->webcamOrientation == static_cast<uint32_t>(orientation); },
                 "saved orientation reaches preview");
             orientationButtons[action]->click();
-            const int expected = transitions[orientation][action];
+            const int expected = transitions[static_cast<std::size_t>(orientation)][action];
             waitForWebcam(
                 [&] { return preview->webcamOrientation == static_cast<uint32_t>(expected); },
                 "orientation action updates the current camera frame");
@@ -4263,8 +4450,8 @@ void recordingSettingsDialog() {
                 moveHandle->isVisible(),
             "closing recording preferences must restore region controls");
     setRecordingToolbarAutoHideTestCursor(*recordingToolbar, outside);
-    require(retreat->isActive(),
-            "closing real recording preferences releases auto-hide protection");
+    require(recordingToolbar->isVisible() && !retreat->isActive(),
+            "closing recording preferences before recording keeps the toolbar expanded");
     require(saved.setAutoHideToolbar(false), "restore auto-hide before opening effect settings");
     toolbarPalette->findChild<AdButton*>(QStringLiteral("screenRecordingEffectSettings"))->click();
     QCoreApplication::processEvents();
@@ -4284,7 +4471,8 @@ void recordingSettingsDialog() {
                 moveHandle->isVisible(),
             "closing effect settings must restore region controls");
     setRecordingToolbarAutoHideTestCursor(*recordingToolbar, outside);
-    require(retreat->isActive(), "closing recording effect settings releases auto-hide protection");
+    require(recordingToolbar->isVisible() && !retreat->isActive(),
+            "closing effect settings before recording keeps the toolbar expanded");
     require(saved.setAutoHideToolbar(false), "restore auto-hide after modal protection checks");
     controller.open(QRect(200, 150, 320, 240));
     button->click();
@@ -7308,7 +7496,15 @@ template <typename Application> int runRecordingControllerTests(Application& app
             "test output directory must be set");
     require(RecordingSettings().setCaptureToolbarInRecording(true),
             "capture exclusion must be disabled for fake backend");
+    if (app.arguments().contains(QStringLiteral("--toolbar-ownership-only"))) {
+        recordingToolbarOwnershipSurvivesSurfaceRecreation();
+        return 0;
+    }
 #ifdef Q_OS_WIN
+    if (app.arguments().contains(QStringLiteral("--toolbar-exclusion-stacking-only"))) {
+        recordingCaptureExclusionPreservesToolbarStacking();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--native-capture-exclusion-only")) ||
         app.arguments().contains(QStringLiteral("--native-capture-exclusion-affinity-only"))) {
         ScreenRecordingToolbarWindow toolbar;
@@ -7948,6 +8144,7 @@ template <typename Application> int runRecordingControllerTests(Application& app
     }
     if (app.arguments().contains(QStringLiteral("--toolbar-auto-hide-only"))) {
         runScreenRecordingToolbarAutoHideTests();
+        recordingToolbarAutoHideFollowsSession();
         return 0;
     }
     if (app.arguments().contains(QStringLiteral("--toolbar-auto-hide-preview-only"))) {

@@ -9,6 +9,7 @@
 #include <QString>
 #include "snow_shot/presentation/globalmousetypes.h"
 #include "snow_shot/presentation/screenshotpinnedimagesnapshot.h"
+#include "snow_shot/presentation/imagesplitwindow.h"
 
 #include <memory>
 #include <functional>
@@ -25,6 +26,7 @@ class ScreenshotQrRecognitionPort;
 class SnowShotApiClient;
 class ScreenshotExportArtifact;
 class ScreenshotPrintService;
+class ScreenshotAirDropService;
 class ScreenRecordingController;
 struct ScreenshotClipboardContent;
 struct ScreenshotClipboardContentSnapshot;
@@ -57,7 +59,8 @@ class ScreenshotController : public QObject {
     [[nodiscard]] bool
     handleActiveScreenshotShortcut(snow_shot::presentation::GlobalShortcutAction action);
     void pinDroppedContent(ScreenshotClipboardContentSnapshot snapshot, QStringList paths);
-    void pinFilesToScreen(QStringList paths);
+    // Finishes once the first file is presented, consumed as a duplicate, or fails.
+    void pinFilesToScreen(QStringList paths, std::function<void()> firstFileFinished = {});
     explicit ScreenshotController(
         QObject* parent = nullptr,
         snow_shot::presentation::PinnedWindowGroupManager* groupManager = nullptr,
@@ -80,6 +83,7 @@ class ScreenshotController : public QObject {
     void cancelGlobalMouseCapture(quint64 gestureId);
 
     void setPrintService(ScreenshotPrintService* service);
+    void setAirDropService(ScreenshotAirDropService* service);
     void setRecordingPermissionCheck(std::function<bool(bool, bool, bool)> check);
     void prepareForSessionEnd(int timeoutMs);
     void offerRecordingRecovery();
@@ -139,7 +143,7 @@ class ScreenshotController : public QObject {
 
   signals:
     void imageStitchingRequested(const QVector<ScreenshotPinnedImageSnapshot>& snapshots);
-    void imageSplittingRequested(const ScreenshotPinnedImageSnapshot& snapshot);
+    void imageSplittingRequested(const snow_shot::presentation::ImageSplitSource& source);
     void scrollingImageEditingRequested(const ScreenshotExportSource& source);
     void pinnedImageEditingRequested(const QString& recordId);
     void recordingExportNotificationRequested(const QString& path);
@@ -155,6 +159,7 @@ class ScreenshotController : public QObject {
     void mcpCanvasChanged();
 
   private:
+    friend class ScreenshotControllerTestAccess;
     struct Impl;
 
     std::unique_ptr<Impl> m_impl;

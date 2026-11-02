@@ -115,8 +115,8 @@ constexpr char kRoleSerialNumericType[] = "serial-numeric-type";
 constexpr char kRoleFilterMode[] = "filter-mode";
 constexpr char kRoleEraserMode[] = "eraser-mode";
 [[maybe_unused]] constexpr const char* kEraserTranslations[] = {
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current brush eraser stroke width"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Brush eraser stroke width %1 (%2px)"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current brush eraser width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Brush eraser width %1 (%2px)"),
 };
 [[maybe_unused]] constexpr const char* kBrushTranslations[] = {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Regular brush"),
@@ -193,7 +193,7 @@ constexpr char kRoleDistanceDecimals[] = "distance-decimals";
 constexpr char kRoleDistanceScale[] = "distance-scale";
 constexpr char kRoleDistanceEndpoint[] = "distance-endpoint";
 constexpr char kSignatureDistanceValue[] = "input:distance-value";
-constexpr char kSignatureDistanceUnit[] = "radio:distance-unit";
+constexpr char kSignatureDistanceUnit[] = "editor:distance-unit";
 constexpr char kSignatureDistanceDecimals[] = "select:distance-decimals";
 constexpr char kRoleMagnifierColor[] = "magnifier-color";
 constexpr char kRoleMagnifierWidth[] = "magnifier-width";
@@ -219,9 +219,10 @@ constexpr char kSignatureMagnifierSourceOutline[] = "toggle:magnifier-source-out
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Leader line"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Gradient"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Source region outline"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Leader line type"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Leader line arrowhead"),
 };
 constexpr char kRoleAngleColor[] = "angle-color";
+constexpr char kRoleBracketColor[] = "bracket-color";
 constexpr char kRoleAngleType[] = "angle-type";
 constexpr char kSignatureAngleType[] = "radio:angle-type";
 constexpr char kRoleAngleUnit[] = "angle-unit";
@@ -233,7 +234,16 @@ constexpr quint32 angleProperty(SnowCanvasAngleStyleProperty property) {
     return static_cast<quint32>(property);
 }
 
+constexpr quint32 bracketProperty(SnowCanvasBracketStyleProperty property) {
+    return static_cast<quint32>(property);
+}
+
 [[maybe_unused]] constexpr const char* kAngleTranslationSources[] = {
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Bracket annotation"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Bracket stroke color"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Bracket stroke color %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current bracket stroke width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Bracket stroke width %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle annotation"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle stroke color"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle stroke color %1"),
@@ -277,6 +287,8 @@ QVector<QByteArray> styleEditorRoles(ScreenshotToolPalette::Tool tool) {
     case Tool::Angle:
         return {kRoleAngleColor, kRoleOutlineWidth, kRoleAngleType, kRoleAngleUnit,
                 kRoleAngleDecimals};
+    case Tool::Bracket:
+        return {kRoleBracketColor, kRoleOutlineWidth};
     case Tool::Arrow:
         return {kRoleOutlineStroke, kRoleOutlineWidth, "arrow-type",   kRoleArrowRatio,
                 "start-arrowhead",  kRoleArrowShaft,   "end-arrowhead"};
@@ -513,14 +525,14 @@ void finalizeRawEditorRoot(QWidget* root) {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Curved line"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Highlight color"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Highlight color %1"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Highlight stroke width"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Highlight stroke width %1px"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Highlight stroke color %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Highlight outline width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Highlight outline width %1px"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Highlight outline color %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pen highlight color"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pen highlight color %1"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow stroke color"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow stroke color %1"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow stroke width %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow color"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow color %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow width %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text color"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text color %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text font size %1 (%2px)"),
@@ -529,17 +541,17 @@ void finalizeRawEditorRoot(QWidget* root) {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Default"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Mixed"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text alignment"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text stroke width"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text stroke width %1px"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text outline width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text outline width %1px"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow outline width"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow outline width %1px"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow outline color transparent"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow outline color %1"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text stroke color transparent"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text stroke color %1"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text fill color"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text fill color transparent"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text fill color %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text outline color transparent"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text outline color %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text background color"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text background color transparent"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text background color %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Watermark color"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Watermark color %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Watermark text"),
@@ -565,13 +577,13 @@ void finalizeRawEditorRoot(QWidget* root) {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number color %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number font size %1px"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number font family"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number fill color"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number fill color transparent"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number fill color %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number background color"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number background color transparent"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number background color %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Mask color"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Mask color %1"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current pen filter stroke width"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pen filter stroke width %1 (%2px)"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current pen filter width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pen filter width %1 (%2px)"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current stroke width"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Dashed stroke"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Dotted stroke"),
@@ -579,37 +591,37 @@ void finalizeRawEditorRoot(QWidget* root) {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Architect"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Artist"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Cartoonist"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Cross-line fill"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Line fill"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Crosshatched fill"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Hatched fill"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid fill"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Border"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "No fill"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pick color from canvas"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current pen highlight stroke width"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pen highlight stroke width %1 (%2px)"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Dashed arrow stroke"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Dotted arrow stroke"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid arrow stroke"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current arrow stroke width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current pen highlight width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pen highlight width %1 (%2px)"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Dashed arrow line"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Dotted arrow line"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid arrow line"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current arrow width"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Start arrowhead"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "End arrowhead"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current text font size"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Align text left"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Align text center"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Align text right"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text stroke width"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Cross-line text fill"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Line text fill"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid text fill"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text outline width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Crosshatched text background"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Hatched text background"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid text background"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current watermark font size"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Watermark font size %1 (%2px)"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Watermark angle"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Watermark gap"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current sequence number font size"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Cross-line sequence number fill"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Line sequence number fill"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid sequence number fill"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Crosshatched sequence number background"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Hatched sequence number background"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid sequence number background"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "%1 (unavailable)"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Highlight stroke width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Highlight outline width"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Opacity"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Adjust opacity"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Filter type"),
@@ -626,9 +638,9 @@ void finalizeRawEditorRoot(QWidget* root) {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Rectangle filter"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pen highlight"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Rectangle highlight"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow ratio (scroll to adjust)"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrowhead scale (scroll to adjust)"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Corner radius (scroll to adjust)"),
-    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text fill corner radius (scroll to adjust)"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text background corner radius (scroll to adjust)"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number (scroll to adjust)"),
 };
 
@@ -945,11 +957,14 @@ void ScreenshotToolPaletteStyleControls::rebuildRegisteredComponents() {
     append(m_distanceColorEditor);
     append(m_distanceWidthEditor);
     append(m_distanceEndpointEditor);
+    append(m_distanceUnitEditor);
     append(m_magnifierColorEditor);
     append(m_magnifierWidthEditor);
     append(m_magnifierLeaderEditor);
     append(m_angleColorEditor);
+    append(m_bracketColorEditor);
     append(m_angleWidthEditor);
+    append(m_bracketWidthEditor);
     append(m_arrowStrokeWidthEditor);
     append(m_arrowStrokeEditor);
     append(m_arrowOutlineEditor);
@@ -1000,6 +1015,7 @@ void ScreenshotToolPaletteStyleControls::parkStyleEditors(int tool, QWidget* con
         park(kRoleDistanceColor, kSignatureForegroundColor, m_distanceColorEditor);
         park(kRoleOutlineWidth, kSignatureStrokeWidth, m_distanceWidthEditor);
         park(kRoleDistanceEndpoint, kSignatureArrowhead, m_distanceEndpointEditor);
+        park(kRoleDistanceUnit, kSignatureDistanceUnit, m_distanceUnitEditor);
         break;
     case Tool::Magnifier:
         park(kRoleMagnifierColor, kSignatureForegroundColor, m_magnifierColorEditor);
@@ -1009,6 +1025,10 @@ void ScreenshotToolPaletteStyleControls::parkStyleEditors(int tool, QWidget* con
     case Tool::Angle:
         park(kRoleAngleColor, kSignatureForegroundColor, m_angleColorEditor);
         park(kRoleOutlineWidth, kSignatureStrokeWidth, m_angleWidthEditor);
+        break;
+    case Tool::Bracket:
+        park(kRoleBracketColor, kSignatureForegroundColor, m_bracketColorEditor);
+        park(kRoleOutlineWidth, kSignatureStrokeWidth, m_bracketWidthEditor);
         break;
     case Tool::Arrow:
         park(kRoleOutlineStroke, kSignatureStroke, m_arrowStrokeEditor);
@@ -1090,6 +1110,7 @@ void ScreenshotToolPaletteStyleControls::restoreStyleEditors(int tool, QWidget* 
         restore(kRoleDistanceColor, m_distanceColorEditor);
         restore(kRoleOutlineWidth, m_distanceWidthEditor);
         restore(kRoleDistanceEndpoint, m_distanceEndpointEditor);
+        restore(kRoleDistanceUnit, m_distanceUnitEditor);
         break;
     case Tool::Magnifier:
         restore(kRoleMagnifierColor, m_magnifierColorEditor);
@@ -1099,6 +1120,10 @@ void ScreenshotToolPaletteStyleControls::restoreStyleEditors(int tool, QWidget* 
     case Tool::Angle:
         restore(kRoleAngleColor, m_angleColorEditor);
         restore(kRoleOutlineWidth, m_angleWidthEditor);
+        break;
+    case Tool::Bracket:
+        restore(kRoleBracketColor, m_bracketColorEditor);
+        restore(kRoleOutlineWidth, m_bracketWidthEditor);
         break;
     case Tool::Arrow:
         restore(kRoleOutlineStroke, m_arrowStrokeEditor);
@@ -1244,6 +1269,8 @@ void ScreenshotToolPaletteStyleControls::prepareStyleReconcile(int sourceTool, i
     if (shared(kRoleOutlineWidth)) {
         if (source == ScreenshotToolPalette::Tool::Distance) {
             stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_distanceWidthEditor);
+        } else if (source == ScreenshotToolPalette::Tool::Bracket) {
+            stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_bracketWidthEditor);
         } else if (source == ScreenshotToolPalette::Tool::Angle) {
             stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_angleWidthEditor);
         } else if (source == ScreenshotToolPalette::Tool::Arrow) {
@@ -1410,8 +1437,8 @@ void ScreenshotToolPaletteStyleControls::stageDestinationStyleEditors(
         stageComponent(kRoleDistanceColor, kSignatureForegroundColor, m_distanceColorEditor);
         stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_distanceWidthEditor);
         stageComponent(kRoleDistanceEndpoint, kSignatureArrowhead, m_distanceEndpointEditor);
+        stageComponent(kRoleDistanceUnit, kSignatureDistanceUnit, m_distanceUnitEditor);
         stageWidget(kRoleDistanceValue);
-        stageWidget(kRoleDistanceUnit);
         stageWidget(kRoleDistanceDecimals);
         stageWidget(kRoleDistanceScale);
         break;
@@ -1432,6 +1459,10 @@ void ScreenshotToolPaletteStyleControls::stageDestinationStyleEditors(
         stageWidget(kRoleAngleType);
         stageWidget(kRoleAngleUnit);
         stageWidget(kRoleAngleDecimals);
+        break;
+    case Tool::Bracket:
+        stageComponent(kRoleBracketColor, kSignatureForegroundColor, m_bracketColorEditor);
+        stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_bracketWidthEditor);
         break;
     case Tool::Arrow:
         stageComponent(kRoleOutlineStroke, kSignatureStroke, m_arrowStrokeEditor);
@@ -1820,11 +1851,12 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
                    : ScreenshotToolPaletteTranslationText("Fill color %1").arg(color.name());
     };
     fillConfig.styleTooltip = [](SnowCanvasFillStyle style) {
-        return style == SnowCanvasFillStyle::Border ? ScreenshotToolPaletteTranslationText("Border")
+        return style == SnowCanvasFillStyle::Border
+                   ? ScreenshotToolPaletteTranslationText("No fill")
                : style == SnowCanvasFillStyle::CrossLine
-                   ? ScreenshotToolPaletteTranslationText("Cross-line fill")
+                   ? ScreenshotToolPaletteTranslationText("Crosshatched fill")
                : style == SnowCanvasFillStyle::Line
-                   ? ScreenshotToolPaletteTranslationText("Line fill")
+                   ? ScreenshotToolPaletteTranslationText("Hatched fill")
                    : ScreenshotToolPaletteTranslationText("Solid fill");
     };
     if (auto reused = takeReusableEditor(kRoleShapeFill, kSignatureShapeFill, layout, controls)) {
@@ -1893,7 +1925,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
     auto* layout = static_cast<QHBoxLayout*>(controls->layout());
 
     ScreenshotToolPaletteStrokeEditorConfig arrowStrokeConfig;
-    arrowStrokeConfig.accessibleName = QStringLiteral("Arrow stroke color");
+    arrowStrokeConfig.accessibleName = QStringLiteral("Arrow color");
     arrowStrokeConfig.renderingStylesEnabled = true;
     arrowStrokeConfig.initialRenderingStyle = m_state.m_arrowStyle.strokeRenderingStyle;
     arrowStrokeConfig.setRenderingStyle = [this](SnowCanvasStrokeRenderingStyle style) {
@@ -1903,14 +1935,14 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
     arrowStrokeConfig.presetSource =
         snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Stroke;
     arrowStrokeConfig.colorTooltip = [](const QColor& color) {
-        return ScreenshotToolPaletteTranslationText("Arrow stroke color %1").arg(color.name());
+        return ScreenshotToolPaletteTranslationText("Arrow color %1").arg(color.name());
     };
     arrowStrokeConfig.styleTooltip = [](SnowCanvasStrokeStyle style) {
         return style == SnowCanvasStrokeStyle::Dashed
-                   ? ScreenshotToolPaletteTranslationText("Dashed arrow stroke")
+                   ? ScreenshotToolPaletteTranslationText("Dashed arrow line")
                : style == SnowCanvasStrokeStyle::Dotted
-                   ? ScreenshotToolPaletteTranslationText("Dotted arrow stroke")
-                   : ScreenshotToolPaletteTranslationText("Solid arrow stroke");
+                   ? ScreenshotToolPaletteTranslationText("Dotted arrow line")
+                   : ScreenshotToolPaletteTranslationText("Solid arrow line");
     };
     if (auto reused = takeReusableEditor(kRoleOutlineStroke, kSignatureStroke, layout, controls)) {
         m_arrowStrokeEditor.reset(
@@ -1935,11 +1967,11 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
     }
 
     ScreenshotToolPaletteNumericPresetEditorConfig arrowStrokeWidthConfig;
-    arrowStrokeWidthConfig.summaryTooltip = QStringLiteral("Current arrow stroke width");
+    arrowStrokeWidthConfig.summaryTooltip = QStringLiteral("Current arrow width");
     arrowStrokeWidthConfig.values = style_presets::strokePresetWidths();
     arrowStrokeWidthConfig.strokePreview = true;
     arrowStrokeWidthConfig.presetTooltip = [](int, double value) {
-        return ScreenshotToolPaletteTranslationText("Arrow stroke width %1").arg(value, 0, 'g', 2);
+        return ScreenshotToolPaletteTranslationText("Arrow width %1").arg(value, 0, 'g', 2);
     };
     if (auto reused =
             takeReusableEditor(kRoleOutlineWidth, kSignatureStrokeWidth, layout, controls)) {
@@ -2041,13 +2073,13 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
         takeReusableWidget(kRoleArrowRatio, kSignatureArrowRatio, layout, controls));
     if (m_arrowRatioEditor == nullptr) {
         m_arrowRatioEditor = createScreenshotToolPaletteIconNumericValueButton(
-            controls, "Arrow ratio (scroll to adjust)", custom_outlined_icons::ArrowRatio(), 1,
+            controls, "Arrowhead scale (scroll to adjust)", custom_outlined_icons::ArrowRatio(), 1,
             QStringLiteral("3.0"), metrics);
         layout->addWidget(m_arrowRatioEditor);
     } else {
         configureScreenshotToolPaletteTooltip(
             m_arrowRatioEditor,
-            ScreenshotToolPaletteTranslationText("Arrow ratio (scroll to adjust)"));
+            ScreenshotToolPaletteTranslationText("Arrowhead scale (scroll to adjust)"));
         configureScreenshotToolPaletteIconNumericValueButton(m_arrowRatioEditor, metrics);
     }
     m_arrowRatioEditor->setDecimalPlaces(1);
@@ -2471,7 +2503,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
         takeReusableWidget(kRoleMagnifierArrowRatio, kSignatureArrowRatio, layout, controls));
     if (m_magnifierArrowRatioEditor == nullptr) {
         m_magnifierArrowRatioEditor = createScreenshotToolPaletteIconNumericValueButton(
-            controls, "Arrow ratio (scroll to adjust)", custom_outlined_icons::ArrowRatio(), 1,
+            controls, "Arrowhead scale (scroll to adjust)", custom_outlined_icons::ArrowRatio(), 1,
             QStringLiteral("3.0"), metrics);
         layout->addWidget(m_magnifierArrowRatioEditor);
     } else {
@@ -2487,8 +2519,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
                      controlCallbackContext(controls), [this]() { setMagnifierArrowRatio(1.0); });
 
     ScreenshotToolPaletteIconOptionEditorConfig leaderConfig;
-    leaderConfig.accessibleName = QStringLiteral("Leader line type");
-    leaderConfig.triggerTooltip = QStringLiteral("Leader line type");
+    leaderConfig.accessibleName = QStringLiteral("Leader line arrowhead");
+    leaderConfig.triggerTooltip = QStringLiteral("Leader line arrowhead");
     leaderConfig.gridColumnCount = 4;
     const QVector<SnowCanvasArrowhead> arrowheads{
         SnowCanvasArrowhead::None,
@@ -2595,6 +2627,84 @@ bool ScreenshotToolPaletteStyleControls::handleMagnifierWheel(const QPoint& glob
         return true;
     }
     return false;
+}
+
+QWidget* ScreenshotToolPaletteStyleControls::buildBracketFamily(
+    QWidget* panel, const ScreenshotToolPaletteStyleFamilyHost& host,
+    const ScreenshotToolPaletteButtonMetrics& metrics) {
+    if (panel == nullptr)
+        return nullptr;
+    QWidget* controls =
+        createRowWidget(panel, QStringLiteral("screenshotBracketStyleControls"), host);
+    auto* layout = static_cast<QHBoxLayout*>(controls->layout());
+    ScreenshotToolPaletteColorEditorConfig colorConfig;
+    colorConfig.accessibleName = QStringLiteral("Bracket stroke color");
+    colorConfig.pickerObjectName = QStringLiteral("screenshotBracketColorPicker");
+    colorConfig.presetValues = style_presets::strokeColors();
+    colorConfig.presetSource =
+        snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Stroke;
+    colorConfig.presetTooltip = [](const QColor& color) {
+        return ScreenshotToolPaletteTranslationText("Bracket stroke color %1").arg(color.name());
+    };
+    const auto setColor = [this](const QColor& color) {
+        if (!color.isValid())
+            return;
+        commitBracketProperty(bracketProperty(SnowCanvasBracketStyleProperty::Stroke),
+                              [color](SnowCanvasBracketStyle& style) { style.stroke = color; });
+    };
+    if (auto reused =
+            takeReusableEditor(kRoleBracketColor, kSignatureForegroundColor, layout, controls)) {
+        m_bracketColorEditor.reset(
+            static_cast<ScreenshotToolPaletteColorEditor*>(reused.release()));
+        m_bracketColorEditor->rebind(colorConfig, setColor, {});
+    } else {
+        m_bracketColorEditor = std::make_unique<ScreenshotToolPaletteColorEditor>();
+        m_bracketColorEditor->build(layout, controls, controls, colorConfig,
+                                    m_state.bracketStyle.stroke, setColor, {}, editorServices(),
+                                    metrics);
+    }
+    tagEditor(m_bracketColorEditor.get(), kRoleBracketColor, kSignatureForegroundColor);
+    registerEditor(m_bracketColorEditor.get());
+
+    if (host.addGroupSeparator)
+        host.addGroupSeparator(layout);
+    ScreenshotToolPaletteNumericPresetEditorConfig widthConfig;
+    widthConfig.summaryTooltip = QStringLiteral("Current bracket stroke width");
+    widthConfig.values = style_presets::strokePresetWidths();
+    widthConfig.strokePreview = true;
+    widthConfig.presetTooltip = [](int, double value) {
+        return ScreenshotToolPaletteTranslationText("Bracket stroke width %1")
+            .arg(value, 0, 'g', 2);
+    };
+    const auto cycleWidth = [this]() {
+        const auto values = style_presets::strokePresetWidths();
+        for (double value : values) {
+            if (value > m_state.bracketStyle.strokeWidth) {
+                setBracketStrokeWidth(value);
+                return;
+            }
+        }
+        if (!values.isEmpty())
+            setBracketStrokeWidth(values.first());
+    };
+    const auto setWidth = [this](double width) { setBracketStrokeWidth(width); };
+    if (auto reused =
+            takeReusableEditor(kRoleOutlineWidth, kSignatureStrokeWidth, layout, controls)) {
+        m_bracketWidthEditor.reset(
+            static_cast<ScreenshotToolPaletteNumericPresetEditor*>(reused.release()));
+        m_bracketWidthEditor->rebind(widthConfig, cycleWidth, setWidth);
+    } else {
+        m_bracketWidthEditor = std::make_unique<ScreenshotToolPaletteNumericPresetEditor>();
+        m_bracketWidthEditor->build(layout, controls, controls, widthConfig,
+                                    m_state.bracketStyle.strokeWidth, cycleWidth, setWidth,
+                                    metrics);
+    }
+    tagEditor(m_bracketWidthEditor.get(), kRoleOutlineWidth, kSignatureStrokeWidth);
+    registerEditor(m_bracketWidthEditor.get());
+
+    registerBracketEntries();
+    updateBracketStyleControls();
+    return controls;
 }
 
 QWidget* ScreenshotToolPaletteStyleControls::buildAngleFamily(
@@ -2903,46 +3013,21 @@ QWidget* ScreenshotToolPaletteStyleControls::buildDistanceFamily(
                              setDistanceValue(value);
                      });
 
-    QWidget* units =
-        takeReusableWidget(kRoleDistanceUnit, kSignatureDistanceUnit, layout, controls);
-    if (units == nullptr) {
-        ScreenshotToolPaletteRadioEditorConfig config;
-        config.objectName = QStringLiteral("screenshotDistanceUnitButtonGroup");
-        config.useButtonMetrics = true;
-        config.options = {
-            {static_cast<int>(SnowCanvasDistanceUnit::Mm), "mm",
-             custom_outlined_icons::DistanceUnitMm()},
-            {static_cast<int>(SnowCanvasDistanceUnit::Cm), "cm",
-             custom_outlined_icons::DistanceUnitCm()},
-            {static_cast<int>(SnowCanvasDistanceUnit::M), "m",
-             custom_outlined_icons::DistanceUnitM()},
-            {static_cast<int>(SnowCanvasDistanceUnit::Km), "km",
-             custom_outlined_icons::DistanceUnitKm()},
-            {static_cast<int>(SnowCanvasDistanceUnit::Px), "px",
-             custom_outlined_icons::DistanceUnitPx()},
-        };
-        auto editor = createScreenshotToolPaletteRadioEditor(controls, config, metrics);
-        units = editor.container;
-        m_distanceUnitGroup = editor.group;
-        layout->addWidget(units);
+    const auto setUnit = [this](SnowCanvasDistanceUnit unit) {
+        commitDistanceProperty(SnowCanvasDistanceStylePropertyUnit,
+                               [unit](SnowCanvasDistanceStyle& style) { style.unit = unit; });
+    };
+    if (auto reused =
+            takeReusableEditor(kRoleDistanceUnit, kSignatureDistanceUnit, layout, controls)) {
+        m_distanceUnitEditor.reset(
+            static_cast<ScreenshotToolPaletteDistanceUnitEditor*>(reused.release()));
+        m_distanceUnitEditor->rebind(setUnit);
     } else {
-        m_distanceUnitGroup = units->findChild<adqt::widgets::AdRadioButtonGroup*>();
+        m_distanceUnitEditor = std::make_unique<ScreenshotToolPaletteDistanceUnitEditor>();
+        m_distanceUnitEditor->build(layout, controls, setUnit, editorServices(), metrics);
     }
-    tagWidget(units, kRoleDistanceUnit, kSignatureDistanceUnit);
-    configureScreenshotToolPaletteTooltip(units, "Distance unit");
-    QObject::disconnect(m_distanceUnitGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-                        nullptr, nullptr);
-    QObject::connect(m_distanceUnitGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-                     controlCallbackContext(controls), [this](int id) {
-                         if (id < static_cast<int>(SnowCanvasDistanceUnit::Px) ||
-                             id > static_cast<int>(SnowCanvasDistanceUnit::Mm))
-                             return;
-                         commitDistanceProperty(SnowCanvasDistanceStylePropertyUnit,
-                                                [id](SnowCanvasDistanceStyle& style) {
-                                                    style.unit =
-                                                        static_cast<SnowCanvasDistanceUnit>(id);
-                                                });
-                     });
+    tagEditor(m_distanceUnitEditor.get(), kRoleDistanceUnit, kSignatureDistanceUnit);
+    registerEditor(m_distanceUnitEditor.get());
 
     m_distanceDecimalsEditor.select = qobject_cast<adqt::widgets::AdSelect*>(
         takeReusableWidget(kRoleDistanceDecimals, kSignatureDistanceDecimals, layout, controls));
@@ -3099,8 +3184,8 @@ ScreenshotToolPaletteHighlightFamilyResult ScreenshotToolPaletteStyleControls::b
         }
 
         ScreenshotToolPaletteWidthColorEditorConfig highlightStrokeConfig;
-        highlightStrokeConfig.accessibleName = QStringLiteral("Highlight stroke width");
-        highlightStrokeConfig.triggerTooltip = QStringLiteral("Highlight stroke width");
+        highlightStrokeConfig.accessibleName = QStringLiteral("Highlight outline width");
+        highlightStrokeConfig.triggerTooltip = QStringLiteral("Highlight outline width");
         highlightStrokeConfig.popupObjectName = QStringLiteral("screenshotHighlightStrokeOptions");
         highlightStrokeConfig.widthRowObjectName =
             QStringLiteral("screenshotHighlightStrokeWidthPresets");
@@ -3111,11 +3196,11 @@ ScreenshotToolPaletteHighlightFamilyResult ScreenshotToolPaletteStyleControls::b
         highlightStrokeConfig.presetSource =
             snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Stroke;
         highlightStrokeConfig.widthTooltip = [](double width) {
-            return ScreenshotToolPaletteTranslationText("Highlight stroke width %1px")
+            return ScreenshotToolPaletteTranslationText("Highlight outline width %1px")
                 .arg(width, 0, 'g', 3);
         };
         highlightStrokeConfig.colorTooltip = [](const QColor& color) {
-            return ScreenshotToolPaletteTranslationText("Highlight stroke color %1")
+            return ScreenshotToolPaletteTranslationText("Highlight outline color %1")
                 .arg(color.name());
         };
         if (auto reused = takeReusableEditor(kRoleHighlightBorder, kSignatureHighlightBorder,
@@ -3194,8 +3279,8 @@ ScreenshotToolPaletteHighlightFamilyResult ScreenshotToolPaletteStyleControls::b
         }
         ScreenshotToolPaletteNumericPresetEditorConfig penHighlightWidthConfig =
             snow_shot::presentation::screenshotToolPaletteSizePresetEditorConfig(
-                QStringLiteral("Current pen highlight stroke width"), QString(),
-                "Pen highlight stroke width %1 (%2px)");
+                QStringLiteral("Current pen highlight width"), QString(),
+                "Pen highlight width %1 (%2px)");
         if (auto reused =
                 takeReusableEditor(kRoleBrushWidth, kSignatureBrushWidth, penLayout, penControls)) {
             m_penHighlightStrokeWidthEditor.reset(
@@ -3452,8 +3537,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
         host.addGroupSeparator(layout);
     }
     ScreenshotToolPaletteWidthColorEditorConfig textStrokeConfig;
-    textStrokeConfig.accessibleName = QStringLiteral("Text stroke width");
-    textStrokeConfig.triggerTooltip = QStringLiteral("Text stroke width");
+    textStrokeConfig.accessibleName = QStringLiteral("Text outline width");
+    textStrokeConfig.triggerTooltip = QStringLiteral("Text outline width");
     textStrokeConfig.popupObjectName = QStringLiteral("screenshotTextStrokeWidthOptions");
     textStrokeConfig.widthRowObjectName = QStringLiteral("screenshotTextStrokeWidthPresets");
     textStrokeConfig.colorRowObjectName = QStringLiteral("screenshotTextStrokeColorPresets");
@@ -3463,12 +3548,14 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
         snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Fill;
     textStrokeConfig.observePopup = true;
     textStrokeConfig.widthTooltip = [](double width) {
-        return ScreenshotToolPaletteTranslationText("Text stroke width %1px").arg(width, 0, 'g', 3);
+        return ScreenshotToolPaletteTranslationText("Text outline width %1px")
+            .arg(width, 0, 'g', 3);
     };
     textStrokeConfig.colorTooltip = [](const QColor& color) {
         return color.alpha() == 0
-                   ? ScreenshotToolPaletteTranslationText("Text stroke color transparent")
-                   : ScreenshotToolPaletteTranslationText("Text stroke color %1").arg(color.name());
+                   ? ScreenshotToolPaletteTranslationText("Text outline color transparent")
+                   : ScreenshotToolPaletteTranslationText("Text outline color %1")
+                         .arg(color.name());
     };
     if (auto reused = takeReusableEditor(kRoleTextStroke, kSignatureTextStroke, layout, controls)) {
         m_textStrokeEditor.reset(
@@ -3488,7 +3575,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
     addToolbarSpacing(layout, kTextStrokeColorTrailingSpacing, metrics);
 
     ScreenshotToolPaletteFillEditorConfig textFillConfig;
-    textFillConfig.accessibleName = QStringLiteral("Text fill color");
+    textFillConfig.accessibleName = QStringLiteral("Text background color");
     textFillConfig.popupObjectName = QStringLiteral("screenshotTextFillOptions");
     textFillConfig.presetRowObjectName = QStringLiteral("screenshotTextFillColorPresets");
     textFillConfig.colorValues = m_state.m_textStyle.fillColorValues();
@@ -3497,16 +3584,18 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
     textFillConfig.observePopup = true;
     textFillConfig.colorTooltip = [](const QColor& color) {
         return color.alpha() == 0
-                   ? ScreenshotToolPaletteTranslationText("Text fill color transparent")
-                   : ScreenshotToolPaletteTranslationText("Text fill color %1").arg(color.name());
+                   ? ScreenshotToolPaletteTranslationText("Text background color transparent")
+                   : ScreenshotToolPaletteTranslationText("Text background color %1")
+                         .arg(color.name());
     };
     textFillConfig.styleTooltip = [](SnowCanvasFillStyle style) {
-        return style == SnowCanvasFillStyle::Border ? ScreenshotToolPaletteTranslationText("Border")
+        return style == SnowCanvasFillStyle::Border
+                   ? ScreenshotToolPaletteTranslationText("No fill")
                : style == SnowCanvasFillStyle::CrossLine
-                   ? ScreenshotToolPaletteTranslationText("Cross-line text fill")
+                   ? ScreenshotToolPaletteTranslationText("Crosshatched text background")
                : style == SnowCanvasFillStyle::Line
-                   ? ScreenshotToolPaletteTranslationText("Line text fill")
-                   : ScreenshotToolPaletteTranslationText("Solid text fill");
+                   ? ScreenshotToolPaletteTranslationText("Hatched text background")
+                   : ScreenshotToolPaletteTranslationText("Solid text background");
     };
     if (auto reused = takeReusableEditor(kRoleTextFill, kSignatureTextFill, layout, controls)) {
         m_textFillEditor.reset(static_cast<ScreenshotToolPaletteFillEditor*>(reused.release()));
@@ -3528,13 +3617,13 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
         takeReusableWidget(kRoleCornerRadius, kSignatureCornerRadius, layout, controls));
     if (m_textCornerRadiusEditor == nullptr) {
         m_textCornerRadiusEditor = createScreenshotToolPaletteCornerRadiusEditor(
-            controls, "Text fill corner radius (scroll to adjust)",
+            controls, "Text background corner radius (scroll to adjust)",
             custom_outlined_icons::SelectionRadius(), qRound(style.cornerRadii.topLeft), metrics);
         layout->addWidget(m_textCornerRadiusEditor);
     } else {
         configureScreenshotToolPaletteTooltip(
-            m_textCornerRadiusEditor,
-            ScreenshotToolPaletteTranslationText("Text fill corner radius (scroll to adjust)"));
+            m_textCornerRadiusEditor, ScreenshotToolPaletteTranslationText(
+                                          "Text background corner radius (scroll to adjust)"));
         configureScreenshotToolPaletteCornerRadiusEditor(m_textCornerRadiusEditor, metrics);
     }
     m_textCornerRadiusEditor->setObjectName(QString());
@@ -3791,7 +3880,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSerialNumberFamily(
         host.addGroupSeparator(layout);
     }
     ScreenshotToolPaletteFillEditorConfig serialNumberFillConfig;
-    serialNumberFillConfig.accessibleName = QStringLiteral("Sequence number fill color");
+    serialNumberFillConfig.accessibleName = QStringLiteral("Sequence number background color");
     serialNumberFillConfig.popupObjectName = QStringLiteral("screenshotSerialNumberFillOptions");
     serialNumberFillConfig.presetRowObjectName =
         QStringLiteral("screenshotSerialNumberFillColorPresets");
@@ -3801,17 +3890,19 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSerialNumberFamily(
     serialNumberFillConfig.observePopup = true;
     serialNumberFillConfig.colorTooltip = [](const QColor& color) {
         return color.alpha() == 0
-                   ? ScreenshotToolPaletteTranslationText("Sequence number fill color transparent")
-                   : ScreenshotToolPaletteTranslationText("Sequence number fill color %1")
+                   ? ScreenshotToolPaletteTranslationText(
+                         "Sequence number background color transparent")
+                   : ScreenshotToolPaletteTranslationText("Sequence number background color %1")
                          .arg(color.name());
     };
     serialNumberFillConfig.styleTooltip = [](SnowCanvasFillStyle style) {
-        return style == SnowCanvasFillStyle::Border ? ScreenshotToolPaletteTranslationText("Border")
+        return style == SnowCanvasFillStyle::Border
+                   ? ScreenshotToolPaletteTranslationText("No fill")
                : style == SnowCanvasFillStyle::CrossLine
-                   ? ScreenshotToolPaletteTranslationText("Cross-line sequence number fill")
+                   ? ScreenshotToolPaletteTranslationText("Crosshatched sequence number background")
                : style == SnowCanvasFillStyle::Line
-                   ? ScreenshotToolPaletteTranslationText("Line sequence number fill")
-                   : ScreenshotToolPaletteTranslationText("Solid sequence number fill");
+                   ? ScreenshotToolPaletteTranslationText("Hatched sequence number background")
+                   : ScreenshotToolPaletteTranslationText("Solid sequence number background");
     };
     if (auto reused = takeReusableEditor(kRoleTextFill, kSignatureTextFill, layout, controls)) {
         m_serialNumberFillEditor.reset(
@@ -4208,9 +4299,9 @@ QWidget* ScreenshotToolPaletteStyleControls::buildEraserFamily(
         if (host.addGroupSeparator)
             host.addGroupSeparator(layout);
         auto config = snow_shot::presentation::screenshotToolPaletteSizePresetEditorConfig(
-            QStringLiteral("Current brush eraser stroke width"),
+            QStringLiteral("Current brush eraser width"),
             QStringLiteral("screenshotBrushEraserStrokeWidthSummary"),
-            "Brush eraser stroke width %1 (%2px)");
+            "Brush eraser width %1 (%2px)");
         config.presetObjectName = [](double width) {
             return QStringLiteral("screenshotBrushEraserStrokeWidth%1").arg(qRound(width));
         };
@@ -4330,9 +4421,9 @@ ScreenshotToolPaletteFilterFamilyResult ScreenshotToolPaletteStyleControls::buil
     if (config.includeStrokeWidth) {
         ScreenshotToolPaletteNumericPresetEditorConfig penFilterWidthConfig =
             snow_shot::presentation::screenshotToolPaletteSizePresetEditorConfig(
-                QStringLiteral("Current pen filter stroke width"),
+                QStringLiteral("Current pen filter width"),
                 QStringLiteral("screenshotPenFilterStrokeWidthSummary"),
-                "Pen filter stroke width %1 (%2px)");
+                "Pen filter width %1 (%2px)");
         penFilterWidthConfig.presetObjectName = [](double value) {
             return QStringLiteral("screenshotPenFilterStrokeWidth%1").arg(qRound(value));
         };
@@ -4600,12 +4691,9 @@ void ScreenshotToolPaletteStyleControls::registerDistanceEntries() {
                      m_distanceValueInput->clear();
                  }
              }
-             if (m_distanceUnitGroup != nullptr) {
-                 const QSignalBlocker blocker(m_distanceUnitGroup);
-                 m_distanceUnitGroup->setCheckedId(mixed(SnowCanvasDistanceStylePropertyUnit)
-                                                       ? -1
-                                                       : static_cast<int>(style.unit));
-             }
+             if (m_distanceUnitEditor != nullptr)
+                 m_distanceUnitEditor->update(style.unit,
+                                              mixed(SnowCanvasDistanceStylePropertyUnit));
              if (m_distanceDecimalsEditor.select != nullptr) {
                  const QSignalBlocker blocker(m_distanceDecimalsEditor.select);
                  m_distanceDecimalsEditor.select->setCurrentValue(
@@ -4627,6 +4715,27 @@ void ScreenshotToolPaletteStyleControls::registerDistanceEntries() {
 
 void ScreenshotToolPaletteStyleControls::updateDistanceStyleControls() {
     applyEditorEntries(m_distanceEntries, kAllRefreshGroups);
+}
+
+void ScreenshotToolPaletteStyleControls::registerBracketEntries() {
+    const auto mixed = [this](SnowCanvasBracketStyleProperty property) {
+        return m_state.showingSelectedBracket &&
+               (m_state.bracketStyleMixed & bracketProperty(property)) != 0;
+    };
+    m_bracketEntries = {
+        {bracketProperty(SnowCanvasBracketStyleProperty::Stroke),
+         [this, mixed]() {
+             if (m_bracketColorEditor != nullptr)
+                 m_bracketColorEditor->update(m_state.bracketStyle.stroke,
+                                              mixed(SnowCanvasBracketStyleProperty::Stroke));
+         }},
+        {bracketProperty(SnowCanvasBracketStyleProperty::StrokeWidth),
+         [this, mixed]() {
+             if (m_bracketWidthEditor != nullptr)
+                 m_bracketWidthEditor->update(m_state.bracketStyle.strokeWidth,
+                                              mixed(SnowCanvasBracketStyleProperty::StrokeWidth));
+         }},
+    };
 }
 
 void ScreenshotToolPaletteStyleControls::registerAngleEntries() {
@@ -4682,6 +4791,11 @@ void ScreenshotToolPaletteStyleControls::registerAngleEntries() {
 void ScreenshotToolPaletteStyleControls::updateAngleStyleControls(quint32 properties) {
     refreshEditorEntries(m_angleEntries, properties,
                          angleProperty(SnowCanvasAngleStyleProperty::All));
+}
+
+void ScreenshotToolPaletteStyleControls::updateBracketStyleControls(quint32 properties) {
+    refreshEditorEntries(m_bracketEntries, properties,
+                         bracketProperty(SnowCanvasBracketStyleProperty::All));
 }
 
 void ScreenshotToolPaletteStyleControls::registerArrowEntries() {
@@ -5059,6 +5173,7 @@ void ScreenshotToolPaletteStyleControls::reset() {
     updateArrowStyleControls();
     updateDistanceStyleControls();
     updateAngleStyleControls();
+    updateBracketStyleControls();
     updateTextStyleControls();
     updateWatermarkControls();
     updateSerialNumberStyleControls();
@@ -5073,6 +5188,7 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_state.m_arrowControlsActive = false;
     m_state.distanceControlsActive = false;
     m_state.angleControlsActive = false;
+    m_state.bracketControlsActive = false;
     m_state.m_lineControlsActive = false;
     m_state.m_speechBubbleControlsActive = false;
     m_state.m_freeDrawControlsActive = false;
@@ -5099,8 +5215,8 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_distanceColorEditor.reset();
     m_distanceWidthEditor.reset();
     m_distanceEndpointEditor.reset();
+    m_distanceUnitEditor.reset();
     m_distanceValueInput = nullptr;
-    m_distanceUnitGroup = nullptr;
     m_distanceDecimalsEditor = {};
     m_distanceScaleEditor = nullptr;
     m_magnifierColorEditor.reset();
@@ -5113,7 +5229,9 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_magnifierConnectionGroup = nullptr;
     m_magnifierSourceOutlineToggle = nullptr;
     m_angleColorEditor.reset();
+    m_bracketColorEditor.reset();
     m_angleWidthEditor.reset();
+    m_bracketWidthEditor.reset();
     m_angleTypeGroup = nullptr;
     m_angleUnitGroup = nullptr;
     m_angleDecimalsEditor = {};
@@ -5163,6 +5281,7 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_arrowEntries.clear();
     m_distanceEntries.clear();
     m_angleEntries.clear();
+    m_bracketEntries.clear();
     m_textEntries.clear();
     m_serialNumberEntries.clear();
     m_watermarkEntries.clear();
@@ -5179,6 +5298,7 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
     const bool keepArrow = destination == Tool::Arrow;
     const bool keepDistance = destination == Tool::Distance;
     const bool keepAngle = destination == Tool::Angle;
+    const bool keepBracket = destination == Tool::Bracket;
     const bool keepMagnifier = destination == Tool::Magnifier;
     const bool keepRectangleHighlight = destination == Tool::RectangleHighlight;
     const bool keepPenHighlight = destination == Tool::PenHighlight;
@@ -5207,6 +5327,7 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
     resetUnless(keepDistance, m_distanceColorEditor);
     resetUnless(keepDistance, m_distanceWidthEditor);
     resetUnless(keepDistance, m_distanceEndpointEditor);
+    resetUnless(keepDistance, m_distanceUnitEditor);
     resetUnless(keepMagnifier, m_magnifierColorEditor);
     resetUnless(keepMagnifier, m_magnifierWidthEditor);
     resetUnless(keepMagnifier, m_magnifierLeaderEditor);
@@ -5219,7 +5340,9 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
         m_magnifierSourceOutlineToggle = nullptr;
     }
     resetUnless(keepAngle, m_angleColorEditor);
+    resetUnless(keepBracket, m_bracketColorEditor);
     resetUnless(keepAngle, m_angleWidthEditor);
+    resetUnless(keepBracket, m_bracketWidthEditor);
     resetUnless(keepArrow, m_arrowStrokeWidthEditor);
     resetUnless(keepArrow, m_arrowStrokeEditor);
     resetUnless(keepArrow, m_arrowOutlineEditor);
@@ -5258,7 +5381,6 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
     }
     if (!keepDistance) {
         m_distanceValueInput = nullptr;
-        m_distanceUnitGroup = nullptr;
         m_distanceDecimalsEditor = {};
         m_distanceScaleEditor = nullptr;
     }
@@ -5344,6 +5466,7 @@ void ScreenshotToolPaletteStyleControls::setCreationStyleDefaults(
     updateArrowStyleControls();
     updateDistanceStyleControls();
     updateAngleStyleControls();
+    updateBracketStyleControls();
     updateHighlightStyleControls();
     updatePenHighlightStyleControls();
     updateBrushEraserStrokeWidthControls(m_state.brushEraserStyle.strokeWidth);
@@ -5357,6 +5480,10 @@ void ScreenshotToolPaletteStyleControls::setDistanceControlsActive(bool active) 
 
 void ScreenshotToolPaletteStyleControls::setAngleControlsActive(bool active) {
     m_state.angleControlsActive = active;
+}
+
+void ScreenshotToolPaletteStyleControls::setBracketControlsActive(bool active) {
+    m_state.bracketControlsActive = active;
 }
 
 bool ScreenshotToolPaletteStyleControls::handleDistanceWheel(const QPoint& globalPosition,
@@ -5491,6 +5618,12 @@ void ScreenshotToolPaletteStyleControls::clearTextStylePopupInteractions() {
 }
 
 bool ScreenshotToolPaletteStyleControls::stepStrokeWidth(int direction) {
+    if (m_state.bracketControlsActive) {
+        if (direction == 0)
+            return false;
+        setBracketStrokeWidth(m_state.bracketStyle.strokeWidth + (direction > 0 ? 1.0 : -1.0));
+        return true;
+    }
     if (m_state.angleControlsActive)
         return false;
     if (m_state.m_penHighlightControlsActive) {
@@ -5745,6 +5878,7 @@ SnowCanvasStyleDefaults ScreenshotToolPaletteStyleControls::creationStyleDefault
     defaults.arrow.arrowOutlineWidth = m_state.m_creationArrowStyle.arrowOutlineWidth;
     defaults.distance = m_state.creationDistanceStyle;
     defaults.angle = m_state.creationAngleStyle;
+    defaults.bracket = m_state.creationBracketStyle;
     defaults.magnifier = m_state.creationMagnifierStyle;
     defaults.text = m_state.m_creationTextStyle.textStyle();
     defaults.serialNumber = m_state.m_creationSerialNumberStyle;
@@ -5778,6 +5912,7 @@ void ScreenshotToolPaletteStyleControls::rememberStyleEdit(const SnowCanvasStyle
     m_state.m_creationArrowStyle = remembered.m_creationArrowStyle;
     m_state.creationDistanceStyle = remembered.creationDistanceStyle;
     m_state.creationAngleStyle = remembered.creationAngleStyle;
+    m_state.creationBracketStyle = remembered.creationBracketStyle;
     m_state.creationMagnifierStyle = remembered.creationMagnifierStyle;
     m_state.m_creationTextStyle = remembered.m_creationTextStyle;
     m_state.m_creationSerialNumberStyle = remembered.m_creationSerialNumberStyle;
@@ -5860,7 +5995,6 @@ void ScreenshotToolPaletteStyleControls::refreshToolbarMetrics(
     configureScreenshotToolPaletteStyleRadioButtonGroup(m_lineTypeButtonGroup, metrics);
     configureScreenshotToolPaletteStyleRadioButtonGroup(m_brushModeButtonGroup, metrics);
     configureScreenshotToolPaletteStyleRadioButtonGroup(m_arrowTypeButtonGroup, metrics);
-    configureScreenshotToolPaletteStyleRadioButtonGroup(m_distanceUnitGroup, metrics, true);
     configureScreenshotToolPaletteIconNumericValueButton(m_distanceScaleEditor, metrics);
     configureScreenshotToolPaletteSelectEditor(m_distanceDecimalsEditor, metrics);
     configureScreenshotToolPaletteStyleRadioButtonGroup(m_angleTypeGroup, metrics, true);
@@ -6028,12 +6162,34 @@ void ScreenshotToolPaletteStyleControls::commitAngleProperty(quint32 property, A
         m_callbacks.angleStyleChanged(m_state.angleStyle, property);
 }
 
+template <typename Apply>
+void ScreenshotToolPaletteStyleControls::commitBracketProperty(quint32 property, Apply apply) {
+    const auto previous = m_state.bracketStyle;
+    apply(m_state.bracketStyle);
+    const bool wasMixed =
+        m_state.showingSelectedBracket && (m_state.bracketStyleMixed & property) != 0;
+    if (previous == m_state.bracketStyle && !wasMixed)
+        return;
+    m_state.bracketStyleMixed &= ~property;
+    updateBracketStyleControls(property);
+    if (m_callbacks.bracketStyleChanged)
+        m_callbacks.bracketStyleChanged(m_state.bracketStyle, property);
+}
+
 void ScreenshotToolPaletteStyleControls::setAngleStrokeWidth(double width) {
     if (!std::isfinite(width))
         return;
     width = std::clamp(width, 1.0, 72.0);
     commitAngleProperty(angleProperty(SnowCanvasAngleStyleProperty::StrokeWidth),
                         [width](SnowCanvasAngleStyle& style) { style.strokeWidth = width; });
+}
+
+void ScreenshotToolPaletteStyleControls::setBracketStrokeWidth(double width) {
+    if (!std::isfinite(width))
+        return;
+    width = std::clamp(width, 1.0, 72.0);
+    commitBracketProperty(bracketProperty(SnowCanvasBracketStyleProperty::StrokeWidth),
+                          [width](SnowCanvasBracketStyle& style) { style.strokeWidth = width; });
 }
 
 void ScreenshotToolPaletteStyleControls::setDistanceValue(double value) {
@@ -7083,6 +7239,37 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
         if (!selected)
             m_state.creationMagnifierStyle = displayed;
         updateMagnifierStyleControls();
+        return;
+    }
+    if (state.source == SnowCanvasStyleToolbarSource::DefaultBracket ||
+        state.source == SnowCanvasStyleToolbarSource::SelectedBracket) {
+        const bool selected = state.source == SnowCanvasStyleToolbarSource::SelectedBracket;
+        auto displayed = state.bracketStyle;
+        if (editorInteracting(m_bracketColorEditor))
+            displayed.stroke = m_state.bracketStyle.stroke;
+        const quint32 mixed = selected ? state.bracketStyleMixed : 0;
+        if (m_state.m_styleSource == state.source && m_state.bracketStyle == displayed &&
+            m_state.bracketStyleMixed == mixed) {
+#if defined(SNOW_SHOT_TEST_HOOKS)
+            ++m_styleStateNoopCount;
+#endif
+            SNOW_SHOT_TOOLBAR_PERF_COUNTER("style.state.noop");
+            return;
+        }
+        quint32 changed = m_state.bracketStyleMixed ^ mixed;
+        if (m_state.m_styleSource != state.source)
+            changed = bracketProperty(SnowCanvasBracketStyleProperty::All);
+        if (m_state.bracketStyle.stroke != displayed.stroke)
+            changed |= bracketProperty(SnowCanvasBracketStyleProperty::Stroke);
+        if (m_state.bracketStyle.strokeWidth != displayed.strokeWidth)
+            changed |= bracketProperty(SnowCanvasBracketStyleProperty::StrokeWidth);
+        m_state.m_styleSource = state.source;
+        m_state.showingSelectedBracket = selected;
+        m_state.bracketStyle = displayed;
+        m_state.bracketStyleMixed = mixed;
+        if (!selected)
+            m_state.creationBracketStyle = displayed;
+        updateBracketStyleControls(changed);
         return;
     }
     if (state.source == SnowCanvasStyleToolbarSource::DefaultAngle ||

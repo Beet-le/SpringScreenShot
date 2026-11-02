@@ -1,6 +1,7 @@
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_shot/presentation/screenshotcanvasrenderer.h"
 #include "snow_shot/presentation/screenshotimagerendering.h"
+#include "../pinned/livewindowframerenderer_p.h"
 
 #include "snow_shot/presentation/screenshotguidelinerendering.h"
 #include "snow_shot/presentation/screenshotocrpresentation.h"
@@ -783,12 +784,17 @@ class ScreenshotOcrGraphicsScene final : public QGraphicsScene {
   public:
     using QGraphicsScene::QGraphicsScene;
 
-    void setTextHighlighting(const QColor& color, const QPainterPath& mask) {
-        if (m_maskColor == color && m_mask == mask) {
+    void setTextHighlighting(const QColor& color, const QPainterPath& mask,
+                             const std::optional<QTransform>& imageToScene = std::nullopt,
+                             const QRectF& imageBounds = {}) {
+        if (m_maskColor == color && m_mask == mask && m_imageToScene == imageToScene &&
+            m_imageBounds == imageBounds) {
             return;
         }
         m_maskColor = color;
         m_mask = mask;
+        m_imageToScene = imageToScene;
+        m_imageBounds = imageBounds;
         invalidate(sceneRect(), QGraphicsScene::BackgroundLayer);
     }
 
@@ -798,10 +804,17 @@ class ScreenshotOcrGraphicsScene final : public QGraphicsScene {
         m_rasterMask = {};
     }
 
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    quint64 rasterBuilds = 0;
+    QImage rasterForTesting() const {
+        return m_raster;
+    }
+#endif
+
   protected:
     void drawBackground(QPainter* painter, const QRectF& rect) override {
         QGraphicsScene::drawBackground(painter, rect);
-        if (m_maskColor.alpha() == 0 || m_mask.isEmpty()) {
+        if (m_maskColor.alpha() == 0 || (m_mask.isEmpty() && !m_imageToScene)) {
             return;
         }
         // Paint one shared complement so overlapping text regions stay clear and mask
@@ -809,6 +822,20 @@ class ScreenshotOcrGraphicsScene final : public QGraphicsScene {
         const QPainterStateGuard guard(painter);
         painter->setCompositionMode(QPainter::CompositionMode_SourceOver);
         painter->setRenderHint(QPainter::Antialiasing, true);
+        if (m_imageToScene) {
+            painter->setClipRect(sceneRect(), Qt::IntersectClip);
+            painter->setWorldTransform(*m_imageToScene, true);
+            // Panning can expose canvas outside the recognized image. Fill that exterior
+            // separately so it does not enlarge or invalidate the image-resolution cache.
+            QPainterPath exterior;
+            exterior.addRect(m_imageToScene->inverted().mapRect(sceneRect()));
+            QPainterPath image;
+            image.addRect(m_imageBounds);
+            painter->setRenderHint(QPainter::Antialiasing, false);
+            painter->fillPath(exterior.subtracted(image), m_maskColor);
+            painter->setClipRect(m_imageBounds, Qt::IntersectClip);
+            painter->setRenderHint(QPainter::Antialiasing, true);
+        }
         if (!drawCachedMask(*painter)) {
             painter->fillPath(m_mask, m_maskColor);
         }
@@ -819,18 +846,26 @@ class ScreenshotOcrGraphicsScene final : public QGraphicsScene {
         // Small contours are cheaper to fill directly than to blit a viewport-sized image.
         // Complex contours amortize rasterization across repaints. The actual device
         // transform owns pixel alignment, including fractional DPR and redirected renders.
-        const QTransform device = painter.deviceTransform();
-        if (m_mask.elementCount() < 128 || device.type() > QTransform::TxScale ||
-            !std::isfinite(device.m11()) || device.m11() <= 0 ||
-            !qFuzzyCompare(device.m11(), device.m22())) {
+        // Pinned OCR keeps one pixel per image coordinate (100% zoom), independent of
+        // viewport size, pan, DPR and redirected paint devices.
+        const QTransform device = m_imageToScene ? QTransform() : painter.deviceTransform();
+        if ((!m_imageToScene && m_mask.elementCount() < 128) ||
+            device.type() > QTransform::TxScale || !std::isfinite(device.m11()) ||
+            device.m11() <= 0 || !qFuzzyCompare(device.m11(), device.m22())) {
             return false;
         }
         const qreal scale = device.m11();
         const QRect pixels =
-            device.mapRect(m_mask.boundingRect().adjusted(-2, -2, 2, 2)).toAlignedRect();
+            m_imageToScene
+                ? m_imageBounds.toAlignedRect()
+                : device.mapRect(m_mask.boundingRect().adjusted(-2, -2, 2, 2)).toAlignedRect();
         constexpr qint64 byteLimit = 64 * 1024 * 1024;
-        if (pixels.isEmpty() || pixels.width() > byteLimit / 4 || pixels.height() > byteLimit / 4 ||
-            qint64(pixels.width()) * pixels.height() * 4 > byteLimit) {
+        // Device-sized masks can grow without bound while zooming. The native cache is
+        // bounded by the source image instead and uses the canvas image allocator's policy.
+        if (pixels.isEmpty() ||
+            (!m_imageToScene &&
+             (pixels.width() > byteLimit / 4 || pixels.height() > byteLimit / 4 ||
+              qint64(pixels.width()) * pixels.height() * 4 > byteLimit))) {
             return false;
         }
         const QPointF origin = device.inverted().map(QPointF(pixels.topLeft()));
@@ -857,13 +892,20 @@ class ScreenshotOcrGraphicsScene final : public QGraphicsScene {
             m_rasterColor = m_maskColor;
             m_rasterOrigin = origin;
             m_rasterScale = scale;
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+            ++rasterBuilds;
+#endif
         }
+        if (m_imageToScene)
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         painter.drawImage(origin, m_raster);
         return true;
     }
 
     QColor m_maskColor = QColor(Qt::transparent);
     QPainterPath m_mask;
+    std::optional<QTransform> m_imageToScene;
+    QRectF m_imageBounds;
     QImage m_raster;
     QPainterPath m_rasterMask;
     QColor m_rasterColor;
@@ -1893,9 +1935,11 @@ bool pinnedResultUsesLinearFiltering(const SnowCanvasRenderContext& context,
 }
 } // namespace
 
-ScreenshotOcrTextLayer::ScreenshotOcrTextLayer(QWidget* parent)
+ScreenshotOcrTextLayer::ScreenshotOcrTextLayer(QWidget* parent,
+                                               HighlightingResolution highlightingResolution)
     : QGraphicsView(parent), m_scene(new ScreenshotOcrGraphicsScene(this)),
-      m_glyphRasterCache(std::make_unique<ScreenshotOcrGlyphRasterCache>()) {
+      m_glyphRasterCache(std::make_unique<ScreenshotOcrGlyphRasterCache>()),
+      m_highlightingResolution(highlightingResolution) {
     setObjectName(QStringLiteral("snowShotOcrTextLayer"));
     setScene(m_scene);
     setFrameShape(QFrame::NoFrame);
@@ -1957,6 +2001,14 @@ void ScreenshotOcrTextLayer::refreshTextAppearance() {
 }
 
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
+quint64 ScreenshotOcrTextLayer::highlightingRasterBuildCount() const {
+    return m_scene->rasterBuilds;
+}
+
+QImage ScreenshotOcrTextLayer::highlightingRasterForTesting() const {
+    return m_scene->rasterForTesting();
+}
+
 quint64 ScreenshotOcrTextLayer::glyphRasterBuildCount() const {
     return m_glyphRasterCache->builds;
 }
@@ -2107,17 +2159,35 @@ void ScreenshotOcrTextLayer::setTextHighlighting(bool enabled, const QColor& mas
 void ScreenshotOcrTextLayer::updateTextHighlighting() {
     if (!m_synchronized || m_renderingMode == RenderingMode::SelectionOnly ||
         m_textHighlightColor.alpha() == 0) {
-        m_scene->setTextHighlighting(QColor(Qt::transparent), {});
+        if (m_highlightingResolution == HighlightingResolution::Image)
+            m_scene->clearTextHighlighting();
+        else
+            m_scene->setTextHighlighting(QColor(Qt::transparent), {});
         return;
     }
+    const bool imageResolution = m_highlightingResolution == HighlightingResolution::Image;
     if (m_textHighlightGeometryDirty) {
         QPainterPath textRegions;
         textRegions.setFillRule(Qt::WindingFill);
         for (const TextItem& item : m_textItems) {
-            if (!item.graphicsText->isVisible()) {
-                continue;
+            QPolygonF polygon;
+            if (imageResolution) {
+                // Prepare fitted holes at 100%, including labels currently outside the
+                // viewport. Zooming/panning must never rebuild this geometry or raster.
+                ScreenshotOcrTextLayout layout;
+                QTransform textToImage;
+                if (!configureScreenshotOcrTextLayout(
+                        layout, m_presentation->lines.at(item.lineIndex), QTransform(),
+                        m_layoutFont, m_textColor, {}, &textToImage)) {
+                    continue;
+                }
+                polygon = textToImage.map(QPolygonF(layout.boundingRect()));
+            } else {
+                if (!item.graphicsText->isVisible()) {
+                    continue;
+                }
+                polygon = item.graphicsText->mapToScene(item.graphicsText->boundingRect());
             }
-            QPolygonF polygon = item.graphicsText->mapToScene(item.graphicsText->boundingRect());
             // Consistent winding gives union semantics even when mirrored labels overlap.
             qreal area = 0;
             for (qsizetype index = 0; index < polygon.size(); ++index) {
@@ -2131,11 +2201,14 @@ void ScreenshotOcrTextLayer::updateTextHighlighting() {
             textRegions.closeSubpath();
         }
         QPainterPath viewport;
-        viewport.addRect(sceneRect());
+        viewport.addRect(imageResolution ? QRectF(m_presentation->selection) : sceneRect());
         m_textHighlightMask = viewport.subtracted(textRegions);
         m_textHighlightGeometryDirty = false;
     }
-    m_scene->setTextHighlighting(m_textHighlightColor, m_textHighlightMask);
+    m_scene->setTextHighlighting(
+        m_textHighlightColor, m_textHighlightMask,
+        imageResolution ? std::optional<QTransform>(m_canvasToViewTransform) : std::nullopt,
+        imageResolution ? QRectF(m_presentation->selection) : QRectF());
 }
 
 void ScreenshotOcrTextLayer::synchronize(const QTransform& canvasToViewTransform,
@@ -2164,7 +2237,8 @@ void ScreenshotOcrTextLayer::synchronize(const QTransform& canvasToViewTransform
             synchronizeTextItem(item, canvasToViewTransform);
         }
         updateSelectionOverlay();
-        m_textHighlightGeometryDirty = true;
+        if (m_highlightingResolution == HighlightingResolution::Device)
+            m_textHighlightGeometryDirty = true;
         updateTextHighlighting();
     }
     updateSelection();
@@ -2536,6 +2610,7 @@ bool ScreenshotCanvasRenderer::hasScrollingResultPreview() const {
 
 void ScreenshotCanvasRenderer::setImageSource(ScreenshotImageSource source, const QRectF& damage,
                                               const ScreenshotImageSource& samplingSource) {
+    m_pinnedLiveFrames = false;
     QList<QRectF> opaqueRects;
     // DPR normalization can detach the QImage. Check the shared source key first
     // so every overlay reuses the answer for the same captured pixel buffer.
@@ -2612,13 +2687,43 @@ void ScreenshotCanvasRenderer::setPinnedAnimationFrame(const QImage& image,
     m_canvas.update(canvasImageDamageRegion(canvasRect));
 }
 
+void ScreenshotCanvasRenderer::setPinnedLiveFrame(ScreenshotImageSource source,
+                                                  const QTransform& imageTransform) {
+    const QRectF previous = m_imageSource.materializedCanvasRect;
+    if (!m_pinnedLiveFrames) {
+        m_pinnedLiveFrames = true;
+        // Release the initial still image held by the editing engine. Conversion
+        // back to an editable image reinstalls its sources through setImageSource.
+        m_canvas.setBaseImageSources({});
+        clearOcrFilteredImage();
+    }
+    m_imageSource = std::move(source);
+    m_pinnedLiveTransform = imageTransform;
+    m_samplingImageSource = m_imageSource;
+    refreshBaseImageSources();
+    // Conservatively repaint the backdrop without scanning alpha on the GUI thread.
+    m_opaqueImageCanvasRects.clear();
+    m_opaqueCoverageValid = false;
+    invalidateCachedContent();
+    m_canvas.update(canvasImageDamageRegion(previous) +
+                    canvasImageDamageRegion(m_imageSource.materializedCanvasRect));
+}
+
+void ScreenshotCanvasRenderer::setPinnedContentClip(std::optional<QRectF> rect) {
+    if (m_pinnedContentClip == rect)
+        return;
+    m_pinnedContentClip = rect;
+    invalidateCachedContent(false);
+    m_canvas.update();
+}
+
 void ScreenshotCanvasRenderer::setPinnedViewportRect(const QRectF& rect) {
     const std::optional<QRectF> normalized =
         rect.isValid() && !rect.isEmpty() ? std::optional<QRectF>(rect.normalized()) : std::nullopt;
     if (m_pinnedViewportRect == normalized)
         return;
     m_pinnedViewportRect = normalized;
-    invalidateCachedContent();
+    invalidateCachedContent(false);
     m_canvas.update();
 }
 
@@ -3059,6 +3164,7 @@ void ScreenshotCanvasRenderer::reset() {
                           m_guideLinesVisible;
     m_imageSource = {};
     m_samplingImageSource = {};
+    m_pinnedLiveFrames = false;
     m_baseImageSources.clear();
     m_opaqueImageCanvasRects.clear();
     m_opaqueImageViewCoverage = {};
@@ -3069,6 +3175,7 @@ void ScreenshotCanvasRenderer::reset() {
     m_canvas.setBaseImageSources({});
     m_imageViewportPhysicalSize = QSize();
     m_pinnedViewportRect.reset();
+    m_pinnedContentClip.reset();
     m_pinnedContentCanvasRect = {};
     m_pinnedSurfaceCanvasRect = {};
     m_pinnedResultStyle = {};
@@ -3133,6 +3240,10 @@ QList<SnowCanvasBaseImageSource> ScreenshotCanvasRenderer::baseImageSources() co
 
 void ScreenshotCanvasRenderer::refreshBaseImageSources() {
     m_baseImageSources.clear();
+    // Live pins disable annotation/sampling tools. An unrotated capture cannot
+    // describe a rotated sampling source using only an axis-aligned canvas rect.
+    if (m_pinnedLiveFrames && !m_pinnedLiveTransform.isIdentity())
+        return;
     if (m_renderMode == RenderMode::ScrollingCapture) {
         if (hasScrollingResultPreview())
             m_baseImageSources.append(
@@ -3578,6 +3689,9 @@ void ScreenshotCanvasRenderer::paintBackground(QPainter& painter,
     if (m_renderMode == RenderMode::PinnedResult && m_pinnedViewportRect) {
         viewportGuard.emplace(&painter);
         painter.setClipRect(pinnedViewportForContext(context), Qt::IntersectClip);
+        if (m_pinnedContentClip)
+            painter.setClipRect(context.canvasToViewTransform.mapRect(*m_pinnedContentClip),
+                                Qt::IntersectClip);
     }
 
     if (!m_imageSource.isValid()) {
@@ -3600,27 +3714,44 @@ void ScreenshotCanvasRenderer::paintBackground(QPainter& painter,
             return;
         }
         painter.save();
-        painter.setRenderHint(QPainter::SmoothPixmapTransform,
-                              m_imageSource.materializedImage.size() !=
-                                  m_imageViewportPhysicalSize);
-        paintExposedScreenshotImage(painter, targetRect, m_imageSource.materializedImage,
-                                    QRectF(m_imageSource.materializedImage.rect()),
-                                    context.exposedRegion);
+        const auto& image = m_imageSource.materializedImage;
+        if (m_pinnedLiveFrames && !m_pinnedLiveTransform.isIdentity()) {
+            using namespace snow_shot::presentation::live_window_detail;
+            painter.setClipRegion(context.exposedRegion, Qt::IntersectClip);
+            paintLiveWindowFrame(painter, targetRect, image, m_pinnedLiveTransform,
+                                 transformedFrameSize(image.size(), m_pinnedLiveTransform) !=
+                                     m_imageViewportPhysicalSize);
+        } else {
+            painter.setRenderHint(QPainter::SmoothPixmapTransform,
+                                  image.size() != m_imageViewportPhysicalSize);
+            paintExposedScreenshotImage(painter, targetRect, image, QRectF(image.rect()),
+                                        context.exposedRegion);
+        }
         painter.restore();
     } else if (m_imageSource.isMaterialized()) {
         const QRectF targetRect =
             context.canvasToViewTransform.mapRect(m_imageSource.materializedCanvasRect);
         if (context.exposedRegion.intersects(targetRect.toAlignedRect())) {
             painter.save();
+            const auto& image = m_imageSource.materializedImage;
+            const bool transformedLive = m_pinnedLiveFrames && !m_pinnedLiveTransform.isIdentity();
+            const auto displayedPixels =
+                transformedLive ? snow_shot::presentation::live_window_detail::transformedFrameSize(
+                                      image.size(), m_pinnedLiveTransform)
+                                : image.size();
+            const bool linear =
+                pinnedResultUsesLinearFiltering(context, targetRect, displayedPixels);
             if (m_renderMode == RenderMode::PinnedResult) {
-                painter.setRenderHint(
-                    QPainter::SmoothPixmapTransform,
-                    pinnedResultUsesLinearFiltering(context, targetRect,
-                                                    m_imageSource.materializedImage.size()));
+                painter.setRenderHint(QPainter::SmoothPixmapTransform, linear);
             }
-            paintExposedScreenshotImage(painter, targetRect, m_imageSource.materializedImage,
-                                        QRectF(m_imageSource.materializedImage.rect()),
-                                        context.exposedRegion);
+            if (transformedLive) {
+                painter.setClipRegion(context.exposedRegion, Qt::IntersectClip);
+                snow_shot::presentation::live_window_detail::paintLiveWindowFrame(
+                    painter, targetRect, image, m_pinnedLiveTransform, linear);
+            } else {
+                paintExposedScreenshotImage(painter, targetRect, image, QRectF(image.rect()),
+                                            context.exposedRegion);
+            }
             painter.restore();
         }
     } else {

@@ -68,6 +68,10 @@ void ScreenshotToolCommandWorkflow::setAngleTool() {
     setCanvasTool(SnowCanvasTool::Angle);
 }
 
+void ScreenshotToolCommandWorkflow::setBracketTool() {
+    setCanvasTool(SnowCanvasTool::Bracket);
+}
+
 void ScreenshotToolCommandWorkflow::setFreeDrawTool() {
     setCanvasTool(SnowCanvasTool::FreeDraw);
 }

@@ -503,6 +503,10 @@
             <translation>Arrow</translation>
         </message>
         <message>
+            <source>Bracket annotation</source>
+            <translation>Bracket annotation</translation>
+        </message>
+        <message>
             <source>Distance annotation</source>
             <translation>Distance annotation</translation>
         </message>
@@ -998,6 +1002,10 @@
     <context>
         <name>ScreenshotToolbarEditorSettingsWidget</name>
         <message>
+            <source>AirDrop</source>
+            <translation>AirDrop</translation>
+        </message>
+        <message>
             <source>Barcode recognition</source>
             <translation>Barcode recognition</translation>
         </message>
@@ -1036,6 +1044,10 @@
         <message>
             <source>No hidden tools</source>
             <translation>No hidden tools</translation>
+        </message>
+        <message>
+            <source>Pin Window to Screen</source>
+            <translation>Pin Window to Screen</translation>
         </message>
         <message>
             <source>Pin to screen</source>
@@ -1268,6 +1280,10 @@
             <translation>Allow resizing the selection from its borders while non-move tools are active</translation>
         </message>
         <message>
+            <source>Also copy the screenshot to the clipboard when pinning it to screen</source>
+            <translation>Also copy the screenshot to the clipboard when pinning it to screen</translation>
+        </message>
+        <message>
             <source>Always</source>
             <translation>Always</translation>
         </message>
@@ -1436,8 +1452,16 @@
             <translation>Automatic text recognition</translation>
         </message>
         <message>
+            <source>Automatically adapt the icon color to the menu bar background. Uses the image's transparency as its shape and ignores its original colors.</source>
+            <translation>Automatically adapt the icon color to the menu bar background. Uses the image's transparency as its shape and ignores its original colors.</translation>
+        </message>
+        <message>
             <source>Automatically disable when a focused fullscreen window exists</source>
             <translation>Automatically disable when a focused fullscreen window exists</translation>
+        </message>
+        <message>
+            <source>Automatically enable annotation mode in new Pin to Screen windows opened with Edit with Snow Shot.</source>
+            <translation>Automatically enable annotation mode in new Pin to Screen windows opened with Edit with Snow Shot.</translation>
         </message>
         <message>
             <source>Automatically exit screen recording after the recording is saved.</source>
@@ -1488,6 +1512,14 @@
             <translation>Barcode recognition</translation>
         </message>
         <message>
+            <source>Batch Actions: Save as File</source>
+            <translation>Batch Actions: Save as File</translation>
+        </message>
+        <message>
+            <source>Batch Actions: Select All</source>
+            <translation>Batch Actions: Select All</translation>
+        </message>
+        <message>
             <source>Blur</source>
             <translation>Blur</translation>
         </message>
@@ -1510,6 +1542,10 @@
         <message>
             <source>Bottom right</source>
             <translation>Bottom right</translation>
+        </message>
+        <message>
+            <source>Bracket annotation</source>
+            <translation>Bracket annotation</translation>
         </message>
         <message>
             <source>Browse</source>
@@ -1618,6 +1654,10 @@
         <message>
             <source>Choose an image for the screenshot, pin-to-screen, full-screen canvas and screen recording toolbar rows. Clear the path to remove this skin.</source>
             <translation>Choose an image for the screenshot, pin-to-screen, full-screen canvas and screen recording toolbar rows. Clear the path to remove this skin.</translation>
+        </message>
+        <message>
+            <source>Choose automatic window or window sub-element selection, or select manually</source>
+            <translation>Choose automatic window or window sub-element selection, or select manually</translation>
         </message>
         <message>
             <source>Choose how much execution time the application receives</source>
@@ -1930,6 +1970,10 @@
         <message>
             <source>Copy Translation Results as an Image</source>
             <translation>Copy Translation Results as an Image</translation>
+        </message>
+        <message>
+            <source>Copy after pinning to screen</source>
+            <translation>Copy after pinning to screen</translation>
         </message>
         <message>
             <source>Copy after text recognition</source>
@@ -2320,6 +2364,10 @@
             <translation>Enable MCP integration</translation>
         </message>
         <message>
+            <source>Enable annotation mode when opening for editing</source>
+            <translation>Enable annotation mode when opening for editing</translation>
+        </message>
+        <message>
             <source>Enable edit mode</source>
             <translation>Enable edit mode</translation>
         </message>
@@ -2528,6 +2576,10 @@
             <translation>GIF, APNG and WebP resolution, frame rate and looping</translation>
         </message>
         <message>
+            <source>GPU</source>
+            <translation>GPU</translation>
+        </message>
+        <message>
             <source>General</source>
             <translation>General</translation>
         </message>
@@ -2578,6 +2630,10 @@
         <message>
             <source>H.265 (Hardware)</source>
             <translation>H.265 (Hardware)</translation>
+        </message>
+        <message>
+            <source>Hardware acceleration</source>
+            <translation>Hardware acceleration</translation>
         </message>
         <message>
             <source>Hidden tools</source>
@@ -2634,6 +2690,10 @@
         <message>
             <source>Image export</source>
             <translation>Image export</translation>
+        </message>
+        <message>
+            <source>Image files</source>
+            <translation>Image files</translation>
         </message>
         <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
@@ -2810,6 +2870,10 @@
         <message>
             <source>Leftover working files from finished or interrupted recordings will be removed</source>
             <translation>Leftover working files from finished or interrupted recordings will be removed</translation>
+        </message>
+        <message>
+            <source>Let macOS control tray icon color</source>
+            <translation>Let macOS control tray icon color</translation>
         </message>
         <message>
             <source>Light</source>
@@ -3212,6 +3276,10 @@
             <translation>Pin Selected Files to Screen</translation>
         </message>
         <message>
+            <source>Pin Window to Screen</source>
+            <translation>Pin Window to Screen</translation>
+        </message>
+        <message>
             <source>Pin clipboard</source>
             <translation>Pin clipboard</translation>
         </message>
@@ -3398,6 +3466,10 @@
         <message>
             <source>Quick selection</source>
             <translation>Quick selection</translation>
+        </message>
+        <message>
+            <source>Rapidly drag a pinned window back and forth to hide other pinned windows in the current group.</source>
+            <translation>Rapidly drag a pinned window back and forth to hide other pinned windows in the current group.</translation>
         </message>
         <message>
             <source>Real-time</source>
@@ -3808,10 +3880,6 @@
             <translation>Secondary Target Language</translation>
         </message>
         <message>
-            <source>Select child elements within a window while taking a screenshot</source>
-            <translation>Select child elements within a window while taking a screenshot</translation>
-        </message>
-        <message>
             <source>Select dark theme tray icon</source>
             <translation>Select dark theme tray icon</translation>
         </message>
@@ -3994,6 +4062,10 @@
         <message>
             <source>Shake Window</source>
             <translation>Shake Window</translation>
+        </message>
+        <message>
+            <source>Shake a window to hide other windows</source>
+            <translation>Shake a window to hide other windows</translation>
         </message>
         <message>
             <source>Shape tool</source>
@@ -4436,6 +4508,10 @@
             <translation>Thumbnail mode</translation>
         </message>
         <message>
+            <source>Toggle Always on Top for the Window Under the Cursor</source>
+            <translation>Toggle Always on Top for the Window Under the Cursor</translation>
+        </message>
+        <message>
             <source>Toggle Global/Relative Coordinates</source>
             <translation>Toggle Global/Relative Coordinates</translation>
         </message>
@@ -4450,6 +4526,10 @@
         <message>
             <source>Toggle hotkeys</source>
             <translation>Toggle hotkeys</translation>
+        </message>
+        <message>
+            <source>Toggle whether the window under the cursor stays above other windows</source>
+            <translation>Toggle whether the window under the cursor stays above other windows</translation>
         </message>
         <message>
             <source>Tool positions</source>
@@ -4600,6 +4680,10 @@
             <translation>Upload to Cloud</translation>
         </message>
         <message>
+            <source>Use GPU acceleration when available. Recognition uses the CPU while acceleration is unavailable.</source>
+            <translation>Use GPU acceleration when available. Recognition uses the CPU while acceleration is unavailable.</translation>
+        </message>
+        <message>
             <source>Use global mouse gestures, select individual window elements, and translate selected text.</source>
             <translation>Use global mouse gestures, select individual window elements, and translate selected text.</translation>
         </message>
@@ -4704,6 +4788,10 @@
             <translation>While editing text, press Delete to remove selected text or the character after the cursor.</translation>
         </message>
         <message>
+            <source>Window</source>
+            <translation>Window</translation>
+        </message>
+        <message>
             <source>Window Element API</source>
             <translation>Window Element API</translation>
         </message>
@@ -4718,6 +4806,10 @@
         <message>
             <source>Window interface</source>
             <translation>Window interface</translation>
+        </message>
+        <message>
+            <source>Window sub-element</source>
+            <translation>Window sub-element</translation>
         </message>
         <message>
             <source>Windows context menu</source>

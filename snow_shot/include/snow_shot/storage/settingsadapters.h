@@ -143,6 +143,10 @@ class InterfaceSettings final {
     bool setSkinMaskOpacity(int opacity) const;
     [[nodiscard]] bool sidebarCollapsed() const;
     bool setSidebarCollapsed(bool collapsed) const;
+    [[nodiscard]] int screenshotHistoryPageSize() const;
+    bool setScreenshotHistoryPageSize(int pageSize) const;
+    [[nodiscard]] int pinnedWindowManagementPageSize() const;
+    bool setPinnedWindowManagementPageSize(int pageSize) const;
 };
 
 class WindowMemorySettings final {
@@ -217,6 +221,9 @@ class ShortcutSettings final {
     bool setTranslateSelectedText(const shortcuts::ShortcutBindingList& bindings) const;
 #endif
 
+    [[nodiscard]] shortcuts::ShortcutBindingList toggleWindowUnderCursorAlwaysOnTop() const;
+    bool
+    setToggleWindowUnderCursorAlwaysOnTop(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList toggleGlobalHotkeys() const;
     bool setToggleGlobalHotkeys(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList toggleDisableOnFocusedFullscreenWindow() const;
@@ -271,6 +278,8 @@ class ScreenshotSettings final {
     [[nodiscard]] bool autoSaveAfterExecution(const QString& action) const;
     [[nodiscard]] bool copyImageFileToClipboard() const;
     bool setCopyImageFileToClipboard(bool enabled) const;
+    [[nodiscard]] bool copyAfterPinningToScreen() const;
+    bool setCopyAfterPinningToScreen(bool enabled) const;
     [[nodiscard]] QString imageSaveDirectory() const;
     bool setImageSaveDirectory(const QString& directory) const;
     [[nodiscard]] QString lastManualSaveDirectory() const;
@@ -661,6 +670,8 @@ class PinToScreenSettings final {
     bool setShowShadowByDefault(bool enabled) const;
     [[nodiscard]] bool showWindowButtons() const;
     bool setShowWindowButtons(bool enabled) const;
+    [[nodiscard]] bool shakeWindowToHideOthers() const;
+    bool setShakeWindowToHideOthers(bool enabled) const;
     [[nodiscard]] bool exitAnnotationModeBeforeClosing() const;
     bool setExitAnnotationModeBeforeClosing(bool enabled) const;
     [[nodiscard]] bool confirmBeforeClosingWindow() const;
@@ -703,6 +714,8 @@ class TraySettings final {
   public:
     [[nodiscard]] bool enabled() const;
     bool setEnabled(bool enabled) const;
+    [[nodiscard]] bool useSystemIconColor() const;
+    bool setUseSystemIconColor(bool enabled) const;
     [[nodiscard]] QString icon() const;
     bool setIcon(const QString& icon) const;
     [[nodiscard]] QString customIcon() const;
@@ -721,6 +734,8 @@ class TraySettings final {
 
 class SystemSettings final {
   public:
+    [[nodiscard]] bool annotationModeWhenOpeningForEditing() const;
+    [[nodiscard]] bool setAnnotationModeWhenOpeningForEditing(bool enabled) const;
     [[nodiscard]] bool autoStartAtBoot() const;
     [[nodiscard]] bool launchAsAdministrator() const;
     [[nodiscard]] bool setLaunchAsAdministrator(bool enabled) const;

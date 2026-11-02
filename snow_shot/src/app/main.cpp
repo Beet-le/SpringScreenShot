@@ -198,7 +198,9 @@ int main(int argc, char* argv[]) {
         return runScreenshotControllerLifetimeTests(argc, argv);
     }
     if (argc == 2 && (QString::fromLocal8Bit(argv[1]) == u"--clipboard-pin-tests" ||
-                      QString::fromLocal8Bit(argv[1]) == u"--automatic-selection-tests")) {
+                      QString::fromLocal8Bit(argv[1]) == u"--automatic-selection-tests" ||
+                      QString::fromLocal8Bit(argv[1]) == u"--shell-file-startup-tests" ||
+                      QString::fromLocal8Bit(argv[1]) == u"--image-editor-pin-tests")) {
         return runScreenshotControllerClipboardTests(argc, argv);
     }
 #endif
@@ -438,29 +440,63 @@ int main(int argc, char* argv[]) {
         storage.shutdown();
         return 0;
     }
-    // A second instance triggered by --open-draw forwards to the running primary
-    // before any heavyweight startup (update probe, diagnostics, QApplication).
-    if (!applicationRestart && !administratorRestart) {
-        for (int index = 1; index < argc; ++index) {
-            if (QString::fromLocal8Bit(argv[index]) != QStringLiteral("--open-draw")) {
-                continue;
-            }
-            QStringList arguments;
-            for (int inner = 0; inner < argc; ++inner) {
-                arguments.push_back(QString::fromLocal8Bit(argv[inner]));
-            }
-            bool forwarded = false;
-            {
-                QCoreApplication forwarder(argc, argv);
-                forwarded = snow_shot::app::SingleInstanceCoordinator::tryForwardToRunningInstance(
-                    arguments);
-            }
-            if (forwarded) {
-                return 0;
-            }
-            break;
-        }
+#ifdef Q_OS_MACOS
+    // Exercise normal pre-application startup without touching live user state.
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == u"--startup-probe") {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+        QApplication probe(argc, argv);
+        adqt::widgets::initializePlatformCompatibility(probe);
+        return 0;
     }
+#endif
+    struct DiagnosticsLifetime {
+        bool started = false;
+        ~DiagnosticsLifetime() {
+            if (!started)
+                return;
+            snow_shot::diagnostics::stopFfmpegDiagnostics();
+            snow_shot::diagnostics::DiagnosticsService::instance().shutdown();
+        }
+    } diagnosticsLifetime;
+    // Capture overlays embed native window-type children (the floating tool
+    // palette) alongside alien, click-through children (selection toolbar,
+    // shortcut hints). Qt would otherwise force every sibling of an embedded
+    // native child native, which silently turns those click-through surfaces
+    // into OS-level input interceptors.
+    QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
+
+#ifdef Q_OS_MACOS
+    snow_shot::platform::macos::configureRasterColorSpace();
+    snow_shot::platform::macos::observeNativeLoginItemLaunch();
+#endif
+    // The internal application name also owns settings and single-instance keys.
+    // Keep it stable while giving Qt windows and the macOS menu the product name.
+    QGuiApplication::setApplicationDisplayName(snow_shot::app::edition::productName());
+    QApplication app(argc, argv);
+    // Forwarding processes need only Qt and the instance protocol. Storage probes,
+    // helper processes and display discovery belong to the primary instance.
+    auto launchArguments =
+        applicationRestart ? snow_shot::app::normalApplicationArguments(QApplication::arguments())
+                           : QApplication::arguments();
+    const bool updaterRelaunch = snow_shot::update::isStartupUpdateRelaunch(launchArguments);
+    launchArguments = snow_shot::update::normalStartupArguments(std::move(launchArguments));
+#ifdef Q_OS_MACOS
+    launchArguments = snow_shot::platform::macos::loginItemLaunchArguments(
+        launchArguments, snow_shot::platform::macos::initialNativeLoginItemLaunch());
+#endif
+    snow_shot::app::SingleInstanceCoordinator singleInstance;
+    const snow_shot::app::SingleInstanceResult instanceResult = singleInstance.acquireOrForward(
+        launchArguments,
+        snow_shot::app::parseShellImageLaunchRequest(launchArguments).requested ? 10000 : 1500);
+    if (instanceResult.outcome == snow_shot::app::SingleInstanceOutcome::Forwarded) {
+        return 0;
+    }
+    if (instanceResult.outcome == snow_shot::app::SingleInstanceOutcome::Failed) {
+        qWarning().noquote() << instanceResult.error;
+        return 2;
+    }
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &singleInstance,
+                     [&singleInstance] { singleInstance.stopAcceptingLaunchRequests(); });
 #ifndef Q_OS_MACOS
     // macOS updates use a downloaded DMG, not the standalone transaction helper.
     if (!snow_shot::app::distribution::isStoreManaged()) {
@@ -480,7 +516,6 @@ int main(int argc, char* argv[]) {
             return 6;
         }
         if (*pendingUpdate) {
-            QCoreApplication recovery(argc, argv);
             const QString root = updateInstallationRoot(QCoreApplication::applicationDirPath());
             const QString pipe =
                 QStringLiteral("snow-shot-recover-") + QUuid::createUuid().toString(QUuid::Id128);
@@ -518,22 +553,7 @@ int main(int argc, char* argv[]) {
         }
     }
 #endif
-#ifdef Q_OS_MACOS
-    // Exercise normal pre-application startup without touching live user state.
-    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == u"--startup-probe") {
-        qputenv("QT_QPA_PLATFORM", "offscreen");
-        QApplication probe(argc, argv);
-        adqt::widgets::initializePlatformCompatibility(probe);
-        return 0;
-    }
-#endif
     auto& diagnostics = snow_shot::diagnostics::DiagnosticsService::instance();
-    struct DiagnosticsLifetime {
-        ~DiagnosticsLifetime() {
-            snow_shot::diagnostics::stopFfmpegDiagnostics();
-            snow_shot::diagnostics::DiagnosticsService::instance().shutdown();
-        }
-    } diagnosticsLifetime;
     // Declared after diagnosticsLifetime so reverse-order destruction stops the collector while
     // diagnostics can still write the final lines. The tap is installed here, before
     // diagnostics.initialize(), because session recovery is queued to a worker thread there and
@@ -563,6 +583,7 @@ int main(int argc, char* argv[]) {
     diagnosticsOptions.version = QStringLiteral(SNOW_DIAGNOSTICS_VERSION);
     diagnosticsOptions.revision = QStringLiteral(SNOW_DIAGNOSTICS_REVISION);
     diagnosticsOptions.buildConfiguration = QStringLiteral(SNOW_DIAGNOSTICS_BUILD);
+    diagnosticsLifetime.started = true;
     static_cast<void>(diagnostics.initialize(std::move(diagnosticsOptions)));
     snow_diagnostics_install_panic_hook(snow_diag_panic);
     snow_shot::diagnostics::installFfmpegDiagnostics();
@@ -571,21 +592,6 @@ int main(int argc, char* argv[]) {
         snow_shot::diagnostics::recordMicrophoneFailure);
 #endif
 
-    // Capture overlays embed native window-type children (the floating tool
-    // palette) alongside alien, click-through children (selection toolbar,
-    // shortcut hints). Qt would otherwise force every sibling of an embedded
-    // native child native, which silently turns those click-through surfaces
-    // into OS-level input interceptors.
-    QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
-
-#ifdef Q_OS_MACOS
-    snow_shot::platform::macos::configureRasterColorSpace();
-    snow_shot::platform::macos::observeNativeLoginItemLaunch();
-#endif
-    // The internal application name also owns settings and single-instance keys.
-    // Keep it stable while giving Qt windows and the macOS menu the product name.
-    QGuiApplication::setApplicationDisplayName(snow_shot::app::edition::productName());
-    QApplication app(argc, argv);
     adqt::widgets::initializePlatformCompatibility(app);
     // Runs before QApplication is destroyed so the sender can still use the network stack and
     // the event loop. The guard above calls stop() a second time, which is a no-op.
@@ -636,29 +642,6 @@ int main(int argc, char* argv[]) {
     snow_shot::presentation::capture_perf::configureTrace(
         qEnvironmentVariable("SNOW_SHOT_CAPTURE_PERF_TRACE"));
 #endif
-    auto launchArguments =
-        applicationRestart ? snow_shot::app::normalApplicationArguments(QApplication::arguments())
-                           : QApplication::arguments();
-    const bool updaterRelaunch = snow_shot::update::isStartupUpdateRelaunch(launchArguments);
-    launchArguments = snow_shot::update::normalStartupArguments(std::move(launchArguments));
-#ifdef Q_OS_MACOS
-    launchArguments = snow_shot::platform::macos::loginItemLaunchArguments(
-        launchArguments, snow_shot::platform::macos::initialNativeLoginItemLaunch());
-#endif
-    snow_shot::app::SingleInstanceCoordinator singleInstance;
-    const snow_shot::app::SingleInstanceResult instanceResult = singleInstance.acquireOrForward(
-        launchArguments,
-        snow_shot::app::parseShellImageLaunchRequest(launchArguments).requested ? 10000 : 1500);
-    if (instanceResult.outcome == snow_shot::app::SingleInstanceOutcome::Forwarded) {
-        return 0;
-    }
-    if (instanceResult.outcome == snow_shot::app::SingleInstanceOutcome::Failed) {
-        qWarning().noquote() << instanceResult.error;
-        return 2;
-    }
-    QObject::connect(&app, &QCoreApplication::aboutToQuit, &singleInstance,
-                     [&singleInstance] { singleInstance.stopAcceptingLaunchRequests(); });
-
     static_cast<void>(
         snow_shot::storage::ApplicationStorage::instance().initialize(storageOptions));
     // Only reached by the instance that won the single-instance lock, so a forwarded launch never
@@ -702,6 +685,7 @@ int main(int argc, char* argv[]) {
 #ifdef Q_OS_WIN
     auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
     if (!snow_shot::app::distribution::isStoreManaged() && !updaterRelaunch &&
+        snow_shot::update::startupUpdateMayDelayLaunch(launchArguments) &&
         applicationStorage.configuration().value(QStringLiteral("updates/mode")).toString() ==
             u"next_launch") {
         snow_shot::update::UpdateService startupUpdate(
@@ -753,64 +737,64 @@ int main(int argc, char* argv[]) {
 #else
     static_cast<void>(updaterRelaunch);
 #endif
-    const auto startupSettings = snow_shot::storage::SystemSettings();
-#ifdef Q_OS_WIN
-    QString shellRegistrationError;
-    const snow_shot::platform::windows::ShellContextMenuRegistration shellRegistration;
-    const auto contextMenuShortcuts = snow_shot::shortcuts::shortcutBindingsFromJson(
-        snow_shot::storage::ApplicationStorage::instance().configuration().value(
-            QStringLiteral("context_menu_shortcuts/edit_with_snow_shot")),
-        false);
-    if (!shellRegistration.setEnabled(
-            snow_shot::storage::ApplicationStorage::instance()
-                    .configuration()
-                    .value(QStringLiteral("system/context_menu_mode"))
-                    .toString() == QStringLiteral("image_files"),
-            contextMenuShortcuts.isEmpty() ? QString() : contextMenuShortcuts.first().portableText,
-            &shellRegistrationError)) {
-        snow_shot::app::reportStartupRegistrationFailure(shellRegistrationError);
-    }
-#endif
-#ifdef Q_OS_MACOS
-    const auto startupResult =
-        snow_shot::platform::macos::loginItemAutomaticRegistrationAllowed(launchArguments)
-            ? snow_shot::platform::macos::loginItemService().initialize(
-                  startupSettings.autoStartAtBoot())
-            : snow_shot::platform::macos::LoginItemResult{};
-#else
-    const auto startupResult = snow_shot::platform::windows::reconcileStartupMode(
-        !startupSettings.autoStartAtBoot() ? snow_shot::platform::windows::StartupMode::Off
-        : startupSettings.launchAsAdministrator()
-            ? snow_shot::platform::windows::StartupMode::ElevatedTask
-            : snow_shot::platform::windows::StartupMode::Registry);
-#endif
-
     adqt::widgets::AdTooltip::installApplicationTooltips();
 
     snow_shot::app::ApplicationController applicationController(app);
-    applicationController.start();
+    applicationController.start(launchArguments, [&] {
+        const auto startupSettings = snow_shot::storage::SystemSettings();
+#ifdef Q_OS_WIN
+        QString shellRegistrationError;
+        const snow_shot::platform::windows::ShellContextMenuRegistration shellRegistration;
+        const auto contextMenuShortcuts = snow_shot::shortcuts::shortcutBindingsFromJson(
+            snow_shot::storage::ApplicationStorage::instance().configuration().value(
+                QStringLiteral("context_menu_shortcuts/edit_with_snow_shot")),
+            false);
+        if (!shellRegistration.setMode(
+                snow_shot::platform::windows::ShellContextMenuRegistration::modeFromValue(
+                    snow_shot::storage::ApplicationStorage::instance()
+                        .configuration()
+                        .value(QStringLiteral("system/context_menu_mode"))
+                        .toString()),
+                contextMenuShortcuts.isEmpty() ? QString()
+                                               : contextMenuShortcuts.first().portableText,
+                &shellRegistrationError)) {
+            snow_shot::app::reportStartupRegistrationFailure(shellRegistrationError);
+        }
+#endif
+#ifdef Q_OS_MACOS
+        const auto startupResult =
+            snow_shot::platform::macos::loginItemAutomaticRegistrationAllowed(launchArguments)
+                ? snow_shot::platform::macos::loginItemService().initialize(
+                      startupSettings.autoStartAtBoot())
+                : snow_shot::platform::macos::LoginItemResult{};
+#else
+        const auto startupResult = snow_shot::platform::windows::reconcileStartupMode(
+            !startupSettings.autoStartAtBoot() ? snow_shot::platform::windows::StartupMode::Off
+            : startupSettings.launchAsAdministrator()
+                ? snow_shot::platform::windows::StartupMode::ElevatedTask
+                : snow_shot::platform::windows::StartupMode::Registry);
+#endif
+        if (!startupResult.success) {
+            snow_shot::app::reportStartupRegistrationFailure(startupResult.error);
+#ifdef Q_OS_MACOS
+            QTimer::singleShot(0, &app, [&applicationController, error = startupResult.error] {
+                // Startup can otherwise have only a tiny floating toolbar visible.
+                // Give the error a readable application surface before opening it.
+                applicationController.showMainWindow();
+                adqt::widgets::AdMessage::Request request;
+                request.content = error;
+                adqt::widgets::AdMessageService::error(std::move(request));
+            });
+#endif
+        }
+    });
     QTimer::singleShot(0, &app, [&] {
-        if (snow_shot::app::parseShellImageLaunchRequest(launchArguments).requested)
-            applicationController.handleLaunchRequest(launchArguments);
         singleInstance.setLaunchRequestHandler(
             [&applicationController](const QStringList& arguments) {
                 applicationController.handleLaunchRequest(
                     snow_shot::update::normalStartupArguments(arguments));
             });
     });
-    if (!startupResult.success) {
-        snow_shot::app::reportStartupRegistrationFailure(startupResult.error);
-#ifdef Q_OS_MACOS
-        QTimer::singleShot(0, &app, [&applicationController, error = startupResult.error] {
-            // Startup can otherwise have only a tiny floating toolbar visible.
-            // Give the error a readable application surface before opening it.
-            applicationController.showMainWindow();
-            adqt::widgets::AdMessage::Request request;
-            request.content = error;
-            adqt::widgets::AdMessageService::error(std::move(request));
-        });
-#endif
-    }
     if (administratorRestart)
         applicationController.showMainWindow();
     snow_shot::diagnostics::logEvent(QStringLiteral("snow_shot.app"),

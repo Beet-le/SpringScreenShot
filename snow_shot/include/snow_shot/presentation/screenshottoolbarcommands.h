@@ -54,6 +54,7 @@ class ScreenshotToolbarCommandSink {
     virtual void setLineTool() = 0;
     virtual void setDistanceTool() {}
     virtual void setAngleTool() {}
+    virtual void setBracketTool() {}
     virtual void setFreeDrawTool() = 0;
     virtual void setHighlightTool() = 0;
     virtual void setPenHighlightTool() = 0;
@@ -119,7 +120,9 @@ class ScreenshotToolbarCommandSink {
     virtual void updateScrollingSelectionMove(QPoint) {}
     virtual void endScrollingSelectionMove() {}
     virtual void pinSelectionToScreen() = 0;
+    virtual void pinWindowSelectionToScreen() {}
     virtual void printSelection() {}
+    virtual void airDropSelection() {}
     virtual void saveSelectionToFile() {}
     virtual void quickSaveSelection() {}
     virtual void uploadSelectionToCloud() {}

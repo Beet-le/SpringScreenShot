@@ -103,6 +103,7 @@ class ScreenshotToolPalette final : public QWidget,
         Angle,
         Magnifier,
         SpeechBubble,
+        Bracket,
     };
 
     enum class MoveToolPresentation {
@@ -242,6 +243,7 @@ class ScreenshotToolPalette final : public QWidget,
         bool showArrowTool = true;
         bool showDistanceTool = true;
         bool showAngleTool = true;
+        bool showBracketTool = true;
         bool showLineTool = false;
         bool showFreeDrawTool = false;
         bool showHighlightTool = false;
@@ -262,6 +264,7 @@ class ScreenshotToolPalette final : public QWidget,
         bool showScrollingScreenshotTool = false;
         bool showGlobalCanvasActions = false;
         bool showSaveButton = false;
+        bool showAirDropButton = false;
         bool saveButtonWithResultActions = false;
         bool copyButtonWithNeutralIcon = false;
         bool showScreenRecordButton = false;
@@ -513,12 +516,14 @@ class ScreenshotToolPalette final : public QWidget,
     void selectionDisplayUnitChanged(ScreenshotSelectionDisplayUnit unit);
     void selectionToolbarHiddenChanged(bool hidden);
     void selectRequested();
+    void recordingSessionChanged();
     void recordingExportSettingsVisibleChanged(bool visible);
     void shapeRequested();
     void speechBubbleRequested();
     void arrowRequested();
     void distanceToolRequested();
     void angleToolRequested();
+    void bracketToolRequested();
     void angleValueAdjustmentRequested(int steps, bool fine);
     void lineRequested();
     void freeDrawRequested();
@@ -564,6 +569,7 @@ class ScreenshotToolPalette final : public QWidget,
     void scrollingImageSplittingRequested();
     void scrollingImageEditingRequested();
     void printRequested();
+    void airDropRequested();
     void saveRequested();
     void cloudUploadRequested();
     void quickSaveRequested();
@@ -580,6 +586,7 @@ class ScreenshotToolPalette final : public QWidget,
     void serialNumberIncrementRequested();
     void serialNumberCreateTextRequested();
     void pinRequested();
+    void pinWindowRequested();
     void cancelRequested();
     void copyRequested();
     void confirmRequested();
@@ -912,6 +919,7 @@ class ScreenshotToolPalette final : public QWidget,
     QWidget* m_arrowStyleControlsWidget = nullptr;
     QWidget* m_distanceStyleControlsWidget = nullptr;
     QWidget* m_angleStyleControlsWidget = nullptr;
+    QWidget* m_bracketStyleControlsWidget = nullptr;
     QWidget* m_magnifierStyleControlsWidget = nullptr;
     QWidget* m_highlightStyleControlsWidget = nullptr;
     QWidget* m_penHighlightStyleControlsWidget = nullptr;
@@ -946,6 +954,7 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdButton* m_arrowButton = nullptr;
     adqt::widgets::AdButton* m_distanceButton = nullptr;
     adqt::widgets::AdButton* m_angleButton = nullptr;
+    adqt::widgets::AdButton* m_bracketButton = nullptr;
     adqt::widgets::AdButton* m_lineButton = nullptr;
     adqt::widgets::AdButton* m_freeDrawButton = nullptr;
     adqt::widgets::AdButton* m_highlighterButton = nullptr;
@@ -997,6 +1006,7 @@ class ScreenshotToolPalette final : public QWidget,
     QSpacerItem* m_textTargetLanguageSpacer = nullptr;
     adqt::widgets::AdButton* m_scrollingScreenshotButton = nullptr;
     adqt::widgets::AdButton* m_printButton = nullptr;
+    adqt::widgets::AdButton* m_airDropButton = nullptr;
     adqt::widgets::AdButton* m_saveButton = nullptr;
     adqt::widgets::AdButton* m_cloudUploadButton = nullptr;
     bool m_cloudUploadBusy = false;
@@ -1078,6 +1088,7 @@ class ScreenshotToolPalette final : public QWidget,
     QLabel* m_recordMouseClickIcon = nullptr;
     QLabel* m_recordDurationLabel = nullptr;
     adqt::widgets::AdButton* m_pinButton = nullptr;
+    adqt::widgets::AdButton* m_pinWindowButton = nullptr;
     adqt::widgets::AdButton* m_cancelButton = nullptr;
     adqt::widgets::AdButton* m_copyButton = nullptr;
     adqt::widgets::AdButton* m_confirmButton = nullptr;

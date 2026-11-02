@@ -382,8 +382,9 @@ void ScreenshotPinnedEditController::ensureToolbar() {
         return;
     }
 
-    m_toolbarWindow = new ScreenshotFloatingToolPaletteWindow(
-        snow_shot::presentation::screenshotDrawingToolbarOptions());
+    auto options = snow_shot::presentation::screenshotDrawingToolbarOptions();
+    options.showAirDropButton = true;
+    m_toolbarWindow = new ScreenshotFloatingToolPaletteWindow(options);
     m_toolbarWindow->setAttribute(Qt::WA_DeleteOnClose, false);
     m_toolbarWindow->setTransientOwnerWindow(&m_pinnedWindow);
     m_toolbarWindow->setStyleToolbarAboveMain(false);
@@ -397,24 +398,10 @@ void ScreenshotPinnedEditController::ensureToolbar() {
                                                          QRectF(m_canvas.rect()).center()));
             });
         toolbar->setHistoryState(m_canvas.canvasHistoryState());
-        connect(toolbar, &ScreenshotToolPalette::undoRequested, this, [this]() {
-            auto* session = m_pinnedWindow.m_recognitionSession.get();
-            if (session && session->active() &&
-                session->mode() == ScreenshotRecognitionSessionController::Mode::Latex) {
-                session->undoTextEdit();
-                return;
-            }
-            static_cast<void>(m_canvas.undo());
-        });
-        connect(toolbar, &ScreenshotToolPalette::redoRequested, this, [this]() {
-            auto* session = m_pinnedWindow.m_recognitionSession.get();
-            if (session && session->active() &&
-                session->mode() == ScreenshotRecognitionSessionController::Mode::Latex) {
-                session->redoTextEdit();
-                return;
-            }
-            static_cast<void>(m_canvas.redo());
-        });
+        connect(toolbar, &ScreenshotToolPalette::undoRequested, this,
+                [this]() { applyHistory(false); });
+        connect(toolbar, &ScreenshotToolPalette::redoRequested, this,
+                [this]() { applyHistory(true); });
         connect(toolbar, &ScreenshotToolPalette::moveRequested, this,
                 &ScreenshotPinnedEditController::activateResizeWindowTool);
         snow_shot::presentation::bindScreenshotCanvasToolRequests(
@@ -490,6 +477,25 @@ void ScreenshotPinnedEditController::ensureToolbar() {
     }
 
     emit toolbarCreated(m_toolbarWindow);
+}
+
+void ScreenshotPinnedEditController::applyHistory(bool redo) {
+    auto* session = m_pinnedWindow.m_recognitionSession.get();
+    if (session && session->active()) {
+        if (session->tableModeActive()) {
+            if (redo)
+                session->redoTableEdit();
+            else
+                session->undoTableEdit();
+        } else {
+            if (redo)
+                session->redoTextEdit();
+            else
+                session->undoTextEdit();
+        }
+        return;
+    }
+    static_cast<void>(redo ? m_canvas.redo() : m_canvas.undo());
 }
 
 void ScreenshotPinnedEditController::setEditMode(bool enabled) {

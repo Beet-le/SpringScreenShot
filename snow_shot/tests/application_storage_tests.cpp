@@ -1,5 +1,6 @@
 #include "snow_shot/presentation/globalmousetypes.h"
 #include "snow_shot/app/distribution.h"
+#include "snow_shot/app/edition.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/configurationstore.h"
@@ -87,6 +88,25 @@ void writeBytes(const QString& path, const QByteArray& bytes) {
     QFile file(path);
     require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "failed to open test file");
     require(file.write(bytes) == bytes.size(), "failed to write test file");
+}
+
+void ocrHardwareAccelerationPersistsAndDefaultsOff() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "OCR acceleration requires isolated storage");
+    const QString path = temporary.filePath(QStringLiteral("configuration.json"));
+    const QString key = QStringLiteral("text_recognition/hardware_acceleration");
+    {
+        storage::ConfigurationStore store(path, true, true, 60000);
+        require(store.value(key) == QJsonValue(false), "missing acceleration defaults off");
+        require(store.setValue(key, true) && store.flushNow().success,
+                "acceleration preference must save to disk");
+    }
+    storage::ConfigurationStore reloaded(path, true, true, 60000);
+    require(reloaded.value(key) == QJsonValue(true), "acceleration must survive a storage reload");
+    require(!reloaded.setValue(key, QStringLiteral("true")) && reloaded.value(key).toBool(),
+            "acceleration must reject nonboolean values");
+    require(reloaded.applySnapshot({}) && reloaded.value(key) == QJsonValue(false),
+            "older configurations must restore acceleration to off");
 }
 
 void ocrHighlightingSettingsPersistAndValidate() {
@@ -473,6 +493,80 @@ void markerResolutionAndStatus() {
             "unwritable portable target did not report fallback");
 }
 
+void portableSystemIntegrationDefaults() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "portable defaults require isolated storage");
+    const auto cleanup = qScopeGuard([] { storage::ApplicationStorage::instance().shutdown(); });
+    const QString executable = temporary.filePath(QStringLiteral("bin"));
+    const QString fallback = temporary.filePath(QStringLiteral("app-data"));
+    const QString enabledKey = QStringLiteral("system/auto_start_at_boot");
+    const QString menuKey = QStringLiteral("system/context_menu_mode");
+    auto& appStorage = initialize(executable, fallback);
+    require(storage::SystemSettings().autoStartAtBoot() &&
+                appStorage.configuration().value(menuKey) == QStringLiteral("image_files"),
+            "application data storage keeps the standard integration defaults");
+    require(QDir().mkpath(executable), "create a portable executable directory");
+    writeBytes(QDir(executable).filePath(snow_shot::app::edition::portableMarkerName()),
+               QByteArrayLiteral("portable"));
+    static_cast<void>(initialize(executable, fallback));
+    if (snow_shot::app::distribution::isStoreManaged()) {
+        require(appStorage.status().effectiveMode == storage::StorageMode::ApplicationData &&
+                    storage::SystemSettings().autoStartAtBoot() &&
+                    appStorage.configuration().value(menuKey) == QStringLiteral("image_files"),
+                "Store distribution ignores portable defaults");
+        return;
+    }
+    const auto integrationsDisabled = [&] {
+        return !storage::SystemSettings().autoStartAtBoot() &&
+               appStorage.configuration().value(menuKey) == QStringLiteral("disabled");
+    };
+    require(appStorage.status().effectiveMode == storage::StorageMode::Portable &&
+                integrationsDisabled() && appStorage.flushNow().success,
+            "fresh portable storage disables auto-start and the Windows context menu");
+    const QString path =
+        QDir(appStorage.configurationDirectory()).filePath(QStringLiteral("config.json"));
+    {
+        storage::ConfigurationStore persisted(path, true, true, 60000);
+        require(!persisted.value(enabledKey).toBool() &&
+                    persisted.value(menuKey) == QStringLiteral("disabled"),
+                "portable defaults are persisted as disabled preferences");
+    }
+    require(appStorage.configuration().setValues(
+                {{enabledKey, true}, {menuKey, QStringLiteral("image_files")}}) &&
+                appStorage.flushNow().success,
+            "portable users can explicitly enable both integrations");
+    static_cast<void>(initialize(executable, fallback));
+    require(storage::SystemSettings().autoStartAtBoot() &&
+                appStorage.configuration().value(menuKey) == QStringLiteral("image_files"),
+            "portable reload preserves explicitly enabled integrations");
+    require(appStorage.configuration().applySnapshot({}) && integrationsDisabled(),
+            "an empty configuration import restores portable integration defaults");
+    require(appStorage.configuration().setValues(
+                {{enabledKey, false}, {menuKey, QStringLiteral("disabled")}}) &&
+                appStorage.flushNow().success,
+            "portable users can save disabled integrations");
+    static_cast<void>(initialize(executable, fallback));
+    require(integrationsDisabled(), "portable reload preserves explicitly disabled integrations");
+
+    appStorage.shutdown();
+    const QJsonObject version{
+        {QStringLiteral("schema_version"), storage::ConfigurationSchema::currentVersion()}};
+    for (const QJsonObject& system :
+         {QJsonObject{}, QJsonObject{{QStringLiteral("auto_start_at_boot"), QStringLiteral("bad")},
+                                     {QStringLiteral("context_menu_mode"), true}}}) {
+        writeBytes(path, QJsonDocument(QJsonObject{{QStringLiteral("storage"), version},
+                                                   {QStringLiteral("system"), system}})
+                             .toJson());
+        static_cast<void>(initialize(executable, fallback));
+        require(integrationsDisabled(),
+                "missing and invalid portable preferences recover disabled defaults");
+        appStorage.shutdown();
+    }
+    writeBytes(path, QByteArrayLiteral("malformed"));
+    static_cast<void>(initialize(executable, fallback));
+    require(integrationsDisabled(), "corrupt portable configuration recovers disabled defaults");
+}
+
 void distributionStoragePaths() {
     QTemporaryDir temporary;
     require(temporary.isValid(), "distribution storage checks require an isolated fixture");
@@ -561,9 +655,9 @@ void defaultsAndTypedRoundTrip() {
                         .value(QStringLiteral("schema_version"))
                         .toInt() == storage::ConfigurationSchema::currentVersion() &&
                 root.value(QStringLiteral("screenshot_selection"))
-                    .toObject()
-                    .value(QStringLiteral("smart_selection"))
-                    .toBool() &&
+                        .toObject()
+                        .value(QStringLiteral("smart_selection")) ==
+                    QStringLiteral("window_sub_element") &&
                 history.value(QStringLiteral("enabled")).toBool() &&
                 history.value(QStringLiteral("retention_days")).toInt() == 7 &&
                 history.value(QStringLiteral("max_entries")).toInt() == 100 &&
@@ -596,7 +690,7 @@ void defaultsAndTypedRoundTrip() {
             {QStringLiteral("capture_history/max_entries"), 250},
             {QStringLiteral("capture_history/max_disk_mib"), 2048},
             {QStringLiteral("capture_history/compression_level"), QStringLiteral("high")},
-            {QStringLiteral("screenshot_selection/smart_selection"), false},
+            {QStringLiteral("screenshot_selection/smart_selection"), QStringLiteral("disabled")},
             {QStringLiteral("screenshot_ui/selection_mask_color"), QStringLiteral(" #12ab34cd ")},
             {QStringLiteral("screenshot_ui/shortcut_hint_opacity"), 42},
             {QStringLiteral("tray/icon"), QStringLiteral("snow-dark")},
@@ -614,7 +708,8 @@ void defaultsAndTypedRoundTrip() {
                 QStringLiteral("high") &&
             reloaded.value(QStringLiteral("screenshot/compression_level")).toString() ==
                 QStringLiteral("medium") &&
-            !reloaded.value(QStringLiteral("screenshot_selection/smart_selection")).toBool() &&
+            reloaded.value(QStringLiteral("screenshot_selection/smart_selection")) ==
+                QStringLiteral("disabled") &&
             reloaded.value(QStringLiteral("screenshot_ui/selection_mask_color")).toString() ==
                 QStringLiteral("#12AB34CD") &&
             reloaded.value(QStringLiteral("screenshot_ui/shortcut_hint_opacity")).toInt() == 42 &&
@@ -683,8 +778,9 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
             defaultValue("text_recognition/model_type").toString() == QStringLiteral("small") &&
             defaultValue("text_recognition/detector_resize_policy").toString() ==
                 QStringLiteral("max") &&
-            !defaultValue("text_recognition/resident_process").toBool() &&
+            defaultValue("text_recognition/resident_process").toBool() &&
             !defaultValue("text_recognition/model_hot_start").toBool() &&
+            !defaultValue("text_recognition/hardware_acceleration").toBool() &&
             !defaultValue("global_shortcuts/disable_on_focused_fullscreen_window").toBool() &&
             !defaultValue("extended_features/jump_to_translation_page").toBool() &&
 #ifdef Q_OS_MACOS
@@ -1005,11 +1101,11 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
         {QStringLiteral("screenshot/double_click_action"),
          {QStringLiteral("copy"), QStringLiteral("save"), QStringLiteral("quick_save"),
           QStringLiteral("pin"), QStringLiteral("ocr"), QStringLiteral("ocr_copy"),
-          QStringLiteral("none")}},
+          QStringLiteral("cancel"), QStringLiteral("none")}},
         {QStringLiteral("screenshot/middle_mouse_button_action"),
          {QStringLiteral("copy"), QStringLiteral("save"), QStringLiteral("quick_save"),
           QStringLiteral("pin"), QStringLiteral("ocr"), QStringLiteral("ocr_copy"),
-          QStringLiteral("none")}},
+          QStringLiteral("cancel"), QStringLiteral("none")}},
         {QStringLiteral("screenshot/image_format"),
          {QStringLiteral("png"), QStringLiteral("jpeg"), QStringLiteral("bmp"),
           QStringLiteral("webp"), QStringLiteral("jxl"), QStringLiteral("avif"),
@@ -1837,7 +1933,7 @@ void verifyPinToScreenShortcutSettings() {
     const storage::PinToScreenShortcutSettings shortcutSettings;
     const shortcuts::ShortcutBindingMap defaults = shortcutSettings.allShortcuts();
     require(
-        defaults.size() == 36 &&
+        defaults.size() == 38 &&
             portable(defaults.value(QStringLiteral("copy_to_clipboard"))) ==
                 QStringList{QStringLiteral("Ctrl+C")} &&
             portable(defaults.value(QStringLiteral("copy_original_content"))) ==
@@ -1894,7 +1990,12 @@ void verifyPinToScreenShortcutSettings() {
                                            {QStringLiteral("M")}) &&
             shortcutSettings.shortcuts(QStringLiteral("unsupported")).isEmpty() &&
             !shortcutSettings.setShortcuts(QStringLiteral("unsupported"), {QStringLiteral("Q")}),
-        "pinned-window shortcut adapter must expose thirty-six stable actions and defaults");
+        "pinned-window shortcut adapter must expose thirty-eight stable actions and defaults");
+    require(portable(defaults.value(QStringLiteral("batch_select_all"))) ==
+                    QStringList{QStringLiteral("Ctrl+Alt+A")} &&
+                portable(defaults.value(QStringLiteral("batch_save_as_file"))) ==
+                    QStringList{QStringLiteral("Ctrl+Alt+S")},
+            "batch shortcut defaults must be exposed by the typed adapter");
     require(portable(defaults.value(QStringLiteral("increase_opacity"))) ==
                 QStringList{QStringLiteral("]")},
             "increase_opacity must have its default binding");
@@ -2403,7 +2504,7 @@ void screenshotMouseActionSettingsRoundTrip() {
     for (const QString& action :
          {QStringLiteral("copy"), QStringLiteral("save"), QStringLiteral("quick_save"),
           QStringLiteral("pin"), QStringLiteral("ocr"), QStringLiteral("ocr_copy"),
-          QStringLiteral("none")}) {
+          QStringLiteral("cancel"), QStringLiteral("none")}) {
         const QString previousMiddleAction = screenshot.middleMouseButtonAction();
         require(screenshot.setDoubleClickAction(action) &&
                     screenshot.doubleClickAction() == action &&
@@ -2414,20 +2515,22 @@ void screenshotMouseActionSettingsRoundTrip() {
                     screenshot.doubleClickAction() == action,
                 "middle-click actions must round-trip without changing the double-click action");
     }
-    for (const bool swapActions : {false, true}) {
-        const QString doubleAction =
-            swapActions ? QStringLiteral("ocr_copy") : QStringLiteral("ocr");
-        const QString middleAction =
-            swapActions ? QStringLiteral("ocr") : QStringLiteral("ocr_copy");
+    const std::pair<QString, QString> persistedActions[] = {
+        {QStringLiteral("ocr"), QStringLiteral("ocr_copy")},
+        {QStringLiteral("ocr_copy"), QStringLiteral("ocr")},
+        {QStringLiteral("cancel"), QStringLiteral("none")},
+        {QStringLiteral("none"), QStringLiteral("cancel")},
+    };
+    for (const auto& [doubleAction, middleAction] : persistedActions) {
         require(screenshot.setDoubleClickAction(doubleAction) &&
                     screenshot.setMiddleMouseButtonAction(middleAction) &&
                     applicationStorage.flushNow().success,
-                "save independent screenshot recognition mouse actions");
+                "save independent screenshot mouse actions");
         applicationStorage.shutdown();
         static_cast<void>(initialize(executable, temporary.path()));
         require(screenshot.doubleClickAction() == doubleAction &&
                     screenshot.middleMouseButtonAction() == middleAction,
-                "both recognition mouse actions must survive restart independently");
+                "both screenshot mouse actions must survive restart independently");
         require(!screenshot.setDoubleClickAction(QStringLiteral("unsupported")) &&
                     !screenshot.setMiddleMouseButtonAction(QStringLiteral("unsupported")) &&
                     screenshot.doubleClickAction() == doubleAction &&
@@ -3041,21 +3144,86 @@ void missingOcrModelConfigurationDefaultsToSmallWithoutAMigration() {
 }
 
 void smartSelectionAccessorAndSignal() {
+    using snow_shot::SmartSelectionMode;
     QTemporaryDir temporary;
     require(temporary.isValid(), "failed to create smart-selection directory");
     const QString executable = QDir(temporary.path()).filePath(QStringLiteral("bin"));
     require(QDir().mkpath(executable), "failed to create smart-selection executable directory");
-    auto& applicationStorage = initialize(executable, temporary.path());
-    bool changed = false;
-    QObject::connect(&applicationStorage, &storage::ApplicationStorage::smartSelectionChanged,
-                     [&changed](bool enabled) { changed = !enabled; });
-    require(applicationStorage.smartSelectionEnabled() &&
-                applicationStorage.requestSmartSelection(false) &&
-                !applicationStorage.smartSelectionEnabled() && changed,
-            "smart-selection accessor did not persist or signal changes");
-    require(applicationStorage.requestSmartSelection(true) &&
-                applicationStorage.smartSelectionEnabled(),
-            "smart-selection setting did not restore its enabled default");
+    auto& app = initialize(executable, temporary.path());
+    const QString key = QStringLiteral("screenshot_selection/smart_selection");
+    require(app.smartSelectionMode() == SmartSelectionMode::WindowSubElement,
+            "smart selection must default to window sub-elements");
+    int changes = 0;
+    auto observed = SmartSelectionMode::WindowSubElement;
+    const auto connection =
+        QObject::connect(&app, &storage::ApplicationStorage::smartSelectionModeChanged,
+                         [&changes, &observed](SmartSelectionMode mode) {
+                             ++changes;
+                             observed = mode;
+                         });
+    for (const auto mode : {SmartSelectionMode::Window, SmartSelectionMode::Disabled,
+                            SmartSelectionMode::WindowSubElement}) {
+        const int before = changes;
+        require(app.requestSmartSelectionMode(mode) && app.smartSelectionMode() == mode &&
+                    observed == mode && changes == before + 1 && app.flushNow().success,
+                "each smart selection mode must persist and signal once");
+        storage::ConfigurationStore reloaded(
+            QDir(app.configurationDirectory()).filePath(QStringLiteral("config.json")), true, true,
+            60000);
+        require(reloaded.value(key) == snow_shot::smartSelectionModeId(mode),
+                "smart selection mode must survive reload");
+    }
+    require(!app.configuration().setValue(key, QStringLiteral("unknown")) &&
+                !app.configuration().setValue(key, true),
+            "live writes must reject invalid or legacy mode values");
+    QObject::disconnect(connection);
+}
+
+void smartSelectionLegacyValuesMigrate() {
+    const QString key = QStringLiteral("screenshot_selection/smart_selection");
+    const QString targetKey = QStringLiteral("screenshot_selection/selection_target");
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "smart-selection migration requires isolated storage");
+    int fixture = 0;
+    const auto verify = [&](QJsonValue value, QJsonValue target, const QString& expected) {
+        QJsonObject selection;
+        if (!value.isUndefined())
+            selection.insert(QStringLiteral("smart_selection"), value);
+        if (!target.isUndefined())
+            selection.insert(QStringLiteral("selection_target"), target);
+        const QString path =
+            temporary.filePath(QString::number(fixture++) + QStringLiteral(".json"));
+        writeBytes(path,
+                   QJsonDocument(QJsonObject{{QStringLiteral("storage"),
+                                              QJsonObject{{QStringLiteral("schema_version"), 1}}},
+                                             {QStringLiteral("screenshot_selection"), selection}})
+                       .toJson());
+        storage::ConfigurationStore store(path, true, true, 60000);
+        require(store.value(key) == expected && store.flushNow().success,
+                "legacy smart selection must preserve the effective target");
+        const auto stored =
+            readObject(path).value(QStringLiteral("screenshot_selection")).toObject();
+        require(stored.value(QStringLiteral("smart_selection")) == expected &&
+                    !stored.contains(QStringLiteral("selection_target")),
+                "migration must persist the mode and remove the obsolete target");
+        QMap<QString, QJsonValue> legacy;
+        if (!value.isUndefined())
+            legacy.insert(key, value);
+        if (!target.isUndefined())
+            legacy.insert(targetKey, target);
+        const auto migrated = storage::ConfigurationSchema::migrateLegacyValues(legacy);
+        require(migrated.value(key) == expected && !migrated.contains(targetKey) &&
+                    storage::ConfigurationSchema::migrateLegacyValues(migrated) == migrated,
+                "archive migration must remove legacy targets and be idempotent");
+    };
+    verify(false, QStringLiteral("window_sub_element"), QStringLiteral("window"));
+    verify(true, QStringLiteral("window"), QStringLiteral("window"));
+    verify(true, QJsonValue(QJsonValue::Undefined), QStringLiteral("window_sub_element"));
+    verify(QJsonValue(QJsonValue::Undefined), QStringLiteral("window"), QStringLiteral("window"));
+    verify(true, QStringLiteral("invalid"), QStringLiteral("window_sub_element"));
+    verify(QStringLiteral("disabled"), QStringLiteral("window"), QStringLiteral("disabled"));
+    verify(QStringLiteral("window_sub_element"), QStringLiteral("window"),
+           QStringLiteral("window_sub_element"));
 }
 
 void unknownFieldsArePreserved() {
@@ -3652,9 +3820,10 @@ void trayDarkIconSettingsPersistAndValidate() {
     require(settings.icon() == QStringLiteral("snow-dark") &&
                 settings.customIcon() == QStringLiteral("regular.ico") &&
                 settings.darkIcon() == QStringLiteral("inherit") &&
-                settings.darkCustomIcon().isEmpty(),
+                settings.darkCustomIcon().isEmpty() && !settings.useSystemIconColor(),
             "existing configurations must retain their icons and inherit them in dark theme");
-    require(settings.setDarkIcon(QStringLiteral("snow-light")) &&
+    require(settings.setUseSystemIconColor(true) &&
+                settings.setDarkIcon(QStringLiteral("snow-light")) &&
                 settings.setDarkCustomIcon(QStringLiteral("dark.png")) &&
                 !settings.setDarkIcon(QStringLiteral("invalid")) &&
                 settings.darkIcon() == QStringLiteral("snow-light") &&
@@ -3665,8 +3834,9 @@ void trayDarkIconSettingsPersistAndValidate() {
                 settings.icon() == QStringLiteral("snow-dark") &&
                 settings.customIcon() == QStringLiteral("regular.ico") &&
                 settings.darkIcon() == QStringLiteral("snow-light") &&
-                settings.darkCustomIcon() == QStringLiteral("dark.png"),
-            "both regular and dark icon settings must survive a storage restart");
+                settings.darkCustomIcon() == QStringLiteral("dark.png") &&
+                settings.useSystemIconColor(),
+            "icon choices and system coloring must survive a storage restart");
     appStorage.shutdown();
     storage::ConfigurationStore imported(config, true, true, 60000);
     require(imported.applySnapshot(
@@ -3675,9 +3845,14 @@ void trayDarkIconSettingsPersistAndValidate() {
                 imported.value(QStringLiteral("tray/dark_icon")).toString() ==
                     QStringLiteral("inherit") &&
                 imported.value(QStringLiteral("tray/dark_custom_icon")).toString().isEmpty() &&
+                !imported.value(QStringLiteral("tray/use_system_icon_color")).toBool(true) &&
                 imported.value(QStringLiteral("tray/custom_icon")).toString() ==
                     QStringLiteral("legacy.png"),
             "importing older snapshots must restore compatible dark icon defaults");
+    require(
+        !imported.setValue(QStringLiteral("tray/use_system_icon_color"), QStringLiteral("true")) &&
+            !imported.value(QStringLiteral("tray/use_system_icon_color")).toBool(true),
+        "system icon coloring must reject non-boolean values without changing its default");
 }
 
 void invalidTrayClickSettingsUseIndependentDefaults() {
@@ -4031,6 +4206,19 @@ int main(int argc, char** argv) {
     }
 #endif
     LifetimeObservedApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--smart-selection-only"))) {
+        QCoreApplication::setOrganizationName(QStringLiteral("SnowShotTests"));
+        QCoreApplication::setApplicationName(QStringLiteral("smart-selection-storage-tests"));
+        defaultsAndTypedRoundTrip();
+        smartSelectionAccessorAndSignal();
+        smartSelectionLegacyValuesMigrate();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--portable-system-integration-only"))) {
+        portableSystemIntegrationDefaults();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--distribution-paths-only"))) {
         markerResolutionAndStatus();
         storage::ApplicationStorage::instance().shutdown();
@@ -4077,6 +4265,7 @@ int main(int argc, char** argv) {
     QCoreApplication::setOrganizationName(QStringLiteral("SnowShotTests"));
     QCoreApplication::setApplicationName(QStringLiteral("storage-tests"));
     if (application.arguments().contains(QStringLiteral("--ocr-settings-only"))) {
+        ocrHardwareAccelerationPersistsAndDefaultsOff();
         ocrHighlightingSettingsPersistAndValidate();
         invalidOcrModelConfigurationFallsBackToSmallWithoutAMigration();
         retiredOcrModelConfigurationsNormalizeToSmall();
@@ -4185,6 +4374,7 @@ int main(int argc, char** argv) {
     retiredOcrModelConfigurationsNormalizeToSmall();
     missingOcrModelConfigurationDefaultsToSmallWithoutAMigration();
     smartSelectionAccessorAndSignal();
+    smartSelectionLegacyValuesMigrate();
     unknownFieldsArePreserved();
     malformedConfigurationIsCopiedAndReplaced();
     futureVersionIsReadOnly();

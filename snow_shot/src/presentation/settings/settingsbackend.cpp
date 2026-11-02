@@ -329,8 +329,8 @@ BuiltInSettingsBackend::BuiltInSettingsBackend(
             [this](const storage::StorageStatus&) { emit synchronized(); });
     connect(&applicationStorage, &storage::ApplicationStorage::captureHistoryClearFinished, this,
             [this](bool, const QString&) { emit synchronized(); });
-    connect(&applicationStorage, &storage::ApplicationStorage::smartSelectionChanged, this,
-            [this](bool) { emit synchronized(); });
+    connect(&applicationStorage, &storage::ApplicationStorage::smartSelectionModeChanged, this,
+            [this](snow_shot::SmartSelectionMode) { emit synchronized(); });
     connect(&applicationStorage.configuration(), &storage::ConfigurationStore::valueChanged, this,
             [this](const QString& key, const QJsonValue& value) {
                 if ((key == QStringLiteral("interface/skin_path") ||
@@ -561,6 +561,8 @@ QVariant BuiltInSettingsBackend::selectValue(SettingsSelectBinding binding) cons
         return storage::ScreenshotSettings().apiMode();
     case SettingsSelectBinding::ScreenRecordingApiMode:
         return storage::RecordingSettings().apiMode();
+    case SettingsSelectBinding::SmartSelection:
+        return smartSelectionModeId(storage::ApplicationStorage::instance().smartSelectionMode());
     case SettingsSelectBinding::WindowElementApi:
         return storage::ScreenshotSettings().windowElementApi();
     case SettingsSelectBinding::ScreenshotToolbarSize:
@@ -799,6 +801,13 @@ bool BuiltInSettingsBackend::applySelectValue(SettingsSelectBinding binding,
         return storage::ScreenshotSettings().setApiMode(value.toString());
     case SettingsSelectBinding::ScreenRecordingApiMode:
         return storage::RecordingSettings().setApiMode(value.toString());
+    case SettingsSelectBinding::SmartSelection: {
+        const auto normalized = storage::ConfigurationSchema::normalize(
+            QStringLiteral("screenshot_selection/smart_selection"), QJsonValue::fromVariant(value));
+        return normalized.valid &&
+               storage::ApplicationStorage::instance().requestSmartSelectionMode(
+                   smartSelectionModeFromId(normalized.value.toString()));
+    }
     case SettingsSelectBinding::WindowElementApi:
         return storage::ScreenshotSettings().setWindowElementApi(value.toString());
     case SettingsSelectBinding::ScreenshotToolbarSize:
@@ -875,6 +884,11 @@ bool BuiltInSettingsBackend::applySelectValue(SettingsSelectBinding binding,
 
 bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
     switch (binding) {
+    case SettingsSwitchBinding::OcrHardwareAcceleration:
+        return storage::ApplicationStorage::instance()
+            .configuration()
+            .value(QStringLiteral("text_recognition/hardware_acceleration"))
+            .toBool();
     case SettingsSwitchBinding::HistoryEnabled:
         return storage::ApplicationStorage::instance().captureHistoryPolicy().enabled;
     case SettingsSwitchBinding::PinnedHistoryEnabled:
@@ -883,8 +897,6 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::ApplicationStorage::instance().captureHistoryPolicy().keepPermanently;
     case SettingsSwitchBinding::PinnedHistoryKeepPermanently:
         return storage::ApplicationStorage::instance().pinnedWindowPolicy().keepPermanently;
-    case SettingsSwitchBinding::SmartSelection:
-        return storage::ApplicationStorage::instance().smartSelectionEnabled();
     case SettingsSwitchBinding::OcrResidentProcess:
         return storage::ApplicationStorage::instance()
             .configuration()
@@ -905,6 +917,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::FloatingToolbarSettings().enabled();
     case SettingsSwitchBinding::TrayEnabled:
         return storage::TraySettings().enabled();
+    case SettingsSwitchBinding::TrayUseSystemIconColor:
+        return storage::TraySettings().useSystemIconColor();
     case SettingsSwitchBinding::ScreenshotQuickSelectionModification:
         return storage::ScreenshotSettings().quickSelectionModification();
     case SettingsSwitchBinding::ScreenshotShowCursor:
@@ -927,6 +941,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::ScreenshotSettings().restoreOriginalScreenColors();
     case SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard:
         return storage::ScreenshotSettings().copyImageFileToClipboard();
+    case SettingsSwitchBinding::ScreenshotCopyAfterPinningToScreen:
+        return storage::ScreenshotSettings().copyAfterPinningToScreen();
     case SettingsSwitchBinding::ScreenshotShowSaveResult:
         return storage::ScreenshotSettings().showSaveResult();
     case SettingsSwitchBinding::SaveRecognitionResultAsImage:
@@ -941,6 +957,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::PinToScreenSettings().autoResizeWindow();
     case SettingsSwitchBinding::PinShowWindowButtons:
         return storage::PinToScreenSettings().showWindowButtons();
+    case SettingsSwitchBinding::PinShakeWindowToHideOthers:
+        return storage::PinToScreenSettings().shakeWindowToHideOthers();
     case SettingsSwitchBinding::PinShowBorderByDefault:
         return storage::PinToScreenSettings().showBorderByDefault();
     case SettingsSwitchBinding::PinShowShadowByDefault:
@@ -1015,6 +1033,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
     case SettingsSwitchBinding::LaunchAsAdministrator:
         return !app::distribution::isStoreManaged() &&
                storage::SystemSettings().launchAsAdministrator();
+    case SettingsSwitchBinding::AnnotationModeWhenOpeningForEditing:
+        return storage::SystemSettings().annotationModeWhenOpeningForEditing();
     case SettingsSwitchBinding::DrawingAutomaticallySelectNewlyCreatedElements:
         return storage::DrawingSettings().automaticallySelectNewlyCreatedElements();
     case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
@@ -1045,8 +1065,9 @@ bool BuiltInSettingsBackend::applyContextMenuSettings(const QJsonValue& mode,
         {kContextMenuModeKey, requestedMode.value},
         {kContextMenuShortcutKey, requestedShortcuts.value},
     };
-    auto result = m_shellContextMenu->changeEnabled(
-        requestedMode.value.toString() == QStringLiteral("image_files"),
+    auto result = m_shellContextMenu->changeMode(
+        platform::windows::ShellContextMenuRegistration::modeFromValue(
+            requestedMode.value.toString()),
         contextMenuAccessKey(requestedShortcuts.value),
         [&] { return configuration.setValues(requested) && configuration.flushNow().success; });
     if (!result.success) {
@@ -1165,6 +1186,16 @@ bool BuiltInSettingsBackend::switchEnabled(SettingsSwitchBinding binding) const 
 }
 
 bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, bool value) {
+    if (binding == SettingsSwitchBinding::AnnotationModeWhenOpeningForEditing)
+        return switchEnabled(binding) &&
+               storage::SystemSettings().setAnnotationModeWhenOpeningForEditing(value);
+    if (binding == SettingsSwitchBinding::OcrHardwareAcceleration) {
+        const bool accepted = storage::ApplicationStorage::instance().configuration().setValue(
+            QStringLiteral("text_recognition/hardware_acceleration"), value);
+        if (accepted)
+            emit synchronized();
+        return accepted;
+    }
     if (binding == SettingsSwitchBinding::ScreenshotShowSaveResult)
         return switchEnabled(binding) && storage::ScreenshotSettings().setShowSaveResult(value);
     if (binding == SettingsSwitchBinding::OcrResidentProcess ||
@@ -1206,9 +1237,6 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::ScreenshotRestoreOriginalScreenColors) {
         return storage::ScreenshotSettings().setRestoreOriginalScreenColors(value);
     }
-    if (binding == SettingsSwitchBinding::SmartSelection) {
-        return storage::ApplicationStorage::instance().requestSmartSelection(value);
-    }
 
     if (binding == SettingsSwitchBinding::ScreenshotAreaTypeHint) {
         return storage::ScreenshotUiSettings().setScreenshotAreaTypeHintEnabled(value);
@@ -1224,8 +1252,14 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::TrayEnabled) {
         return storage::TraySettings().setEnabled(value);
     }
+    if (binding == SettingsSwitchBinding::TrayUseSystemIconColor) {
+        return storage::TraySettings().setUseSystemIconColor(value);
+    }
     if (binding == SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard) {
         return storage::ScreenshotSettings().setCopyImageFileToClipboard(value);
+    }
+    if (binding == SettingsSwitchBinding::ScreenshotCopyAfterPinningToScreen) {
+        return storage::ScreenshotSettings().setCopyAfterPinningToScreen(value);
     }
     if (binding == SettingsSwitchBinding::DrawingAutomaticallySelectNewlyCreatedElements) {
         return storage::DrawingSettings().setAutomaticallySelectNewlyCreatedElements(value);
@@ -1256,6 +1290,9 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     }
     if (binding == SettingsSwitchBinding::PinShowWindowButtons) {
         return storage::PinToScreenSettings().setShowWindowButtons(value);
+    }
+    if (binding == SettingsSwitchBinding::PinShakeWindowToHideOthers) {
+        return storage::PinToScreenSettings().setShakeWindowToHideOthers(value);
     }
     if (binding == SettingsSwitchBinding::PinShowBorderByDefault) {
         return storage::PinToScreenSettings().setShowBorderByDefault(value);
@@ -1379,16 +1416,16 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
         pinnedPolicy.keepPermanently = value;
         return storage::ApplicationStorage::instance().requestPinnedWindowPolicy(pinnedPolicy);
     }
-    case SettingsSwitchBinding::SmartSelection:
-        return false;
     case SettingsSwitchBinding::OcrResidentProcess:
     case SettingsSwitchBinding::OcrModelHotStart:
+    case SettingsSwitchBinding::OcrHardwareAcceleration:
         return false;
     case SettingsSwitchBinding::ScreenshotAreaTypeHint:
     case SettingsSwitchBinding::ShowGuidesByDefault:
     case SettingsSwitchBinding::ShowEditSelectionToolbar:
     case SettingsSwitchBinding::FloatingToolbarEnabled:
     case SettingsSwitchBinding::TrayEnabled:
+    case SettingsSwitchBinding::TrayUseSystemIconColor:
     case SettingsSwitchBinding::ScreenshotQuickSelectionModification:
     case SettingsSwitchBinding::ScreenshotShowCursor:
     case SettingsSwitchBinding::ScreenshotCaptureUiInScrollingScreenshot:
@@ -1399,12 +1436,14 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::ScreenshotRestoreOriginalScreenColors:
     case SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard:
     case SettingsSwitchBinding::ScreenshotShowSaveResult:
+    case SettingsSwitchBinding::ScreenshotCopyAfterPinningToScreen:
     case SettingsSwitchBinding::SaveRecognitionResultAsImage:
     case SettingsSwitchBinding::ShowOriginalImagePreview:
     case SettingsSwitchBinding::ShowTextHighlighting:
     case SettingsSwitchBinding::PinAutomaticTextRecognition:
     case SettingsSwitchBinding::PinAutoResizeWindow:
     case SettingsSwitchBinding::PinShowWindowButtons:
+    case SettingsSwitchBinding::PinShakeWindowToHideOthers:
     case SettingsSwitchBinding::PinShowBorderByDefault:
     case SettingsSwitchBinding::PinShowShadowByDefault:
     case SettingsSwitchBinding::PinExitAnnotationModeBeforeClosing:
@@ -1427,6 +1466,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::McpEnabled:
     case SettingsSwitchBinding::AutoStartAtBoot:
     case SettingsSwitchBinding::LaunchAsAdministrator:
+    case SettingsSwitchBinding::AnnotationModeWhenOpeningForEditing:
     case SettingsSwitchBinding::DrawingAutomaticallySelectNewlyCreatedElements:
     case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
     case SettingsSwitchBinding::DrawingRememberLastUsedTool:
@@ -2356,7 +2396,7 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
     const QString contextMenuKey = QStringLiteral("system/context_menu_mode");
 #endif
     const auto importedValue = [&](const QString& key) {
-        const auto fallback = storage::ConfigurationSchema::defaultValue(key);
+        const auto fallback = configuration.defaultValue(key);
         const auto normalized =
             storage::ConfigurationSchema::normalize(key, values.value(key, fallback));
         return normalized.valid ? normalized.value : fallback;
@@ -2596,6 +2636,8 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                       QStringLiteral("global_shortcuts/split_selected_images"));
         resetShortcut(GlobalShortcutAction::TranslateSelectedText,
                       QStringLiteral("global_shortcuts/translate_selected_text"));
+        resetShortcut(GlobalShortcutAction::ToggleWindowUnderCursorAlwaysOnTop,
+                      QStringLiteral("global_shortcuts/toggle_window_under_cursor_always_on_top"));
         resetShortcut(GlobalShortcutAction::ToggleGlobalHotkeys,
                       QStringLiteral("global_shortcuts/toggle_global_hotkeys"));
         resetShortcut(
@@ -2661,11 +2703,15 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                    storage::ConfigurationSchema::defaultValue(
                        QStringLiteral("pinned_history/compression_level")));
     case SettingsSectionReset::ScreenshotSettings:
-        return storage::ApplicationStorage::instance().requestSmartSelection(
-                   storage::ConfigurationSchema::defaultValue(
-                       QStringLiteral("screenshot_selection/smart_selection"))
-                       .toBool()) &&
+        return storage::ApplicationStorage::instance().requestSmartSelectionMode(
+                   smartSelectionModeFromId(
+                       storage::ConfigurationSchema::defaultValue(
+                           QStringLiteral("screenshot_selection/smart_selection"))
+                           .toString())) &&
                resetAvailableConfigurationValues({
+                   {QStringLiteral("screenshot/copy_after_pinning_to_screen"),
+                    storage::ConfigurationSchema::defaultValue(
+                        QStringLiteral("screenshot/copy_after_pinning_to_screen"))},
                    {QStringLiteral("screenshot/shutter_sound_notification"),
                     storage::ConfigurationSchema::defaultValue(
                         QStringLiteral("screenshot/shutter_sound_notification"))},
@@ -2824,6 +2870,9 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
         });
     case SettingsSectionReset::PinToScreenBehavior:
         return storage::ApplicationStorage::instance().configuration().setValues({
+            {QStringLiteral("pin_to_screen/shake_window_to_hide_others"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("pin_to_screen/shake_window_to_hide_others"))},
             {QStringLiteral("pin_to_screen/mouse_wheel_opacity_step"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("pin_to_screen/mouse_wheel_opacity_step"))},
@@ -2991,25 +3040,32 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                 QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window"))
                 .toBool());
     case SettingsSectionReset::SystemGeneral: {
+        const auto& configuration = storage::ApplicationStorage::instance().configuration();
+        const bool annotationAccepted =
+#ifdef Q_OS_WIN
+            applySwitchValue(
+                SettingsSwitchBinding::AnnotationModeWhenOpeningForEditing,
+                configuration
+                    .defaultValue(QStringLiteral("system/annotation_mode_when_opening_for_editing"))
+                    .toBool());
+#else
+            true;
+#endif
         if (app::distribution::isStoreManaged())
             return applySelectValue(SettingsSelectBinding::ContextMenuMode,
-                                    storage::ConfigurationSchema::defaultValue(
-                                        QStringLiteral("system/context_menu_mode"))
-                                        .toVariant());
+                                    configuration.defaultValue(kContextMenuModeKey).toVariant()) &&
+                   annotationAccepted;
         emit synchronized();
         const auto result = applyStartupSettings(
-            storage::ConfigurationSchema::defaultValue(QStringLiteral("system/auto_start_at_boot"))
-                .toBool(),
+            configuration.defaultValue(QStringLiteral("system/auto_start_at_boot")).toBool(),
             false);
         if (!result.success)
             emit operationMessage(result.error, false);
         emit synchronized();
-        bool accepted = result.success;
+        bool accepted = result.success && annotationAccepted;
 #ifdef Q_OS_WIN
         accepted = applySelectValue(SettingsSelectBinding::ContextMenuMode,
-                                    storage::ConfigurationSchema::defaultValue(
-                                        QStringLiteral("system/context_menu_mode"))
-                                        .toVariant()) &&
+                                    configuration.defaultValue(kContextMenuModeKey).toVariant()) &&
                    accepted;
 #endif
         return accepted && applySelectValue(SettingsSelectBinding::UpdateMode,
@@ -3083,8 +3139,11 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
     case SettingsSectionReset::TextRecognition: {
         auto& storage = storage::ApplicationStorage::instance();
         const bool accepted = storage.configuration().setValues({
-            {QStringLiteral("text_recognition/resident_process"), false},
+            {QStringLiteral("text_recognition/resident_process"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("text_recognition/resident_process"))},
             {QStringLiteral("text_recognition/model_hot_start"), false},
+            {QStringLiteral("text_recognition/hardware_acceleration"), false},
             {QStringLiteral("text_recognition/model_type"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("text_recognition/model_type"))},
