@@ -1475,10 +1475,12 @@ class McpStatusSettingsWidget final : public SettingsCustomWidget {
                 "Keep %1 running while using MCP.")
                 .arg(snow_shot::app::edition::productName()));
 #else
-        m_help->setText(QCoreApplication::translate(
-            "ScreenshotMcpSettings",
-            "Add this configuration to your MCP client, then restart the client to connect. "
-            "Keep Snow Shot running while using MCP."));
+        m_help->setText(
+            QCoreApplication::translate(
+                "ScreenshotMcpSettings",
+                "Add this configuration to your MCP client, then restart the client to connect. "
+                "Keep %1 running while using MCP.")
+                .arg(snow_shot::app::edition::productName()));
 #endif
         updateCopyText();
         const QString executable = snow_shot::app::distribution::isStoreManaged()

@@ -2070,7 +2070,7 @@ void builtInCatalogIsCompleteAndValid() {
             screenshotSection.reset ==
                 settings::SettingsSectionReset::ScreenshotInterfaceSettings &&
             trayIcon->configurationKey == QStringLiteral("tray/icon") &&
-            std::get<settings::SettingsRadioDefinition>(trayIcon->payload).options.size() == 6,
+            std::get<settings::SettingsRadioDefinition>(trayIcon->payload).options.size() == 2,
         "new Interface settings controls must retain their schema contracts");
     const auto* screenshotToolbarField =
         settings::builtInSettingsRegistry().field(screenshotToolbarEditor->id);
