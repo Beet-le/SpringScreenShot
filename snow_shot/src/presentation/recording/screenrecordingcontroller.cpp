@@ -23,6 +23,7 @@
 #include <QElapsedTimer>
 
 #include "snow_shot/presentation/screenshottoolpalette.h"
+#include "snow_shot/presentation/components/screenrecordingmodal.h"
 #include "snow_shot/presentation/components/screenrecordingsettingsdialog.h"
 #include "widgets/modal.h"
 #include "snow_shot/presentation/screenshotimagefileservice.h"
@@ -240,7 +241,7 @@ QString captureError() {
         return QCoreApplication::translate(
                    "ScreenRecordingController",
                    "The recording could not be finalized. Recoverable media and its timeline "
-                   "were saved in:\n%1\n\nKeep this folder to recover the recording.")
+                   "were saved in:\n%1\n\nKeep this folder to recover the recording")
             .arg(message.section(recoveryMarker, 1).trimmed());
     }
     if (message.contains(QStringLiteral("keyboard recording:"))) {
@@ -1770,7 +1771,7 @@ struct ScreenRecordingController::Impl {
         auto* notice =
             new QMessageBox(QMessageBox::Information, tr("Recording recovery"),
                             tr("A recording was interrupted when Windows ended the "
-                               "session. Recover the saved recording or open its folder."),
+                               "session. Recover the saved recording or open its folder"),
                             QMessageBox::NoButton, QApplication::activeWindow());
         notice->setAttribute(Qt::WA_DeleteOnClose);
         QStringList details{record->sourcePath, record->outputPath, folder};
@@ -2314,7 +2315,7 @@ struct ScreenRecordingController::Impl {
                 snow_webcam_create(static_cast<uint32_t>(webcamSize), 30), snow_webcam_destroy);
             if (!webcam) {
                 webcamFailed = true;
-                notifyWebcamError(tr("The webcam could not be initialized."));
+                notifyWebcamError(tr("The webcam could not be initialized"));
                 return;
             }
         }
@@ -2501,8 +2502,16 @@ struct ScreenRecordingController::Impl {
         automationRevision = snow_shot::presentation::nextAutomationRevision();
         if (automationOwned || automationCommand)
             return;
-        QMessageBox::critical(toolbarWindow, tr("Screen recording"),
-                              message.isEmpty() ? tr("The recording operation failed") : message);
+        using adqt::widgets::AdModal;
+        auto* modal = new AdModal(uiSession ? static_cast<QObject*>(uiSession) : &owner);
+        modal->setObjectName(QStringLiteral("screenRecordingErrorModal"));
+        snow_shot::presentation::configureScreenRecordingModal(*modal, areaWindow);
+        modal->setPreset(AdModal::Preset::Error);
+        modal->setWindowTitle(tr("Screen recording"));
+        modal->setText(message.isEmpty() ? tr("The recording operation failed") : message);
+        modal->setStandardButtons(AdModal::StandardButton::Ok);
+        QObject::connect(modal, &AdModal::finished, modal, &QObject::deleteLater);
+        modal->open();
     }
 
     PermissionCheck permissionCheck;

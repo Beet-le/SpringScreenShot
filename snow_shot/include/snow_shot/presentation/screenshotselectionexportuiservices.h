@@ -45,6 +45,7 @@ struct ScreenshotAutomaticSaveRequest final {
 namespace snow_shot::presentation {
 class LiveWindowSource;
 class PinnedWindowGroupManager;
+class PinnedWindowStackingCoordinator;
 class PinnedWindowSelectionController;
 } // namespace snow_shot::presentation
 
@@ -150,11 +151,18 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
     [[nodiscard]] snow_shot::storage::StorageResult tryDestroyRecords(const QVector<QString>& ids);
 
   private:
+    [[nodiscard]] snow_shot::presentation::PinnedWindowStackingCoordinator*
+    stackingCoordinator() const;
+    bool restoreRecordImpl(const QString& id, bool activateGroup,
+                           ScreenshotPinnedWindow::PresentationPolicy policy, quint64 batch = 0);
     void configureVisibility(ScreenshotPinnedWindow::Config* config);
     bool persistHiddenWindow(const snow_shot::storage::PinnedWindowRecord& record);
     bool hideRecords(const QVector<QString>& ids);
-    [[nodiscard]] ScreenshotPinnedWindow::HideOtherWindowsResult
+    bool showRecords(const QString& group, const QVector<QString>& ids);
+    [[nodiscard]] ScreenshotPinnedWindow::OtherWindowsVisibilityResult
     hideOtherWindowsWithResult(const QString& exceptId);
+    [[nodiscard]] ScreenshotPinnedWindow::OtherWindowsVisibilityResult
+    toggleOtherWindowsForShake(const QString& exceptId);
     void cancelRestore(const QString& id);
     [[nodiscard]] ScreenshotPinnedWindow* liveWindow(const QString& id) const;
     [[nodiscard]] QString
@@ -190,6 +198,9 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
         QDateTime createdUtc;
         bool attentionPending = false;
         quint64 generation = 0;
+        quint64 stackingBatch = 0;
+        ScreenshotPinnedWindow::PresentationPolicy presentationPolicy =
+            ScreenshotPinnedWindow::PresentationPolicy::Activate;
         QPointer<ScreenshotPinnedWindow> window;
     };
     QHash<QString, RestoringPin> m_restoringIds;
@@ -205,6 +216,7 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
     std::function<void(const ScreenshotExportSource&)> m_liveImageEditingRequested;
     std::function<ScreenshotPinnedRecognitionProviders()> m_recognitionProvider;
     snow_shot::presentation::PinnedWindowGroupManager* m_groupManager = nullptr;
+    std::unique_ptr<snow_shot::presentation::PinnedWindowStackingCoordinator> m_ownedStacking;
     std::unique_ptr<snow_shot::presentation::PinnedWindowSelectionController> m_selectionController;
     std::unique_ptr<ScreenshotPinnedWindowPool> m_windowPool;
     std::unique_ptr<ScreenshotPendingPinCoordinator> m_pendingPinCoordinator;

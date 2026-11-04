@@ -2,6 +2,25 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="zh_TW" sourcelanguage="en_US">
     <context>
+        <name>ScreenshotQuickTextAnnotationToolbar</name>
+        <message>
+            <source>Highlight</source>
+            <translation>醒目提示</translation>
+        </message>
+        <message>
+            <source>Strikethrough</source>
+            <translation>刪除線</translation>
+        </message>
+        <message>
+            <source>Underline</source>
+            <translation>底線</translation>
+        </message>
+        <message>
+            <source>Wavy Underline</source>
+            <translation>波浪底線</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotToolPalette</name>
         <message>
             <source>%1 (unavailable)</source>
@@ -388,8 +407,8 @@
             <translation>目前浮水印字型大小</translation>
         </message>
         <message>
-            <source>Cursor data is unavailable for this screenshot.</source>
-            <translation>此螢幕擷取沒有可用的游標資料。</translation>
+            <source>Cursor data is unavailable for this screenshot</source>
+            <translation>此螢幕擷取沒有可用的游標資料</translation>
         </message>
         <message>
             <source>Curve region</source>
@@ -440,8 +459,8 @@
             <translation>刪除標註範本</translation>
         </message>
         <message>
-            <source>Delete annotation template "%1"? This action cannot be undone.</source>
-            <translation>刪除標註範本「%1」？此操作無法復原。</translation>
+            <source>Delete annotation template "%1"? This action cannot be undone</source>
+            <translation>刪除標註範本「%1」？此操作無法復原</translation>
         </message>
         <message>
             <source>Delete selected elements</source>
@@ -1408,8 +1427,8 @@
             <translation>漸寬箭桿</translation>
         </message>
         <message>
-            <source>Tapered shafts support standard, triangle, triangle outline, and indented triangle arrowheads.</source>
-            <translation>漸寬箭桿支援標準、三角形、空心三角形和內凹三角形箭頭。</translation>
+            <source>Tapered shafts support standard, triangle, triangle outline, and indented triangle arrowheads</source>
+            <translation>漸寬箭桿支援標準、三角形、空心三角形和內凹三角形箭頭</translation>
         </message>
         <message>
             <source>Target Language</source>
@@ -1506,6 +1525,10 @@
         <message>
             <source>Thought Bubble</source>
             <translation>思考氣泡</translation>
+        </message>
+        <message>
+            <source>Translation service</source>
+            <translation>翻譯服務</translation>
         </message>
         <message>
             <source>Translation settings</source>
@@ -1644,16 +1667,16 @@
     <context>
         <name>snow_shot::presentation::GlobalCanvasController</name>
         <message>
-            <source>Could not change canvas click-through.</source>
-            <translation>無法切換畫布的滑鼠穿透狀態。</translation>
+            <source>Could not change canvas click-through</source>
+            <translation>無法切換畫布的滑鼠穿透狀態</translation>
         </message>
         <message>
             <source>Could not show the laser pointer: %1</source>
             <translation>無法顯示雷射筆：%1</translation>
         </message>
         <message>
-            <source>The laser pointer is unavailable.</source>
-            <translation>雷射筆無法使用。</translation>
+            <source>The laser pointer is unavailable</source>
+            <translation>雷射筆無法使用</translation>
         </message>
     </context>
 </TS>

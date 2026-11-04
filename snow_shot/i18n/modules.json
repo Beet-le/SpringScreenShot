@@ -70,6 +70,7 @@
     "snow_shot::presentation::DirectCaptureController"
   ],
   "annotation": [
+    "ScreenshotQuickTextAnnotationToolbar",
     "snow_shot::presentation::GlobalCanvasController",
     "ScreenshotToolPalette"
   ],
@@ -107,9 +108,11 @@
     "ScreenshotOriginalImagePreviewWindow",
     "ScreenshotRecognitionWindow",
     "ScreenshotRecognitionSessionController",
+    "ScreenshotTableConversionController",
     "ScreenshotTableEditor"
   ],
   "translation": [
+    "FreeTranslation",
     "ScreenshotTranslationSettingsDialog",
     "TranslationLanguages",
     "TranslationPageWidget",
@@ -125,6 +128,7 @@
     "CollagePdfExport",
     "CollagePdfPageGrid",
     "CollagePdfSettingsWidget",
+    "CollagePdfTemplateWidget",
     "CollageWindow",
     "HistoryEntryWidget",
     "HistoryFileLocation",

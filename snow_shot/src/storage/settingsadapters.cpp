@@ -975,6 +975,14 @@ bool GlobalShortcutSettings::setDisableOnFocusedFullscreenWindow(bool disabled) 
                             disabled);
 }
 
+QString GlobalShortcutSettings::fullscreenWindowFilter() const {
+    return cache().value(QStringLiteral("global_shortcuts/fullscreen_window_filter")).toString();
+}
+
+bool GlobalShortcutSettings::setFullscreenWindowFilter(const QString& filter) const {
+    return cache().setValue(QStringLiteral("global_shortcuts/fullscreen_window_filter"), filter);
+}
+
 bool ScreenshotSettings::shutterSoundNotification() const {
     return cache().value(QStringLiteral("screenshot/shutter_sound_notification")).toBool();
 }
@@ -2712,6 +2720,17 @@ bool PinToScreenSettings::setTextSelectionOnRecognitionResults(const QString& mo
 
 bool PinToScreenSettings::automaticTextRecognition() const {
     return cache().value(QStringLiteral("pin_to_screen/automatic_text_recognition")).toBool();
+}
+
+bool PinToScreenSettings::quickAnnotationForSelectedText() const {
+    return cache()
+        .value(QStringLiteral("pin_to_screen/quick_annotation_for_selected_text"))
+        .toBool();
+}
+
+bool PinToScreenSettings::setQuickAnnotationForSelectedText(bool enabled) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/quick_annotation_for_selected_text"),
+                            enabled);
 }
 
 bool PinToScreenSettings::setAutomaticTextRecognition(bool enabled) const {

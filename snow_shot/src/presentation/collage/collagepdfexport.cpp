@@ -32,16 +32,16 @@
 namespace snow_shot::presentation {
 namespace {
 [[maybe_unused]] constexpr const char* labels[] = {
-    QT_TRANSLATE_NOOP("CollagePdfExport", "Export was canceled."),
-    QT_TRANSLATE_NOOP("CollagePdfExport", "The PDF settings or images are invalid."),
-    QT_TRANSLATE_NOOP("CollagePdfExport", "No output destination was selected."),
-    QT_TRANSLATE_NOOP("CollagePdfExport", "The output folder could not be created."),
+    QT_TRANSLATE_NOOP("CollagePdfExport", "Export was canceled"),
+    QT_TRANSLATE_NOOP("CollagePdfExport", "The PDF settings or images are invalid"),
+    QT_TRANSLATE_NOOP("CollagePdfExport", "No output destination was selected"),
+    QT_TRANSLATE_NOOP("CollagePdfExport", "The output folder could not be created"),
     QT_TRANSLATE_NOOP("CollagePdfExport",
-                      "The selected PDF already exists. Choose another filename."),
+                      "The selected PDF already exists. Choose another filename"),
     QT_TRANSLATE_NOOP("CollagePdfExport", "Page %1 could not be exported: %2"),
     QT_TRANSLATE_NOOP("CollagePdfExport", "The PDF could not be saved: %1"),
-    QT_TRANSLATE_NOOP("CollagePdfExport", "The image could not be prepared for PDF export."),
-    QT_TRANSLATE_NOOP("CollagePdfExport", "There is not enough memory to export the PDF."),
+    QT_TRANSLATE_NOOP("CollagePdfExport", "The image could not be prepared for PDF export"),
+    QT_TRANSLATE_NOOP("CollagePdfExport", "There is not enough memory to export the PDF"),
 };
 
 void setError(CollagePdfExportResult& result, const char* source, QStringList arguments = {}) {
@@ -52,7 +52,7 @@ void setError(CollagePdfExportResult& result, const char* source, QStringList ar
 
 QString preparationError() {
     return QCoreApplication::translate("CollagePdfExport",
-                                       "The image could not be prepared for PDF export.");
+                                       "The image could not be prepared for PDF export");
 }
 
 QString safeImageName(QString label) {
@@ -244,11 +244,12 @@ exportCollagePdf(const QVector<CollageItem>& items, const CollagePdfSettings& se
                  const CollagePdfDestination& destination, std::function<bool()> cancelled,
                  std::function<void(const CollagePdfExportProgress&)> progress) {
     CollagePdfExportResult result;
-    result.totalCount = items.size();
+    const qsizetype pageCount = collagePdfPageCount(items.size(), settings);
+    result.totalCount = pageCount;
     const auto stopped = [&] { return cancelled && cancelled(); };
     const auto stop = [&] {
         result.cancelled = true;
-        setError(result, "Export was canceled.");
+        setError(result, "Export was canceled");
     };
     if (stopped()) {
         stop();
@@ -258,42 +259,56 @@ exportCollagePdf(const QVector<CollageItem>& items, const CollagePdfSettings& se
         std::any_of(items.cbegin(), items.cend(), [](const CollageItem& item) {
             return item.image.isNull() || transformedSize(item).isEmpty();
         })) {
-        setError(result, "The PDF settings or images are invalid.");
+        setError(result, "The PDF settings or images are invalid");
         return result;
     }
     if (destination.path.trimmed().isEmpty()) {
-        setError(result, "No output destination was selected.");
+        setError(result, "No output destination was selected");
         return result;
     }
     const auto reportProgress = [&](qsizetype page, qreal fraction) {
         if (progress)
-            progress({std::min(page, items.size()), items.size(), std::min(page + 1, items.size()),
+            progress({std::min(page, pageCount), pageCount, std::min(page + 1, pageCount),
                       std::clamp(fraction, qreal{0}, qreal{1})});
     };
     qsizetype activePage = 0;
     const screenshot_pdf::PageProducer produce = [&](qsizetype pageIndex,
                                                      screenshot_pdf::Page* page, QString* error) {
         activePage = pageIndex;
-        const auto geometry =
-            calculateCollagePdfPageLayout(transformedSize(items[pageIndex]), settings);
+        const auto geometry = calculateCollagePdfComposedPage(items, settings, pageIndex);
         if (!geometry.isValid()) {
             if (error)
                 *error = geometry.error;
             return false;
         }
         reportProgress(pageIndex, 0);
-        const auto rows = pageRows(items[pageIndex], cancelled, error);
-        if (!rows.isValid())
-            return false;
-        page->payload = screenshot_pdf::prepare(rows, 100, error, true, [&](qreal fraction) {
-            reportProgress(pageIndex, fraction * 0.85);
-        });
         constexpr qreal pointsPerMillimeter = 72.0 / 25.4;
         page->geometry.pagePoints = geometry.pageMillimeters * pointsPerMillimeter;
-        page->geometry.imagePoints =
-            QRectF(geometry.imageMillimeters.topLeft() * pointsPerMillimeter,
-                   geometry.imageMillimeters.size() * pointsPerMillimeter);
-        return bool(page->payload);
+        const auto points = [](const QRectF& rect) {
+            return QRectF(rect.topLeft() * pointsPerMillimeter, rect.size() * pointsPerMillimeter);
+        };
+        qsizetype occupied = 0;
+        for (const auto& cell : geometry.cells)
+            occupied += cell.itemIndex >= 0 ? 1 : 0;
+        qsizetype prepared = 0;
+        for (const auto& cell : geometry.cells) {
+            if (cell.itemIndex < 0)
+                continue;
+            if (stopped())
+                return false;
+            const auto rows = pageRows(items[cell.itemIndex], cancelled, error);
+            if (!rows.isValid())
+                return false;
+            auto payload = screenshot_pdf::prepare(rows, 100, error, true, [&](qreal fraction) {
+                reportProgress(pageIndex, 0.85 * (qreal(prepared) + fraction) / qreal(occupied));
+            });
+            if (!payload)
+                return false;
+            page->layers.append(
+                {std::move(payload), points(cell.imageMillimeters), points(cell.clipMillimeters)});
+            ++prepared;
+        }
+        return !page->layers.isEmpty();
     };
     const auto write = [&](QIODevice* output, qsizetype first, qsizetype count, QString* error) {
         return screenshot_pdf::writeDocument(
@@ -315,9 +330,8 @@ exportCollagePdf(const QVector<CollageItem>& items, const CollagePdfSettings& se
                 {QString::number(activePage + 1), error.isEmpty() ? preparationError() : error});
     };
     try {
-        result.completedPages.reserve(items.size());
-        result.paths.reserve(settings.exportMode == CollagePdfExportMode::Combined ? 1
-                                                                                   : items.size());
+        result.completedPages.reserve(pageCount);
+        result.paths.reserve(settings.exportMode == CollagePdfExportMode::Combined ? 1 : pageCount);
         auto writerWorking = collage_detail::reserveWorking(32 * 1024 * 1024, &result.error);
         if (!writerWorking)
             return result;
@@ -330,12 +344,12 @@ exportCollagePdf(const QVector<CollageItem>& items, const CollagePdfSettings& se
             if (!hasPdfSuffix)
                 path += QStringLiteral(".pdf");
             if (QFileInfo::exists(path) && !overwriteAllowed) {
-                setError(result, "The selected PDF already exists. Choose another filename.");
+                setError(result, "The selected PDF already exists. Choose another filename");
                 return result;
             }
             const QDir directory(QFileInfo(path).absolutePath());
             if (!QDir().mkpath(directory.absolutePath())) {
-                setError(result, "The output folder could not be created.");
+                setError(result, "The output folder could not be created");
                 return result;
             }
             QString error;
@@ -346,7 +360,7 @@ exportCollagePdf(const QVector<CollageItem>& items, const CollagePdfSettings& se
                     setError(result, "The PDF could not be saved: %1", {file.errorString()});
                     return result;
                 }
-                if (!write(&file, 0, items.size(), &error) || stopped()) {
+                if (!write(&file, 0, pageCount, &error) || stopped()) {
                     file.cancelWriting();
                     failure(error);
                     return result;
@@ -369,7 +383,7 @@ exportCollagePdf(const QVector<CollageItem>& items, const CollagePdfSettings& se
                     setError(result, "The PDF could not be saved: %1", {file.errorString()});
                     return result;
                 }
-                if (!write(&file, 0, items.size(), &error) || !file.flush() || stopped()) {
+                if (!write(&file, 0, pageCount, &error) || !file.flush() || stopped()) {
                     failure(error.isEmpty() ? file.errorString() : error);
                     return result;
                 }
@@ -381,16 +395,16 @@ exportCollagePdf(const QVector<CollageItem>& items, const CollagePdfSettings& se
                 }
             }
             result.paths.append(path);
-            for (qsizetype index = 0; index < items.size(); ++index)
+            for (qsizetype index = 0; index < pageCount; ++index)
                 result.completedPages.append(index + 1);
         } else {
             const QDir directory(QFileInfo(destination.path).absoluteFilePath());
             if (!QDir().mkpath(directory.absolutePath()) || !QFileInfo(directory.path()).isDir()) {
-                setError(result, "The output folder could not be created.");
+                setError(result, "The output folder could not be created");
                 return result;
             }
-            const int digits = std::max(3, static_cast<int>(QString::number(items.size()).size()));
-            for (qsizetype index = 0; index < items.size(); ++index) {
+            const int digits = std::max(3, static_cast<int>(QString::number(pageCount).size()));
+            for (qsizetype index = 0; index < pageCount; ++index) {
                 activePage = index;
                 if (stopped()) {
                     stop();
@@ -412,9 +426,12 @@ exportCollagePdf(const QVector<CollageItem>& items, const CollagePdfSettings& se
                     return result;
                 }
                 file.close();
-                const QString base = QStringLiteral("%1_%2")
-                                         .arg(index + 1, digits, 10, u'0')
-                                         .arg(safeImageName(items[index].label));
+                const QString base =
+                    QStringLiteral("%1_%2")
+                        .arg(index + 1, digits, 10, u'0')
+                        .arg(settings.stitchingMethod == CollagePdfStitchingMethod::TemplateBased
+                                 ? QStringLiteral("page")
+                                 : safeImageName(items[index].label));
                 const QString path =
                     publishUnique(file.fileName(), directory, base, cancelled, &error);
                 if (path.isEmpty()) {
@@ -424,13 +441,13 @@ exportCollagePdf(const QVector<CollageItem>& items, const CollagePdfSettings& se
                 result.completedPages.append(index + 1);
                 result.paths.append(path);
                 if (progress)
-                    progress({result.completedPages.size(), items.size(), index + 1, 0});
+                    progress({result.completedPages.size(), pageCount, index + 1, 0});
             }
         }
         if (progress)
-            progress({items.size(), items.size(), items.size(), 1});
+            progress({pageCount, pageCount, pageCount, 1});
     } catch (const std::bad_alloc&) {
-        setError(result, "There is not enough memory to export the PDF.");
+        setError(result, "There is not enough memory to export the PDF");
     }
     return result;
 }

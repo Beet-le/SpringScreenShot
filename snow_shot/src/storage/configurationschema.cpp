@@ -271,8 +271,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("api_configuration/custom_models"), QJsonArray(),
      ConfigurationValueKind::Structured},
 #endif
-    {QStringLiteral("storage/schema_version"), 4, ConfigurationValueKind::Integer,
-     ConfigurationIntegerRange{4, 4, 1}},
+    {QStringLiteral("storage/schema_version"), 5, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{5, 5, 1}},
     {QStringLiteral("interface/theme_mode"),
      QStringLiteral("system"),
      ConfigurationValueKind::String,
@@ -405,7 +405,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("zh-Hant")}},
     {QStringLiteral("screenshot_translation/language_detection_confidence_threshold"), 60,
      ConfigurationValueKind::Integer, ConfigurationIntegerRange{30, 100}},
-    {QStringLiteral("screenshot_translation/model"), QString(), ConfigurationValueKind::String},
+    {QStringLiteral("screenshot_translation/model"), QStringLiteral("free-translation"),
+     ConfigurationValueKind::String},
 #endif
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
     {QStringLiteral("screenshot_conversion/vision_model"), QString(),
@@ -653,6 +654,11 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      2},
     {QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window"), false,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("global_shortcuts/fullscreen_window_filter"),
+     QStringLiteral("game_windows"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("all_windows"), QStringLiteral("game_windows")}},
     {QStringLiteral("global_mouse/screenshot_copy"),
 #ifdef Q_OS_MACOS
      QJsonObject(),
@@ -783,7 +789,11 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      {QStringLiteral("ultrafast"), QStringLiteral("veryfast"), QStringLiteral("medium"),
       QStringLiteral("veryslow"), QStringLiteral("placebo")}},
     {QStringLiteral("screen_recording/api_mode"),
+#ifdef Q_OS_WIN
+     QStringLiteral("wgc"),
+#else
      QStringLiteral("dxgi"),
+#endif
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("dxgi"), QStringLiteral("wgc"), QStringLiteral("gdi")}},
@@ -1624,6 +1634,10 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("only_when_displayed"), QStringLiteral("always")}},
+    {QStringLiteral("pin_to_screen/quick_annotation_for_selected_text"), true,
+     ConfigurationValueKind::Boolean},
+    {QStringLiteral("pin_to_screen/quick_text_annotation_styles"), QJsonObject(),
+     ConfigurationValueKind::Structured},
     {QStringLiteral("pin_to_screen/duplicate_content_action"),
      QStringLiteral("shake_window"),
      ConfigurationValueKind::String,
@@ -1651,6 +1665,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {QStringLiteral("none"), QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
       QStringLiteral("screenshot_copy"), QStringLiteral("screenshot_fixed"),
+      QStringLiteral("open_capture_history"), QStringLiteral("open_pin_to_screen_management"),
       QStringLiteral("open_function_settings")}},
     {QStringLiteral("tray/middle_click_action"),
      QStringLiteral("screenshot_fixed"),
@@ -1658,6 +1673,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {QStringLiteral("none"), QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
       QStringLiteral("screenshot_copy"), QStringLiteral("screenshot_fixed"),
+      QStringLiteral("open_capture_history"), QStringLiteral("open_pin_to_screen_management"),
       QStringLiteral("open_function_settings")}},
     {QStringLiteral("tray/menu_options"),
      QJsonArray{
@@ -1840,6 +1856,20 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationIntegerRange{0, std::numeric_limits<int>::max(), 1}},
     {QStringLiteral("collage/background_color"), QStringLiteral("#FFFFFFFF"),
      ConfigurationValueKind::String},
+    {QStringLiteral("collage/pdf_stitching_method"),
+     QStringLiteral("page_based"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("page_based"), QStringLiteral("template_based")}},
+    {QStringLiteral("collage/pdf_template_type"),
+     QStringLiteral("two_images"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("two_images"), QStringLiteral("id_card"), QStringLiteral("three_images"),
+      QStringLiteral("four_images"), QStringLiteral("five_images"), QStringLiteral("six_images"),
+      QStringLiteral("seven_images"), QStringLiteral("eight_images"),
+      QStringLiteral("nine_images")}},
+    {QStringLiteral("collage/pdf_image_spacing_mm"), 5.0, ConfigurationValueKind::Structured},
     {QStringLiteral("collage/pdf_paper_size"),
      QStringLiteral("a4"),
      ConfigurationValueKind::String,
@@ -2854,7 +2884,8 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
         return {normalized, true, normalized != value};
     }
     if (key.startsWith(QStringLiteral("collage/pdf_custom_")) ||
-        key.startsWith(QStringLiteral("collage/pdf_margin_"))) {
+        key.startsWith(QStringLiteral("collage/pdf_margin_")) ||
+        key == QStringLiteral("collage/pdf_image_spacing_mm")) {
         if (!value.isDouble() || !std::isfinite(value.toDouble()))
             return {};
         const bool customDimension = key.startsWith(QStringLiteral("collage/pdf_custom_"));

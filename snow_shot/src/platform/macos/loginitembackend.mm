@@ -29,11 +29,11 @@ QString signatureError() {
     return app::edition::isMini
                ? text(QT_TRANSLATE_NOOP("LoginItemService",
                                         "%1 needs a valid code signature to use launch at login. "
-                                        "Reinstall the signed app."))
+                                        "Reinstall the signed app"))
                      .arg(app::edition::productName())
                : text(QT_TRANSLATE_NOOP("LoginItemService",
                                         "Snow Shot needs a valid code signature to use launch at "
-                                        "login. Reinstall the signed app."));
+                                        "login. Reinstall the signed app"));
 }
 LoginItemSnapshot query() {
     @autoreleasepool {
@@ -51,11 +51,11 @@ LoginItemSnapshot query() {
                     (app::edition::isMini
                          ? text(QT_TRANSLATE_NOOP("LoginItemService",
                                                   "Move the signed %1 app to /Applications or "
-                                                  "~/Applications to use launch at login."))
+                                                  "~/Applications to use launch at login"))
                                .arg(app::edition::productName())
                          : text(QT_TRANSLATE_NOOP("LoginItemService",
                                                   "Move the signed Snow Shot app to /Applications "
-                                                  "or ~/Applications to use launch at login.")))};
+                                                  "or ~/Applications to use launch at login")))};
         }
         // Registration enforces signing. Routine status refreshes must not revalidate
         // the entire bundle on the GUI thread whenever a settings page is shown.
@@ -67,17 +67,11 @@ LoginItemSnapshot query() {
         case SMAppServiceStatusRequiresApproval:
             return {LoginItemStatus::ApprovalRequired, {}};
         case SMAppServiceStatusNotFound:
-            break;
+            // macOS 26 reports notFound for a main app that has no login item
+            // record yet. Registration is the authoritative eligibility check.
+            return {LoginItemStatus::Unregistered, {}};
         }
-        return {LoginItemStatus::Unavailable,
-                (app::edition::isMini
-                     ? text(QT_TRANSLATE_NOOP("LoginItemService",
-                                              "macOS could not find %1's login item. Reinstall the "
-                                              "app in Applications."))
-                           .arg(app::edition::productName())
-                     : text(QT_TRANSLATE_NOOP("LoginItemService",
-                                              "macOS could not find Snow Shot's login item. "
-                                              "Reinstall the app in Applications.")))};
+        return {LoginItemStatus::Unavailable, {}};
     }
 }
 } // namespace

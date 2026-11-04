@@ -31,12 +31,15 @@
 class QUrl;
 class QMimeData;
 class QTextDocument;
+class QTimer;
 class QWidget;
 class ScreenshotOcrPresentation;
 class ScreenshotOcrTextEditingSession;
 class ScreenshotRecognitionWindow;
 class ScreenshotImageConversionController;
 class ScreenshotTableEditingSession;
+class ScreenshotTableConversionController;
+class ScreenshotTableDocument;
 struct ScreenshotTableCommandState;
 
 namespace adqt::widgets {
@@ -98,6 +101,8 @@ struct ScreenshotRecognitionSessionActions {
     std::function<QImage()> renderTranslationImage;
     // An empty override opens the workbook with the system's default application.
     std::function<bool(const QUrl&)> openSpreadsheetUrl{};
+    std::function<void(const QVector<SnowShotChatModel>&, const QString&, bool)>
+        setTextTranslationServices{};
 };
 
 class ScreenshotRecognitionSessionController final : public QObject {
@@ -127,6 +132,8 @@ class ScreenshotRecognitionSessionController final : public QObject {
                       ScreenshotQrRecognitionPort* qrRecognition,
                       SnowShotApiClient* tableRecognition);
     void seedRecognitionResults(ScreenshotRecognitionResults results);
+    // A lightweight view of the current target's original OCR, without serializing other modes.
+    [[nodiscard]] std::optional<ScreenshotOcrRecognitionResult> cachedTextRecognitionResult() const;
     [[nodiscard]] ScreenshotRecognitionResults cachedRecognitionResults() const;
     [[nodiscard]] ScreenshotRecognitionResults recognitionResultsSnapshot() const;
     [[nodiscard]] bool hasTarget() const;
@@ -167,6 +174,9 @@ class ScreenshotRecognitionSessionController final : public QObject {
     void applyTextFormatting(const QString& value);
     void applyTextPunctuation(const QString& value);
     void applyTextTargetLanguage(const QString& language);
+    // Catalog discovery belongs to the selector, independently of translation job readiness.
+    void requestTextTranslationServices();
+    void applyTextTranslationService(const QString& service);
     [[nodiscard]] bool editing() const;
     [[nodiscard]] bool translating() const;
     [[nodiscard]] bool originalImageTranslationActive() const;
@@ -281,6 +291,10 @@ class ScreenshotRecognitionSessionController final : public QObject {
     void startTableRecognition();
     void startQrRecognition();
     void startLatexRecognition();
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    void flushLatexStream();
+    void clearLatexStream();
+#endif
     void loadRecognitionModels(bool refresh = false);
     bool migrateRecognitionModelPreferences();
     bool updateRecognitionModels() const;
@@ -298,9 +312,11 @@ class ScreenshotRecognitionSessionController final : public QObject {
     void handleLatexOutput(quint64 generation, const QString& key, SnowShotLatexResult result);
     void handleTextOutput(quint64 generation, const QString& key,
                           ScreenshotOcrRecognitionResult output);
-    void handleTableOutput(quint64 generation, const QString& key, SnowShotTableResult result);
+    void handleTableOutput(quint64 generation, const QString& key, SnowShotTableResult result,
+                           std::shared_ptr<ScreenshotTableDocument> prepared = {});
     void materializeTableEntry(quint64 generation, const QString& key,
-                               ScreenshotTableRecognitionEntry entry, bool allowSynchronous);
+                               ScreenshotTableRecognitionEntry entry, bool allowSynchronous,
+                               std::shared_ptr<ScreenshotTableDocument> prepared = {});
     void handleQrOutput(quint64 generation, const QString& key,
                         ScreenshotQrRecognitionResult result);
     void ensureContent();
@@ -370,12 +386,22 @@ class ScreenshotRecognitionSessionController final : public QObject {
     QHash<QString, QString> m_tableEntryTargets;
     QString m_tableModelSelection;
     bool m_tableParsing = false;
+    ScreenshotTableConversionController* m_tableConversion = nullptr;
     std::shared_ptr<std::atomic_bool> m_tableParsingCancellation;
 #endif
 #if SNOW_SHOT_ENABLE_QR_RECOGNITION
     QHash<QString, QStringList> m_qrCache;
 #endif
 #if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    struct LatexStreamState {
+        QString key;
+        quint64 generation = 0;
+        QString rawSource;
+        QString source;
+        std::shared_ptr<QTextDocument> document;
+    };
+    std::shared_ptr<LatexStreamState> m_latexStream;
+    QTimer* m_latexStreamTimer = nullptr;
     QHash<QString, SnowShotLatexResult> m_latexResults;
     QHash<QString, std::shared_ptr<ScreenshotOcrTextEditingSession>> m_latexCache;
     QHash<QString, ScreenshotLatexRecognitionEntry> m_latexEntries;

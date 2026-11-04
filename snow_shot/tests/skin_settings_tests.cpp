@@ -86,7 +86,7 @@ class SkinStatusBackend final : public settings::SettingsBackend {
             return QCoreApplication::translate("MainWindowSkin", "Loading skin...");
         case Status::Error:
             return QCoreApplication::translate("MainWindowSkin",
-                                               "The skin image could not be opened.");
+                                               "The skin image could not be opened");
         }
         return {};
     }
@@ -208,8 +208,9 @@ class SkinStatusBackend final : public settings::SettingsBackend {
     storage::StorageStatus storageStatus() const override {
         return m_backend.storageStatus();
     }
-    bool resetSection(settings::SettingsSectionReset reset) override {
-        return m_backend.resetSection(reset);
+    settings::SettingsResetResult
+    resetSectionWithResults(settings::SettingsSectionReset reset) override {
+        return m_backend.resetSectionWithResults(reset);
     }
 
   private:

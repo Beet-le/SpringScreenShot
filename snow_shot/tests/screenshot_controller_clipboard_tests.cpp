@@ -6,6 +6,8 @@
 #include "snow_shot/presentation/languagemanager.h"
 #include "snow_shot/presentation/screenshotoverlaywindow.h"
 #include "snow_shot/presentation/screenshotcontroller.h"
+#include "snow_shot/presentation/screenshotocrrecognitionservice.h"
+#include "snow_shot/presentation/screenshotrecognitionwindow.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/screenshotselectionparams.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
@@ -14,6 +16,7 @@
 #include "snow_shot/presentation/imagesplitwindow.h"
 #include "snow_shot/presentation/imageeditingwindow.h"
 #include "snow_shot/presentation/screenshottoolpalette.h"
+#include "snow_shot/presentation/screenshottoolbarcommands.h"
 #include "widgets/modal.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/capturehistoryrepository.h"
@@ -30,12 +33,15 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QFileDialog>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QJsonArray>
 #include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 #include <QUrl>
 
 #ifdef Q_OS_WIN
@@ -90,6 +96,150 @@ QImage fixture() {
     image.setPixelColor(0, 0, QColor(201, 19, 79, 43));
     image.setColorSpace(QColorSpace::SRgb);
     return image;
+}
+
+ScreenshotOcrRecognitionService::Options isolatedRecognitionOptions(const QString& directory) {
+    ScreenshotOcrRecognitionService::Options options;
+    // Explicit local paths keep an unexpected recognition request away from downloads.
+    options.processPath = QDir(directory).filePath(QStringLiteral("missing-ocr-worker.exe"));
+    options.detectorModelPath = QDir(directory).filePath(QStringLiteral("missing-detector.onnx"));
+    options.recognizerModelPath =
+        QDir(directory).filePath(QStringLiteral("missing-recognizer.onnx"));
+    options.dictionaryPath = QDir(directory).filePath(QStringLiteral("missing-dictionary.txt"));
+    return options;
+}
+
+void queuedRecognitionDoesNotOverrideReselection(const QString& directory) {
+    ScreenshotOcrRecognitionService recognition(isolatedRecognitionOptions(directory));
+    ScreenshotSelectionParams selection;
+    selection.selection = QRect(10, 10, 60, 40);
+
+    for (int scenario = 0; scenario < 4; ++scenario) {
+        ScreenshotController controller(nullptr, nullptr, &recognition);
+        ScreenshotControllerTestAccess::prepareSelection(controller, fixture(), selection);
+        QString error;
+        require(controller.mcpSetTool(QStringLiteral("ocr"), &error),
+                "queue recognition activation after selection confirmation");
+        require(controller.mcpState().value(QStringLiteral("active_tool")).toString() ==
+                    QStringLiteral("move"),
+                "recognition restoration waits until the input event finishes");
+        if (scenario == 0) {
+            ScreenshotControllerTestAccess::prepareSelection(controller, fixture(), selection);
+        } else if (scenario == 1) {
+            controller.mcpCancelCapture();
+            ScreenshotControllerTestAccess::prepareSelection(controller, fixture(), selection);
+        } else {
+            if (scenario == 3) {
+                require(controller.mcpSetTool(QStringLiteral("table"), &error),
+                        "a later recognition command replaces the queued tool");
+            }
+            require(controller.mcpSetTool(QStringLiteral("move"), &error),
+                    "an explicit Edit selection command supersedes queued recognition");
+        }
+        bool dispatched = false;
+        QTimer::singleShot(0, &controller, [&] { dispatched = true; });
+        waitUntil([&] { return dispatched; }, "dispatch queued recognition restoration");
+        require(controller.mcpState().value(QStringLiteral("active_tool")).toString() ==
+                    QStringLiteral("move"),
+                "stale recognition restoration cannot override selection or explicit tool changes");
+        require(!recognition.storageBusy() && recognition.liveWorkerCount() == 0,
+                "discarded recognition restoration must not request model work");
+    }
+}
+
+QPointer<ScreenshotRecognitionWindow> visibleRecognitionWindow() {
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        if (auto* window = qobject_cast<ScreenshotRecognitionWindow*>(widget);
+            window != nullptr && window->isVisible()) {
+            return window;
+        }
+    }
+    return {};
+}
+
+void sendMouse(QWidget& target, QEvent::Type type, const QPointF& point, Qt::MouseButton button,
+               Qt::MouseButtons buttons) {
+    QMouseEvent event(type, point, target.mapToGlobal(point), button, buttons, Qt::NoModifier);
+    QApplication::sendEvent(&target, &event);
+}
+
+void recognitionWindowsFollowSelectionTransitions(const QString& directory) {
+    const snow_shot::storage::ScreenshotSettings settings;
+    require(settings.setAutoRecognizeQrCode(false) &&
+                settings.setAutoExecuteAfterTextRecognition(QStringLiteral("no_action")),
+            "recognition transition tests must not run automatic follow-up commands");
+    for (const QString& tool : {QStringLiteral("ocr"), QStringLiteral("text_translation")}) {
+        for (const bool resize : {false, true}) {
+            ScreenshotOcrRecognitionService recognition(isolatedRecognitionOptions(directory));
+            ScreenshotController controller(nullptr, nullptr, &recognition);
+            QImage image(240, 180, QImage::Format_RGB32);
+            image.fill(Qt::white);
+            ScreenshotSelectionParams params;
+            params.selection = QRect(40, 40, 120, 100);
+            ScreenshotControllerTestAccess::prepareSelection(controller, image, params);
+            auto* overlay = ScreenshotControllerTestAccess::presentSelection(controller);
+            require(overlay != nullptr && overlay->isVisible(), "present the capture overlay");
+            QString error;
+            const auto activeTool = [&] {
+                return controller.mcpState().value(QStringLiteral("active_tool")).toString();
+            };
+            require(controller.mcpSetTool(tool, &error), "activate recognition for selection");
+            waitUntil([&] { return activeTool() == tool && visibleRecognitionWindow(); },
+                      "recognition must present an input-bearing window");
+            const QPointer<ScreenshotRecognitionWindow> original = visibleRecognitionWindow();
+            if (resize) {
+                const QPointF edge(original->width() - 1, original->height() / 2);
+                sendMouse(*original, QEvent::MouseButtonPress, edge, Qt::LeftButton,
+                          Qt::LeftButton);
+                require(original && original->isVisible() && activeTool() == QStringLiteral("move"),
+                        "a resize must retain its recognition event receiver until release");
+                sendMouse(*original, QEvent::MouseMove, edge + QPointF(20, 0), Qt::NoButton,
+                          Qt::LeftButton);
+                require(original && original->isVisible(),
+                        "the recognition resize receiver must survive pointer movement");
+                sendMouse(*original, QEvent::MouseButtonRelease, edge + QPointF(20, 0),
+                          Qt::LeftButton, Qt::NoButton);
+            } else {
+                auto* canvas = overlay->canvas();
+                sendMouse(*canvas, QEvent::MouseButtonPress, {200, 160}, Qt::RightButton,
+                          Qt::RightButton);
+                sendMouse(*canvas, QEvent::MouseButtonRelease, {200, 160}, Qt::RightButton,
+                          Qt::NoButton);
+                require(!original || !original->isVisible(),
+                        "reselection must retire the old recognition input surface");
+                require(activeTool() == QStringLiteral("move") &&
+                            controller.mcpState()
+                                    .value(QStringLiteral("selection"))
+                                    .toObject()
+                                    .value(QStringLiteral("bounds"))
+                                    .toArray() == QJsonArray{0, 0, 0, 0},
+                        "outside right click must enter empty selection mode");
+                QCoreApplication::processEvents();
+                QWidget* receiver = QApplication::widgetAt(canvas->mapToGlobal(QPoint(60, 60)));
+                require(receiver != nullptr && receiver->window() == overlay,
+                        "the previous capture area must receive reselection input");
+                sendMouse(*canvas, QEvent::MouseButtonPress, {60, 60}, Qt::LeftButton,
+                          Qt::LeftButton);
+                sendMouse(*canvas, QEvent::MouseMove, {99, 89}, Qt::NoButton, Qt::LeftButton);
+                sendMouse(*canvas, QEvent::MouseButtonRelease, {99, 89}, Qt::LeftButton,
+                          Qt::NoButton);
+            }
+            waitUntil([&] { return activeTool() == tool && visibleRecognitionWindow(); },
+                      "selection completion must restore recognition on its new bounds");
+            const auto bounds = controller.mcpState()
+                                    .value(QStringLiteral("selection"))
+                                    .toObject()
+                                    .value(QStringLiteral("bounds"))
+                                    .toArray();
+            require(resize ? bounds.at(2).toInt() > 120 : bounds == QJsonArray{60, 60, 40, 30},
+                    "the replacement selection must keep the completed gesture geometry");
+            const QPointer<ScreenshotRecognitionWindow> restored = visibleRecognitionWindow();
+            require(controller.mcpSetTool(QStringLiteral("move"), &error) &&
+                        (!restored || !restored->isVisible()) && !visibleRecognitionWindow(),
+                    "an explicit Move command must retire recognition rather than suspend it");
+            controller.mcpCancelCapture();
+        }
+    }
 }
 
 std::pair<QImage, QString> captureClipboardOutput() {
@@ -350,6 +500,123 @@ void capturePinCopiesOnlyWhenEnabled() {
 }
 } // namespace
 
+#ifdef Q_OS_MACOS
+namespace {
+void screenshotSessionFocusRouting() {
+    using namespace snow_shot::platform::macos;
+    struct Target final : ScreenshotFocusTarget {
+        Target(ScreenshotController& controller, int& restores, int& live)
+            : controller(controller), restores(restores), live(live) {
+            ++this->live;
+        }
+        ~Target() override {
+            --live;
+        }
+        bool canRestore() const override {
+            return true;
+        }
+        void restore() override {
+            require(controller.captureAvailable(), "focus must return only after session teardown");
+            ++restores;
+        }
+        ScreenshotController& controller;
+        int& restores;
+        int& live;
+    };
+    QTemporaryDir output;
+    require(output.isValid(), "focus routing needs isolated output storage");
+    const snow_shot::storage::ScreenshotSettings settings;
+    require(settings.setImageSaveDirectory(output.path()) &&
+                settings.setLastManualSaveDirectory(output.path()) &&
+                settings.setSaveAsFileDialog(QStringLiteral("system")) &&
+                settings.setShowSaveResult(false) && settings.setCopyAfterPinningToScreen(false),
+            "focus routing must isolate save and pin settings");
+    QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+    for (int action = 0; action < 8; ++action) {
+        int restores = 0;
+        int live = 0;
+        {
+            ScreenshotController controller;
+            ScreenshotSelectionParams selection;
+            selection.selection = QRect(0, 0, 100, 60);
+            ScreenshotControllerTestAccess::prepareSelection(controller, fixture(), selection);
+            ScreenshotControllerTestAccess::installSessionFocus(
+                controller, [&] { return std::make_unique<Target>(controller, restores, live); });
+            auto& commands = ScreenshotControllerTestAccess::commands(controller);
+            switch (action) {
+            case 0:
+                controller.mcpCancelCapture();
+                controller.mcpCancelCapture();
+                break;
+            case 1:
+                controller.mcpCopySelectionToClipboard();
+                break;
+            case 2:
+                commands.quickSaveSelection();
+                break;
+            case 3:
+            case 4: {
+                bool dialogHandled = false;
+                QTimer closeDialog;
+                closeDialog.setInterval(10);
+                QObject::connect(&closeDialog, &QTimer::timeout, &controller, [&] {
+                    for (auto* widget : QApplication::topLevelWidgets()) {
+                        auto* dialog = qobject_cast<QFileDialog*>(widget);
+                        if (!dialog || !dialog->isVisible())
+                            continue;
+                        closeDialog.stop();
+                        dialogHandled = true;
+                        if (action == 3) {
+                            dialog->selectFile(output.filePath(QStringLiteral("manual.png")));
+                            QMetaObject::invokeMethod(dialog, "accept", Qt::QueuedConnection);
+                        } else {
+                            dialog->reject();
+                        }
+                        return;
+                    }
+                });
+                closeDialog.start();
+                commands.saveSelectionToFile();
+                require(dialogHandled, "manual save must exercise the real file dialog");
+                if (action == 4) {
+                    QCoreApplication::processEvents();
+                    require(restores == 0 && live == 1 && !controller.captureAvailable(),
+                            "cancelling Save must retain the session and its original target");
+                    controller.mcpCancelCapture();
+                }
+                break;
+            }
+            case 5:
+                controller.mcpPinSelectionToScreen();
+                break;
+            case 6:
+                commands.startScreenRecording();
+                break;
+            case 7:
+                break; // Destruction of an active session must not reactivate another app.
+            }
+            if (action < 7) {
+                waitUntil([&] { return live == 0; },
+                          "terminal action must release its focus target");
+                require(restores == (action < 5 ? 1 : 0),
+                        "copy/save/cancel restore focus; pin/recording preserve destination focus");
+                waitUntil([&] { return !ScreenshotControllerTestAccess::exportActive(controller); },
+                          "focus fixture export must settle");
+                QCoreApplication::processEvents();
+                require(restores == (action < 5 ? 1 : 0),
+                        "late export completion must not restore focus again");
+            }
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QCoreApplication::processEvents();
+        require(live == 0 && (action != 7 || restores == 0),
+                "shutdown must discard the target and pending restoration");
+        closePins();
+    }
+}
+} // namespace
+#endif
+
 int runScreenshotControllerClipboardTests(int argc, char** argv) {
     QStandardPaths::setTestModeEnabled(true);
     QApplication application(argc, argv);
@@ -366,6 +633,19 @@ int runScreenshotControllerClipboardTests(int argc, char** argv) {
                 settings.setShowBorderByDefault(true) && settings.setShowShadowByDefault(false),
             "clipboard controller settings must be isolated and deterministic");
     static_cast<void>(snow_shot::presentation::styles::ThemeManager::instance());
+    if (application.arguments().contains(QStringLiteral("--controller-reselection-tests"))) {
+        const auto shutdown = qScopeGuard([&] { storage.shutdown(); });
+        queuedRecognitionDoesNotOverrideReselection(directory.path());
+        recognitionWindowsFollowSelectionTransitions(directory.path());
+        return EXIT_SUCCESS;
+    }
+#ifdef Q_OS_MACOS
+    if (application.arguments().contains(QStringLiteral("--session-focus-tests"))) {
+        const auto shutdown = qScopeGuard([&] { storage.shutdown(); });
+        screenshotSessionFocusRouting();
+        return 0;
+    }
+#endif
     if (application.arguments().contains(QStringLiteral("--shell-file-startup-tests"))) {
         const auto shutdown = qScopeGuard([&] { storage.shutdown(); });
         auto& configuration = storage.configuration();

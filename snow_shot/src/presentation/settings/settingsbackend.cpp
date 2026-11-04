@@ -255,7 +255,7 @@ applyNativeStartupSettings(bool enabled, bool elevated,
     if (!result.success && !save(restoredEnabled, restoredElevated)) {
         auto failed = result;
         failed.error += QCoreApplication::translate(
-            "AdministratorLaunch", " Settings recovery failed. Retry before closing Snow Shot.");
+            "AdministratorLaunch", " Settings recovery failed. Retry before closing Snow Shot");
         return failed;
     }
     return result;
@@ -452,6 +452,8 @@ bool BuiltInSettingsBackend::selectEnabled(SettingsSelectBinding binding) const 
 
 QVariant BuiltInSettingsBackend::selectValue(SettingsSelectBinding binding) const {
     switch (binding) {
+    case SettingsSelectBinding::FullscreenWindowFilter:
+        return storage::GlobalShortcutSettings().fullscreenWindowFilter();
     case SettingsSelectBinding::TranslationSourceLanguage:
     case SettingsSelectBinding::TranslationPrimaryTargetLanguage:
     case SettingsSelectBinding::TranslationSecondaryTargetLanguage:
@@ -878,6 +880,8 @@ bool BuiltInSettingsBackend::applySelectValue(SettingsSelectBinding binding,
         return storage::TraySettings().setLeftClickAction(value.toString());
     case SettingsSelectBinding::TrayMiddleClickAction:
         return storage::TraySettings().setMiddleClickAction(value.toString());
+    case SettingsSelectBinding::FullscreenWindowFilter:
+        return storage::GlobalShortcutSettings().setFullscreenWindowFilter(value.toString());
     }
     return false;
 }
@@ -953,6 +957,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::TextRecognitionSettings().showTextHighlighting();
     case SettingsSwitchBinding::PinAutomaticTextRecognition:
         return storage::PinToScreenSettings().automaticTextRecognition();
+    case SettingsSwitchBinding::PinQuickAnnotationForSelectedText:
+        return storage::PinToScreenSettings().quickAnnotationForSelectedText();
     case SettingsSwitchBinding::PinAutoResizeWindow:
         return storage::PinToScreenSettings().autoResizeWindow();
     case SettingsSwitchBinding::PinShowWindowButtons:
@@ -1078,7 +1084,7 @@ bool BuiltInSettingsBackend::applyContextMenuSettings(const QJsonValue& mode,
             result.error +=
                 QLatin1Char(' ') +
                 QCoreApplication::translate(
-                    "SettingsBackend", "Could not restore the Windows context menu preference.");
+                    "SettingsBackend", "Could not restore the Windows context menu preference");
         }
         emit operationMessage(result.error, false);
     }
@@ -1133,6 +1139,9 @@ QString BuiltInSettingsBackend::switchHint(SettingsSwitchBinding binding) const 
         .launchHint;
 }
 bool BuiltInSettingsBackend::switchEnabled(SettingsSwitchBinding binding) const {
+    if (binding == SettingsSwitchBinding::PinQuickAnnotationForSelectedText)
+        return storage::PinToScreenSettings().textSelectionOnRecognitionResults() ==
+               QStringLiteral("always");
     if (binding == SettingsSwitchBinding::ScreenshotShowSaveResult)
         return storage::ScreenshotSettings().saveAsFileDialog() == QStringLiteral("snow_shot");
     if (app::distribution::isStoreManaged()) {
@@ -1284,6 +1293,10 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     }
     if (binding == SettingsSwitchBinding::PinAutomaticTextRecognition) {
         return storage::PinToScreenSettings().setAutomaticTextRecognition(value);
+    }
+    if (binding == SettingsSwitchBinding::PinQuickAnnotationForSelectedText) {
+        return switchEnabled(binding) &&
+               storage::PinToScreenSettings().setQuickAnnotationForSelectedText(value);
     }
     if (binding == SettingsSwitchBinding::PinAutoResizeWindow) {
         return storage::PinToScreenSettings().setAutoResizeWindow(value);
@@ -1441,6 +1454,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::ShowOriginalImagePreview:
     case SettingsSwitchBinding::ShowTextHighlighting:
     case SettingsSwitchBinding::PinAutomaticTextRecognition:
+    case SettingsSwitchBinding::PinQuickAnnotationForSelectedText:
     case SettingsSwitchBinding::PinAutoResizeWindow:
     case SettingsSwitchBinding::PinShowWindowButtons:
     case SettingsSwitchBinding::PinShakeWindowToHideOthers:
@@ -2219,7 +2233,7 @@ bool BuiltInSettingsBackend::triggerAction(SettingsActionBinding binding, const 
                 result = future.get();
             } catch (...) {
                 result.error = QCoreApplication::translate(
-                    "DiagnosticsService", "The diagnostics writer stopped unexpectedly.");
+                    "DiagnosticsService", "The diagnostics writer stopped unexpectedly");
             }
             if (!result.success) {
                 m_copyLogBusy = false;
@@ -2241,9 +2255,9 @@ bool BuiltInSettingsBackend::triggerAction(SettingsActionBinding binding, const 
             if (!handle.isValid()) {
                 m_copyLogBusy = false;
                 emit synchronized();
-                emit actionFinished(binding, false,
-                                    QCoreApplication::translate("SettingsBackend",
-                                                                "The clipboard is unavailable."));
+                emit actionFinished(
+                    binding, false,
+                    QCoreApplication::translate("SettingsBackend", "The clipboard is unavailable"));
             }
         });
         poll->start();
@@ -2311,7 +2325,7 @@ bool BuiltInSettingsBackend::triggerAction(SettingsActionBinding binding, const 
             m_configurationBusy = false;
             emit synchronized();
             const QString error =
-                QCoreApplication::translate("SettingsBackend", "The clipboard is unavailable.");
+                QCoreApplication::translate("SettingsBackend", "The clipboard is unavailable");
             emit operationMessage(error, false);
             emit actionFinished(binding, false, error);
         }
@@ -2336,15 +2350,15 @@ bool BuiltInSettingsBackend::triggerAction(SettingsActionBinding binding, const 
             return true;
         }
         storage::ApplicationStorage& applicationStorage = storage::ApplicationStorage::instance();
-        // An import replaces the whole configuration: keys the archive does not
-        // carry (settings added after the archive's schema version, for example)
-        // revert to schema defaults. The overlay is materialized with the same
-        // salvage rules as loading the persisted configuration, including schema
-        // upgrades.
-        read.preserveOmittedCredentials(applicationStorage.configuration().snapshot());
+        // An import preserves omitted local directories and redacted credentials.
+        // Other keys the archive does not carry revert to schema defaults, using
+        // the same salvage and upgrade rules as loading persisted configuration.
+        const auto current = applicationStorage.configuration().snapshot();
+        read.preserveOmittedDirectories(current);
+        read.preserveOmittedCredentials(current);
         if (!importConfigurationSnapshot(read.values, read.schemaVersion)) {
             finish(false, QCoreApplication::translate("SettingsBackend",
-                                                      "The configuration could not be imported."));
+                                                      "The configuration could not be imported"));
             return true;
         }
         const storage::StorageResult flushed = applicationStorage.flushNow();
@@ -2509,7 +2523,7 @@ void BuiltInSettingsBackend::refreshStorageStatusIfStale() {
     storage::ApplicationStorage::instance().requestStorageUsageRefreshIfStale();
 }
 
-bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
+SettingsResetResult BuiltInSettingsBackend::resetSectionWithResults(SettingsSectionReset reset) {
 #if !SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     if (reset == SettingsSectionReset::Translation)
         return false;
@@ -2909,6 +2923,9 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("pin_to_screen/automatic_text_recognition"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("pin_to_screen/automatic_text_recognition"))},
+            {QStringLiteral("pin_to_screen/quick_annotation_for_selected_text"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("pin_to_screen/quick_annotation_for_selected_text"))},
             {QStringLiteral("pin_to_screen/auto_resize_window"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("pin_to_screen/auto_resize_window"))},
@@ -3035,43 +3052,55 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                  QStringLiteral("screen_recording/capture_toolbar_in_recording"))},
         });
     case SettingsSectionReset::GlobalHotkeys:
-        return storage::GlobalShortcutSettings().setDisableOnFocusedFullscreenWindow(
-            storage::ConfigurationSchema::defaultValue(
-                QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window"))
-                .toBool());
+        return resetAvailableConfigurationValues(sectionDefaults(reset));
     case SettingsSectionReset::SystemGeneral: {
         const auto& configuration = storage::ApplicationStorage::instance().configuration();
-        const bool annotationAccepted =
+        SettingsResetResult resetResult(true);
 #ifdef Q_OS_WIN
-            applySwitchValue(
-                SettingsSwitchBinding::AnnotationModeWhenOpeningForEditing,
-                configuration
-                    .defaultValue(QStringLiteral("system/annotation_mode_when_opening_for_editing"))
-                    .toBool());
-#else
-            true;
+        resetResult.fields.insert(
+            QStringLiteral("system.annotation-mode-when-opening-for-editing"),
+            {applySwitchValue(SettingsSwitchBinding::AnnotationModeWhenOpeningForEditing,
+                              configuration
+                                  .defaultValue(QStringLiteral(
+                                      "system/annotation_mode_when_opening_for_editing"))
+                                  .toBool()),
+             {}});
 #endif
-        if (app::distribution::isStoreManaged())
-            return applySelectValue(SettingsSelectBinding::ContextMenuMode,
-                                    configuration.defaultValue(kContextMenuModeKey).toVariant()) &&
-                   annotationAccepted;
+        if (app::distribution::isStoreManaged()) {
+            resetResult.fields.insert(
+                QStringLiteral("system.context-menu-mode"),
+                {applySelectValue(SettingsSelectBinding::ContextMenuMode,
+                                  configuration.defaultValue(kContextMenuModeKey).toVariant()),
+                 {}});
+            return resetResult;
+        }
         emit synchronized();
         const auto result = applyStartupSettings(
             configuration.defaultValue(QStringLiteral("system/auto_start_at_boot")).toBool(),
             false);
+        resetResult.fields.insert(QStringLiteral("system.auto-start-at-boot"),
+                                  {result.success, result.error});
+#ifdef Q_OS_WIN
+        resetResult.fields.insert(QStringLiteral("system.launch-as-administrator"),
+                                  {result.success, result.error});
+#endif
         if (!result.success)
             emit operationMessage(result.error, false);
         emit synchronized();
-        bool accepted = result.success && annotationAccepted;
 #ifdef Q_OS_WIN
-        accepted = applySelectValue(SettingsSelectBinding::ContextMenuMode,
-                                    configuration.defaultValue(kContextMenuModeKey).toVariant()) &&
-                   accepted;
+        resetResult.fields.insert(
+            QStringLiteral("system.context-menu-mode"),
+            {applySelectValue(SettingsSelectBinding::ContextMenuMode,
+                              configuration.defaultValue(kContextMenuModeKey).toVariant()),
+             {}});
 #endif
-        return accepted && applySelectValue(SettingsSelectBinding::UpdateMode,
-                                            storage::ConfigurationSchema::defaultValue(
-                                                QStringLiteral("updates/mode"))
-                                                .toVariant());
+        resetResult.fields.insert(
+            QStringLiteral("updates.mode"),
+            {applySelectValue(
+                 SettingsSelectBinding::UpdateMode,
+                 configuration.defaultValue(QStringLiteral("updates/mode")).toVariant()),
+             {}});
+        return resetResult;
     }
     case SettingsSectionReset::ScreenshotCapture:
         return storage::ApplicationStorage::instance().configuration().setValues({

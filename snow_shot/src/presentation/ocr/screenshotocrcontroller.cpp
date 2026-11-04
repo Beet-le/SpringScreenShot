@@ -313,6 +313,14 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
                 }
                 return snapshot ? renderScreenshotRecognitionImage(*snapshot) : QImage{};
             },
+            {},
+            [this](const QVector<SnowShotChatModel>& models, const QString& selection,
+                   bool loading) {
+                if (auto* toolbar = m_context.overlayCoordinator.toolbar()) {
+                    if (auto* palette = toolbar->palette())
+                        palette->setTextTranslationServices(models, selection, loading);
+                }
+            },
         },
         this);
     connect(m_session.get(), &ScreenshotRecognitionSessionController::textEditingChanged, this,
@@ -641,6 +649,14 @@ void ScreenshotOcrController::applyTextTargetLanguage(const QString& language) {
     m_session->applyTextTargetLanguage(language);
 }
 
+void ScreenshotOcrController::requestTextTranslationServices() {
+    m_session->requestTextTranslationServices();
+}
+
+void ScreenshotOcrController::applyTextTranslationService(const QString& service) {
+    m_session->applyTextTranslationService(service);
+}
+
 void ScreenshotOcrController::applyTextPunctuation(const QString& value) {
     m_session->applyTextPunctuation(value);
 }
@@ -920,18 +936,24 @@ bool ScreenshotOcrController::ensureRecognitionWindow() {
             [this](const QUrl& url) { handleQrLinkActivated(url); },
             [this]() { undoTextEdit(); },
             [this]() { redoTextEdit(); },
-            [this](const QPointF& canvasPosition) {
-                return m_context.selectionResizeDragMode(canvasPosition);
+            [this](const QPointF& globalPosition) {
+                return m_context.selectionResizeDragMode(
+                    m_context.geometry.canvasPositionForLogicalPoint(m_context.displaySession,
+                                                                     globalPosition));
             },
-            [this](const QPointF& canvasPosition) {
-                return m_context.beginSelectionResize(canvasPosition);
+            [this](const QPointF& globalPosition) {
+                return m_context.beginSelectionResize(
+                    m_context.geometry.canvasPositionForLogicalPoint(m_context.displaySession,
+                                                                     globalPosition));
             },
-            [this](const QPointF& canvasPosition) {
-                m_context.updateSelectionResize(canvasPosition);
+            [this](const QPointF& globalPosition) {
+                m_context.updateSelectionResize(m_context.geometry.canvasPositionForLogicalPoint(
+                    m_context.displaySession, globalPosition));
                 updateRecognitionWindowGeometry();
             },
-            [this](const QPointF& canvasPosition) {
-                m_context.finishSelectionResize(canvasPosition);
+            [this](const QPointF& globalPosition) {
+                m_context.finishSelectionResize(m_context.geometry.canvasPositionForLogicalPoint(
+                    m_context.displaySession, globalPosition));
                 updateRecognitionWindowGeometry();
             },
             []() {},

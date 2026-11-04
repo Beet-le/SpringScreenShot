@@ -675,6 +675,9 @@ int main(int argc, char** argv) {
     auto& applicationStorage = storage::ApplicationStorage::instance();
     require(applicationStorage.initialize({executable, temporary.path(), 60000}).success,
             "initialize translation settings storage");
+    require(
+        storage::GlobalShortcutSettings().setFullscreenWindowFilter(QStringLiteral("all_windows")),
+        "translation hotkey fixtures explicitly use all-window suppression");
 #ifdef Q_OS_WIN
     if (application.arguments().contains(QStringLiteral("--window-always-on-top-only"))) {
         windowAlwaysOnTopShortcutSettings();
@@ -956,7 +959,7 @@ int main(int argc, char** argv) {
                     translation.configuration().targetLanguage.isEmpty() &&
                     translation.configuration().secondaryTargetLanguage == QStringLiteral("en") &&
                     translation.configuration().languageDetectionConfidenceThreshold == 60 &&
-                    translation.configuration().modelId.isEmpty() &&
+                    translation.configuration().modelId == QStringLiteral("free-translation") &&
                     translation.configuration().layoutProcessing == QStringLiteral("smart_merge"),
                 "reset Translation restores all seven settings");
 

@@ -119,6 +119,7 @@ enum class SettingsSelectBinding {
     SkinPosition,
     ToolbarSkinPosition,
     TrayMenuSkinPosition,
+    FullscreenWindowFilter,
 };
 
 struct SettingsSelectDefinition {
@@ -156,6 +157,7 @@ enum class SettingsSwitchBinding {
     ShowOriginalImagePreview,
     ShowTextHighlighting,
     PinAutomaticTextRecognition,
+    PinQuickAnnotationForSelectedText,
     PinAutoResizeWindow,
     PinShowWindowButtons,
     PinShakeWindowToHideOthers,

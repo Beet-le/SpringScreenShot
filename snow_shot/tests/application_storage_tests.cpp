@@ -90,6 +90,42 @@ void writeBytes(const QString& path, const QByteArray& bytes) {
     require(file.write(bytes) == bytes.size(), "failed to write test file");
 }
 
+void fullscreenWindowFilterPersistsAndDefaultsToGames() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "fullscreen filter requires isolated storage");
+    const QString path = temporary.filePath(QStringLiteral("filter.json"));
+    const QString key = QStringLiteral("global_shortcuts/fullscreen_window_filter");
+    const QString enabledKey =
+        QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window");
+    QMap<QString, QJsonValue> exported;
+    {
+        storage::ConfigurationStore store(path, true, true, 60000);
+        require(store.value(key) == QJsonValue(QStringLiteral("game_windows")) &&
+                    !store.value(enabledKey).toBool(),
+                "new configurations default to game filtering without enabling suppression");
+        require(store.setValue(key, QStringLiteral("all_windows")) &&
+                    !store.setValue(key, QStringLiteral("unknown")) && !store.setValue(key, true) &&
+                    store.value(key) == QJsonValue(QStringLiteral("all_windows")),
+                "only the two stable filter identifiers can be persisted");
+        exported = store.snapshot();
+        require(store.flushNow().success, "persist the selected fullscreen filter");
+    }
+    storage::ConfigurationStore reloaded(path, true, true, 60000);
+    require(reloaded.value(key) == QJsonValue(QStringLiteral("all_windows")),
+            "fullscreen filter survives a storage restart");
+    storage::ConfigurationStore imported(temporary.filePath(QStringLiteral("import.json")), true,
+                                         true, 60000);
+    require(imported.applySnapshot(exported) &&
+                imported.value(key) == QJsonValue(QStringLiteral("all_windows")),
+            "configuration snapshots export and import the filter");
+    require(imported.applySnapshot({{enabledKey, true}}) && imported.value(enabledKey).toBool() &&
+                imported.value(key) == QJsonValue(QStringLiteral("game_windows")),
+            "older configurations retain suppression but adopt the game filter default");
+    require(imported.applySnapshot({{key, QStringLiteral("unsupported")}}) &&
+                imported.value(key) == QJsonValue(QStringLiteral("game_windows")),
+            "invalid imported filters recover to game windows");
+}
+
 void ocrHardwareAccelerationPersistsAndDefaultsOff() {
     QTemporaryDir temporary;
     require(temporary.isValid(), "OCR acceleration requires isolated storage");
@@ -378,7 +414,8 @@ void autoSaveAfterExecutionSettingsMigrateAndPersist() {
             {
                 storage::ConfigurationStore store(path, true, true, 60000);
                 require(store.value(key) == expected && !store.snapshot().contains(legacyKey) &&
-                            store.value(QStringLiteral("storage/schema_version")).toInt() == 4 &&
+                            store.value(QStringLiteral("storage/schema_version")).toInt() ==
+                                storage::ConfigurationSchema::currentVersion() &&
                             store.flushNow().success,
                         "legacy booleans must retain their original five auto-save scenarios");
                 const QJsonObject screenshot =
@@ -415,10 +452,12 @@ void autoSaveAfterExecutionSettingsMigrateAndPersist() {
     }
     const QString futurePath = temporary.filePath(QStringLiteral("future.json"));
     const QByteArray futureBytes =
-        QJsonDocument(QJsonObject{{QStringLiteral("storage"),
-                                   QJsonObject{{QStringLiteral("schema_version"), 5}}},
-                                  {QStringLiteral("screenshot"),
-                                   QJsonObject{{QStringLiteral("auto_save_after_copy"), true}}}})
+        QJsonDocument(
+            QJsonObject{{QStringLiteral("storage"),
+                         QJsonObject{{QStringLiteral("schema_version"),
+                                      storage::ConfigurationSchema::currentVersion() + 1}}},
+                        {QStringLiteral("screenshot"),
+                         QJsonObject{{QStringLiteral("auto_save_after_copy"), true}}}})
             .toJson();
     writeBytes(futurePath, futureBytes);
     storage::ConfigurationStore future(futurePath, true, true, 60000);
@@ -1134,10 +1173,12 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
         {QStringLiteral("tray/left_click_action"),
          {QStringLiteral("none"), QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
           QStringLiteral("screenshot_copy"), QStringLiteral("screenshot_fixed"),
+          QStringLiteral("open_capture_history"), QStringLiteral("open_pin_to_screen_management"),
           QStringLiteral("open_function_settings")}},
         {QStringLiteral("tray/middle_click_action"),
          {QStringLiteral("none"), QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
           QStringLiteral("screenshot_copy"), QStringLiteral("screenshot_fixed"),
+          QStringLiteral("open_capture_history"), QStringLiteral("open_pin_to_screen_management"),
           QStringLiteral("open_function_settings")}},
     };
     for (auto it = allowedStringValues.cbegin(); it != allowedStringValues.cend(); ++it) {
@@ -1766,8 +1807,9 @@ void screenshotTranslationSettingsRoundTripSupportedValues() {
     require(!translation.copyTranslationResultsAsImage(), "translation image copy defaults off");
     require(translation.setCopyTranslationResultsAsImage(true), "enable translation image copy");
     require(translation.configuration() ==
-                storage::ScreenshotTranslationConfiguration{QStringLiteral("auto"), {}, {}},
-            "translation settings should default to Auto source and runtime-derived target/model");
+                storage::ScreenshotTranslationConfiguration{
+                    QStringLiteral("auto"), {}, QStringLiteral("free-translation")},
+            "translation settings default to Auto source, runtime target, and Free Translation");
     require(translation.configuration().languageDetectionConfidenceThreshold == 60,
             "language detection confidence defaults to 60 percent");
     const storage::ScreenshotTranslationConfiguration selected{
@@ -3303,7 +3345,7 @@ void futureVersionIsReadOnly() {
     require(temporary.isValid(), "failed to create future-version directory");
     const QString config = QDir(temporary.path()).filePath(QStringLiteral("config.json"));
     writeBytes(config, QByteArrayLiteral("{\n"
-                                         "  \"storage\": {\"schema_version\": 5},\n"
+                                         "  \"storage\": {\"schema_version\": 6},\n"
                                          "  \"interface\": {\"theme_mode\": \"dark\"},\n"
                                          "  \"future\": {\"value\": 42}\n"
                                          "}\n"));
@@ -3927,6 +3969,24 @@ void trayClickSettingsSurviveRestart() {
                                                   QStringLiteral("tray.restart-app"),
                                                   QStringLiteral("tray.exit")},
             "tray click choices and Restart App must survive storage restart");
+    for (const auto& action : {QStringLiteral("open_capture_history"),
+                               QStringLiteral("open_pin_to_screen_management")}) {
+        const auto previousMiddle = tray.middleClickAction();
+        require(tray.setLeftClickAction(action) && tray.middleClickAction() == previousMiddle &&
+                    applicationStorage.flushNow().success,
+                "new left-click actions must persist independently");
+        static_cast<void>(initialize(executable, temporary.path()));
+        require(tray.leftClickAction() == action && tray.middleClickAction() == previousMiddle,
+                "new left-click actions must survive storage restart");
+        require(tray.setMiddleClickAction(action) && tray.leftClickAction() == action &&
+                    applicationStorage.flushNow().success,
+                "new middle-click actions must persist independently");
+        static_cast<void>(initialize(executable, temporary.path()));
+        require(tray.leftClickAction() == action && tray.middleClickAction() == action,
+                "new middle-click actions must survive storage restart");
+    }
+    require(tray.setMiddleClickAction(QStringLiteral("open_function_settings")),
+            "restore the middle-click fixture before disabling actions");
     require(tray.setLeftClickAction(QStringLiteral("none")) &&
                 tray.middleClickAction() == QStringLiteral("open_function_settings") &&
                 applicationStorage.flushNow().success,
@@ -4262,6 +4322,10 @@ int main(int argc, char** argv) {
         globalMouseCombinationSchemaIsStrictAndPersistent();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--fullscreen-filter-only"))) {
+        fullscreenWindowFilterPersistsAndDefaultsToGames();
+        return 0;
+    }
     QCoreApplication::setOrganizationName(QStringLiteral("SnowShotTests"));
     QCoreApplication::setApplicationName(QStringLiteral("storage-tests"));
     if (application.arguments().contains(QStringLiteral("--ocr-settings-only"))) {
@@ -4277,8 +4341,20 @@ int main(int argc, char** argv) {
         trayDarkIconSettingsPersistAndValidate();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--tray-click-settings-only"))) {
+        settingsSchemaDefaultsAndValidationAreComplete();
+        invalidTrayClickSettingsUseIndependentDefaults();
+        trayClickSettingsSurviveRestart();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--translation-settings-only"))) {
         screenshotTranslationSettingsRoundTripSupportedValues();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--schema-version-only"))) {
+        autoSaveAfterExecutionSettingsMigrateAndPersist();
+        futureVersionIsReadOnly();
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -4348,6 +4424,7 @@ int main(int argc, char** argv) {
     selectionAspectRatioSettingsValidateAndPreserveLegacyLock();
     settingsSchemaDefaultsAndValidationAreComplete();
     pinnedDestroyShortcutMigratesPreviousDefault();
+    fullscreenWindowFilterPersistsAndDefaultsToGames();
     obsoleteClickThroughShortcutIsIgnored();
     shortcutSchemaMigrationAndPhysicalMetadataRoundTrip();
     localShortcutDefaultsPreserveConfiguredBindings();

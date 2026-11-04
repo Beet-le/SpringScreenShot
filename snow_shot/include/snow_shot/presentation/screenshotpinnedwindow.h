@@ -17,6 +17,8 @@
 #include "snow_shot/presentation/screenshotresultcompositor.h"
 #include "snow_shot/storage/pinnedwindowtypes.h"
 #include "snow_shot/storage/pinnedwindowplacement.h"
+#include "snow_shot/presentation/screenshottextannotation.h"
+#include "snow_shot/presentation/screenshottextannotationrenderer.h"
 
 #include <QByteArray>
 #include <QJsonObject>
@@ -56,6 +58,7 @@ class WindowShortcutManager;
 class PinnedWindowGroupManager;
 class PinnedWindowSelectionController;
 class PinnedWindowPlatform;
+class PinnedWindowStackingCoordinator;
 class LiveWindowSource;
 } // namespace snow_shot::presentation
 namespace snow_shot::platform {
@@ -77,6 +80,7 @@ class QDragLeaveEvent;
 class QDropEvent;
 class QKeyEvent;
 class QMouseEvent;
+class ScreenshotQuickTextAnnotationToolbar;
 class QMoveEvent;
 class QResizeEvent;
 class QScreen;
@@ -147,12 +151,17 @@ class ScreenshotPinnedWindow final : public QWidget {
     }
     [[nodiscard]] bool liveFrameAvailable() const;
     Q_INVOKABLE void closeLiveWindow();
-    struct HideOtherWindowsResult {
+    struct OtherWindowsVisibilityResult {
+        enum class Action { Hide, Show };
         bool success = false;
-        // Includes hiding a displayed pin or canceling a peer's pending presentation/restore.
+        // Includes changing desired visibility for a pending presentation/restore.
         bool changed = false;
+        Action action = Action::Hide;
     };
+    enum class PresentationPolicy { Activate, PreserveFocus };
     struct Config {
+        PresentationPolicy presentationPolicy = PresentationPolicy::Activate;
+        QPointer<snow_shot::presentation::PinnedWindowStackingCoordinator> stackingCoordinator;
         snow_shot::storage::PinnedSourceIdentity sourceIdentity;
         QDateTime sourceCreatedUtc;
         snow_shot::storage::PinnedWindowPlacement placement;
@@ -221,6 +230,7 @@ class ScreenshotPinnedWindow final : public QWidget {
         snow_shot::storage::PinnedWindowPlacement persistedPreThumbnailPlacement;
         QByteArray persistedCanvasSession;
         QByteArray persistedRecognitionResults;
+        QByteArray persistedTextAnnotations;
         std::optional<snow_shot::storage::PinnedTextType> persistedTextType;
         bool persistedRecognitionVisible = false;
         bool persistedTranslationVisible = false;
@@ -232,7 +242,8 @@ class ScreenshotPinnedWindow final : public QWidget {
         std::function<bool(const snow_shot::storage::PinnedWindowRecord&)> persistenceHider;
         std::function<void()> showAllWindowsRequested;
         std::function<void(const QString&)> hideOtherWindowsRequested;
-        std::function<HideOtherWindowsResult(const QString&)> shakeHideOtherWindowsRequested;
+        std::function<OtherWindowsVisibilityResult(const QString&)>
+            shakeToggleOtherWindowsRequested;
         snow_shot::storage::PinnedWindowCreationSource creationSource =
             snow_shot::storage::PinnedWindowCreationSource::Other;
         snow_shot::presentation::PinnedWindowGroupManager* groupManager = nullptr;
@@ -298,6 +309,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     Q_INVOKABLE bool requestHide();
     void requestDestroy();
     void showFromManagement();
+    void showPreservingStacking();
     void cancelDeferredInactiveGroupClose();
 
   public:
@@ -472,6 +484,12 @@ class ScreenshotPinnedWindow final : public QWidget {
     void configureRecognitionSession();
     ScreenshotRecognitionWindow* ensureRecognitionContent();
     void synchronizeHiddenTextSelection();
+    void synchronizeTextAnnotations(bool bindEmptySource = false);
+    void synchronizeQuickTextAnnotationToolbar();
+    void destroyQuickTextAnnotationToolbar();
+    void clearTextAnnotations();
+    void textAnnotationsChanged();
+    [[nodiscard]] ScreenshotTextAnnotationRenderSnapshot textAnnotationSnapshot() const;
     [[nodiscard]] bool copyHiddenTextSelection();
     void updateOcrPresentation();
     void updateRecognitionContentGeometry();
@@ -522,10 +540,12 @@ class ScreenshotPinnedWindow final : public QWidget {
     void uploadToCloud();
     void cancelCloudUpload();
     [[nodiscard]] std::shared_ptr<ScreenshotExportArtifact> fileSaveArtifact();
+    enum class ViewportExportMode { Complete, RecognitionBackground };
     [[nodiscard]] std::shared_ptr<ScreenshotExportArtifact>
-    viewportArtifact(bool applyWindowOpacity = true);
+    viewportArtifact(ViewportExportMode mode = ViewportExportMode::Complete);
     [[nodiscard]] ScreenshotExportSource
     cachedPinnedExportSource(ScreenshotPinnedViewportExportSource request);
+    [[nodiscard]] std::optional<QByteArray> exportDocumentSnapshot() const;
     void quickSave();
     void invalidatePendingCopy();
     void copyRenderedImage(std::shared_ptr<ScreenshotExportArtifact> artifact);
@@ -616,8 +636,9 @@ class ScreenshotPinnedWindow final : public QWidget {
     void sampleWindowShake(const QPointF& pointer);
     void updateWindowShake(const QPointF& pointer, qint64 timeMs);
     void endWindowShake(bool cancel);
-    [[nodiscard]] HideOtherWindowsResult hideOtherWindowsForShake();
+    [[nodiscard]] OtherWindowsVisibilityResult toggleOtherWindowsForShake();
     void showShakeMessage(bool restart = true);
+    void setShowWithoutActivating(bool enabled);
     bool windowDragEnabled() const;
     bool windowDragEligible() const;
     bool windowDragEligibleAt(const QPoint& position,
@@ -822,6 +843,26 @@ class ScreenshotPinnedWindow final : public QWidget {
 #endif
     std::function<ScreenshotPinnedRecognitionProviders()> m_recognitionProvider;
     ScreenshotRecognitionResults m_recognitionResults;
+    ScreenshotTextAnnotationDocument m_textAnnotations;
+    ScreenshotTextAnnotationRenderer m_textAnnotationRenderer;
+    ScreenshotTextAnnotationRenderSnapshot m_textAnnotationSnapshot;
+    ScreenshotQuickTextAnnotationToolbar* m_quickTextAnnotationToolbar = nullptr;
+    QVector<ScreenshotTextSelectionRange> m_quickTextAnnotationSelection;
+    quint64 m_quickTextAnnotationSelectionRevision = 0;
+    quint64 m_quickTextAnnotationModelRevision = ~quint64(0);
+    bool m_quickTextAnnotationSelectionSuperseded = false;
+    bool m_synchronizingQuickTextAnnotation = false;
+    const void* m_hiddenTextSelectionSource = nullptr;
+    bool m_hiddenTextSelectionFormatted = false;
+    QTransform m_hiddenTextSelectionSourceTransform;
+    quint64 m_textAnnotationRenderedRevision = ~quint64(0);
+    QTransform m_textAnnotationRenderedTransform;
+    const ScreenshotOcrPresentation* m_textAnnotationSourceOcr = nullptr;
+    const QTextDocument* m_textAnnotationSourceDocument = nullptr;
+    int m_textAnnotationSourceDocumentRevision = -1;
+    bool m_textAnnotationSourceAvailable = false;
+    QPointer<QTextDocument> m_textAnnotationObservedDocument;
+    QMetaObject::Connection m_textAnnotationDocumentConnection;
     ScreenshotRecognitionWindow* m_recognitionContent = nullptr;
     std::optional<bool> m_recognitionEmptyViewportVisibility;
     // Scale is 100 * current content width / oriented initial content width.
@@ -840,9 +881,11 @@ class ScreenshotPinnedWindow final : public QWidget {
     std::function<bool(const snow_shot::storage::PinnedWindowRecord&)> m_persistenceHider;
     std::function<void()> m_showAllWindowsRequested;
     std::function<void(const QString&)> m_hideOtherWindowsRequested;
-    std::function<HideOtherWindowsResult(const QString&)> m_shakeHideOtherWindowsRequested;
+    std::function<OtherWindowsVisibilityResult(const QString&)> m_shakeToggleOtherWindowsRequested;
     std::unique_ptr<ScreenshotPinnedShakeGesture> m_shakeGesture;
     QPointer<adqt::widgets::AdMessageHandle> m_shakeMessage;
+    OtherWindowsVisibilityResult::Action m_shakeMessageAction =
+        OtherWindowsVisibilityResult::Action::Hide;
     QDeadlineTimer m_shakeMessageDeadline{0};
     snow_shot::storage::PinnedWindowCreationSource m_creationSource =
         snow_shot::storage::PinnedWindowCreationSource::Other;
@@ -850,6 +893,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     snow_shot::storage::PinnedWindowCloseIntent m_closeIntent =
         snow_shot::storage::PinnedWindowCloseIntent::Preserve;
     QPointer<snow_shot::presentation::PinnedWindowGroupManager> m_groupManager;
+    QPointer<snow_shot::presentation::PinnedWindowStackingCoordinator> m_stackingCoordinator;
     QPointer<snow_shot::presentation::PinnedWindowSelectionController> m_selectionController;
     adqt::widgets::AdButton* m_selectionIndicator = nullptr;
     bool m_windowSelected = false;

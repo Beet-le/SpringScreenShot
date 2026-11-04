@@ -18,7 +18,7 @@ snow_require_msvc_version()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SnowWindowsArchitecture.cmake")
 snow_configure_windows_architecture()
 
-set(SNOW_SHOT_VERSION "1.4.4")
+set(SNOW_SHOT_VERSION "1.4.5")
 if(NOT SNOW_SHOT_VERSION MATCHES "^([0-9]+\\.[0-9]+\\.[0-9]+)(-[0-9A-Za-z.-]+)?$")
     message(FATAL_ERROR "SNOW_SHOT_VERSION must be a semantic version such as 0.8.0-dev")
 endif()
@@ -132,6 +132,8 @@ endif()
 
 set(SNOW_APPS_API_BASE_URL "" CACHE STRING
     "Default Snow Shot API base URL. Set explicitly for reproducible builds.")
+set(SNOW_APPS_FREE_TRANSLATION_API_BASE_URL "" CACHE STRING
+    "Free translation API base URL. Set explicitly by the build preset.")
 set(SNOW_RUST_CARGO_TARGET_DIR
     "${CMAKE_BINARY_DIR}/cargo"
     CACHE PATH
@@ -319,6 +321,8 @@ if(SNOW_APPS_BUILD_SNOW_SHOT)
         "Link Snow Shot against a static Qt build." FORCE)
     set(SNOW_SHOT_API_BASE_URL "${SNOW_APPS_API_BASE_URL}" CACHE STRING
         "Snow Shot API base URL." FORCE)
+    set(SNOW_SHOT_FREE_TRANSLATION_API_BASE_URL "${SNOW_APPS_FREE_TRANSLATION_API_BASE_URL}" CACHE STRING
+        "Free translation API base URL." FORCE)
     set(SNOW_SHOT_LIBCLANG_DIR "${SNOW_LIBCLANG_BIN_DIR}" CACHE PATH
         "Directory containing libclang.dll for Rust bindgen." FORCE)
     set(SNOW_SHOT_FFMPEG_BIN_DIR "${SNOW_FFMPEG_ROOT}/bin" CACHE PATH

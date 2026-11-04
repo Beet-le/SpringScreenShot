@@ -72,7 +72,7 @@ QString imageName(const QString& label) {
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "PDF document pages"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid",
                       "Drag pages to reorder. Use the arrow keys to select a page and Enter to "
-                      "preview the original image."),
+                      "preview the original image"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Page %1: %2"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Page %1"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Replace image"),
@@ -83,15 +83,16 @@ QString imageName(const QString& label) {
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Flip vertically"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Reset transform"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Preview original image"),
+    QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Reverse page order"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Clear"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Add images"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Add images to create a PDF document"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Drag image files here, or choose Add images"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Drop images to add pages"),
     QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Add multiple image files at once"),
-    QT_TRANSLATE_NOOP("CollagePdfPageGrid", "The original image is unavailable."),
-    QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Image preview was cancelled."),
-    QT_TRANSLATE_NOOP("CollagePdfPageGrid", "The page preview shows the last valid settings."),
+    QT_TRANSLATE_NOOP("CollagePdfPageGrid", "The original image is unavailable"),
+    QT_TRANSLATE_NOOP("CollagePdfPageGrid", "Image preview was cancelled"),
+    QT_TRANSLATE_NOOP("CollagePdfPageGrid", "The page preview shows the last valid settings"),
 };
 
 quint64 draggedId(const QMimeData* mime, const CollageDocument* document) {
@@ -127,7 +128,7 @@ class MemoryImageReply final : public adqt::widgets::AdImageReply {
             if (isFinished())
                 return;
             if (m_image.isNull())
-                fail(gridText("The original image is unavailable."));
+                fail(gridText("The original image is unavailable"));
             else
                 succeed(m_image);
         });
@@ -135,7 +136,7 @@ class MemoryImageReply final : public adqt::widgets::AdImageReply {
 
     void abort() override {
         if (!isFinished())
-            fail(gridText("Image preview was cancelled."));
+            fail(gridText("Image preview was cancelled"));
     }
 
   private:
@@ -405,7 +406,7 @@ class PdfPageCard final : public QWidget {
         m_number->setAccessibleName(gridText("Page %1").arg(m_ordinal));
         setAccessibleDescription(gridText(
             "Drag pages to reorder. Use the arrow keys to select a page and Enter to preview the "
-            "original image."));
+            "original image"));
     }
 
   protected:
@@ -578,6 +579,7 @@ struct CollagePdfPageGrid::Impl {
     CanvasActionToolbar* toolbar = nullptr;
     CanvasActionToolbar* selectionToolbar = nullptr;
     std::array<AdButton*, 8> selectionActions{};
+    AdButton* reverse = nullptr;
     AdButton* add = nullptr;
     AdButton* clear = nullptr;
     ImageDropSurface* empty = nullptr;
@@ -656,6 +658,7 @@ struct CollagePdfPageGrid::Impl {
     }
 
     void enabled() {
+        reverse->setEnabled(!loading && !exporting && document->items().size() > 1);
         add->setEnabled(!loading && !exporting);
         add->setBusy(loading);
         clear->setEnabled(!exporting && !document->items().isEmpty());
@@ -1083,10 +1086,13 @@ CollagePdfPageGrid::CollagePdfPageGrid(CollageDocument* document, QWidget* paren
     layout->addWidget(d.scroll);
     d.toolbar = new CanvasActionToolbar(this);
     d.toolbar->setObjectName(QStringLiteral("collagePdfCanvasToolbar"));
+    d.reverse =
+        d.toolbar->addAction(snow_shot::presentation::icons::custom::outlined::ReverseOrder(),
+                             "collagePdfReversePageOrder");
+    d.add = d.toolbar->addAction(icons::Plus(), "collagePdfAddImages");
+    d.toolbar->addSeparator();
     d.clear = d.toolbar->addAction(icons::IconDelete(), "collagePdfClear");
     d.clear->setAccentRole(AdButton::AccentRole::Danger);
-    d.toolbar->addSeparator();
-    d.add = d.toolbar->addAction(icons::Plus(), "collagePdfAddImages");
     d.selectionToolbar = new CanvasActionToolbar(this);
     d.selectionToolbar->setObjectName(QStringLiteral("collagePdfImageToolbar"));
     d.selectionToolbar->hide();
@@ -1096,7 +1102,7 @@ CollagePdfPageGrid::CollagePdfPageGrid(CollageDocument* document, QWidget* paren
         snow_shot::presentation::icons::custom::outlined::FlipHorizontal(),
         snow_shot::presentation::icons::custom::outlined::FlipVertical(),
         icons::Reload(),
-        icons::Edit(),
+        snow_shot::presentation::icons::custom::outlined::ReplaceImage(),
         icons::Eye(),
         icons::IconDelete()};
     constexpr std::array<const char*, 8> names{
@@ -1132,6 +1138,10 @@ CollagePdfPageGrid::CollagePdfPageGrid(CollageDocument* document, QWidget* paren
         });
     }
     d.selectionActions.back()->setAccentRole(AdButton::AccentRole::Danger);
+    connect(d.reverse, &AdButton::clicked, this, [this] {
+        if (!m_impl->loading && !m_impl->exporting)
+            m_impl->document->reverseItems();
+    });
     connect(d.clear, &AdButton::clicked, this, &CollagePdfPageGrid::clearRequested);
     connect(d.add, &AdButton::clicked, this, &CollagePdfPageGrid::addImagesRequested);
     d.empty = new ImageDropSurface(false, this);
@@ -1244,13 +1254,14 @@ void CollagePdfPageGrid::setExportBusy(bool busy) {
 void CollagePdfPageGrid::retranslateUi() {
     auto& d = *m_impl;
     setAccessibleName(gridText("PDF document pages"));
-    d.validationNotice->setText(gridText("The page preview shows the last valid settings."));
+    d.validationNotice->setText(gridText("The page preview shows the last valid settings"));
     setAccessibleDescription(gridText(
         "Drag pages to reorder. Use the arrow keys to select a page and Enter to preview the "
-        "original image."));
-    d.clear->setToolTip(gridText("Clear"));
+        "original image"));
+    d.reverse->setToolTip(gridText("Reverse page order"));
     d.add->setToolTip(gridText("Add images"));
-    for (auto* action : {d.clear, d.add})
+    d.clear->setToolTip(gridText("Clear"));
+    for (auto* action : {d.reverse, d.add, d.clear})
         action->setAccessibleName(action->toolTip());
     constexpr std::array<const char*, 8> actions{
         "Rotate clockwise by 90°", "Rotate counterclockwise by 90°",

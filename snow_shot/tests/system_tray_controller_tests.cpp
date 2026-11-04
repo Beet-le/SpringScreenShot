@@ -851,6 +851,8 @@ void verifyTrayClickActions() {
                                    QStringLiteral("show_main_window"),
                                    QStringLiteral("screenshot_copy"),
                                    QStringLiteral("screenshot_fixed"),
+                                   QStringLiteral("open_capture_history"),
+                                   QStringLiteral("open_pin_to_screen_management"),
                                    QStringLiteral("open_function_settings")};
     for (const auto reason : {QSystemTrayIcon::Trigger, QSystemTrayIcon::MiddleClick}) {
         for (const auto& action : clickActions) {
@@ -877,9 +879,13 @@ void verifyTrayClickActions() {
                 expected.push_back(snow_shot::presentation::GlobalShortcutAction::ScreenshotCopy);
             } else if (action == QStringLiteral("screenshot_fixed")) {
                 expected.push_back(snow_shot::presentation::GlobalShortcutAction::ScreenshotFixed);
+            } else if (action == QStringLiteral("open_capture_history")) {
+                expected.push_back(GlobalShortcutAction::OpenCaptureHistory);
+            } else if (action == QStringLiteral("open_pin_to_screen_management")) {
+                expected.push_back(GlobalShortcutAction::OpenPinToScreenManagement);
             }
             require(quickActions == expected,
-                    "copy and pin must dispatch their existing capture commands");
+                    "tray click actions must dispatch exactly the selected existing command");
         }
     }
 }
@@ -908,6 +914,9 @@ int main(int argc, char* argv[]) {
     require(storageDirectory.isValid(), "temporary storage directory should be available");
     static_cast<void>(snow_shot::storage::ApplicationStorage::instance().initialize(
         {storageDirectory.path(), storageDirectory.path(), 8000}));
+    require(snow_shot::storage::GlobalShortcutSettings().setFullscreenWindowFilter(
+                QStringLiteral("all_windows")),
+            "tray fullscreen fixtures use all-window suppression");
     auto& languageManager = snow_shot::presentation::LanguageManager::instance();
     require(languageManager.setLanguage(QStringLiteral("en_US")),
             "English should be available from the English catalog");

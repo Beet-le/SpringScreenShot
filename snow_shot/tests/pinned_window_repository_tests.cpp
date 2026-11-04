@@ -93,6 +93,61 @@ storage::PinnedWindowRecord recordWithId(const QString& id, const QImage& image)
     return value;
 }
 
+void imagePathsResolveOnlyPersistedImages() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, patternedImage(QSize(12, 6), 3));
+    require(!repository.imagePath(id) && !repository.imagePath(QStringLiteral("../invalid")),
+            "unknown and invalid pins have no image file path");
+    require(repository.upsert(record).success && repository.flush().success,
+            "persist an image for path lookup");
+    const auto path = repository.imagePath(id);
+    require(path && QFileInfo(*path).isAbsolute() && QFileInfo(*path).isFile() &&
+                QFileInfo(*path).fileName() == QStringLiteral("source.png"),
+            "image path lookup returns the complete persisted image filename");
+    repository.suspendWrites(true);
+    require(!repository.imagePath(id), "storage relocation suspends image path resolution");
+    repository.suspendWrites(false);
+    require(repository.imagePath(id) == path, "image path lookup resumes after relocation");
+    require(QFile::remove(*path), "remove the image path fixture");
+    require(!repository.imagePath(id), "a missing image never resolves to its containing folder");
+
+    const auto textId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto text = recordWithId(textId, {});
+    text.sourceKind = storage::PinnedWindowSourceKind::ClipboardText;
+    text.originalText = QStringLiteral("Pinned text");
+    text.initialWindowSize = QSize(120, 60);
+    require(repository.create(text).success && repository.flush().success &&
+                !repository.imagePath(textId),
+            "text payloads cannot be copied as image file paths");
+
+    const QString originalPath = directory.filePath(QStringLiteral("selected image.png"));
+    require(record.image.save(originalPath), "write an imported image path fixture");
+    record.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    record.sourceKind = storage::PinnedWindowSourceKind::ClipboardImageFile;
+    record.originalFilePath = originalPath;
+    record.originalFileName = QFileInfo(originalPath).fileName();
+    require(repository.create(record).success && repository.flush().success &&
+                QFile::remove(originalPath),
+            "persist an imported image and remove its original file");
+    const auto importedPath = repository.imagePath(record.id);
+    require(importedPath && *importedPath != originalPath && QFileInfo(*importedPath).isFile(),
+            "imported image paths use the retained file after the original disappears");
+
+    const auto fixture = pinned_animation_fixtures::images().front();
+    const auto animation = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+    require(animation && animation->isAnimated(), "decode an animated image path fixture");
+    auto animated =
+        recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), animation->firstFrame);
+    animated.animationSource = animation;
+    require(repository.create(animated).success && repository.flush().success,
+            "persist an animation for image path lookup");
+    const auto animatedPath = repository.imagePath(animated.id);
+    require(animatedPath && QFileInfo(*animatedPath).suffix() == animation->format,
+            "animated pins resolve the retained animation rather than a preview frame");
+}
+
 void pinnedTextStyleMetadataRoundTrips() {
     QTemporaryDir directory;
     const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -1239,6 +1294,55 @@ void missingOptionalPayloadDoesNotHideRestorableImage() {
 // Invariant: demotion must not corrupt payload identity. A metadata-only
 // update after a commit reuses the committed payload instead of re-encoding
 // and re-writing it.
+void textAnnotationsSurviveLazyUpdatesAndClear() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "text annotation temporary storage is unavailable");
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, patternedImage(QSize(24, 12), 9));
+    record.canvasSession = QByteArrayLiteral("ordinary annotations");
+    record.textAnnotations = QByteArrayLiteral("first text annotations");
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        require(repository.upsert(record).success && repository.flush().success,
+                "text annotations commit with the source");
+        const auto loaded = repository.loadRecord(id);
+        require(loaded && loaded->textAnnotations == record.textAnnotations,
+                "committed text annotations reload after source demotion");
+        record.textAnnotations = QByteArrayLiteral("recoloured text annotations");
+        require(repository.updateState(record).success && repository.flush().success,
+                "changing text marks updates a demoted mutable payload");
+    }
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        auto loaded = repository.loadRecord(id);
+        require(loaded && loaded->textAnnotations == record.textAnnotations &&
+                    loaded->canvasSession == record.canvasSession,
+                "reopening retains text marks independently of ordinary drawing content");
+        loaded->opacityPercent = 83;
+        require(repository.updateState(*loaded).success && repository.flush().success,
+                "metadata-only saves retain text marks");
+        loaded->textAnnotations.clear();
+        require(repository.updateState(*loaded).success && repository.flush().success,
+                "clearing text marks removes the lazy payload descriptor");
+        const auto cleared = repository.loadRecord(id);
+        require(cleared && cleared->textAnnotations.isEmpty() &&
+                    cleared->canvasSession == record.canvasSession,
+                "clearing text marks retains the image and ordinary drawing document");
+        require(
+            !QFileInfo::exists(
+                QDir(directory.path())
+                    .filePath(
+                        QStringLiteral("pinned_windows_v2/pins/%1/text_annotations.bin").arg(id))),
+            "cleared text annotation payload files are pruned");
+    }
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        const auto loaded = repository.loadRecord(id);
+        require(loaded && loaded->textAnnotations.isEmpty(),
+                "records without a text annotation payload remain restorable");
+    }
+}
+
 void metadataOnlyUpdatesDoNotRewriteCommittedPayloads() {
     QTemporaryDir directory;
     require(directory.isValid(), "temporary storage directory is unavailable");
@@ -3048,6 +3152,14 @@ void closeRestoreAndRetentionRevealHiddenSiblings() {
 
 int main(int argc, char* argv[]) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--text-annotations-only"))) {
+        textAnnotationsSurviveLazyUpdatesAndClear();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--image-path-only"))) {
+        imagePathsResolveOnlyPersistedImages();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--source-limit-only"))) {
         persistedSourceLoadsShareTheDecodedRasterLimit();
         return 0;
@@ -3100,6 +3212,7 @@ int main(int argc, char* argv[]) {
         markdownFormatMetadataRoundTrips();
         return 0;
     }
+    imagePathsResolveOnlyPersistedImages();
     pinnedTextStyleMetadataRoundTrips();
     mislabeledImageFilesSurviveRestart();
     markdownFormatMetadataRoundTrips();
@@ -3145,6 +3258,7 @@ int main(int argc, char* argv[]) {
     sourceOnlyAdmissionAndCancellationExcludeDocumentPayloads();
     persistedSourceLoadsShareTheDecodedRasterLimit();
     metadataOnlyUpdatesDoNotRewriteCommittedPayloads();
+    textAnnotationsSurviveLazyUpdatesAndClear();
     changedPayloadsRecommitAndStayLazy();
     removedRecordsPruneTheirPayloads();
     specifiedGroupRemovalIsAtomicAndPersistent();
