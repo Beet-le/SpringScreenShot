@@ -25,6 +25,7 @@ class QNetworkAccessManager;
 class QJsonObject;
 class QTimer;
 class SnowShotApiClient;
+class LocalGatewayProxy;
 
 struct SnowShotTableResult {
     QString html;
@@ -283,6 +284,9 @@ class SnowShotApiClient final : public QObject {
     QHash<RequestToken, QList<RequestToken>> m_modelCatalogSubscribers;
     QVector<SnowShotChatModel> m_cachedChatModels;
     QString m_cachedChatModelsLocale;
+
+    void configureDefaultModel(const QString& apiKey);
+    LocalGatewayProxy* m_localGatewayProxy = nullptr;
 };
 #endif
 

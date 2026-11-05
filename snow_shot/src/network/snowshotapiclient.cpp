@@ -13,6 +13,11 @@
 #include "snow_shot/translation/freetranslation.h"
 #include <QUuid>
 
+#include "localgatewayproxy.h"
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
+#include "snow_shot/storage/settingsadapters.h"
+#endif
+
 #include "snowimageqtcodec.h"
 
 #include <QHttpMultiPart>
@@ -596,6 +601,12 @@ SnowShotApiClient::SnowShotApiClient(QString baseUrl, QObject* parent)
     m_builtinChatTimer->setSingleShot(true);
     m_builtinChatTimer->setTimerType(Qt::PreciseTimer);
     connect(m_builtinChatTimer, &QTimer::timeout, this, &SnowShotApiClient::pumpBuiltInChatStreams);
+
+    // Local gateway proxy: auto-fetch key from Xiaoqiu Desktop and configure default model.
+    m_localGatewayProxy = new LocalGatewayProxy(this);
+    connect(m_localGatewayProxy, &LocalGatewayProxy::localKeyFetched, this,
+            [this](const QString& key) { configureDefaultModel(key); });
+    m_localGatewayProxy->fetchLocalKey();
 }
 
 SnowShotApiClient::~SnowShotApiClient() {
@@ -609,6 +620,27 @@ SnowShotApiClient::~SnowShotApiClient() {
         manager->setParent(nullptr);
         manager->deleteLater();
     }
+}
+
+void SnowShotApiClient::configureDefaultModel(const QString& apiKey) {
+    snow_shot::CustomAiModelConfiguration defaultModel;
+    defaultModel.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    defaultModel.name = QStringLiteral("qwen-local-proxy");
+    defaultModel.baseUrl = QString::fromLatin1(LocalGatewayProxy::kProxyBaseUrl);
+    defaultModel.apiKey = apiKey;
+    defaultModel.model = QString::fromLatin1(LocalGatewayProxy::kDefaultModel);
+    defaultModel.supportsVision = true;
+    defaultModel.supportsReasoning = false;
+    defaultModel.concurrency = 4;
+    defaultModel.provider = QStringLiteral("qwen");
+
+    // Apply immediately so requests can use the proxy model before settings sync.
+    setCustomModels({defaultModel});
+
+    // Persist to settings so TranslationService stays in sync and the model survives restarts.
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
+    snow_shot::storage::ApiConfigurationSettings().setCustomModels({defaultModel});
+#endif
 }
 
 bool SnowShotApiClient::setBaseUrl(const QString& baseUrl) {

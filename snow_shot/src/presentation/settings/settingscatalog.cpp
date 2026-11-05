@@ -4202,24 +4202,6 @@ QVector<SettingsPageDefinition> builtInPages() {
                                               "Network access and AI-client connections")),
          {
 #if SNOW_SHOT_ENABLE_API_CONFIGURATION
-             {QStringLiteral("ai-model"),
-              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Custom AI models")),
-              settingsText(QT_TRANSLATE_NOOP(
-                  "SettingsCatalog",
-                  "Custom OpenAI-compatible models for translation and image conversion")),
-              SettingsSectionReset::CustomAiModels,
-              {{QStringLiteral("api.custom-models"),
-                settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Custom Models")),
-                settingsText(
-                    QT_TRANSLATE_NOOP("SettingsCatalog", "OpenAI-compatible Chat Completions")),
-                {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "API URL")),
-                 settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "API Key")),
-                 settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Vision Support"))},
-                QStringLiteral("api_configuration/custom_models"),
-                SettingsCustomDefinition{SettingsCustomRenderer::CustomAiModels}}}},
-#endif
-
-#if SNOW_SHOT_ENABLE_API_CONFIGURATION
              {QStringLiteral("text-translation"),
               settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Translation services")),
               settingsText(
@@ -4233,22 +4215,6 @@ QVector<SettingsPageDefinition> builtInPages() {
                 {},
                 QStringLiteral("api_configuration/text_translation"),
                 SettingsCustomDefinition{SettingsCustomRenderer::TextTranslationConfigurations}}}},
-#endif
-
-#if SNOW_SHOT_ENABLE_API_CONFIGURATION
-             {QStringLiteral("snow-shot-server"),
-              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Spring ScreenShot server")),
-              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
-                                             "Choose the server for built-in online services. "
-                                             "Application updates are not affected")),
-              SettingsSectionReset::Server,
-              {textFormatItem(QStringLiteral("api.server-url"),
-                              QT_TRANSLATE_NOOP("SettingsCatalog", "Server address"),
-                              QT_TRANSLATE_NOOP("SettingsCatalog",
-                                                "Enter an HTTP or HTTPS address. Changes apply "
-                                                "immediately. Clear to use the default server"),
-                              QStringLiteral("api_configuration/server_url"),
-                              SettingsTextBinding::ServerUrl)}},
 #endif
 
              {

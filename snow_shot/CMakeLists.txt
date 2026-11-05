@@ -819,6 +819,8 @@ add_library(snow_shot_translation STATIC
     src/network/boundednetworkresponse.h
     src/network/freetranslationprotocol.h
     src/network/snowshotapiclient.cpp
+    src/network/localgatewayproxy.h
+    src/network/localgatewayproxy.cpp
     include/snow_shot/presentation/translationlanguages.h
     src/presentation/services/translationlanguages.cpp
     include/snow_shot/presentation/translationpagecontroller.h
@@ -826,6 +828,7 @@ add_library(snow_shot_translation STATIC
 )
 snow_enable_unity_build(snow_shot_translation)
 target_include_directories(snow_shot_translation PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(snow_shot_translation PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/network")
 target_link_libraries(snow_shot_translation PUBLIC snow_shot_storage Qt6::Network
     PRIVATE snow_selected_text_c snow_language_detection_c)
 target_compile_definitions(snow_shot_translation PRIVATE
