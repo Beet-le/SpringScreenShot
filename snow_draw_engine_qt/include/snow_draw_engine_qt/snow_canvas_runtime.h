@@ -54,6 +54,8 @@ class SnowCanvasRuntime {
     bool setAutomaticallySelectNewlyCreatedElements(bool enabled);
     bool setAutomaticSelectionExcludedTools(const QSet<SnowCanvasTool>& tools);
     bool setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& tools);
+    // Applies only to creation defaults. Clearing the policy retains their current colors.
+    bool setSharedCreationColor(const std::optional<QColor>& color);
     QByteArray applyAnnotationTransaction(const QByteArray& payload);
     bool undo();
     bool redo();
@@ -88,6 +90,10 @@ class SnowCanvasRuntime {
     // and no color profile; callers supply metadata for their source color space.
     static QImage renderImageSourcesToImage(const QRectF& canvasRect, const QSize& outputSize,
                                             const QList<CanvasExportSource>& sources);
+    // Retain the original projection while preparing only a pixel viewport of its result.
+    static QImage renderImageSourcesToImage(const QRectF& canvasRect, const QSize& outputSize,
+                                            const QList<CanvasExportSource>& sources,
+                                            const QRect& outputPixelRect);
     // An optional output-sized background replaces capture painting, while sources
     // remain available to magnifiers and background restoration.
     QImage renderToImage(const QRectF& virtualSelectionRect, const QSize& outputSize,

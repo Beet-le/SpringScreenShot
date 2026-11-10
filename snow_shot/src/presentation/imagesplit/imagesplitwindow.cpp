@@ -45,20 +45,21 @@ QString splitText(const char* source) {
     return QCoreApplication::translate("ImageSplitWindow", source);
 }
 [[maybe_unused]] constexpr const char* labels[] = {
-    QT_TRANSLATE_NOOP("ImageSplitWindow", "Image Splitting"),
-    QT_TRANSLATE_NOOP("ImageSplitWindow", "Save All"),
+    QT_TRANSLATE_NOOP("ImageSplitWindow", "Image splitting"),
+    QT_TRANSLATE_NOOP("ImageSplitWindow", "Save all"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Stitch to PDF"),
-    QT_TRANSLATE_NOOP("ImageSplitWindow", "Image Stitching is busy. Try again when it finishes"),
+    QT_TRANSLATE_NOOP("ImageSplitWindow", "Image stitching is busy. Try again when it finishes"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Cancel"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Images"),
-    QT_TRANSLATE_NOOP("ImageSplitWindow", "Select Image"),
-    QT_TRANSLATE_NOOP("ImageSplitWindow", "Select Destination Folder"),
-    QT_TRANSLATE_NOOP("ImageSplitWindow", "Replace Image"),
+    QT_TRANSLATE_NOOP("ImageSplitWindow", "Select image"),
+    QT_TRANSLATE_NOOP("ImageSplitWindow", "Select destination folder"),
+    QT_TRANSLATE_NOOP("ImageSplitWindow", "Replace image"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Replacing the image will discard the current edits"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Discard these image splits?"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "The image and current split edits will be discarded"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Discard"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Loading image…"),
+    QT_TRANSLATE_NOOP("ImageSplitWindow", "Finding split lines…"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Saving images: %1 of %2"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Saved %1 images to %2"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Saved %1 of %2 images to %3. %4"),
@@ -103,7 +104,8 @@ const char* selectedFileErrorSource(platform::SelectedFileError error) {
 struct LoadedImage final {
     QImage image;
     QImage preview;
-    std::shared_ptr<CollageImportReservation> reservation;
+    std::optional<ImageSplitPreparedLayout> prepared;
+    std::shared_ptr<ImageStitchingImportReservation> reservation;
     const char* errorSource = nullptr;
     QString originalFileName;
     QDateTime createdUtc;
@@ -118,8 +120,9 @@ struct ExportProgress final {
 QString imageMemoryError() {
     return splitText("The image is too large or there is not enough memory to load it");
 }
-bool reserveImage(QSize size, const std::shared_ptr<LoadedImage>& loaded, qint64 nativeBytes = 0) {
-    auto bytes = collageImageImportBytes(size);
+bool reserveImage(QSize size, const std::shared_ptr<LoadedImage>& loaded, qint64 nativeBytes = 0,
+                  qint64 renderingBytes = 0) {
+    auto bytes = imageStitchingImageImportBytes(size);
     if (bytes == 0)
         return false;
     if (nativeBytes > 0) {
@@ -132,8 +135,9 @@ bool reserveImage(QSize size, const std::shared_ptr<LoadedImage>& loaded, qint64
             return false;
         bytes = std::max(bytes, nativeBytes + previewBytes);
     }
+    bytes = std::max(bytes, renderingBytes);
     if (!loaded->reservation)
-        loaded->reservation = reserveCollageImport(bytes);
+        loaded->reservation = reserveImageStitchingImport(bytes);
     else if (!loaded->reservation->resize(bytes))
         loaded->reservation.reset();
     return loaded->reservation != nullptr;
@@ -152,7 +156,8 @@ ScreenshotExportTaskResult prepareImage(QImage image, const std::shared_ptr<Load
     if (image.isNull())
         return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
                               "The image could not be read or is no longer available");
-    if (!reserveImage(image.size(), loaded, image.sizeInBytes()))
+    if (!reserveImage(image.size(), loaded, image.sizeInBytes(),
+                      image.sizeInBytes() + imageSplitAnalysisMaximumWorkingBytes))
         return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
                               "The image is too large or there is not enough memory to load it");
     // The document and canvas use physical pixel coordinates. Retain native pixels and metadata;
@@ -164,6 +169,16 @@ ScreenshotExportTaskResult prepareImage(QImage image, const std::shared_ptr<Load
     if (loaded->preview.isNull())
         return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
                               "The image could not be read or is no longer available");
+    ImageSplitSettings settings;
+    if (loaded->initialDirection)
+        settings.direction = *loaded->initialDirection;
+    loaded->prepared = prepareImageSplitLayout(
+        image, settings, [&cancellation] { return cancellation.isCancellationRequested(); });
+    if (!loaded->prepared)
+        return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Cancelled, {});
+    if (loaded->prepared->layout.errors.contains(QStringLiteral("image")))
+        return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
+                              "Image processing failed. Try again");
     loaded->image = std::move(image);
     const qint64 retained =
         loaded->image.sizeInBytes() + (loaded->preview.constBits() == loaded->image.constBits()
@@ -185,7 +200,8 @@ struct ImageSplitWindow::Impl final {
         LoadError,
         ExportError,
         DropError,
-        StitchError
+        StitchError,
+        FindingLines
     };
     ImageSplitWindow& q;
     ImageSplitWindowServices services;
@@ -199,8 +215,21 @@ struct ImageSplitWindow::Impl final {
     QPointer<QFileDialog> fileDialog;
     QPointer<AdMessageHandle> message;
     ScreenshotExportJobHandle job;
+    ScreenshotExportJobHandle splitJob;
+    struct SplitRequest final {
+        ImageSplitSettings settings;
+        quint64 revision;
+        qint64 sourceKey;
+        quint64 generation;
+    };
+    std::optional<SplitRequest> pendingSplit;
+    std::optional<SplitRequest> activeSplit;
+    quint64 splitGeneration = 0;
+    enum class OutputAction { None, Save, Pdf };
+    OutputAction pendingOutput = OutputAction::None;
+    QTimer* splitStatusTimer;
     std::shared_ptr<ScreenshotExportArtifact> artifact;
-    std::shared_ptr<CollageImportReservation> imageReservation;
+    std::shared_ptr<ImageStitchingImportReservation> imageReservation;
     QString sourceName;
     QString error;
     const char* loadingErrorSource = nullptr;
@@ -226,6 +255,17 @@ struct ImageSplitWindow::Impl final {
           editor(new components::ImageSplitEditorWidget(document)), modal(new AdModal(&q)),
           save(new AdButton), stitch(new AdButton), cancel(new AdButton),
           progressTimer(new QTimer(&q)) {
+        splitStatusTimer = new QTimer(&q);
+        splitStatusTimer->setSingleShot(true);
+        splitStatusTimer->setInterval(150);
+        QObject::connect(splitStatusTimer, &QTimer::timeout, &q, [this] {
+            if (editor->calculating() && !unavailable()) {
+                status = Status::FindingLines;
+                showStatus();
+            }
+        });
+        editor->setSettingsCommitter(
+            [this](const ImageSplitSettings& settings) { requestSettings(settings); });
         progressTimer->setInterval(100);
         QObject::connect(progressTimer, &QTimer::timeout, &q, [this] {
             if (!exporting || !progress)
@@ -317,6 +357,8 @@ struct ImageSplitWindow::Impl final {
     }
     void updateActions() {
         // Busy blocks activation while retaining the primary button's loading appearance.
+        // A valid draft stays actionable during calculation: focus loss can start a worker
+        // during a footer mouse press, and the release must still deliver its output request.
         save->setEnabled(exporting || (!unavailable() && editor->configurationValid()));
         save->setBusy(exporting);
         stitch->setEnabled(!unavailable() && services.stitchToPdf && editor->configurationValid());
@@ -324,8 +366,8 @@ struct ImageSplitWindow::Impl final {
         editor->setExportBusy(exporting);
     }
     void retranslate() {
-        modal->setWindowTitle(splitText("Image Splitting"));
-        save->setText(splitText("Save All"));
+        modal->setWindowTitle(splitText("Image splitting"));
+        save->setText(splitText("Save all"));
         stitch->setText(splitText("Stitch to PDF"));
         cancel->setText(splitText("Cancel"));
         save->setAccessibleName(save->text());
@@ -337,7 +379,7 @@ struct ImageSplitWindow::Impl final {
         if (status == Status::LoadError && loadingErrorSource)
             error = splitText(loadingErrorSource);
         if (status == Status::StitchError)
-            error = splitText("Image Stitching is busy. Try again when it finishes");
+            error = splitText("Image stitching is busy. Try again when it finishes");
         if (status == Status::ExportError) {
             exportResult.error = windowExportErrorSource ? splitText(windowExportErrorSource)
                                                          : exportResult.errorMessage();
@@ -350,6 +392,9 @@ struct ImageSplitWindow::Impl final {
         switch (status) {
         case Status::Loading:
             content = splitText("Loading image…");
+            break;
+        case Status::FindingLines:
+            content = splitText("Finding split lines…");
             break;
         case Status::Saving:
             content = splitText("Saving images: %1 of %2").arg(completed).arg(total);
@@ -386,7 +431,8 @@ struct ImageSplitWindow::Impl final {
         AdMessage::Request request;
         request.key = QStringLiteral("imageSplitStatus");
         request.content = content;
-        if (status == Status::Loading || status == Status::Saving) {
+        if (status == Status::Loading || status == Status::Saving ||
+            status == Status::FindingLines) {
             request.durationMs = 0;
             message = AdMessageService::loading(std::move(request), editor->window());
         } else if (status == Status::Saved) {
@@ -412,12 +458,12 @@ struct ImageSplitWindow::Impl final {
         installWindowCloseShortcut(editor->window(), [this] { q.requestClose(); });
     }
     void translateConfirmation() {
-        confirmation->setWindowTitle(replacing ? splitText("Replace Image")
+        confirmation->setWindowTitle(replacing ? splitText("Replace image")
                                                : splitText("Discard these image splits?"));
         confirmation->setText(
             replacing ? splitText("Replacing the image will discard the current edits")
                       : splitText("The image and current split edits will be discarded"));
-        confirmation->setAcceptText(replacing ? splitText("Replace Image") : splitText("Discard"));
+        confirmation->setAcceptText(replacing ? splitText("Replace image") : splitText("Discard"));
         confirmation->setRejectText(splitText("Cancel"));
     }
     void askConfirmation(bool replace, std::function<void(bool)> complete) {
@@ -461,7 +507,152 @@ struct ImageSplitWindow::Impl final {
         QObject::connect(dialog, &AdModal::finished, dialog, &QObject::deleteLater);
         dialog->present();
     }
+    void clearSplitStatus() {
+        splitStatusTimer->stop();
+        if (status == Status::FindingLines) {
+            status = Status::None;
+            showStatus();
+        }
+    }
+    void cancelSplit() {
+        ++splitGeneration;
+        pendingSplit.reset();
+        pendingOutput = OutputAction::None;
+        splitJob.cancel();
+        editor->setCalculating(false);
+        clearSplitStatus();
+    }
+    void finishSplit(const SplitRequest& request,
+                     const std::shared_ptr<std::optional<ImageSplitPreparedLayout>>& prepared,
+                     ScreenshotExportTaskResult result) {
+        activeSplit.reset();
+        splitJob = {};
+        if (!closing && request.generation == splitGeneration) {
+            editor->setCalculating(false);
+            clearSplitStatus();
+            const auto action = std::exchange(pendingOutput, OutputAction::None);
+            // Stale failures must not erase a newer draft or report an old image's error.
+            const bool current = request.sourceKey == document->image().cacheKey() &&
+                                 request.revision == document->revision() &&
+                                 editor->matchesDraft(request.settings);
+            if (current && result.succeeded() && *prepared && (*prepared)->layout.isValid() &&
+                (*prepared)->settings == request.settings) {
+                if (document->setPreparedSettings(**prepared, request.revision))
+                    requestOutput(action);
+            } else if (current && result.failureStage != ScreenshotExportFailureStage::Cancelled) {
+                editor->restoreCommittedSettings();
+                loadingErrorSource = "Image processing failed. Try again";
+                error = splitText(loadingErrorSource);
+                status = Status::LoadError;
+                showStatus();
+            } else if (current) {
+                editor->restoreCommittedSettings();
+            }
+            updateActions();
+        }
+        if (!closing && !importing && pendingSplit)
+            startPendingSplit();
+    }
+    void startPendingSplit() {
+        if (activeSplit || !pendingSplit)
+            return;
+        const auto request = *pendingSplit;
+        pendingSplit.reset();
+        if (request.sourceKey != document->image().cacheKey() ||
+            request.revision != document->revision()) {
+            editor->setCalculating(false);
+            clearSplitStatus();
+            return;
+        }
+        activeSplit = request;
+        auto prepared = std::make_shared<std::optional<ImageSplitPreparedLayout>>();
+        splitJob = ScreenshotExportCoordinator::shared().submit(
+            &q, ScreenshotExportCoordinator::Priority::Foreground,
+            [image = document->image(), reservation = imageReservation, request, prepared,
+             prepare = services.prepareSplit](const ScreenshotExportCancellation& cancellation) {
+                Q_UNUSED(reservation);
+                const auto cancelled = [&cancellation] {
+                    return cancellation.isCancellationRequested();
+                };
+                *prepared = prepare ? prepare(image, request.settings, cancelled)
+                                    : prepareImageSplitLayout(image, request.settings, cancelled);
+                if (cancelled() || !*prepared)
+                    return ScreenshotExportTaskResult::failure(
+                        ScreenshotExportFailureStage::Cancelled, {});
+                return ScreenshotExportTaskResult{};
+            },
+            [this, request, prepared](ScreenshotExportTaskResult result) {
+                finishSplit(request, prepared, std::move(result));
+            },
+            imageSplitAnalysisMaximumWorkingBytes);
+        if (!splitJob.isValid())
+            finishSplit(
+                request, prepared,
+                ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Queue, {}));
+    }
+    void requestSettings(const ImageSplitSettings& settings) {
+        if (unavailable())
+            return;
+        const auto same = [&](const std::optional<SplitRequest>& request) {
+            return request && request->generation == splitGeneration &&
+                   request->revision == document->revision() &&
+                   request->sourceKey == document->image().cacheKey() &&
+                   request->settings == settings;
+        };
+        if (same(pendingSplit) || same(activeSplit))
+            return;
+        cancelSplit();
+        error.clear();
+        loadingErrorSource = nullptr;
+        status = Status::None;
+        showStatus();
+        if (settings == document->settings())
+            return;
+        auto previous = document->settings();
+        previous.overlapWidth = settings.overlapWidth;
+        if (previous == settings) {
+            document->setSettings(settings);
+            return;
+        }
+        if (const auto cached = document->cachedLayout(settings)) {
+            document->setPreparedSettings(*cached, document->revision());
+            return;
+        }
+        if (!calculateImageSplitLayout(document->image().size(), settings).isValid())
+            return;
+        pendingSplit = SplitRequest{settings, document->revision(), document->image().cacheKey(),
+                                    splitGeneration};
+        editor->setCalculating(true);
+        splitStatusTimer->start();
+        startPendingSplit();
+    }
+    void requestOutput(OutputAction action) {
+        if (action == OutputAction::None || unavailable() ||
+            (action == OutputAction::Pdf && !services.stitchToPdf))
+            return;
+        pendingOutput = OutputAction::None;
+        if (!editor->commitPendingSettings()) {
+            if (editor->configurationValid() && editor->calculating())
+                pendingOutput = action;
+            return;
+        }
+        if (action == OutputAction::Save) {
+            choose(true);
+            return;
+        }
+        ImageSplitSnapshot snapshot{document->image(), document->layout(), sourceName,
+                                    imageReservation};
+        if (services.stitchToPdf(std::move(snapshot))) {
+            error.clear();
+            status = Status::None;
+        } else {
+            error = splitText("Image stitching is busy. Try again when it finishes");
+            status = Status::StitchError;
+        }
+        showStatus();
+    }
     void cancelWork() {
+        cancelSplit();
         ++generation;
         job.cancel();
         job = {};
@@ -481,6 +672,7 @@ struct ImageSplitWindow::Impl final {
             confirmation->reject();
     }
     void beginLoading() {
+        cancelSplit();
         ++generation;
         importing = true;
         error.clear();
@@ -534,10 +726,16 @@ struct ImageSplitWindow::Impl final {
                                                 .toLocalTime()
                                                 .toString(QStringLiteral("yyyyMMdd-HHmmss")))
                                  : stem;
-                ImageSplitSettings initialSettings;
-                if (loaded->initialDirection)
-                    initialSettings.direction = *loaded->initialDirection;
-                document->setImage(loaded->image, loaded->preview, initialSettings);
+                if (!loaded->prepared || !document->setPreparedImage(loaded->image, loaded->preview,
+                                                                     *loaded->prepared)) {
+                    loadingErrorSource = "Image processing failed. Try again";
+                    error = splitText(loadingErrorSource);
+                    status = Status::LoadError;
+                    showStatus();
+                    updateActions();
+                    emit q.imageLoaded(false);
+                    return;
+                }
                 imageReservation = loaded->reservation;
                 editor->canvas()->fitToCanvas();
             }
@@ -580,8 +778,8 @@ struct ImageSplitWindow::Impl final {
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->setObjectName(directory ? QStringLiteral("imageSplitFolderDialog")
                                         : QStringLiteral("imageSplitFileDialog"));
-        dialog->setWindowTitle(directory ? splitText("Select Destination Folder")
-                                         : splitText("Select Image"));
+        dialog->setWindowTitle(directory ? splitText("Select destination folder")
+                                         : splitText("Select image"));
         dialog->setFileMode(directory ? QFileDialog::Directory : QFileDialog::ExistingFile);
         dialog->setAcceptMode(QFileDialog::AcceptOpen);
         if (directory)
@@ -597,7 +795,8 @@ struct ImageSplitWindow::Impl final {
         dialog->open();
     }
     void startExport(QString directory) {
-        if (unavailable() || !editor->configurationValid())
+        if (unavailable() || !editor->configurationValid() || editor->calculating() ||
+            !editor->matchesDraft(document->settings()))
             return;
         exporting = true;
         completed = 0;
@@ -679,6 +878,8 @@ ImageSplitWindow::ImageSplitWindow(QObject* parent, ImageSplitWindowServices ser
     : QObject(parent), m_impl(std::make_unique<Impl>(*this, std::move(services))) {}
 ImageSplitWindow::~ImageSplitWindow() {
     shutdown();
+    // The modal's focused editor outlives Impl during QObject child teardown.
+    m_impl->editor->setSettingsCommitter([](const ImageSplitSettings&) {});
 }
 
 void ImageSplitWindow::presentHistory(const storage::CaptureHistoryRecord& record) {
@@ -722,10 +923,34 @@ void ImageSplitWindow::presentPinnedRecord(const QString& recordId) {
     d.present();
     d.beginLoading();
     const auto token = d.generation;
+    if (d.services.requestPinnedSnapshot) {
+        const QPointer<ImageSplitWindow> guard(this);
+        d.services.requestPinnedSnapshot(
+            recordId,
+            [guard, recordId, token](std::optional<ScreenshotPinnedImageSnapshot> snapshot) {
+                if (!guard || guard->m_impl->closing || token != guard->m_impl->generation)
+                    return;
+                if (snapshot) {
+                    guard->loadSource({std::move(snapshot->source),
+                                       std::move(snapshot->originalFileName), snapshot->createdUtc,
+                                       std::move(snapshot->error), snapshot->outputSize,
+                                       std::nullopt, snapshot->renderingBytes},
+                                      token);
+                } else {
+                    guard->loadPinnedRecord(recordId, token);
+                }
+            });
+        return;
+    }
+    loadPinnedRecord(recordId, token);
+}
+
+void ImageSplitWindow::loadPinnedRecord(const QString& recordId, quint64 token) {
+    auto& d = *m_impl;
     auto loaded = std::make_shared<LoadedImage>();
     d.job = ScreenshotExportCoordinator::shared().submit(
         this, ScreenshotExportCoordinator::Priority::Background,
-        [recordId, loaded, swatchStyle = capturePinnedColorSwatchStyle()](
+        [recordId, loaded, preparation = captureScreenshotPinnedRenderPreparation()](
             const ScreenshotExportCancellation& cancellation) {
             const auto cancelled = [&cancellation] {
                 return cancellation.isCancellationRequested();
@@ -734,7 +959,7 @@ void ImageSplitWindow::presentPinnedRecord(const QString& recordId) {
                 if (cancelled())
                     return false;
                 if (!loaded->reservation)
-                    loaded->reservation = reserveCollageImport(bytes);
+                    loaded->reservation = reserveImageStitchingImport(bytes);
                 else if (!loaded->reservation->resize(bytes))
                     loaded->reservation.reset();
                 if (!loaded->reservation)
@@ -742,12 +967,15 @@ void ImageSplitWindow::presentPinnedRecord(const QString& recordId) {
                         "The image is too large or there is not enough memory to load it";
                 return loaded->reservation != nullptr;
             };
-            auto source = readImageImportPinnedRecord(recordId, cancelled, allocate, swatchStyle);
+            auto source = readImageImportPinnedRecord(recordId, cancelled, allocate, preparation);
             loaded->originalFileName = std::move(source.originalFileName);
             loaded->createdUtc = source.createdUtc;
             if (loaded->errorSource)
                 return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
                                       loaded->errorSource);
+            if (!source.error.isEmpty())
+                return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Source,
+                                                           std::move(source.error));
             return prepareImage(std::move(source.image), loaded, cancellation);
         },
         [this, loaded, token](ScreenshotExportTaskResult result) {
@@ -767,6 +995,11 @@ void ImageSplitWindow::presentSource(ImageSplitSource source) {
     d.present();
     d.beginLoading();
     const auto token = d.generation;
+    loadSource(std::move(source), token);
+}
+
+void ImageSplitWindow::loadSource(ImageSplitSource source, quint64 token) {
+    auto& d = *m_impl;
     auto loaded = std::make_shared<LoadedImage>();
     loaded->initialDirection = source.initialDirection;
     if (!source.error.isEmpty() || !source.source.isValid()) {
@@ -777,7 +1010,8 @@ void ImageSplitWindow::presentSource(ImageSplitSource source) {
                                                             source.error));
         return;
     }
-    if (!source.outputSize.isEmpty() && !reserveImage(source.outputSize, loaded)) {
+    if (!source.outputSize.isEmpty() &&
+        !reserveImage(source.outputSize, loaded, 0, source.renderingBytes)) {
         d.finishLoading(
             loaded, source.originalFileName, source.createdUtc, false, token,
             loadingFailure(loaded, ScreenshotExportFailureStage::Source,
@@ -845,7 +1079,7 @@ void ImageSplitWindow::replaceFile(const QString& path) {
                 image = reader(path, cancelled).value_or(QImage());
             } else {
                 QString error;
-                loaded->reservation = reserveCollageImport(0, &error);
+                loaded->reservation = reserveImageStitchingImport(0, &error);
                 if (loaded->reservation)
                     image = readImageImportFile(
                         path, std::nullopt, cancelled, [loaded, &error](qint64 bytes) {
@@ -888,7 +1122,7 @@ void ImageSplitWindow::paste() {
         return;
     }
     auto loaded = std::make_shared<LoadedImage>();
-    loaded->reservation = reserveCollageImport(0);
+    loaded->reservation = reserveImageStitchingImport(0);
     bool rejected = !loaded->reservation;
     auto snapshot = ScreenshotClipboardContentReader::snapshotImage(
         clipboard, editor()->devicePixelRatioF(), [loaded, &rejected](qint64 bytes) {
@@ -931,23 +1165,10 @@ void ImageSplitWindow::paste() {
                             "Image loading could not be started. Try again"));
 }
 void ImageSplitWindow::saveAll() {
-    if (!m_impl->unavailable() && m_impl->editor->commitPendingSettings())
-        m_impl->choose(true);
+    m_impl->requestOutput(Impl::OutputAction::Save);
 }
 void ImageSplitWindow::stitchToPdf() {
-    auto& d = *m_impl;
-    if (d.unavailable() || !d.services.stitchToPdf || !d.editor->commitPendingSettings())
-        return;
-    ImageSplitSnapshot snapshot{d.document->image(), d.document->layout(), d.sourceName,
-                                d.imageReservation};
-    if (d.services.stitchToPdf(std::move(snapshot))) {
-        d.error.clear();
-        d.status = Impl::Status::None;
-    } else {
-        d.error = splitText("Image Stitching is busy. Try again when it finishes");
-        d.status = Impl::Status::StitchError;
-    }
-    d.showStatus();
+    m_impl->requestOutput(Impl::OutputAction::Pdf);
 }
 void ImageSplitWindow::requestClose() {
     if (m_impl->closing || m_impl->confirming)
@@ -972,7 +1193,7 @@ void ImageSplitWindow::shutdown() {
     m_impl->modal->reject();
 }
 bool ImageSplitWindow::busy() const {
-    return m_impl->exporting;
+    return m_impl->exporting || m_impl->editor->calculating();
 }
 bool ImageSplitWindow::loading() const {
     return m_impl->importing;

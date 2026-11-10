@@ -90,7 +90,7 @@
         </message>
         <message>
             <source>The image save directory is not configured</source>
-            <translation>尚未配置图片保存目录</translation>
+            <translation>尚未配置图像保存目录</translation>
         </message>
         <message>
             <source>The screenshot clipboard payload is invalid</source>
@@ -132,6 +132,10 @@
             <translation>PNG 图像 (*.png)</translation>
         </message>
         <message>
+            <source>TIFF image (*.tif *.tiff)</source>
+            <translation>TIFF 图像 (*.tif *.tiff)</translation>
+        </message>
+        <message>
             <source>The encoded image is empty</source>
             <translation>编码后的图像为空</translation>
         </message>
@@ -142,6 +146,10 @@
         <message>
             <source>The save was cancelled</source>
             <translation>保存已取消</translation>
+        </message>
+        <message>
+            <source>The screenshot filename format is invalid</source>
+            <translation>截图文件名格式无效</translation>
         </message>
         <message>
             <source>WebP image (*.webp)</source>
@@ -438,6 +446,10 @@
             <translation>百分比</translation>
         </message>
         <message>
+            <source>Pixels</source>
+            <translation>像素</translation>
+        </message>
+        <message>
             <source>Please enter a name</source>
             <translation>请输入名称</translation>
         </message>
@@ -494,6 +506,10 @@
             <translation>尺寸单位</translation>
         </message>
         <message>
+            <source>TIFF</source>
+            <translation>TIFF</translation>
+        </message>
+        <message>
             <source>The clipboard could not be updated: %1</source>
             <translation>无法更新剪贴板：%1</translation>
         </message>
@@ -522,7 +538,7 @@
             <translation>图像尺寸超出导出限制</translation>
         </message>
         <message>
-            <source>The save paths could not be stored</source>
+            <source>The save path settings could not be saved</source>
             <translation>无法存储保存路径配置</translation>
         </message>
         <message>
@@ -560,10 +576,6 @@
         <message>
             <source>Width</source>
             <translation>宽度</translation>
-        </message>
-        <message>
-            <source>pixel</source>
-            <translation>像素</translation>
         </message>
     </context>
     <context>

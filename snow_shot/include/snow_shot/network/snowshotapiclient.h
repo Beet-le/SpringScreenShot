@@ -158,6 +158,7 @@ class SnowShotApiClient final : public QObject {
 
     [[nodiscard]] bool usesSystemProxy() const;
     void setUseSystemProxy(bool enabled);
+    void setProxyConfiguration(const QString& mode, const QString& address);
     [[nodiscard]] const QVector<SnowShotChatModel>& cachedChatModels() const;
     [[nodiscard]] QString cachedChatModelsLocale() const {
         return m_cachedChatModelsLocale;
@@ -277,7 +278,8 @@ class SnowShotApiClient final : public QObject {
     snow_shot::CustomAiModels m_customModels;
     QVector<SnowShotChatModel> m_availableModels;
 
-    bool m_useSystemProxy = false;
+    QString m_proxyMode = QStringLiteral("none");
+    QString m_proxyAddress;
     RequestToken m_nextToken = 0;
     QHash<RequestToken, Request*> m_requests;
     QHash<QString, RequestToken> m_pendingModelCatalogs;

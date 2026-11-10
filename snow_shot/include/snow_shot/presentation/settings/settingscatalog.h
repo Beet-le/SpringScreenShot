@@ -115,6 +115,7 @@ enum class SettingsSelectBinding {
     TranslationSecondaryTargetLanguage,
     TranslationService,
     ScreenshotSelectionResizeMode,
+    ScreenshotHiDpiImageScaling,
     SkinDisplayMode,
     SkinPosition,
     ToolbarSkinPosition,
@@ -152,6 +153,7 @@ enum class SettingsSwitchBinding {
     ScreenshotRestoreOriginalScreenColors,
     ScreenshotCopyImageFileToClipboard,
     ScreenshotCopyAfterPinningToScreen,
+    ScreenshotKeepAnnotationsEditableAfterPinningToScreen,
     ScreenshotShowSaveResult,
     SaveRecognitionResultAsImage,
     ShowOriginalImagePreview,
@@ -179,7 +181,7 @@ enum class SettingsSwitchBinding {
     ScreenRecordingAutoExitAfterRecordingEnds,
     ScreenRecordingNotifyAfterExportCompletes,
     ScreenRecordingDeleteFilesOnRecordingClose,
-    DisableHotkeysOnFocusedFullscreen,
+    DisableShortcutsOnFocusedFullscreen,
     McpEnabled,
     AutoStartAtBoot,
     LaunchAsAdministrator,
@@ -187,6 +189,7 @@ enum class SettingsSwitchBinding {
     DrawingAutomaticallySelectNewlyCreatedElements,
     DrawingDeleteTextAfterCursor,
     DrawingRememberLastUsedTool,
+    DrawingSyncToolColors,
     DrawingAlwaysShowFirstToolbarGroupButton,
 };
 
@@ -270,6 +273,7 @@ struct SettingsColorDefinition {
 enum class SettingsColorPaletteBinding {
     StrokeColors,
     FillColors,
+    HighlightColors,
 };
 
 struct SettingsColorPaletteDefinition {
@@ -321,6 +325,7 @@ struct SettingsDirectoryPathDefinition {
 };
 
 enum class SettingsTextBinding {
+    HttpProxy,
     ServerUrl,
     ScreenshotManualFilenameFormat,
     ScreenshotAutoFilenameFormat,
@@ -371,7 +376,7 @@ enum class SettingsActionBinding {
     ClearPinnedHistory,
     ClearThumbnailCache,
     ClearRecordingTemp,
-    CopyTodayLog,
+    ExportLogs,
     ExportConfiguration,
     ImportConfiguration,
 };
@@ -521,7 +526,7 @@ enum class SettingsSectionReset {
     FloatingToolbar,
     ScreenRecording,
     ScreenRecordingOutput,
-    GlobalHotkeys,
+    GlobalShortcuts,
     SystemGeneral,
     ScreenshotCapture,
     ScreenRecordingCapture,

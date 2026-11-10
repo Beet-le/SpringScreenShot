@@ -469,7 +469,7 @@ void TranslationPageWidget::retranslateUi() {
         m_labels[index]->setText(labels[index]);
         m_selects[index]->setAccessibleName(labels[index]);
     }
-    QVector<AdSelect::Option> sourceOptions{{QStringLiteral("auto"), tr("Auto Detect")}};
+    QVector<AdSelect::Option> sourceOptions{{QStringLiteral("auto"), tr("Auto-detect language")}};
     QVector<AdSelect::Option> targetOptions;
     for (const auto& language : translation::translationLanguages()) {
         const QString code = QString::fromLatin1(language.code);
@@ -480,7 +480,7 @@ void TranslationPageWidget::retranslateUi() {
     }
     m_selects[0]->setOptions(sourceOptions);
     m_selects[1]->setOptions(targetOptions);
-    m_selects[2]->setPlaceholder(tr("Select a service"));
+    m_selects[2]->setPlaceholder(tr("Select a translation service"));
     m_source->setPlaceholderText(tr("Enter text to translate"));
     m_source->setAccessibleName(tr("Source text"));
     m_result->setPlaceholderText(tr("Translation appears here"));
@@ -507,7 +507,7 @@ void TranslationPageWidget::retranslateActions() {
             tr("Copy (%1)").arg(snow_shot::shortcuts::formatShortcutDisplayText(copyBinding)));
     if (m_copyClose)
         m_copyClose->setText(
-            tr("Copy and Close (%1)")
+            tr("Copy and close (%1)")
                 .arg(snow_shot::shortcuts::formatShortcutDisplayText(copyCloseBinding)));
 }
 

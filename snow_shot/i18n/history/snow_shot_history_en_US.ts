@@ -2,7 +2,542 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="en_US" sourcelanguage="en_US">
     <context>
-        <name>CollageDocument</name>
+        <name>CaptureHistoryRepository</name>
+        <message>
+            <source>Unable to create the screenshot history entry folder</source>
+            <translation>Unable to create the screenshot history entry folder</translation>
+        </message>
+        <message>
+            <source>Unable to write screenshot history file %1: %2</source>
+            <translation>Unable to write screenshot history file %1: %2</translation>
+        </message>
+    </context>
+    <context>
+        <name>HistoryEntryWidget</name>
+        <message>
+            <source>%1 x %2 px  ·  %3 display(s)</source>
+            <translation>%1 x %2 px  ·  %3 display(s)</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Copy</source>
+            <translation>Copy</translation>
+        </message>
+        <message>
+            <source>Copy screenshot result</source>
+            <translation>Copy screenshot result</translation>
+        </message>
+        <message>
+            <source>Copy to clipboard</source>
+            <translation>Copy to clipboard</translation>
+        </message>
+        <message>
+            <source>Current monitor</source>
+            <translation>Current monitor</translation>
+        </message>
+        <message>
+            <source>Delete</source>
+            <translation>Delete</translation>
+        </message>
+        <message>
+            <source>Delete history entry</source>
+            <translation>Delete history entry</translation>
+        </message>
+        <message>
+            <source>Delete this screenshot history entry?</source>
+            <translation>Delete this screenshot history entry?</translation>
+        </message>
+        <message>
+            <source>Edit</source>
+            <translation>Edit</translation>
+        </message>
+        <message>
+            <source>Edit screenshot history entry</source>
+            <translation>Edit screenshot history entry</translation>
+        </message>
+        <message>
+            <source>Focused window</source>
+            <translation>Focused window</translation>
+        </message>
+        <message>
+            <source>Image editing</source>
+            <translation>Image editing</translation>
+        </message>
+        <message>
+            <source>Loading preview…</source>
+            <translation>Loading preview…</translation>
+        </message>
+        <message>
+            <source>More</source>
+            <translation>More</translation>
+        </message>
+        <message>
+            <source>More actions</source>
+            <translation>More actions</translation>
+        </message>
+        <message>
+            <source>Pin this screenshot to the screen</source>
+            <translation>Pin this screenshot to the screen</translation>
+        </message>
+        <message>
+            <source>Pin to screen</source>
+            <translation>Pin to screen</translation>
+        </message>
+        <message>
+            <source>Position %1, %2  ·  %3</source>
+            <translation>Position %1, %2  ·  %3</translation>
+        </message>
+        <message>
+            <source>Preview unavailable</source>
+            <translation>Preview unavailable</translation>
+        </message>
+        <message>
+            <source>Save as file</source>
+            <translation>Save as file</translation>
+        </message>
+        <message>
+            <source>Screenshot display</source>
+            <translation>Screenshot display</translation>
+        </message>
+        <message>
+            <source>Screenshot result</source>
+            <translation>Screenshot result</translation>
+        </message>
+        <message>
+            <source>Stitch images</source>
+            <translation>Stitch images</translation>
+        </message>
+        <message>
+            <source>This action cannot be undone</source>
+            <translation>This action cannot be undone</translation>
+        </message>
+        <message>
+            <source>This screenshot cannot be pinned</source>
+            <translation>This screenshot cannot be pinned</translation>
+        </message>
+    </context>
+    <context>
+        <name>HistoryFileLocation</name>
+        <message>
+            <source>Copy image path</source>
+            <translation>Copy image path</translation>
+        </message>
+        <message>
+            <source>Open containing folder</source>
+            <translation>Open containing folder</translation>
+        </message>
+        <message>
+            <source>Open in Explorer</source>
+            <translation>Open in Explorer</translation>
+        </message>
+        <message>
+            <source>Reveal in Finder</source>
+            <translation>Reveal in Finder</translation>
+        </message>
+        <message>
+            <source>Unable to copy this entry's image path</source>
+            <translation>Unable to copy this entry's image path</translation>
+        </message>
+        <message>
+            <source>Unable to open this entry's file location</source>
+            <translation>Unable to open this entry's file location</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageEditingWindow</name>
+        <message>
+            <source>%1 px</source>
+            <translation>%1 px</translation>
+        </message>
+        <message>
+            <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again</source>
+            <translation>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again</translation>
+        </message>
+        <message>
+            <source>Could not read the selected image files. Please try again</source>
+            <translation>Could not read the selected image files. Please try again</translation>
+        </message>
+        <message>
+            <source>No available output filename was found</source>
+            <translation>No available output filename was found</translation>
+        </message>
+        <message>
+            <source>The editing content could not be prepared for export</source>
+            <translation>The editing content could not be prepared for export</translation>
+        </message>
+        <message>
+            <source>The file manager is unavailable. Open it and try again</source>
+            <translation>The file manager is unavailable. Open it and try again</translation>
+        </message>
+        <message>
+            <source>The file manager took too long to return the selected files. Please try again</source>
+            <translation>The file manager took too long to return the selected files. Please try again</translation>
+        </message>
+        <message>
+            <source>The image could not be loaded</source>
+            <translation>The image could not be loaded</translation>
+        </message>
+        <message>
+            <source>The image is too large or there is not enough memory to load it</source>
+            <translation>The image is too large or there is not enough memory to load it</translation>
+        </message>
+        <message>
+            <source>The save directory is not available</source>
+            <translation>The save directory is not available</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitDocument</name>
+        <message>
+            <source>Choose a split direction</source>
+            <translation>Choose a split direction</translation>
+        </message>
+        <message>
+            <source>Choose a split type</source>
+            <translation>Choose a split type</translation>
+        </message>
+        <message>
+            <source>Choose pixels or percentage</source>
+            <translation>Choose pixels or percentage</translation>
+        </message>
+        <message>
+            <source>Each image must be at least one pixel wide and high</source>
+            <translation>Each image must be at least one pixel wide and high</translation>
+        </message>
+        <message>
+            <source>Enter a non-negative integer</source>
+            <translation>Enter a non-negative integer</translation>
+        </message>
+        <message>
+            <source>Enter a percentage from 5% to 100%</source>
+            <translation>Enter a percentage from 5% to 100%</translation>
+        </message>
+        <message>
+            <source>Enter a positive whole number</source>
+            <translation>Enter a positive whole number</translation>
+        </message>
+        <message>
+            <source>Enter at least 16 pixels</source>
+            <translation>Enter at least 16 pixels</translation>
+        </message>
+        <message>
+            <source>The image is unavailable</source>
+            <translation>The image is unavailable</translation>
+        </message>
+        <message>
+            <source>The split lines require too much memory</source>
+            <translation>The split lines require too much memory</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitEditorWidget</name>
+        <message>
+            <source> px</source>
+            <translation> px</translation>
+        </message>
+        <message>
+            <source>%1 × %2 px</source>
+            <translation>%1 × %2 px</translation>
+        </message>
+        <message>
+            <source>Columns</source>
+            <translation>Columns</translation>
+        </message>
+        <message>
+            <source>Drag an image file here, or choose select image</source>
+            <translation>Drag an image file here, or choose select image</translation>
+        </message>
+        <message>
+            <source>Drop one image file at a time</source>
+            <translation>Drop one image file at a time</translation>
+        </message>
+        <message>
+            <source>Drop one image to replace the current image</source>
+            <translation>Drop one image to replace the current image</translation>
+        </message>
+        <message>
+            <source>Drop one image to split</source>
+            <translation>Drop one image to split</translation>
+        </message>
+        <message>
+            <source>Each image extends this many pixels past each split line</source>
+            <translation>Each image extends this many pixels past each split line</translation>
+        </message>
+        <message>
+            <source>Enter a non-negative integer</source>
+            <translation>Enter a non-negative integer</translation>
+        </message>
+        <message>
+            <source>Enter a positive integer</source>
+            <translation>Enter a positive integer</translation>
+        </message>
+        <message>
+            <source>Enter an integer of at least 16 pixels</source>
+            <translation>Enter an integer of at least 16 pixels</translation>
+        </message>
+        <message>
+            <source>Equal split</source>
+            <translation>Equal split</translation>
+        </message>
+        <message>
+            <source>Fit to canvas</source>
+            <translation>Fit to canvas</translation>
+        </message>
+        <message>
+            <source>Grid</source>
+            <translation>Grid</translation>
+        </message>
+        <message>
+            <source>Height per image</source>
+            <translation>Height per image</translation>
+        </message>
+        <message>
+            <source>Horizontal</source>
+            <translation>Horizontal</translation>
+        </message>
+        <message>
+            <source>Number of images</source>
+            <translation>Number of images</translation>
+        </message>
+        <message>
+            <source>Overlap width</source>
+            <translation>Overlap width</translation>
+        </message>
+        <message>
+            <source>Percentage</source>
+            <translation>Percentage</translation>
+        </message>
+        <message>
+            <source>Pixels</source>
+            <translation>Pixels</translation>
+        </message>
+        <message>
+            <source>Precise split</source>
+            <translation>Precise split</translation>
+        </message>
+        <message>
+            <source>Redo</source>
+            <translation>Redo</translation>
+        </message>
+        <message>
+            <source>Reload</source>
+            <translation>Reload</translation>
+        </message>
+        <message>
+            <source>Rows</source>
+            <translation>Rows</translation>
+        </message>
+        <message>
+            <source>Select an image to split</source>
+            <translation>Select an image to split</translation>
+        </message>
+        <message>
+            <source>Select image</source>
+            <translation>Select image</translation>
+        </message>
+        <message>
+            <source>Smart split</source>
+            <translation>Smart split</translation>
+        </message>
+        <message>
+            <source>Split direction</source>
+            <translation>Split direction</translation>
+        </message>
+        <message>
+            <source>Split size unit</source>
+            <translation>Split size unit</translation>
+        </message>
+        <message>
+            <source>Split type</source>
+            <translation>Split type</translation>
+        </message>
+        <message>
+            <source>Total: %1 images</source>
+            <translation>Total: %1 images</translation>
+        </message>
+        <message>
+            <source>Undo</source>
+            <translation>Undo</translation>
+        </message>
+        <message>
+            <source>Vertical</source>
+            <translation>Vertical</translation>
+        </message>
+        <message>
+            <source>Width per image</source>
+            <translation>Width per image</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitExport</name>
+        <message>
+            <source>Export was canceled</source>
+            <translation>Export was canceled</translation>
+        </message>
+        <message>
+            <source>Image %1 could not be saved: %2</source>
+            <translation>Image %1 could not be saved: %2</translation>
+        </message>
+        <message>
+            <source>The image could not be prepared for export</source>
+            <translation>The image could not be prepared for export</translation>
+        </message>
+        <message>
+            <source>The image or split configuration is invalid</source>
+            <translation>The image or split configuration is invalid</translation>
+        </message>
+        <message>
+            <source>The output folder could not be created</source>
+            <translation>The output folder could not be created</translation>
+        </message>
+        <message>
+            <source>There is not enough memory to export the image</source>
+            <translation>There is not enough memory to export the image</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitPreviewCanvas</name>
+        <message>
+            <source>Click a ruler to add a split line; drag a line to move it. Select a line and press Delete to remove it. Drag with the middle mouse button to pan; scroll to zoom</source>
+            <translation>Click a ruler to add a split line; drag a line to move it. Select a line and press Delete to remove it. Drag with the middle mouse button to pan; scroll to zoom</translation>
+        </message>
+        <message>
+            <source>Image splitting preview</source>
+            <translation>Image splitting preview</translation>
+        </message>
+        <message>
+            <source>X: %1 px</source>
+            <translation>X: %1 px</translation>
+        </message>
+        <message>
+            <source>Y: %1 px</source>
+            <translation>Y: %1 px</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitWindow</name>
+        <message>
+            <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again</source>
+            <translation>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Could not read the selected image files. Please try again</source>
+            <translation>Could not read the selected image files. Please try again</translation>
+        </message>
+        <message>
+            <source>Discard</source>
+            <translation>Discard</translation>
+        </message>
+        <message>
+            <source>Discard these image splits?</source>
+            <translation>Discard these image splits?</translation>
+        </message>
+        <message>
+            <source>Drop one image file at a time</source>
+            <translation>Drop one image file at a time</translation>
+        </message>
+        <message>
+            <source>Export could not be started. Try again</source>
+            <translation>Export could not be started. Try again</translation>
+        </message>
+        <message>
+            <source>Finding split lines…</source>
+            <translation>Finding split lines…</translation>
+        </message>
+        <message>
+            <source>Image loading could not be started. Try again</source>
+            <translation>Image loading could not be started. Try again</translation>
+        </message>
+        <message>
+            <source>Image processing failed. Try again</source>
+            <translation>Image processing failed. Try again</translation>
+        </message>
+        <message>
+            <source>Image splitting</source>
+            <translation>Image splitting</translation>
+        </message>
+        <message>
+            <source>Image stitching is busy. Try again when it finishes</source>
+            <translation>Image stitching is busy. Try again when it finishes</translation>
+        </message>
+        <message>
+            <source>Images</source>
+            <translation>Images</translation>
+        </message>
+        <message>
+            <source>Loading image…</source>
+            <translation>Loading image…</translation>
+        </message>
+        <message>
+            <source>Replace image</source>
+            <translation>Replace image</translation>
+        </message>
+        <message>
+            <source>Replacing the image will discard the current edits</source>
+            <translation>Replacing the image will discard the current edits</translation>
+        </message>
+        <message>
+            <source>Save all</source>
+            <translation>Save all</translation>
+        </message>
+        <message>
+            <source>Saved %1 images to %2</source>
+            <translation>Saved %1 images to %2</translation>
+        </message>
+        <message>
+            <source>Saved %1 of %2 images to %3. %4</source>
+            <translation>Saved %1 of %2 images to %3. %4</translation>
+        </message>
+        <message>
+            <source>Saving images: %1 of %2</source>
+            <translation>Saving images: %1 of %2</translation>
+        </message>
+        <message>
+            <source>Select destination folder</source>
+            <translation>Select destination folder</translation>
+        </message>
+        <message>
+            <source>Select image</source>
+            <translation>Select image</translation>
+        </message>
+        <message>
+            <source>Stitch to PDF</source>
+            <translation>Stitch to PDF</translation>
+        </message>
+        <message>
+            <source>The file manager is unavailable. Open it and try again</source>
+            <translation>The file manager is unavailable. Open it and try again</translation>
+        </message>
+        <message>
+            <source>The file manager took too long to return the selected files. Please try again</source>
+            <translation>The file manager took too long to return the selected files. Please try again</translation>
+        </message>
+        <message>
+            <source>The image and current split edits will be discarded</source>
+            <translation>The image and current split edits will be discarded</translation>
+        </message>
+        <message>
+            <source>The image could not be read or is no longer available</source>
+            <translation>The image could not be read or is no longer available</translation>
+        </message>
+        <message>
+            <source>The image is too large or there is not enough memory to load it</source>
+            <translation>The image is too large or there is not enough memory to load it</translation>
+        </message>
+        <message>
+            <source>The images could not be exported. Try again</source>
+            <translation>The images could not be exported. Try again</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageStitchingDocument</name>
         <message>
             <source>Enter a nonnegative image spacing</source>
             <translation>Enter a nonnegative image spacing</translation>
@@ -14,6 +549,10 @@
         <message>
             <source>Enter a positive paper dimension</source>
             <translation>Enter a positive paper dimension</translation>
+        </message>
+        <message>
+            <source>Image stitching requires too much temporary memory. Try fewer images or smaller image sizes</source>
+            <translation>Image stitching requires too much temporary memory. Try fewer images or smaller image sizes</translation>
         </message>
         <message>
             <source>Select a paper orientation</source>
@@ -40,28 +579,16 @@
             <translation>The PDF page settings are invalid</translation>
         </message>
         <message>
-            <source>The collage exceeds the 8 GiB image limit. Try fewer images or smaller layout settings</source>
-            <translation>The collage exceeds the 8 GiB image limit. Try fewer images or smaller layout settings</translation>
-        </message>
-        <message>
-            <source>The collage export was cancelled</source>
-            <translation>The collage export was cancelled</translation>
-        </message>
-        <message>
-            <source>The collage images could not be prepared for export</source>
-            <translation>The collage images could not be prepared for export</translation>
-        </message>
-        <message>
-            <source>The collage is too large for the clipboard. Save it to a file instead</source>
-            <translation>The collage is too large for the clipboard. Save it to a file instead</translation>
-        </message>
-        <message>
-            <source>The collage layout settings are invalid</source>
-            <translation>The collage layout settings are invalid</translation>
-        </message>
-        <message>
             <source>The image spacing must leave usable template cells</source>
             <translation>The image spacing must leave usable template cells</translation>
+        </message>
+        <message>
+            <source>The image stitching export was canceled</source>
+            <translation>The image stitching export was canceled</translation>
+        </message>
+        <message>
+            <source>The image stitching layout settings are invalid</source>
+            <translation>The image stitching layout settings are invalid</translation>
         </message>
         <message>
             <source>The margins must leave a usable content area</source>
@@ -72,16 +599,24 @@
             <translation>The paper dimension exceeds the PDF size limit</translation>
         </message>
         <message>
-            <source>There is not enough available memory for this collage operation. Try fewer images or close other collage windows</source>
-            <translation>There is not enough available memory for this collage operation. Try fewer images or close other collage windows</translation>
+            <source>The stitched image could not be prepared for export</source>
+            <translation>The stitched image could not be prepared for export</translation>
         </message>
         <message>
-            <source>This collage requires too much temporary memory. Try fewer images or smaller image sizes</source>
-            <translation>This collage requires too much temporary memory. Try fewer images or smaller image sizes</translation>
+            <source>The stitched image exceeds the 8 GiB image limit. Try fewer images or smaller layout settings</source>
+            <translation>The stitched image exceeds the 8 GiB image limit. Try fewer images or smaller layout settings</translation>
+        </message>
+        <message>
+            <source>The stitched image is too large for the clipboard. Save it to a file instead</source>
+            <translation>The stitched image is too large for the clipboard. Save it to a file instead</translation>
+        </message>
+        <message>
+            <source>There is not enough available memory for image stitching. Try fewer images or close other image stitching windows</source>
+            <translation>There is not enough available memory for image stitching. Try fewer images or close other image stitching windows</translation>
         </message>
     </context>
     <context>
-        <name>CollageEditorWidget</name>
+        <name>ImageStitchingEditorWidget</name>
         <message>
             <source> px</source>
             <translation> px</translation>
@@ -99,8 +634,8 @@
             <translation>Add images</translation>
         </message>
         <message>
-            <source>Add images to create a collage</source>
-            <translation>Add images to create a collage</translation>
+            <source>Add images to start image stitching</source>
+            <translation>Add images to start image stitching</translation>
         </message>
         <message>
             <source>Add multiple image files at once</source>
@@ -127,10 +662,6 @@
             <translation>Clear all</translation>
         </message>
         <message>
-            <source>Collage preview</source>
-            <translation>Collage preview</translation>
-        </message>
-        <message>
             <source>Columns</source>
             <translation>Columns</translation>
         </message>
@@ -143,16 +674,16 @@
             <translation>Delete image</translation>
         </message>
         <message>
-            <source>Drag image files here, or choose Add images</source>
-            <translation>Drag image files here, or choose Add images</translation>
+            <source>Drag an image to move or swap it; drag selection handles to scale around its center. Drag with the middle mouse button to pan; scroll to zoom</source>
+            <translation>Drag an image to move or swap it; drag selection handles to scale around its center. Drag with the middle mouse button to pan; scroll to zoom</translation>
         </message>
         <message>
-            <source>Drag with the middle mouse button to pan; scroll to zoom</source>
-            <translation>Drag with the middle mouse button to pan; scroll to zoom</translation>
+            <source>Drag image files here, or choose add images</source>
+            <translation>Drag image files here, or choose add images</translation>
         </message>
         <message>
-            <source>Drop images to add to collage</source>
-            <translation>Drop images to add to collage</translation>
+            <source>Drop images to stitch</source>
+            <translation>Drop images to stitch</translation>
         </message>
         <message>
             <source>Fit to canvas</source>
@@ -183,6 +714,10 @@
             <translation>Image %1: %2</translation>
         </message>
         <message>
+            <source>Image preview was cancelled</source>
+            <translation>Image preview was cancelled</translation>
+        </message>
+        <message>
             <source>Image sizing</source>
             <translation>Image sizing</translation>
         </message>
@@ -201,6 +736,10 @@
         <message>
             <source>Image spacing unit</source>
             <translation>Image spacing unit</translation>
+        </message>
+        <message>
+            <source>Image stitching preview</source>
+            <translation>Image stitching preview</translation>
         </message>
         <message>
             <source>Image type</source>
@@ -251,8 +790,12 @@
             <translation>Percentage of the widest image after sizing</translation>
         </message>
         <message>
-            <source>Pixel</source>
-            <translation>Pixel</translation>
+            <source>Pixels</source>
+            <translation>Pixels</translation>
+        </message>
+        <message>
+            <source>Preview original image</source>
+            <translation>Preview original image</translation>
         </message>
         <message>
             <source>Purple</source>
@@ -295,6 +838,10 @@
             <translation>Static image</translation>
         </message>
         <message>
+            <source>The original image is unavailable</source>
+            <translation>The original image is unavailable</translation>
+        </message>
+        <message>
             <source>Total: %1 images</source>
             <translation>Total: %1 images</translation>
         </message>
@@ -320,7 +867,7 @@
         </message>
     </context>
     <context>
-        <name>CollagePdfExport</name>
+        <name>ImageStitchingPdfExport</name>
         <message>
             <source>Export was canceled</source>
             <translation>Export was canceled</translation>
@@ -359,7 +906,7 @@
         </message>
     </context>
     <context>
-        <name>CollagePdfPageGrid</name>
+        <name>ImageStitchingPdfPageGrid</name>
         <message>
             <source>Add images</source>
             <translation>Add images</translation>
@@ -381,8 +928,8 @@
             <translation>Delete image</translation>
         </message>
         <message>
-            <source>Drag image files here, or choose Add images</source>
-            <translation>Drag image files here, or choose Add images</translation>
+            <source>Drag image files here, or choose add images</source>
+            <translation>Drag image files here, or choose add images</translation>
         </message>
         <message>
             <source>Drag pages to reorder. Use the arrow keys to select a page and Enter to preview the original image</source>
@@ -450,7 +997,7 @@
         </message>
     </context>
     <context>
-        <name>CollagePdfSettingsWidget</name>
+        <name>ImageStitchingPdfSettingsWidget</name>
         <message>
             <source>A3</source>
             <translation>A3</translation>
@@ -512,8 +1059,8 @@
             <translation>ID card</translation>
         </message>
         <message>
-            <source>Image Size</source>
-            <translation>Image Size</translation>
+            <source>Image size</source>
+            <translation>Image size</translation>
         </message>
         <message>
             <source>Image spacing</source>
@@ -597,7 +1144,7 @@
         </message>
     </context>
     <context>
-        <name>CollagePdfTemplateWidget</name>
+        <name>ImageStitchingPdfTemplateWidget</name>
         <message>
             <source>Add images</source>
             <translation>Add images</translation>
@@ -615,8 +1162,16 @@
             <translation>Delete image</translation>
         </message>
         <message>
-            <source>Drag an image to move or swap it; drag its selection handles to scale around its center</source>
-            <translation>Drag an image to move or swap it; drag its selection handles to scale around its center</translation>
+            <source>Drag an image to move or swap it; drag its selection handles to scale proportionally around its center. Drag with the middle mouse button to pan; scroll to zoom</source>
+            <translation>Drag an image to move or swap it; drag its selection handles to scale proportionally around its center. Drag with the middle mouse button to pan; scroll to zoom</translation>
+        </message>
+        <message>
+            <source>Drag image files here, or choose add images</source>
+            <translation>Drag image files here, or choose add images</translation>
+        </message>
+        <message>
+            <source>Fit to canvas</source>
+            <translation>Fit to canvas</translation>
         </message>
         <message>
             <source>Flip horizontally</source>
@@ -696,7 +1251,7 @@
         </message>
     </context>
     <context>
-        <name>CollageWindow</name>
+        <name>ImageStitchingWindow</name>
         <message>
             <source>%1: %2</source>
             <translation>%1: %2</translation>
@@ -706,8 +1261,8 @@
             <translation>Add images</translation>
         </message>
         <message>
-            <source>All images will be removed from this collage</source>
-            <translation>All images will be removed from this collage</translation>
+            <source>All images will be removed from this stitching session</source>
+            <translation>All images will be removed from this stitching session</translation>
         </message>
         <message>
             <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again</source>
@@ -734,20 +1289,16 @@
             <translation>Clipboard image</translation>
         </message>
         <message>
-            <source>Collage</source>
-            <translation>Collage</translation>
-        </message>
-        <message>
             <source>Copy</source>
             <translation>Copy</translation>
         </message>
         <message>
-            <source>Copying collage…</source>
-            <translation>Copying collage…</translation>
-        </message>
-        <message>
             <source>Copying could not be started. Try again</source>
             <translation>Copying could not be started. Try again</translation>
+        </message>
+        <message>
+            <source>Copying stitched image…</source>
+            <translation>Copying stitched image…</translation>
         </message>
         <message>
             <source>Could not read the selected image files. Please try again</source>
@@ -758,8 +1309,8 @@
             <translation>Discard</translation>
         </message>
         <message>
-            <source>Discard this collage?</source>
-            <translation>Discard this collage?</translation>
+            <source>Discard this stitching session?</source>
+            <translation>Discard this stitching session?</translation>
         </message>
         <message>
             <source>Export could not be started. Try again</source>
@@ -772,6 +1323,10 @@
         <message>
             <source>Image loading could not be started. Try again</source>
             <translation>Image loading could not be started. Try again</translation>
+        </message>
+        <message>
+            <source>Image stitching</source>
+            <translation>Image stitching</translation>
         </message>
         <message>
             <source>Images</source>
@@ -802,8 +1357,8 @@
             <translation>Pinned window %1</translation>
         </message>
         <message>
-            <source>Preparing collage…</source>
-            <translation>Preparing collage…</translation>
+            <source>Preparing stitched image…</source>
+            <translation>Preparing stitched image…</translation>
         </message>
         <message>
             <source>Reading selected image files…</source>
@@ -836,12 +1391,12 @@ Files:
 %3</translation>
         </message>
         <message>
-            <source>Saving collage…</source>
-            <translation>Saving collage…</translation>
-        </message>
-        <message>
             <source>Saving could not be started. Try again</source>
             <translation>Saving could not be started. Try again</translation>
+        </message>
+        <message>
+            <source>Saving stitched image…</source>
+            <translation>Saving stitched image…</translation>
         </message>
         <message>
             <source>Screenshot %1</source>
@@ -878,492 +1433,12 @@ Files:
             <translation>The image could not be decoded or is no longer available</translation>
         </message>
         <message>
-            <source>The images and edits in this collage will be discarded</source>
-            <translation>The images and edits in this collage will be discarded</translation>
+            <source>The images and edits in this stitching session will be discarded</source>
+            <translation>The images and edits in this stitching session will be discarded</translation>
         </message>
         <message>
             <source>The layout settings could not be remembered: %1</source>
             <translation>The layout settings could not be remembered: %1</translation>
-        </message>
-    </context>
-    <context>
-        <name>HistoryEntryWidget</name>
-        <message>
-            <source>%1 x %2 px  ·  %3 display(s)</source>
-            <translation>%1 x %2 px  ·  %3 display(s)</translation>
-        </message>
-        <message>
-            <source>Cancel</source>
-            <translation>Cancel</translation>
-        </message>
-        <message>
-            <source>Copy</source>
-            <translation>Copy</translation>
-        </message>
-        <message>
-            <source>Copy screenshot result</source>
-            <translation>Copy screenshot result</translation>
-        </message>
-        <message>
-            <source>Copy to clipboard</source>
-            <translation>Copy to clipboard</translation>
-        </message>
-        <message>
-            <source>Current monitor</source>
-            <translation>Current monitor</translation>
-        </message>
-        <message>
-            <source>Delete</source>
-            <translation>Delete</translation>
-        </message>
-        <message>
-            <source>Delete history entry</source>
-            <translation>Delete history entry</translation>
-        </message>
-        <message>
-            <source>Delete this screenshot history entry?</source>
-            <translation>Delete this screenshot history entry?</translation>
-        </message>
-        <message>
-            <source>Edit</source>
-            <translation>Edit</translation>
-        </message>
-        <message>
-            <source>Edit screenshot history entry</source>
-            <translation>Edit screenshot history entry</translation>
-        </message>
-        <message>
-            <source>Focused window</source>
-            <translation>Focused window</translation>
-        </message>
-        <message>
-            <source>Image Editing</source>
-            <translation>Image Editing</translation>
-        </message>
-        <message>
-            <source>Loading preview…</source>
-            <translation>Loading preview…</translation>
-        </message>
-        <message>
-            <source>More</source>
-            <translation>More</translation>
-        </message>
-        <message>
-            <source>More actions</source>
-            <translation>More actions</translation>
-        </message>
-        <message>
-            <source>Pin this screenshot to the screen</source>
-            <translation>Pin this screenshot to the screen</translation>
-        </message>
-        <message>
-            <source>Pin to screen</source>
-            <translation>Pin to screen</translation>
-        </message>
-        <message>
-            <source>Position %1, %2  ·  %3</source>
-            <translation>Position %1, %2  ·  %3</translation>
-        </message>
-        <message>
-            <source>Preview unavailable</source>
-            <translation>Preview unavailable</translation>
-        </message>
-        <message>
-            <source>Save as file</source>
-            <translation>Save as file</translation>
-        </message>
-        <message>
-            <source>Screenshot display</source>
-            <translation>Screenshot display</translation>
-        </message>
-        <message>
-            <source>Screenshot result</source>
-            <translation>Screenshot result</translation>
-        </message>
-        <message>
-            <source>Stitch Image</source>
-            <translation>Stitch Image</translation>
-        </message>
-        <message>
-            <source>This action cannot be undone</source>
-            <translation>This action cannot be undone</translation>
-        </message>
-        <message>
-            <source>This screenshot cannot be pinned</source>
-            <translation>This screenshot cannot be pinned</translation>
-        </message>
-    </context>
-    <context>
-        <name>HistoryFileLocation</name>
-        <message>
-            <source>Copy image path</source>
-            <translation>Copy image path</translation>
-        </message>
-        <message>
-            <source>Open Containing Folder</source>
-            <translation>Open Containing Folder</translation>
-        </message>
-        <message>
-            <source>Open in Explorer</source>
-            <translation>Open in Explorer</translation>
-        </message>
-        <message>
-            <source>Reveal in Finder</source>
-            <translation>Reveal in Finder</translation>
-        </message>
-        <message>
-            <source>Unable to copy this entry's image path</source>
-            <translation>Unable to copy this entry's image path</translation>
-        </message>
-        <message>
-            <source>Unable to open this entry's file location</source>
-            <translation>Unable to open this entry's file location</translation>
-        </message>
-    </context>
-    <context>
-        <name>ImageEditingWindow</name>
-        <message>
-            <source>%1 px</source>
-            <translation>%1 px</translation>
-        </message>
-        <message>
-            <source>No available output filename was found</source>
-            <translation>No available output filename was found</translation>
-        </message>
-        <message>
-            <source>The editing content could not be prepared for export</source>
-            <translation>The editing content could not be prepared for export</translation>
-        </message>
-        <message>
-            <source>The image could not be loaded</source>
-            <translation>The image could not be loaded</translation>
-        </message>
-        <message>
-            <source>The save directory is not available</source>
-            <translation>The save directory is not available</translation>
-        </message>
-    </context>
-    <context>
-        <name>ImageSplitDocument</name>
-        <message>
-            <source>Choose a split direction</source>
-            <translation>Choose a split direction</translation>
-        </message>
-        <message>
-            <source>Choose a split type</source>
-            <translation>Choose a split type</translation>
-        </message>
-        <message>
-            <source>Choose pixels or percentage</source>
-            <translation>Choose pixels or percentage</translation>
-        </message>
-        <message>
-            <source>Each image must be at least one pixel wide or high</source>
-            <translation>Each image must be at least one pixel wide or high</translation>
-        </message>
-        <message>
-            <source>Enter a percentage from 5% to 100%</source>
-            <translation>Enter a percentage from 5% to 100%</translation>
-        </message>
-        <message>
-            <source>Enter a positive whole number</source>
-            <translation>Enter a positive whole number</translation>
-        </message>
-        <message>
-            <source>Enter at least 16 pixels</source>
-            <translation>Enter at least 16 pixels</translation>
-        </message>
-        <message>
-            <source>The image is unavailable</source>
-            <translation>The image is unavailable</translation>
-        </message>
-        <message>
-            <source>The split lines require too much memory</source>
-            <translation>The split lines require too much memory</translation>
-        </message>
-    </context>
-    <context>
-        <name>ImageSplitEditorWidget</name>
-        <message>
-            <source> px</source>
-            <translation> px</translation>
-        </message>
-        <message>
-            <source>%1 × %2 px</source>
-            <translation>%1 × %2 px</translation>
-        </message>
-        <message>
-            <source>Columns</source>
-            <translation>Columns</translation>
-        </message>
-        <message>
-            <source>Drag an image file here, or choose Select Image</source>
-            <translation>Drag an image file here, or choose Select Image</translation>
-        </message>
-        <message>
-            <source>Drop one image file at a time</source>
-            <translation>Drop one image file at a time</translation>
-        </message>
-        <message>
-            <source>Drop one image to replace the current image</source>
-            <translation>Drop one image to replace the current image</translation>
-        </message>
-        <message>
-            <source>Drop one image to split</source>
-            <translation>Drop one image to split</translation>
-        </message>
-        <message>
-            <source>Enter a positive integer</source>
-            <translation>Enter a positive integer</translation>
-        </message>
-        <message>
-            <source>Enter an integer of at least 16 pixels</source>
-            <translation>Enter an integer of at least 16 pixels</translation>
-        </message>
-        <message>
-            <source>Equal Split</source>
-            <translation>Equal Split</translation>
-        </message>
-        <message>
-            <source>Fit to Canvas</source>
-            <translation>Fit to Canvas</translation>
-        </message>
-        <message>
-            <source>Grid</source>
-            <translation>Grid</translation>
-        </message>
-        <message>
-            <source>Height per Image</source>
-            <translation>Height per Image</translation>
-        </message>
-        <message>
-            <source>Horizontal</source>
-            <translation>Horizontal</translation>
-        </message>
-        <message>
-            <source>Number of Images</source>
-            <translation>Number of Images</translation>
-        </message>
-        <message>
-            <source>Percentage</source>
-            <translation>Percentage</translation>
-        </message>
-        <message>
-            <source>Pixels</source>
-            <translation>Pixels</translation>
-        </message>
-        <message>
-            <source>Precise Split</source>
-            <translation>Precise Split</translation>
-        </message>
-        <message>
-            <source>Redo</source>
-            <translation>Redo</translation>
-        </message>
-        <message>
-            <source>Reload</source>
-            <translation>Reload</translation>
-        </message>
-        <message>
-            <source>Rows</source>
-            <translation>Rows</translation>
-        </message>
-        <message>
-            <source>Select Image</source>
-            <translation>Select Image</translation>
-        </message>
-        <message>
-            <source>Select an image to split</source>
-            <translation>Select an image to split</translation>
-        </message>
-        <message>
-            <source>Split direction</source>
-            <translation>Split direction</translation>
-        </message>
-        <message>
-            <source>Split size unit</source>
-            <translation>Split size unit</translation>
-        </message>
-        <message>
-            <source>Split type</source>
-            <translation>Split type</translation>
-        </message>
-        <message>
-            <source>Total: %1 images</source>
-            <translation>Total: %1 images</translation>
-        </message>
-        <message>
-            <source>Undo</source>
-            <translation>Undo</translation>
-        </message>
-        <message>
-            <source>Vertical</source>
-            <translation>Vertical</translation>
-        </message>
-        <message>
-            <source>Width per Image</source>
-            <translation>Width per Image</translation>
-        </message>
-    </context>
-    <context>
-        <name>ImageSplitExport</name>
-        <message>
-            <source>Export was canceled</source>
-            <translation>Export was canceled</translation>
-        </message>
-        <message>
-            <source>Image %1 could not be saved: %2</source>
-            <translation>Image %1 could not be saved: %2</translation>
-        </message>
-        <message>
-            <source>The image could not be prepared for export</source>
-            <translation>The image could not be prepared for export</translation>
-        </message>
-        <message>
-            <source>The image or split configuration is invalid</source>
-            <translation>The image or split configuration is invalid</translation>
-        </message>
-        <message>
-            <source>The output folder could not be created</source>
-            <translation>The output folder could not be created</translation>
-        </message>
-        <message>
-            <source>There is not enough memory to export the image</source>
-            <translation>There is not enough memory to export the image</translation>
-        </message>
-    </context>
-    <context>
-        <name>ImageSplitPreviewCanvas</name>
-        <message>
-            <source>Click a ruler to add a split line; drag a line to move it. Select a line and press Delete to remove it. Drag with the middle mouse button to pan; scroll to zoom</source>
-            <translation>Click a ruler to add a split line; drag a line to move it. Select a line and press Delete to remove it. Drag with the middle mouse button to pan; scroll to zoom</translation>
-        </message>
-        <message>
-            <source>Image splitting preview</source>
-            <translation>Image splitting preview</translation>
-        </message>
-        <message>
-            <source>X: %1 px</source>
-            <translation>X: %1 px</translation>
-        </message>
-        <message>
-            <source>Y: %1 px</source>
-            <translation>Y: %1 px</translation>
-        </message>
-    </context>
-    <context>
-        <name>ImageSplitWindow</name>
-        <message>
-            <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again</source>
-            <translation>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again</translation>
-        </message>
-        <message>
-            <source>Cancel</source>
-            <translation>Cancel</translation>
-        </message>
-        <message>
-            <source>Could not read the selected image files. Please try again</source>
-            <translation>Could not read the selected image files. Please try again</translation>
-        </message>
-        <message>
-            <source>Discard</source>
-            <translation>Discard</translation>
-        </message>
-        <message>
-            <source>Discard these image splits?</source>
-            <translation>Discard these image splits?</translation>
-        </message>
-        <message>
-            <source>Drop one image file at a time</source>
-            <translation>Drop one image file at a time</translation>
-        </message>
-        <message>
-            <source>Export could not be started. Try again</source>
-            <translation>Export could not be started. Try again</translation>
-        </message>
-        <message>
-            <source>Image Splitting</source>
-            <translation>Image Splitting</translation>
-        </message>
-        <message>
-            <source>Image Stitching is busy. Try again when it finishes</source>
-            <translation>Image Stitching is busy. Try again when it finishes</translation>
-        </message>
-        <message>
-            <source>Image loading could not be started. Try again</source>
-            <translation>Image loading could not be started. Try again</translation>
-        </message>
-        <message>
-            <source>Image processing failed. Try again</source>
-            <translation>Image processing failed. Try again</translation>
-        </message>
-        <message>
-            <source>Images</source>
-            <translation>Images</translation>
-        </message>
-        <message>
-            <source>Loading image…</source>
-            <translation>Loading image…</translation>
-        </message>
-        <message>
-            <source>Replace Image</source>
-            <translation>Replace Image</translation>
-        </message>
-        <message>
-            <source>Replacing the image will discard the current edits</source>
-            <translation>Replacing the image will discard the current edits</translation>
-        </message>
-        <message>
-            <source>Save All</source>
-            <translation>Save All</translation>
-        </message>
-        <message>
-            <source>Saved %1 images to %2</source>
-            <translation>Saved %1 images to %2</translation>
-        </message>
-        <message>
-            <source>Saved %1 of %2 images to %3. %4</source>
-            <translation>Saved %1 of %2 images to %3. %4</translation>
-        </message>
-        <message>
-            <source>Saving images: %1 of %2</source>
-            <translation>Saving images: %1 of %2</translation>
-        </message>
-        <message>
-            <source>Select Destination Folder</source>
-            <translation>Select Destination Folder</translation>
-        </message>
-        <message>
-            <source>Select Image</source>
-            <translation>Select Image</translation>
-        </message>
-        <message>
-            <source>Stitch to PDF</source>
-            <translation>Stitch to PDF</translation>
-        </message>
-        <message>
-            <source>The file manager is unavailable. Open it and try again</source>
-            <translation>The file manager is unavailable. Open it and try again</translation>
-        </message>
-        <message>
-            <source>The file manager took too long to return the selected files. Please try again</source>
-            <translation>The file manager took too long to return the selected files. Please try again</translation>
-        </message>
-        <message>
-            <source>The image and current split edits will be discarded</source>
-            <translation>The image and current split edits will be discarded</translation>
-        </message>
-        <message>
-            <source>The image could not be read or is no longer available</source>
-            <translation>The image could not be read or is no longer available</translation>
-        </message>
-        <message>
-            <source>The image is too large or there is not enough memory to load it</source>
-            <translation>The image is too large or there is not enough memory to load it</translation>
-        </message>
-        <message>
-            <source>The images could not be exported. Try again</source>
-            <translation>The images could not be exported. Try again</translation>
         </message>
     </context>
     <context>
@@ -1373,8 +1448,8 @@ Files:
             <translation>Allow Accessibility in System Settings to monitor the live window's state</translation>
         </message>
         <message>
-            <source>Allow Screen &amp; System Audio Recording in System Settings to pin a live window</source>
-            <translation>Allow Screen &amp; System Audio Recording in System Settings to pin a live window</translation>
+            <source>Allow Screen &amp; System Audio Recording in System Settings to pin a live window to the screen</source>
+            <translation>Allow Screen &amp; System Audio Recording in System Settings to pin a live window to the screen</translation>
         </message>
         <message>
             <source>The live window display could not be initialized</source>
@@ -1470,8 +1545,8 @@ Files:
             <translation>All sources</translation>
         </message>
         <message>
-            <source>Batch Actions</source>
-            <translation>Batch Actions</translation>
+            <source>Batch actions</source>
+            <translation>Batch actions</translation>
         </message>
         <message>
             <source>Bulk actions for selected pinned windows</source>
@@ -1549,12 +1624,12 @@ Files:
             <translation>Hidden</translation>
         </message>
         <message>
-            <source>Image Editing</source>
-            <translation>Image Editing</translation>
+            <source>Image editing</source>
+            <translation>Image editing</translation>
         </message>
         <message>
-            <source>Image Splitting</source>
-            <translation>Image Splitting</translation>
+            <source>Image splitting</source>
+            <translation>Image splitting</translation>
         </message>
         <message>
             <source>More</source>
@@ -1573,20 +1648,20 @@ Files:
             <translation>No pinned windows</translation>
         </message>
         <message>
-            <source>Not Closed</source>
-            <translation>Not Closed</translation>
+            <source>Not closed</source>
+            <translation>Not closed</translation>
         </message>
         <message>
             <source>Other / legacy</source>
             <translation>Other / legacy</translation>
         </message>
         <message>
-            <source>Pin to Screen Management</source>
-            <translation>Pin to Screen Management</translation>
-        </message>
-        <message>
             <source>Pin to screen</source>
             <translation>Pin to screen</translation>
+        </message>
+        <message>
+            <source>Pin to screen management</source>
+            <translation>Pin to screen management</translation>
         </message>
         <message>
             <source>Pinned images and text will appear here</source>
@@ -1656,8 +1731,8 @@ Files:
             <translation>Start date</translation>
         </message>
         <message>
-            <source>Stitch Image</source>
-            <translation>Stitch Image</translation>
+            <source>Stitch images</source>
+            <translation>Stitch images</translation>
         </message>
         <message>
             <source>The saved record and its open window will be removed</source>
@@ -1694,8 +1769,8 @@ Files:
             <translation>All sources</translation>
         </message>
         <message>
-            <source>Batch Actions</source>
-            <translation>Batch Actions</translation>
+            <source>Batch actions</source>
+            <translation>Batch actions</translation>
         </message>
         <message>
             <source>Bulk actions for selected screenshot history entries</source>
@@ -1710,8 +1785,8 @@ Files:
             <translation>Change the source or date range to see more history</translation>
         </message>
         <message>
-            <source>Copied and pinned screenshots will appear here</source>
-            <translation>Copied and pinned screenshots will appear here</translation>
+            <source>Copied or pinned screenshots will appear here</source>
+            <translation>Copied or pinned screenshots will appear here</translation>
         </message>
         <message>
             <source>Copy to clipboard</source>
@@ -1808,8 +1883,8 @@ Files:
             <translation>Start date</translation>
         </message>
         <message>
-            <source>Stitch Image</source>
-            <translation>Stitch Image</translation>
+            <source>Stitch images</source>
+            <translation>Stitch images</translation>
         </message>
         <message>
             <source>This action cannot be undone</source>
@@ -1842,20 +1917,20 @@ Files:
             <translation>AirDrop</translation>
         </message>
         <message>
-            <source>Always on Top</source>
-            <translation>Always on Top</translation>
+            <source>Always on top</source>
+            <translation>Always on top</translation>
         </message>
         <message>
             <source>Annotation mode</source>
             <translation>Annotation mode</translation>
         </message>
         <message>
-            <source>Apply Crop</source>
-            <translation>Apply Crop</translation>
+            <source>Apply crop</source>
+            <translation>Apply crop</translation>
         </message>
         <message>
-            <source>Batch Actions</source>
-            <translation>Batch Actions</translation>
+            <source>Batch actions</source>
+            <translation>Batch actions</translation>
         </message>
         <message>
             <source>Cancel</source>
@@ -1894,8 +1969,23 @@ Files:
             <translation>Closed</translation>
         </message>
         <message>
-            <source>Convert to Image</source>
-            <translation>Convert to Image</translation>
+            <source>Convert to image</source>
+            <translation>Convert to image</translation>
+        </message>
+        <message numerus="yes">
+            <source>Copied %n file(s)</source>
+            <translation>
+            <numerusform>Copied %n file</numerusform>
+            <numerusform>Copied %n files</numerusform>
+        </translation>
+        </message>
+        <message>
+            <source>Copied: %1; failed: %2</source>
+            <translation>Copied: %1; failed: %2</translation>
+        </message>
+        <message>
+            <source>Copy files to clipboard</source>
+            <translation>Copy files to clipboard</translation>
         </message>
         <message>
             <source>Copy original content</source>
@@ -1922,12 +2012,12 @@ Files:
             <translation>Default</translation>
         </message>
         <message>
-            <source>Delete Empty Groups</source>
-            <translation>Delete Empty Groups</translation>
+            <source>Delete empty groups</source>
+            <translation>Delete empty groups</translation>
         </message>
         <message>
-            <source>Delete Specified Group</source>
-            <translation>Delete Specified Group</translation>
+            <source>Delete specified group</source>
+            <translation>Delete specified group</translation>
         </message>
         <message>
             <source>Deselect window</source>
@@ -1946,32 +2036,32 @@ Files:
             <translation>Destroy this pinned window? This action cannot be undone</translation>
         </message>
         <message>
-            <source>Disable Hide to Top</source>
-            <translation>Disable Hide to Top</translation>
+            <source>Disable hide at top</source>
+            <translation>Disable hide at top</translation>
         </message>
         <message>
-            <source>Disable Lock Mode</source>
-            <translation>Disable Lock Mode</translation>
+            <source>Disable lock mode</source>
+            <translation>Disable lock mode</translation>
         </message>
         <message>
-            <source>Disable Thumbnail Mode</source>
-            <translation>Disable Thumbnail Mode</translation>
-        </message>
-        <message>
-            <source>Enable Hide to Top</source>
-            <translation>Enable Hide to Top</translation>
-        </message>
-        <message>
-            <source>Enable Lock Mode</source>
-            <translation>Enable Lock Mode</translation>
-        </message>
-        <message>
-            <source>Enable Thumbnail Mode</source>
-            <translation>Enable Thumbnail Mode</translation>
+            <source>Disable thumbnail mode</source>
+            <translation>Disable thumbnail mode</translation>
         </message>
         <message>
             <source>Enable annotation mode</source>
             <translation>Enable annotation mode</translation>
+        </message>
+        <message>
+            <source>Enable hide at top</source>
+            <translation>Enable hide at top</translation>
+        </message>
+        <message>
+            <source>Enable lock mode</source>
+            <translation>Enable lock mode</translation>
+        </message>
+        <message>
+            <source>Enable thumbnail mode</source>
+            <translation>Enable thumbnail mode</translation>
         </message>
         <message>
             <source>Exit click-through mode</source>
@@ -1990,20 +2080,20 @@ Files:
             <translation>Group: %1</translation>
         </message>
         <message>
-            <source>Group: Default</source>
-            <translation>Group: Default</translation>
+            <source>Group: default</source>
+            <translation>Group: default</translation>
+        </message>
+        <message>
+            <source>Hide at top</source>
+            <translation>Hide at top</translation>
         </message>
         <message>
             <source>Hide other windows</source>
             <translation>Hide other windows</translation>
         </message>
         <message>
-            <source>Hide to Top</source>
-            <translation>Hide to Top</translation>
-        </message>
-        <message>
-            <source>Image Editing</source>
-            <translation>Image Editing</translation>
+            <source>Image editing</source>
+            <translation>Image editing</translation>
         </message>
         <message>
             <source>Image file</source>
@@ -2012,6 +2102,10 @@ Files:
         <message>
             <source>Image size is too large</source>
             <translation>Image size is too large</translation>
+        </message>
+        <message>
+            <source>Image stitching</source>
+            <translation>Image stitching</translation>
         </message>
         <message>
             <source>Increase 10%</source>
@@ -2042,8 +2136,8 @@ Files:
             <translation>Move window</translation>
         </message>
         <message>
-            <source>New Group</source>
-            <translation>New Group</translation>
+            <source>New group</source>
+            <translation>New group</translation>
         </message>
         <message>
             <source>Next frame</source>
@@ -2072,6 +2166,14 @@ Files:
         <message>
             <source>Pause</source>
             <translation>Pause</translation>
+        </message>
+        <message>
+            <source>Pin to screen management</source>
+            <translation>Pin to screen management</translation>
+        </message>
+        <message>
+            <source>Pinned content</source>
+            <translation>Pinned content</translation>
         </message>
         <message>
             <source>Play</source>
@@ -2118,16 +2220,16 @@ Files:
             <translation>Rotate counterclockwise</translation>
         </message>
         <message>
-            <source>Save as File</source>
-            <translation>Save as File</translation>
-        </message>
-        <message>
             <source>Save as file</source>
             <translation>Save as file</translation>
         </message>
         <message>
             <source>Save displayed windows</source>
             <translation>Save displayed windows</translation>
+        </message>
+        <message>
+            <source>Save selected windows</source>
+            <translation>Save selected windows</translation>
         </message>
         <message numerus="yes">
             <source>Saved %n window(s)</source>
@@ -2145,8 +2247,8 @@ Files:
             <translation>Scale</translation>
         </message>
         <message>
-            <source>Select All</source>
-            <translation>Select All</translation>
+            <source>Select all</source>
+            <translation>Select all</translation>
         </message>
         <message>
             <source>Show all windows</source>
@@ -2187,10 +2289,6 @@ Files:
         <message>
             <source>The image could not be saved automatically: %1</source>
             <translation>The image could not be saved automatically: %1</translation>
-        </message>
-        <message>
-            <source>The live window requires a current frame snapshot</source>
-            <translation>The live window requires a current frame snapshot</translation>
         </message>
         <message>
             <source>The new content could not be loaded</source>
@@ -2252,10 +2350,6 @@ Files:
             <source>Uploading to cloud... %1%</source>
             <translation>Uploading to cloud... %1%</translation>
         </message>
-        <message>
-            <source>Window Management</source>
-            <translation>Window Management</translation>
-        </message>
     </context>
     <context>
         <name>WindowGroupSwitcher</name>
@@ -2276,8 +2370,8 @@ Files:
             <translation>Release shortcut keys or click a group to switch. Esc to cancel</translation>
         </message>
         <message>
-            <source>Switch Window Group</source>
-            <translation>Switch Window Group</translation>
+            <source>Switch window group</source>
+            <translation>Switch window group</translation>
         </message>
         <message>
             <source>Windows · not closed / total</source>
@@ -2287,20 +2381,36 @@ Files:
     <context>
         <name>snow_shot::presentation::ImageEditingWindow</name>
         <message>
+            <source>Add images</source>
+            <translation>Add images</translation>
+        </message>
+        <message>
+            <source>Add images to start image editing</source>
+            <translation>Add images to start image editing</translation>
+        </message>
+        <message>
             <source>Configure cloud upload before uploading an image</source>
             <translation>Configure cloud upload before uploading an image</translation>
         </message>
         <message>
-            <source>Continue Editing</source>
-            <translation>Continue Editing</translation>
+            <source>Continue editing</source>
+            <translation>Continue editing</translation>
         </message>
         <message>
-            <source>Discard Changes</source>
-            <translation>Discard Changes</translation>
+            <source>Discard changes</source>
+            <translation>Discard changes</translation>
         </message>
         <message>
-            <source>Discard Changes?</source>
-            <translation>Discard Changes?</translation>
+            <source>Discard changes?</source>
+            <translation>Discard changes?</translation>
+        </message>
+        <message>
+            <source>Drag image files here, or choose add images</source>
+            <translation>Drag image files here, or choose add images</translation>
+        </message>
+        <message>
+            <source>Drop images to edit</source>
+            <translation>Drop images to edit</translation>
         </message>
         <message>
             <source>Export completed</source>
@@ -2319,8 +2429,12 @@ Files:
             <translation>Fit image to window</translation>
         </message>
         <message>
-            <source>Image Editing</source>
-            <translation>Image Editing</translation>
+            <source>Image editing</source>
+            <translation>Image editing</translation>
+        </message>
+        <message>
+            <source>Images</source>
+            <translation>Images</translation>
         </message>
         <message>
             <source>Loading image…</source>
@@ -2329,6 +2443,10 @@ Files:
         <message>
             <source>No recognition result is available to export</source>
             <translation>No recognition result is available to export</translation>
+        </message>
+        <message>
+            <source>Open each image in its own window</source>
+            <translation>Open each image in its own window</translation>
         </message>
         <message>
             <source>Printing is unavailable</source>
@@ -2345,6 +2463,10 @@ Files:
         <message>
             <source>The image could not be loaded</source>
             <translation>The image could not be loaded</translation>
+        </message>
+        <message>
+            <source>The image is too large or there is not enough memory to load it</source>
+            <translation>The image is too large or there is not enough memory to load it</translation>
         </message>
         <message>
             <source>This editing window has unsaved changes</source>
@@ -2366,8 +2488,8 @@ Files:
             <translation>Cancel</translation>
         </message>
         <message>
-            <source>Clear Default group</source>
-            <translation>Clear Default group</translation>
+            <source>Clear default group</source>
+            <translation>Clear default group</translation>
         </message>
         <message>
             <source>Clear group</source>
@@ -2382,8 +2504,8 @@ Files:
             <translation>Delete "%1" and all its pinned windows, including closed windows? This action cannot be undone</translation>
         </message>
         <message>
-            <source>Delete all pinned windows in "%1", including closed windows? The Default group will remain. This action cannot be undone</source>
-            <translation>Delete all pinned windows in "%1", including closed windows? The Default group will remain. This action cannot be undone</translation>
+            <source>Delete all pinned windows in "%1", including closed windows? The default group will remain. This action cannot be undone</source>
+            <translation>Delete all pinned windows in "%1", including closed windows? The default group will remain. This action cannot be undone</translation>
         </message>
         <message>
             <source>Delete empty groups</source>
@@ -2410,8 +2532,8 @@ Files:
             <translation>Group name</translation>
         </message>
         <message>
-            <source>New Group</source>
-            <translation>New Group</translation>
+            <source>New group</source>
+            <translation>New group</translation>
         </message>
         <message>
             <source>Please enter a group name</source>
@@ -2436,16 +2558,16 @@ Files:
         </translation>
         </message>
         <message>
-            <source>Align Position</source>
-            <translation>Align Position</translation>
-        </message>
-        <message>
             <source>Align bottom</source>
             <translation>Align bottom</translation>
         </message>
         <message>
             <source>Align left</source>
             <translation>Align left</translation>
+        </message>
+        <message>
+            <source>Align position</source>
+            <translation>Align position</translation>
         </message>
         <message>
             <source>Align right</source>
@@ -2472,16 +2594,20 @@ Files:
             <translation>Close</translation>
         </message>
         <message>
-            <source>Close Other Windows</source>
-            <translation>Close Other Windows</translation>
+            <source>Close other windows</source>
+            <translation>Close other windows</translation>
         </message>
         <message>
-            <source>Delete Empty Groups</source>
-            <translation>Delete Empty Groups</translation>
+            <source>Copy files to clipboard</source>
+            <translation>Copy files to clipboard</translation>
         </message>
         <message>
-            <source>Delete Specified Group</source>
-            <translation>Delete Specified Group</translation>
+            <source>Delete empty groups</source>
+            <translation>Delete empty groups</translation>
+        </message>
+        <message>
+            <source>Delete specified group</source>
+            <translation>Delete specified group</translation>
         </message>
         <message>
             <source>Destroy</source>
@@ -2522,16 +2648,20 @@ Files:
             <translation>Group</translation>
         </message>
         <message>
-            <source>Image Stitching</source>
-            <translation>Image Stitching</translation>
+            <source>Image stitching</source>
+            <translation>Image stitching</translation>
         </message>
         <message>
             <source>Lock</source>
             <translation>Lock</translation>
         </message>
         <message>
-            <source>New Group</source>
-            <translation>New Group</translation>
+            <source>New group</source>
+            <translation>New group</translation>
+        </message>
+        <message>
+            <source>Save as file</source>
+            <translation>Save as file</translation>
         </message>
         <message>
             <source>The displayed windows could not be destroyed</source>

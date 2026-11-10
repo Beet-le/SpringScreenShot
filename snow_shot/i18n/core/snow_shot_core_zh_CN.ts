@@ -42,7 +42,7 @@
         <message>
             <source>Capture, annotate, recognize text, and record your screen,
 so every moment on screen can be expressed clearly and shared easily</source>
-            <translation>截图、标注、文字识别和屏幕录制，
+            <translation>截图、标注、文本识别和屏幕录制，
 让屏幕上的每一刻都能清晰表达、轻松分享</translation>
         </message>
         <message>
@@ -98,7 +98,7 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>发现更多功能与使用方式</translation>
         </message>
         <message>
-            <source>Discussion and support · Group No. %1</source>
+            <source>Discussion and support · group no. %1</source>
             <translation>交流与答疑 · 群号 %1</translation>
         </message>
         <message>
@@ -138,7 +138,7 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>自由开源软件，不提供任何担保</translation>
         </message>
         <message>
-            <source>Free · Open source</source>
+            <source>Free · open source</source>
             <translation>自由 · 开源</translation>
         </message>
         <message>
@@ -182,8 +182,12 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>隐私政策</translation>
         </message>
         <message>
-            <source>QQ Group 3</source>
+            <source>QQ group 3</source>
             <translation>QQ 交流群 3</translation>
+        </message>
+        <message>
+            <source>QQ group 4</source>
+            <translation>QQ 交流群 4</translation>
         </message>
         <message>
             <source>Ready to install %1</source>
@@ -218,12 +222,12 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>Snow Shot 标志</translation>
         </message>
         <message>
-            <source>Snow Shot · Make expression clearer</source>
+            <source>Snow Shot · make expression clearer</source>
             <translation>Snow Shot · 让表达更清晰</translation>
         </message>
         <message>
             <source>Text recognition</source>
-            <translation>文字识别</translation>
+            <translation>文本识别</translation>
         </message>
         <message>
             <source>Turn pixels into usable text</source>
@@ -300,7 +304,7 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>已锁定</translation>
         </message>
         <message>
-            <source>Motion Preview in Progress</source>
+            <source>Motion preview in progress</source>
             <translation>动效预览中</translation>
         </message>
         <message>
@@ -312,7 +316,7 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>正在渲染预览</translation>
         </message>
         <message>
-            <source>Result Preview in Progress</source>
+            <source>Result preview in progress</source>
             <translation>正在预览结果</translation>
         </message>
         <message>
@@ -329,6 +333,10 @@ so every moment on screen can be expressed clearly and shared easily</source>
     </context>
     <context>
         <name>DiagnosticsService</name>
+        <message>
+            <source>A diagnostics file could not be read</source>
+            <translation>无法读取诊断文件</translation>
+        </message>
         <message>
             <source>A log file could not be read</source>
             <translation>无法读取日志文件</translation>
@@ -366,6 +374,14 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>无法初始化本地崩溃数据库</translation>
         </message>
         <message>
+            <source>The log archive could not be saved</source>
+            <translation>无法保存日志压缩包</translation>
+        </message>
+        <message>
+            <source>The log archive directory could not be created</source>
+            <translation>无法创建日志压缩包目录</translation>
+        </message>
+        <message>
             <source>The log directory is not writable</source>
             <translation>无法写入日志目录</translation>
         </message>
@@ -384,6 +400,10 @@ so every moment on screen can be expressed clearly and shared easily</source>
         <message>
             <source>The preferred log directory is unavailable; a fallback is in use</source>
             <translation>首选日志目录不可用，正在使用备用目录</translation>
+        </message>
+        <message>
+            <source>There is not enough space for a log archive</source>
+            <translation>没有足够的空间保存日志压缩包</translation>
         </message>
         <message>
             <source>There is not enough space for a log snapshot</source>
@@ -420,12 +440,12 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>自定义工具栏</translation>
         </message>
         <message>
-            <source>Delay %1 seconds to execute</source>
-            <translation>延迟 %1 秒执行</translation>
+            <source>Edit selected images</source>
+            <translation>编辑选中的图像</translation>
         </message>
         <message>
-            <source>Formula recognition</source>
-            <translation>公式识别</translation>
+            <source>Full-screen canvas</source>
+            <translation>全屏画布</translation>
         </message>
         <message>
             <source>Hide during screenshots</source>
@@ -444,8 +464,8 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>更多工具</translation>
         </message>
         <message>
-            <source>QR code recognition</source>
-            <translation>二维码识别</translation>
+            <source>Run after %1 seconds</source>
+            <translation>延迟 %1 秒执行</translation>
         </message>
         <message>
             <source>Screen recording</source>
@@ -456,8 +476,20 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>截图</translation>
         </message>
         <message>
+            <source>Screenshot history</source>
+            <translation>截图历史</translation>
+        </message>
+        <message>
             <source>Show toolbar</source>
             <translation>显示工具栏</translation>
+        </message>
+        <message>
+            <source>Split selected images</source>
+            <translation>分割选中的图像</translation>
+        </message>
+        <message>
+            <source>Stitch selected images</source>
+            <translation>拼接选中的图像</translation>
         </message>
         <message>
             <source>Toolbar mode</source>
@@ -528,7 +560,7 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>%1 已分配给其他快捷键，请尝试其他按键</translation>
         </message>
         <message>
-            <source>Add key config</source>
+            <source>Add key configuration</source>
             <translation>添加按键配置</translation>
         </message>
         <message>
@@ -649,7 +681,7 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>展开导航</translation>
         </message>
         <message>
-            <source>Search Function</source>
+            <source>Search function</source>
             <translation>搜索功能</translation>
         </message>
     </context>
@@ -811,19 +843,19 @@ so every moment on screen can be expressed clearly and shared easily</source>
     <context>
         <name>SystemTrayController</name>
         <message>
-            <source>Delete Empty Groups</source>
+            <source>Delete empty groups</source>
             <translation>删除空分组</translation>
         </message>
         <message>
-            <source>Delete Specified Group</source>
+            <source>Delete specified group</source>
             <translation>删除指定分组</translation>
         </message>
         <message>
-            <source>New Group</source>
+            <source>New group</source>
             <translation>新建分组</translation>
         </message>
         <message>
-            <source>Window Group: %1</source>
+            <source>Window group: %1</source>
             <translation>窗口分组：%1</translation>
         </message>
     </context>
@@ -873,16 +905,12 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>无法打开所选文件：%1</translation>
         </message>
         <message>
-            <source>Could not pin selected files</source>
+            <source>Could not pin selected files to screen</source>
             <translation>无法将选中的文件固定到屏幕</translation>
         </message>
         <message>
-            <source>Feature unavailable</source>
-            <translation>功能暂不可用</translation>
-        </message>
-        <message>
             <source>Finish capturing, recording, exporting, recognizing text, or updating before changing storage</source>
-            <translation>请先完成截图、录制、导出、文字识别或更新，再更改存储目录</translation>
+            <translation>请先完成截图、录制、导出、文本识别或更新，再更改存储目录</translation>
         </message>
         <message>
             <source>Finish capturing, recording, or exporting before updating</source>

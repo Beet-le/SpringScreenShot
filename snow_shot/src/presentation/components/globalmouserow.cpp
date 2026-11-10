@@ -33,7 +33,7 @@ adqt::icons::IconRef actionIcon(settings::SettingsGlobalMouseAction action) {
     switch (action) {
     case settings::SettingsGlobalMouseAction::ScreenshotCopy:
         return custom_outlined_icons::ScreenshotCopy();
-    case settings::SettingsGlobalMouseAction::ScreenshotFixed:
+    case settings::SettingsGlobalMouseAction::ScreenshotPinToScreen:
         return custom_outlined_icons::PinToScreen();
     case settings::SettingsGlobalMouseAction::ScreenshotOcr:
     case settings::SettingsGlobalMouseAction::ScreenshotOcrCopy:
@@ -320,8 +320,8 @@ void GlobalMouseRow::syncModalText() {
             {option(QStringLiteral("left_drag"), tr("Left-button drag")),
              option(QStringLiteral("right_drag"), tr("Right-button drag")),
              option(QStringLiteral("wheel_drag"), tr("Middle-button drag")),
-             option(QStringLiteral("side_button_1_drag"), tr("Side button 1 (Back) drag")),
-             option(QStringLiteral("side_button_2_drag"), tr("Side button 2 (Forward) drag")),
+             option(QStringLiteral("side_button_1_drag"), tr("Side button 1 (back) drag")),
+             option(QStringLiteral("side_button_2_drag"), tr("Side button 2 (forward) drag")),
              option(QStringLiteral("none"), tr("None"))});
         if (mouseButton.isValid()) {
             m_mouseButtonSelect->setCurrentValue(mouseButton);
@@ -421,8 +421,8 @@ QString GlobalMouseRow::mouseButtonLabel(const QString& value) const {
         return tr("Middle-button drag");
     }
     if (value == QStringLiteral("side_button_1_drag")) {
-        return tr("Side button 1 (Back) drag");
+        return tr("Side button 1 (back) drag");
     }
-    return value == QStringLiteral("side_button_2_drag") ? tr("Side button 2 (Forward) drag")
+    return value == QStringLiteral("side_button_2_drag") ? tr("Side button 2 (forward) drag")
                                                          : value;
 }

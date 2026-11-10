@@ -2,6 +2,8 @@
 #include "snow_shot/presentation/components/collagepdftemplatewidget.h"
 #include "snow_shot/presentation/components/collageeditorwidget.h"
 #include "snow_shot/presentation/components/collagepdfpagegrid.h"
+#include "snow_shot/presentation/components/imagedropsurface.h"
+#include "snow_shot/presentation/components/overlaycontrolbutton.h"
 #include "snow_shot/presentation/screenshotexportcoordinator.h"
 #include "snow_draw_engine_qt/snow_canvas_overlay_style.h"
 #include "theme/theme_manager.h"
@@ -61,13 +63,13 @@ QImage image(QSize size, QColor color) {
     value.setColorSpace(QColorSpace::SRgb);
     return value;
 }
-void configure(CollageDocument& document,
-               CollagePdfTemplateType type = CollagePdfTemplateType::TwoImages) {
+void configure(ImageStitchingDocument& document,
+               ImageStitchingPdfTemplateType type = ImageStitchingPdfTemplateType::TwoImages) {
     auto settings = document.pdfSettings();
-    settings.stitchingMethod = CollagePdfStitchingMethod::TemplateBased;
+    settings.stitchingMethod = ImageStitchingPdfStitchingMethod::TemplateBased;
     settings.templateType = type;
     document.setPdfSettings(settings);
-    document.setOutputType(CollageOutputType::PdfDocument);
+    document.setOutputType(ImageStitchingOutputType::PdfDocument);
 }
 void show(QWidget& widget, QSize size = {800, 720}) {
     widget.resize(size);
@@ -108,17 +110,18 @@ void key(QWidget* widget, int value) {
 bool close(qreal first, qreal second, qreal epsilon = .001) {
     return std::abs(first - second) < epsilon;
 }
-void setManualCoverPlacement(CollageDocument& document, quint64 id, qreal scaleFactor = 1) {
+void setManualCoverPlacement(ImageStitchingDocument& document, quint64 id, qreal scaleFactor = 1) {
     const auto settings = document.lastValidPdfSettings();
     const int index = document.indexOf(id);
     require(index >= 0, "manual placement fixture must identify an input image");
-    const auto page = calculateCollagePdfComposedPage(
-        document.items(), settings, index / collagePdfTemplateCapacity(settings.templateType));
+    const auto page = calculateImageStitchingPdfComposedPage(
+        document.items(), settings,
+        index / imageStitchingPdfTemplateCapacity(settings.templateType));
     for (const auto& cell : page.cells) {
         if (cell.itemId != id)
             continue;
         const auto pixels = transformedSize(document.items()[index]);
-        CollagePdfPlacement placement;
+        ImageStitchingPdfPlacement placement;
         placement.millimetersPerPixel =
             scaleFactor * std::max(cell.clipMillimeters.width() / pixels.width(),
                                    cell.clipMillimeters.height() / pixels.height());
@@ -128,11 +131,11 @@ void setManualCoverPlacement(CollageDocument& document, quint64 id, qreal scaleF
     }
     require(false, "manual placement fixture must find its assigned cell");
 }
-void requireVisibleImagesContained(const CollageDocument& document,
-                                   const CollagePdfTemplateCanvas& canvas) {
+void requireVisibleImagesContained(const ImageStitchingDocument& document,
+                                   const ImageStitchingPdfTemplateCanvas& canvas) {
     const auto settings = document.lastValidPdfSettings();
     const auto page =
-        calculateCollagePdfComposedPage(document.items(), settings, canvas.pageIndex());
+        calculateImageStitchingPdfComposedPage(document.items(), settings, canvas.pageIndex());
     require(page.isValid(), "automatic layout fixture must compose a valid page");
     for (const auto& cell : page.cells) {
         if (!cell.itemId)
@@ -239,9 +242,9 @@ void requireSolidCellBorder(const QImage& surface, const QRectF& bounds, const Q
 void solidCellBordersAtEveryDpi() {
     auto& themes = adqt::theme::ThemeManager::instance();
     const auto originalConfig = themes.config();
-    CollageDocument document;
+    ImageStitchingDocument document;
     configure(document);
-    CollagePdfTemplateCanvas canvas(&document);
+    ImageStitchingPdfTemplateCanvas canvas(&document);
     // Distinguish border coverage from the surrounding canvas in both themes.
     auto palette = canvas.palette();
     palette.setColor(QPalette::Window, QColor(32, 48, 64));
@@ -257,15 +260,16 @@ void solidCellBordersAtEveryDpi() {
         themes.setSeed(seed);
         const QColor stroke(QStringLiteral("#F0F0F0"));
         for (const auto type :
-             {CollagePdfTemplateType::TwoImages, CollagePdfTemplateType::IdCard,
-              CollagePdfTemplateType::ThreeImages, CollagePdfTemplateType::FourImages,
-              CollagePdfTemplateType::FiveImages, CollagePdfTemplateType::SixImages,
-              CollagePdfTemplateType::SevenImages, CollagePdfTemplateType::EightImages,
-              CollagePdfTemplateType::NineImages}) {
+             {ImageStitchingPdfTemplateType::TwoImages, ImageStitchingPdfTemplateType::IdCard,
+              ImageStitchingPdfTemplateType::ThreeImages, ImageStitchingPdfTemplateType::FourImages,
+              ImageStitchingPdfTemplateType::FiveImages, ImageStitchingPdfTemplateType::SixImages,
+              ImageStitchingPdfTemplateType::SevenImages,
+              ImageStitchingPdfTemplateType::EightImages,
+              ImageStitchingPdfTemplateType::NineImages}) {
             document.clear();
             configure(document, type);
             // Leave the final cell empty; occupied cells cover their clips right up to the guides.
-            for (int index = 1; index < collagePdfTemplateCapacity(type); ++index) {
+            for (int index = 1; index < imageStitchingPdfTemplateCapacity(type); ++index) {
                 const auto id =
                     document.append(image({64, 48}, QColor(240, 220, 180)), QString::number(index));
                 setManualCoverPlacement(document, id);
@@ -279,7 +283,8 @@ void solidCellBordersAtEveryDpi() {
                 document.setPdfSettings(settings);
                 for (const auto& item : document.items())
                     setManualCoverPlacement(document, item.id);
-                const auto page = calculateCollagePdfComposedPage(document.items(), settings, 0);
+                const auto page =
+                    calculateImageStitchingPdfComposedPage(document.items(), settings, 0);
                 const auto paper = canvas.pageViewportRect();
                 const qreal viewScale = paper.width() / page.pageMillimeters.width();
                 for (const qreal dpr : {1.0, 1.25, 1.5, 1.75, 2.0, 3.0}) {
@@ -309,15 +314,155 @@ void solidCellBordersAtEveryDpi() {
     themes.setConfig(originalConfig);
 }
 
+void emptyPreviewMatchesPageBasedStitching() {
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto originalConfig = themes.config();
+    ImageStitchingDocument document;
+    configure(document);
+    ImageStitchingPdfTemplateWidget widget(&document);
+    ImageStitchingPdfPageGrid grid(&document);
+    show(widget);
+    show(grid);
+    auto* empty = dynamic_cast<ImageDropSurface*>(
+        widget.findChild<QWidget*>(QStringLiteral("collagePdfTemplateEmptyState")));
+    auto* pageEmpty = dynamic_cast<ImageDropSurface*>(
+        grid.findChild<QWidget*>(QStringLiteral("collagePdfEmptyState")));
+    auto* add = button(widget, "collagePdfTemplateEmptyAddImages");
+    auto* pageAdd = button(grid, "collagePdfEmptyAddImages");
+    auto* strip = widget.findChild<QWidget*>(QStringLiteral("collagePdfTemplateThumbnailStrip"));
+    auto* pageNumber = widget.findChild<QLabel*>(QStringLiteral("collagePdfTemplatePageNumber"));
+    auto* toolbar = widget.findChild<QWidget*>(QStringLiteral("collagePdfTemplateCanvasToolbar"));
+    require(empty && pageEmpty && strip && pageNumber && toolbar,
+            "empty template fixture must have its import surface and populated controls");
+    for (const auto scheme : {adqt::theme::ThemeScheme::Light, adqt::theme::ThemeScheme::Dark}) {
+        themes.setPreset(scheme);
+        for (const QSize size : {QSize(803, 727), QSize(480, 420)}) {
+            widget.resize(size);
+            grid.resize(size);
+            pump();
+            add->clearFocus();
+            pageAdd->clearFocus();
+            require(empty->isVisible() && !strip->isVisible() && !pageNumber->isVisible() &&
+                        !toolbar->isVisible() && empty->size() == pageEmpty->size() &&
+                        empty->size() == widget.size(),
+                    "empty templates must fill the same preview area as empty page stitching "
+                    "without pagination, thumbnails, or floating actions");
+            require(empty->title->text() == pageEmpty->title->text() &&
+                        empty->description->text() == pageEmpty->description->text() &&
+                        add->text() == pageAdd->text() && add->isVisible() &&
+                        add->accessibleName() == add->text(),
+                    "empty templates must share page stitching's import copy and accessible add "
+                    "action");
+            saveFixture(widget, "empty-template.png");
+            saveFixture(grid, "empty-pages.png");
+            require(empty->grab().toImage() == pageEmpty->grab().toImage(),
+                    "empty template and page stitching must render the same import surface "
+                    "in both themes and at different viewport sizes");
+        }
+    }
+    int additions = 0;
+    QObject::connect(&widget, &ImageStitchingPdfTemplateWidget::addImagesRequested, &widget,
+                     [&] { ++additions; });
+    add->click();
+    require(additions == 1, "empty template add action must request image import");
+    widget.setLoading(true);
+    require(!add->isEnabled() && add->busy(),
+            "empty template import must disable and busy its add action");
+    widget.setLoading(false);
+    widget.setExportBusy(true);
+    require(!add->isEnabled() && !add->busy(), "export must disable the empty template add action");
+    widget.setExportBusy(false);
+    require(add->isEnabled(), "empty template add action must recover after busy work");
+    document.append(image({80, 60}, Qt::red), QStringLiteral("First"));
+    pump();
+    require(!empty->isVisible() && strip->isVisible() && pageNumber->isVisible() &&
+                toolbar->isVisible() && !widget.canvas()->pageViewportRect().isEmpty(),
+            "adding an image must restore the template preview, navigation, and actions");
+    document.clear();
+    pump();
+    require(empty->isVisible() && !strip->isVisible() && !pageNumber->isVisible() &&
+                !toolbar->isVisible() && add->isEnabled(),
+            "clearing template images must restore the full empty import surface");
+    saveFixture(widget, "empty-template.png");
+    saveFixture(grid, "empty-pages.png");
+    themes.setConfig(originalConfig);
+}
+
+void thumbnailReplacementAndDeletion() {
+    ImageStitchingDocument document;
+    configure(document);
+    const auto first = document.append(image({80, 60}, Qt::red), QStringLiteral("first"));
+    const auto second = document.append(image({60, 80}, Qt::blue), QStringLiteral("second"));
+    ImageStitchingPdfTemplateWidget widget(&document);
+    show(widget);
+    auto* thumbnail =
+        widget.findChild<QWidget*>(QStringLiteral("collagePdfTemplateThumbnail_%1").arg(second));
+    require(thumbnail != nullptr, "PDF input thumbnail must exist");
+    thumbnail->clearFocus();
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(thumbnail, &leave);
+    pump();
+    auto* replace = button(*thumbnail, "collagePdfTemplateReplaceThumbnailImage");
+    auto* remove = button(*thumbnail, "collagePdfTemplateDeleteThumbnailImage");
+    require(!replace->isVisible() && !remove->isVisible(),
+            "unfocused PDF thumbnails hide their corner controls");
+    thumbnail->setFocus();
+    pump();
+    require(dynamic_cast<OverlayControlButton*>(replace) &&
+                dynamic_cast<OverlayControlButton*>(remove) && replace->isVisible() &&
+                remove->isVisible() && replace->size() == QSize(28, 28) &&
+                remove->pos() == QPoint(thumbnail->width() - 32, thumbnail->height() - 32) &&
+                replace->pos() == remove->pos() - QPoint(32, 0),
+            "PDF inputs use the same focused bottom-right overlays as static thumbnails");
+    saveFixture(widget, "template-thumbnail-actions.png");
+    replace->setFocus();
+    pump();
+    require(replace->isVisible() && remove->isVisible(),
+            "corner controls remain visible when focus moves into an action");
+    document.select(first);
+    quint64 replacement = 0;
+    QObject::connect(&widget, &ImageStitchingPdfTemplateWidget::replaceImageRequested, &widget,
+                     [&](quint64 id) { replacement = id; });
+    replace->click();
+    require(replacement == second && document.selectedId() == first && document.items().size() == 2,
+            "PDF thumbnail replacement targets its own input independently of selection");
+    widget.setLoading(true);
+    require(!replace->isEnabled() && remove->isEnabled(),
+            "loading blocks PDF thumbnail replacement while retaining deletion like static mode");
+    widget.setLoading(false);
+    widget.setExportBusy(true);
+    replace->click();
+    remove->click();
+    require(!replace->isEnabled() && !remove->isEnabled() && document.items().size() == 2,
+            "export disables both PDF thumbnail edits");
+    widget.setExportBusy(false);
+    QTranslator translator;
+    require(translator.load(QStringLiteral(":/i18n/snow_shot_zh_CN.qm")),
+            "load PDF thumbnail translations");
+    QApplication::installTranslator(&translator);
+    QEvent language(QEvent::LanguageChange);
+    QApplication::sendEvent(&widget, &language);
+    require(replace->toolTip() == QCoreApplication::translate("ImageStitchingPdfTemplateWidget",
+                                                              "Replace image") &&
+                remove->accessibleName() ==
+                    QCoreApplication::translate("ImageStitchingPdfTemplateWidget", "Delete image"),
+            "PDF corner actions retranslate their accessible labels and tooltips");
+    QApplication::removeTranslator(&translator);
+    remove->click();
+    pump();
+    require(document.items().size() == 1 && document.items().front().id == first,
+            "PDF thumbnail deletion removes only its own input");
+}
+
 void paginationThumbnailsAndSwaps() {
-    CollageDocument document;
+    ImageStitchingDocument document;
     configure(document);
     for (int index = 0; index < 1000; ++index)
         document.append(image({32, 24}, QColor::fromHsv(index % 360, 180, 220)),
                         QString::number(index));
     const auto selected = document.items().front().id;
     document.select(selected);
-    CollagePdfTemplateWidget widget(&document);
+    ImageStitchingPdfTemplateWidget widget(&document);
     show(widget);
     require(widget.canvas()->pageIndex() == 0 &&
                 widget.property("materializedThumbnailCount").toInt() > 0 &&
@@ -380,12 +525,12 @@ void paginationThumbnailsAndSwaps() {
 }
 
 void centeredResizeMoveResetAndCancellation() {
-    CollageDocument document;
+    ImageStitchingDocument document;
     configure(document);
     const auto first = document.append(image({800, 500}, Qt::red), QStringLiteral("First"));
     const auto second = document.append(image({400, 600}, Qt::blue), QStringLiteral("Second"));
     document.select(first);
-    CollagePdfTemplateWidget widget(&document);
+    ImageStitchingPdfTemplateWidget widget(&document);
     show(widget);
     auto* canvas = widget.canvas();
     requireVisibleImagesContained(document, *canvas);
@@ -393,7 +538,7 @@ void centeredResizeMoveResetAndCancellation() {
     const auto center = fitted.center();
     const auto handle = snowCanvasImageSelectionCorners(fitted)[2];
     int placements = 0;
-    QObject::connect(&document, &CollageDocument::pdfPlacementChanged, &widget,
+    QObject::connect(&document, &ImageStitchingDocument::pdfPlacementChanged, &widget,
                      [&](quint64) { ++placements; });
     const auto originalRevision = document.contentRevision();
     press(canvas, handle);
@@ -473,7 +618,7 @@ void centeredResizeMoveResetAndCancellation() {
 }
 
 void automaticContainmentAcrossTemplatesAndLayoutChanges() {
-    CollageDocument document;
+    ImageStitchingDocument document;
     configure(document);
     for (int index = 0; index < 9; ++index) {
         const QSize size = index % 3 == 0   ? QSize(960, 120)
@@ -481,11 +626,11 @@ void automaticContainmentAcrossTemplatesAndLayoutChanges() {
                                             : QSize(500, 500);
         document.append(image(size, QColor::fromHsv(index * 35, 160, 220)), QString::number(index));
     }
-    CollagePdfTemplateWidget widget(&document);
+    ImageStitchingPdfTemplateWidget widget(&document);
     show(widget);
     const auto checkEveryPage = [&] {
         const auto count =
-            collagePdfPageCount(document.items().size(), document.lastValidPdfSettings());
+            imageStitchingPdfPageCount(document.items().size(), document.lastValidPdfSettings());
         for (qsizetype page = 0; page < count; ++page) {
             widget.canvas()->setPageIndex(static_cast<int>(page));
             pump();
@@ -493,14 +638,14 @@ void automaticContainmentAcrossTemplatesAndLayoutChanges() {
         }
     };
     constexpr std::array types{
-        CollagePdfTemplateType::TwoImages,   CollagePdfTemplateType::IdCard,
-        CollagePdfTemplateType::ThreeImages, CollagePdfTemplateType::FourImages,
-        CollagePdfTemplateType::FiveImages,  CollagePdfTemplateType::SixImages,
-        CollagePdfTemplateType::SevenImages, CollagePdfTemplateType::EightImages,
-        CollagePdfTemplateType::NineImages};
+        ImageStitchingPdfTemplateType::TwoImages,   ImageStitchingPdfTemplateType::IdCard,
+        ImageStitchingPdfTemplateType::ThreeImages, ImageStitchingPdfTemplateType::FourImages,
+        ImageStitchingPdfTemplateType::FiveImages,  ImageStitchingPdfTemplateType::SixImages,
+        ImageStitchingPdfTemplateType::SevenImages, ImageStitchingPdfTemplateType::EightImages,
+        ImageStitchingPdfTemplateType::NineImages};
     for (const auto type : types) {
         for (const auto orientation :
-             {CollagePdfOrientation::Portrait, CollagePdfOrientation::Landscape}) {
+             {ImageStitchingPdfOrientation::Portrait, ImageStitchingPdfOrientation::Landscape}) {
             auto settings = document.pdfSettings();
             settings.templateType = type;
             settings.orientation = orientation;
@@ -510,15 +655,15 @@ void automaticContainmentAcrossTemplatesAndLayoutChanges() {
     }
     document.select(document.items().front().id);
     const auto first = document.selectedId();
-    const std::array<std::function<void(CollagePdfSettings&)>, 8> changes{
-        [](auto& settings) { settings.templateType = CollagePdfTemplateType::FourImages; },
-        [](auto& settings) { settings.paperSize = CollagePdfPaperSize::A5; },
-        [](auto& settings) { settings.orientation = CollagePdfOrientation::Portrait; },
+    const std::array<std::function<void(ImageStitchingPdfSettings&)>, 8> changes{
+        [](auto& settings) { settings.templateType = ImageStitchingPdfTemplateType::FourImages; },
+        [](auto& settings) { settings.paperSize = ImageStitchingPdfPaperSize::A5; },
+        [](auto& settings) { settings.orientation = ImageStitchingPdfOrientation::Portrait; },
         [](auto& settings) { settings.marginLeftMm += 3; },
         [](auto& settings) { settings.imageSpacingMm += 2; },
-        [](auto& settings) { settings.paperSize = CollagePdfPaperSize::ImageSize; },
+        [](auto& settings) { settings.paperSize = ImageStitchingPdfPaperSize::ImageSize; },
         [](auto& settings) {
-            settings.paperSize = CollagePdfPaperSize::Custom;
+            settings.paperSize = ImageStitchingPdfPaperSize::Custom;
             settings.customWidthMm = 240;
             settings.customHeightMm = 320;
         },
@@ -541,13 +686,13 @@ void automaticContainmentAcrossTemplatesAndLayoutChanges() {
 }
 
 void clippingBlankCellsAndDetails() {
-    CollageDocument document;
+    ImageStitchingDocument document;
     configure(document);
     const auto first = document.append(image({1200, 400}, Qt::red), QStringLiteral("Red"));
     document.append(image({600, 600}, Qt::blue), QStringLiteral("Blue"));
     setManualCoverPlacement(document, first);
     document.select(first);
-    CollagePdfTemplateWidget widget(&document);
+    ImageStitchingPdfTemplateWidget widget(&document);
     show(widget, {850, 850});
     auto* canvas = widget.canvas();
     const auto cell = canvas->cellViewportRect(first);
@@ -592,7 +737,7 @@ void clippingBlankCellsAndDetails() {
 }
 
 void longThinImagesPrepareVisibleSourceDetail() {
-    CollageDocument document;
+    ImageStitchingDocument document;
     configure(document);
     QImage stripes({6400, 64}, QImage::Format_RGB32);
     stripes.setColorSpace(QColorSpace::SRgb);
@@ -604,7 +749,7 @@ void longThinImagesPrepareVisibleSourceDetail() {
     const auto id = document.append(stripes, QStringLiteral("Long thin stripes"));
     setManualCoverPlacement(document, id);
     document.select(0);
-    CollagePdfTemplateWidget widget(&document);
+    ImageStitchingPdfTemplateWidget widget(&document);
     show(widget, {850, 850});
     auto* canvas = widget.canvas();
     const auto cell = canvas->cellViewportRect(id);
@@ -634,12 +779,12 @@ void longThinImagesPrepareVisibleSourceDetail() {
 }
 
 void detailedAlphaDoesNotBlendThePreviewTwice() {
-    CollageDocument document;
+    ImageStitchingDocument document;
     configure(document);
     const auto id = document.append(image({1200, 400}, QColor(255, 0, 0, 128)),
                                     QStringLiteral("Transparent red"));
     document.select(0);
-    CollagePdfTemplateWidget widget(&document);
+    ImageStitchingPdfTemplateWidget widget(&document);
     show(widget, {850, 850});
     auto* canvas = widget.canvas();
     const auto sample = canvas->cellViewportRect(id).center().toPoint();
@@ -657,27 +802,28 @@ void detailedAlphaDoesNotBlendThePreviewTwice() {
 }
 
 void actionsLanguageAndVisualFixtures() {
-    CollageDocument document;
-    configure(document, CollagePdfTemplateType::FiveImages);
+    ImageStitchingDocument document;
+    configure(document, ImageStitchingPdfTemplateType::FiveImages);
     for (int index = 0; index < 7; ++index)
         document.append(image({700 + index * 30, 450}, QColor::fromHsv(index * 45, 140, 210)),
                         QStringLiteral("Image %1").arg(index + 1));
-    CollagePdfTemplateWidget widget(&document);
+    ImageStitchingPdfTemplateWidget widget(&document);
     show(widget);
     saveFixture(widget, "portrait-five.png");
     auto settings = document.pdfSettings();
-    settings.templateType = CollagePdfTemplateType::IdCard;
-    settings.orientation = CollagePdfOrientation::Landscape;
+    settings.templateType = ImageStitchingPdfTemplateType::IdCard;
+    settings.orientation = ImageStitchingPdfOrientation::Landscape;
     document.setPdfSettings(settings);
     pump();
     saveFixture(widget, "landscape-id.png");
     int add = 0;
     int clear = 0;
     quint64 replace = 0;
-    QObject::connect(&widget, &CollagePdfTemplateWidget::addImagesRequested, &widget,
+    QObject::connect(&widget, &ImageStitchingPdfTemplateWidget::addImagesRequested, &widget,
                      [&] { ++add; });
-    QObject::connect(&widget, &CollagePdfTemplateWidget::clearRequested, &widget, [&] { ++clear; });
-    QObject::connect(&widget, &CollagePdfTemplateWidget::replaceImageRequested, &widget,
+    QObject::connect(&widget, &ImageStitchingPdfTemplateWidget::clearRequested, &widget,
+                     [&] { ++clear; });
+    QObject::connect(&widget, &ImageStitchingPdfTemplateWidget::replaceImageRequested, &widget,
                      [&](quint64 id) { replace = id; });
     button(widget, "collagePdfTemplateAddImages")->click();
     button(widget, "collagePdfTemplateClear")->click();
@@ -715,10 +861,17 @@ void actionsLanguageAndVisualFixtures() {
       public:
         QString translate(const char* context, const char* source, const char*,
                           int) const override {
-            return QByteArray(context) == "CollagePdfTemplateWidget" &&
-                           QByteArray(source) == "Reverse image order"
-                       ? QStringLiteral("Translated reverse")
-                       : QString{};
+            if (QByteArray(context) != "ImageStitchingPdfTemplateWidget")
+                return {};
+            if (QByteArray(source) == "Reverse image order")
+                return QStringLiteral("Translated reverse");
+            if (QByteArray(source) == "Add images to create a PDF document")
+                return QStringLiteral("Translated empty title");
+            if (QByteArray(source) == "Drag image files here, or choose add images")
+                return QStringLiteral("Translated empty description");
+            if (QByteArray(source) == "Add images")
+                return QStringLiteral("Translated add");
+            return {};
         }
     } translator;
     QApplication::installTranslator(&translator);
@@ -727,53 +880,66 @@ void actionsLanguageAndVisualFixtures() {
     require(button(widget, "collagePdfTemplateReverseImages")->accessibleName() ==
                 QStringLiteral("Translated reverse"),
             "language changes must update floating action accessibility and tooltips");
+    auto* empty = dynamic_cast<ImageDropSurface*>(
+        widget.findChild<QWidget*>(QStringLiteral("collagePdfTemplateEmptyState")));
+    auto* emptyAdd = button(widget, "collagePdfTemplateEmptyAddImages");
+    require(empty && empty->title->text() == QStringLiteral("Translated empty title") &&
+                empty->description->text() == QStringLiteral("Translated empty description") &&
+                emptyAdd->text() == QStringLiteral("Translated add") &&
+                emptyAdd->accessibleName() == emptyAdd->text(),
+            "language changes must refresh the empty template guide and its accessible add action");
     QApplication::removeTranslator(&translator);
     document.clear();
     pump();
-    require(button(widget, "collagePdfTemplateAddImages")->isVisible() &&
+    require(button(widget, "collagePdfTemplateEmptyAddImages")->isVisible() &&
+                !button(widget, "collagePdfTemplateAddImages")->isVisible() &&
                 !button(widget, "collagePdfTemplateClear")->isEnabled() &&
                 !button(widget, "collagePdfTemplateReverseImages")->isEnabled(),
-            "empty template state must keep the floating add action available");
+            "empty template state must expose its import guide instead of floating actions");
 }
 
 void fullEditorVisualFixtures() {
     if (qEnvironmentVariableIsEmpty("SNOW_TEST_TEMPLATE_PREVIEW_DIR"))
         return;
-    CollageDocument document;
-    configure(document, CollagePdfTemplateType::FiveImages);
+    ImageStitchingDocument document;
+    configure(document, ImageStitchingPdfTemplateType::FiveImages);
     auto settings = document.pdfSettings();
-    settings.paperSize = CollagePdfPaperSize::ImageSize;
+    settings.paperSize = ImageStitchingPdfPaperSize::ImageSize;
     document.setPdfSettings(settings);
     for (int index = 0; index < 7; ++index)
         document.append(image({700 + index * 30, 450}, QColor::fromHsv(index * 45, 140, 210)),
                         QStringLiteral("Image %1").arg(index + 1));
-    CollageEditorWidget editor(&document);
+    ImageStitchingEditorWidget editor(&document);
     show(editor, {1180, 800});
     saveFixture(editor, "editor-template-five-image-size.png");
-    document.setOutputType(CollageOutputType::StaticImage);
+    settings.stitchingMethod = ImageStitchingPdfStitchingMethod::PageBased;
+    document.setPdfSettings(settings);
+    pump();
+    saveFixture(editor, "editor-page-based.png");
+    document.setOutputType(ImageStitchingOutputType::StaticImage);
     pump();
     saveFixture(editor, "editor-static-toolbar.png");
 }
 
 void invalidDraftKeepsTheLastValidPreviewMethod() {
-    CollageDocument document;
+    ImageStitchingDocument document;
     for (int index = 0; index < 5; ++index)
         document.append(image({80, 60}, QColor::fromHsv(index * 60, 150, 220)),
                         QString::number(index));
-    document.setOutputType(CollageOutputType::PdfDocument);
+    document.setOutputType(ImageStitchingOutputType::PdfDocument);
     document.select(document.items()[3].id);
-    CollageEditorWidget editor(&document);
+    ImageStitchingEditorWidget editor(&document);
     show(editor, {1100, 760});
     require(editor.pdfGrid()->isVisible() && !editor.pdfTemplateWidget()->isVisible(),
             "valid page-based settings must show the existing page grid");
     auto draft = document.pdfSettings();
-    draft.paperSize = CollagePdfPaperSize::Custom;
+    draft.paperSize = ImageStitchingPdfPaperSize::Custom;
     draft.customWidthMm = 0;
     document.setPdfSettings(draft);
-    draft.stitchingMethod = CollagePdfStitchingMethod::TemplateBased;
+    draft.stitchingMethod = ImageStitchingPdfStitchingMethod::TemplateBased;
     document.setPdfSettings(draft);
     pump();
-    require(!validateCollagePdfSettings(document.pdfSettings()).isEmpty() &&
+    require(!validateImageStitchingPdfSettings(document.pdfSettings()).isEmpty() &&
                 editor.pdfGrid()->isVisible() && !editor.pdfTemplateWidget()->isVisible(),
             "an invalid raw template draft must keep the last valid page-based preview visible");
     draft.customWidthMm = 210;
@@ -785,10 +951,10 @@ void invalidDraftKeepsTheLastValidPreviewMethod() {
         "repairing the draft must switch to template composition and follow the selected input");
     draft.marginTopMm = 999;
     document.setPdfSettings(draft);
-    draft.stitchingMethod = CollagePdfStitchingMethod::PageBased;
+    draft.stitchingMethod = ImageStitchingPdfStitchingMethod::PageBased;
     document.setPdfSettings(draft);
     pump();
-    require(!validateCollagePdfSettings(document.pdfSettings()).isEmpty() &&
+    require(!validateImageStitchingPdfSettings(document.pdfSettings()).isEmpty() &&
                 !editor.pdfGrid()->isVisible() && editor.pdfTemplateWidget()->isVisible() &&
                 editor.pdfTemplateWidget()->canvas()->pageIndex() == 1,
             "an invalid raw page-based draft must preserve the last valid template preview and "
@@ -806,7 +972,9 @@ int main(int argc, char** argv) {
     try {
         sharedSelectionMetricsAndDpi();
         solidCellBordersAtEveryDpi();
+        emptyPreviewMatchesPageBasedStitching();
         paginationThumbnailsAndSwaps();
+        thumbnailReplacementAndDeletion();
         centeredResizeMoveResetAndCancellation();
         automaticContainmentAcrossTemplatesAndLayoutChanges();
         clippingBlankCellsAndDetails();

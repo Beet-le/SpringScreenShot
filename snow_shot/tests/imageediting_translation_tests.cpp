@@ -10,6 +10,8 @@
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/translation/freetranslation.h"
 #include "translation_test_support.h"
+#include "recognition_attachment_test_access.h"
+#include <QKeyEvent>
 #include "widgets/select.h"
 
 #include <QApplication>
@@ -25,6 +27,7 @@
 
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 namespace {
+using snow_shot::presentation::ImageEditingDocument;
 using snow_shot::presentation::ImageEditingSource;
 using snow_shot::presentation::ImageEditingWindow;
 using Session = ScreenshotRecognitionSessionController;
@@ -62,6 +65,143 @@ ScreenshotRecognitionResults recognitionFixture() {
     results.text = ScreenshotOcrRecognitionResult{original};
     results.translatedText = std::move(translated);
     return results;
+}
+
+class ImmediateRecognition final : public ScreenshotOcrRecognitionPort {
+  public:
+    RequestToken recognize(ScreenshotOcrRequest request, QObject*, Completion completion) override {
+        auto result = recognitionFixture().text.value();
+        result.presentation->selection = request.canvasRect.toRect();
+        result.presentation->lines[0].text = QStringLiteral("Cropped recognition");
+        completion(std::move(result));
+        return ++token;
+    }
+    void cancel(RequestToken) override {}
+    bool reprioritize(RequestToken, ScreenshotOcrRequestPriority) override {
+        return true;
+    }
+    RequestToken token = 0;
+};
+
+void cropSessionCopyUsesAttachedController() {
+    ImmediateRecognition provider;
+    ImageEditingWindow editor(
+        {[&] { return ScreenshotPinnedRecognitionProviders{&provider, nullptr, nullptr}; }});
+    ImageEditingSource source;
+    source.image = QImage(100, 60, QImage::Format_ARGB32_Premultiplied);
+    source.image.fill(Qt::white);
+    source.canvasRect = QRectF(0, 0, 100, 60);
+    source.recognition = recognitionFixture();
+    editor.present(source);
+    editor.palette()->textTranslationRequested();
+    const QPointer<Session> original = editor.recognition();
+    original->setTextDraft(QStringLiteral("Edited A translation"));
+    editor.palette()->moveRequested();
+    require(editor.document()->crop(ImageEditingDocument::CropAxis::Rows, 30, 35),
+            "copy fixture creates crop B");
+    require(!original->hasTarget(), "inactive translation releases target pixels");
+    editor.palette()->ocrRequested();
+    const QPointer<Session> cropped = editor.recognition();
+    require(cropped && cropped != original && cropped->hasTextResult(),
+            "crop B gets independent deterministic recognition");
+    cropped->setTextDraft(QStringLiteral("B draft"));
+    editor.palette()->moveRequested();
+    require(editor.document()->undo(), "copy fixture undoes crop B");
+    editor.palette()->textTranslationRequested();
+    require(editor.recognition() == original && original->translating() &&
+                original->textDraft() == QStringLiteral("Edited A translation"),
+            "undo restores A's edited translation and active controller");
+    auto* view = editor.canvas()->parentWidget()->findChild<ScreenshotRecognitionWindow*>(
+        QStringLiteral("imageEditingRecognition"));
+    require(view && original->ownsContentAttachment(), "A owns the shared view after undo");
+    require(ScreenshotRecognitionWindowTestAccess::canvasSelection(*view) ==
+                editor.document()->bounds(),
+            "cached activation presents the restored crop geometry");
+    const snow_shot::storage::ScreenshotTranslationSettings settings;
+    const bool previousCopy = settings.copyTranslationResultsAsImage();
+    const auto restore = qScopeGuard(
+        [&] { static_cast<void>(settings.setCopyTranslationResultsAsImage(previousCopy)); });
+    for (const bool imageCopy : {true, false}) {
+        require(settings.setCopyTranslationResultsAsImage(imageCopy),
+                "select Copy output preference");
+        const auto assertClipboard = [&] {
+            const auto* mime = QApplication::clipboard()->mimeData();
+            require(mime && mime->hasImage() == imageCopy && mime->hasText() != imageCopy &&
+                        (imageCopy || mime->text() == QStringLiteral("Edited A translation")),
+                    "all unselected Copy routes follow A's translation policy");
+        };
+        {
+            adqt::widgets::AdContextMenu menu(view);
+            ScreenshotRecognitionWindowTestAccess::populateTextMenu(*view, menu);
+            auto* copy =
+                menu.findChild<QAction*>(QStringLiteral("screenshotRecognitionCopyAction"));
+            require(copy && copy->isEnabled(), "restored translation context Copy is enabled");
+            copy->trigger();
+            assertClipboard();
+        }
+        require(view->copyVisibleContentToClipboard(), "restored direct-view Copy succeeds");
+        assertClipboard();
+        editor.palette()->copyRequested();
+        assertClipboard();
+        auto* text = view->findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+        require(text, "restored translation owns a text editor");
+        text->setFocus();
+        QApplication::processEvents();
+        bool sawPublication = false;
+        const auto observe =
+            QObject::connect(QApplication::clipboard(), &QClipboard::dataChanged, view, [&] {
+                sawPublication = true;
+                assertClipboard();
+            });
+        QKeyEvent key(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier, 0x2e, 0x43, 0,
+                      QStringLiteral("c"));
+        QApplication::sendEvent(text, &key);
+        QObject::disconnect(observe);
+        require(sawPublication, "keyboard Copy publishes the correct MIME from its first write");
+        auto cursor = text->textCursor();
+        cursor.setPosition(0);
+        cursor.setPosition(6, QTextCursor::KeepAnchor);
+        text->setTextCursor(cursor);
+        require(view->copyVisibleContentToClipboard() &&
+                    QApplication::clipboard()->text() == QStringLiteral("Edited") &&
+                    !QApplication::clipboard()->mimeData()->hasImage(),
+                "selected translation text precedes image preference");
+        {
+            adqt::widgets::AdContextMenu menu(view);
+            ScreenshotRecognitionWindowTestAccess::populateTextMenu(*view, menu);
+            menu.findChild<QAction*>(QStringLiteral("screenshotRecognitionCopyAction"))->trigger();
+            require(QApplication::clipboard()->text() == QStringLiteral("Edited") &&
+                        !QApplication::clipboard()->mimeData()->hasImage(),
+                    "context Copy preserves selected translation text");
+        }
+        editor.palette()->copyRequested();
+        require(QApplication::clipboard()->text() == QStringLiteral("Edited") &&
+                    !QApplication::clipboard()->mimeData()->hasImage(),
+                "toolbar Copy preserves selected translation text");
+        cursor.clearSelection();
+        text->setTextCursor(cursor);
+    }
+    editor.palette()->moveRequested();
+    require(editor.document()->redo(), "copy fixture redoes B");
+    editor.palette()->ocrRequested();
+    require(editor.recognition() == cropped && cropped->textDraft() == QStringLiteral("B draft") &&
+                ScreenshotRecognitionWindowTestAccess::canvasSelection(*view) ==
+                    editor.document()->bounds() &&
+                view->copyVisibleContentToClipboard() &&
+                QApplication::clipboard()->text() == QStringLiteral("B draft"),
+            "redo restores B's recognition draft and current Copy policy");
+    editor.palette()->moveRequested();
+    require(editor.document()->undo(), "copy fixture returns to A before branching");
+    require(editor.document()->crop(ImageEditingDocument::CropAxis::Columns, 40, 45),
+            "new crop discards B's redo branch");
+    editor.palette()->ocrRequested();
+    const QPointer<Session> current = editor.recognition();
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(!cropped && current && current->ownsContentAttachment() &&
+                view->copyVisibleContentToClipboard() &&
+                QApplication::clipboard()->text() == QStringLiteral("Cropped recognition"),
+            "deferred destruction of pruned B preserves the new crop's attachment");
+    editor.shutdown();
 }
 
 void editCachedTranslation(const ImageEditingSource& source) {
@@ -138,14 +278,37 @@ void liveAndPersistedTranslationImports() {
     require(pin.present(config, [&](bool success, QImage) { published = success; }),
             "translation source pin presents");
     awaitCondition([&] { return published; }, "translation source pin publishes its image");
-    const auto live = pin.imageEditingSnapshot();
+    ImageEditingSource cached;
+    cached.image = image;
+    cached.canvasRect = config.canvasSourceRect;
+    cached.recognition = recognitionFixture();
+    editCachedTranslation(cached);
+    auto* session = pin.findChild<Session*>();
+    awaitCondition([&] { return session && session->hasTextResult(); },
+                   "the pinned source seeds its cached text presentation");
+    session->activate(Session::Mode::Text);
+    session->beginTextTranslation();
+    require(session->originalImageTranslationActive(),
+            "the source pin displays its cached translated image content");
+    ImageEditingWindow live;
+    bool loaded = false;
+    QObject::connect(&live, &ImageEditingWindow::loaded, &live, [&](bool success) {
+        require(success, "live translated raster loads into independent editing");
+        loaded = true;
+    });
+    pin.requestRenderedImageSnapshot([&](ScreenshotPinnedImageSnapshot snapshot) {
+        require(snapshot.error.isEmpty(), "translated pin prepares its shared rendered source");
+        live.presentSource(std::move(snapshot.source));
+    });
+    awaitCondition([&] { return loaded; }, "the live translated render completes");
     const auto persisted = snow_shot::presentation::readImageEditingPinned(
-        pin.persistenceSnapshot(), captureScreenshotPinnedTextPreparation());
-    require(live.recognition.translatedText && persisted.recognition.translatedText,
-            "live and persisted pins retain captured translation content for import");
-    editCachedTranslation(live);
+        pin.persistenceSnapshot(), captureScreenshotPinnedRenderPreparation());
+    require(persisted.error.isEmpty() && persisted.recognition.isEmpty() &&
+                !live.document()->runtime().hasDocumentContent() &&
+                persisted.image == live.document()->image() && persisted.image != image,
+            "live and persisted translated pins import the same rendered image without stale OCR");
+    live.shutdown();
     pin.hide();
-    editCachedTranslation(persisted);
 }
 
 void independentFreshTranslationKeepsTextPresentation() {
@@ -297,6 +460,7 @@ void runImageEditingTranslationTests() {
         [&] { static_cast<void>(settings.setOriginalImageTranslationEnabled(originalImage)); });
     require(settings.setOriginalImageTranslationEnabled(true),
             "translation regression selects image translation for ordinary hosts");
+    cropSessionCopyUsesAttachedController();
     liveAndPersistedTranslationImports();
     quickServicePickerDiscoversModelsWithoutATranslationJob();
     independentModeAfterSeedingKeepsCapturedText();

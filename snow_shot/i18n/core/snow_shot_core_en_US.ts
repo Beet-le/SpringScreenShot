@@ -98,8 +98,8 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>Discover more features and ways to use it</translation>
         </message>
         <message>
-            <source>Discussion and support · Group No. %1</source>
-            <translation>Discussion and support · Group No. %1</translation>
+            <source>Discussion and support · group no. %1</source>
+            <translation>Discussion and support · group no. %1</translation>
         </message>
         <message>
             <source>Download from GitHub</source>
@@ -138,8 +138,8 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>Free and open-source software. Distributed without any warranty</translation>
         </message>
         <message>
-            <source>Free · Open source</source>
-            <translation>Free · Open source</translation>
+            <source>Free · open source</source>
+            <translation>Free · open source</translation>
         </message>
         <message>
             <source>GNU General Public License v3.0 or later</source>
@@ -182,8 +182,12 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>Privacy policy</translation>
         </message>
         <message>
-            <source>QQ Group 3</source>
-            <translation>QQ Group 3</translation>
+            <source>QQ group 3</source>
+            <translation>QQ group 3</translation>
+        </message>
+        <message>
+            <source>QQ group 4</source>
+            <translation>QQ group 4</translation>
         </message>
         <message>
             <source>Ready to install %1</source>
@@ -218,8 +222,8 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>Snow Shot logo</translation>
         </message>
         <message>
-            <source>Snow Shot · Make expression clearer</source>
-            <translation>Snow Shot · Make expression clearer</translation>
+            <source>Snow Shot · make expression clearer</source>
+            <translation>Snow Shot · make expression clearer</translation>
         </message>
         <message>
             <source>Text recognition</source>
@@ -300,8 +304,8 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>Locked</translation>
         </message>
         <message>
-            <source>Motion Preview in Progress</source>
-            <translation>Motion Preview in Progress</translation>
+            <source>Motion preview in progress</source>
+            <translation>Motion preview in progress</translation>
         </message>
         <message>
             <source>Opacity: %1%</source>
@@ -312,8 +316,8 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>Rendering preview</translation>
         </message>
         <message>
-            <source>Result Preview in Progress</source>
-            <translation>Result Preview in Progress</translation>
+            <source>Result preview in progress</source>
+            <translation>Result preview in progress</translation>
         </message>
         <message>
             <source>Scale: %1%</source>
@@ -329,6 +333,10 @@ so every moment on screen can be expressed clearly and shared easily</translatio
     </context>
     <context>
         <name>DiagnosticsService</name>
+        <message>
+            <source>A diagnostics file could not be read</source>
+            <translation>A diagnostics file could not be read</translation>
+        </message>
         <message>
             <source>A log file could not be read</source>
             <translation>A log file could not be read</translation>
@@ -366,6 +374,14 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>The local crash database could not be initialized</translation>
         </message>
         <message>
+            <source>The log archive could not be saved</source>
+            <translation>The log archive could not be saved</translation>
+        </message>
+        <message>
+            <source>The log archive directory could not be created</source>
+            <translation>The log archive directory could not be created</translation>
+        </message>
+        <message>
             <source>The log directory is not writable</source>
             <translation>The log directory is not writable</translation>
         </message>
@@ -384,6 +400,10 @@ so every moment on screen can be expressed clearly and shared easily</translatio
         <message>
             <source>The preferred log directory is unavailable; a fallback is in use</source>
             <translation>The preferred log directory is unavailable; a fallback is in use</translation>
+        </message>
+        <message>
+            <source>There is not enough space for a log archive</source>
+            <translation>There is not enough space for a log archive</translation>
         </message>
         <message>
             <source>There is not enough space for a log snapshot</source>
@@ -420,12 +440,12 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>Customize toolbar</translation>
         </message>
         <message>
-            <source>Delay %1 seconds to execute</source>
-            <translation>Delay %1 seconds to execute</translation>
+            <source>Edit selected images</source>
+            <translation>Edit selected images</translation>
         </message>
         <message>
-            <source>Formula recognition</source>
-            <translation>Formula recognition</translation>
+            <source>Full-screen canvas</source>
+            <translation>Full-screen canvas</translation>
         </message>
         <message>
             <source>Hide during screenshots</source>
@@ -444,8 +464,8 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>More tools</translation>
         </message>
         <message>
-            <source>QR code recognition</source>
-            <translation>QR code recognition</translation>
+            <source>Run after %1 seconds</source>
+            <translation>Run after %1 seconds</translation>
         </message>
         <message>
             <source>Screen recording</source>
@@ -456,8 +476,20 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>Screenshot</translation>
         </message>
         <message>
+            <source>Screenshot history</source>
+            <translation>Screenshot history</translation>
+        </message>
+        <message>
             <source>Show toolbar</source>
             <translation>Show toolbar</translation>
+        </message>
+        <message>
+            <source>Split selected images</source>
+            <translation>Split selected images</translation>
+        </message>
+        <message>
+            <source>Stitch selected images</source>
+            <translation>Stitch selected images</translation>
         </message>
         <message>
             <source>Toolbar mode</source>
@@ -528,8 +560,8 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>%1 is already assigned to another shortcut, try another key</translation>
         </message>
         <message>
-            <source>Add key config</source>
-            <translation>Add key config</translation>
+            <source>Add key configuration</source>
+            <translation>Add key configuration</translation>
         </message>
         <message>
             <source>Global shortcuts are not supported on this platform</source>
@@ -649,8 +681,8 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>Expand navigation</translation>
         </message>
         <message>
-            <source>Search Function</source>
-            <translation>Search Function</translation>
+            <source>Search function</source>
+            <translation>Search function</translation>
         </message>
     </context>
     <context>
@@ -811,20 +843,20 @@ so every moment on screen can be expressed clearly and shared easily</translatio
     <context>
         <name>SystemTrayController</name>
         <message>
-            <source>Delete Empty Groups</source>
-            <translation>Delete Empty Groups</translation>
+            <source>Delete empty groups</source>
+            <translation>Delete empty groups</translation>
         </message>
         <message>
-            <source>Delete Specified Group</source>
-            <translation>Delete Specified Group</translation>
+            <source>Delete specified group</source>
+            <translation>Delete specified group</translation>
         </message>
         <message>
-            <source>New Group</source>
-            <translation>New Group</translation>
+            <source>New group</source>
+            <translation>New group</translation>
         </message>
         <message>
-            <source>Window Group: %1</source>
-            <translation>Window Group: %1</translation>
+            <source>Window group: %1</source>
+            <translation>Window group: %1</translation>
         </message>
     </context>
     <context>
@@ -873,12 +905,8 @@ so every moment on screen can be expressed clearly and shared easily</translatio
             <translation>Could not open the selected file: %1</translation>
         </message>
         <message>
-            <source>Could not pin selected files</source>
-            <translation>Could not pin selected files</translation>
-        </message>
-        <message>
-            <source>Feature unavailable</source>
-            <translation>Feature unavailable</translation>
+            <source>Could not pin selected files to screen</source>
+            <translation>Could not pin selected files to screen</translation>
         </message>
         <message>
             <source>Finish capturing, recording, exporting, recognizing text, or updating before changing storage</source>

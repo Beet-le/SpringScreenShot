@@ -80,6 +80,16 @@
 #include <qt_windows.h>
 #endif
 
+class ScreenshotOriginalImagePreviewWindowTestAccess final {
+  public:
+    static const QImage& source(const ScreenshotOriginalImagePreviewWindow& window) {
+        return window.m_sourceImage;
+    }
+    static bool dimmed(const ScreenshotOriginalImagePreviewWindow& window) {
+        return window.m_dimmed;
+    }
+};
+
 namespace {
 class LatexPreviewTranslator final : public QTranslator {
   public:
@@ -3244,17 +3254,17 @@ void translationCopyProviderHandlesKeyboardAndContextMenu() {
     QApplication::processEvents();
     auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
     require(editor, "translation copy owns a result editor");
-    window.setTranslationClipboardProvider(
-        [] { return true; },
-        [&]() -> std::unique_ptr<QMimeData> {
-            if (fail)
-                return {};
-            if (auto selected = window.textSelectionClipboardMimeData())
-                return selected;
-            auto mime = std::make_unique<QMimeData>();
-            mime->setImageData(window.translationDocumentImage());
-            return mime;
-        });
+    static_cast<void>(window.attachSession(
+        &window, {[] { return true; },
+                  [&]() -> std::unique_ptr<QMimeData> {
+                      if (fail)
+                          return {};
+                      if (auto selected = window.textSelectionClipboardMimeData())
+                          return selected;
+                      auto mime = std::make_unique<QMimeData>();
+                      mime->setImageData(window.translationDocumentImage());
+                      return mime;
+                  }}));
     const auto image = window.translationDocumentImage();
     require(!image.isNull() && image.height() > editor->viewport()->height(),
             "translation image includes content below the viewport");
@@ -3320,7 +3330,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
     inspectContextMenu(window, window.rect().center(), [](adqt::widgets::AdContextMenu& menu) {
         require(menu.objectName() == QStringLiteral("screenshotOcrContextMenu") &&
                     contextMenuActionTexts(menu) ==
-                        QStringList{QStringLiteral("Copy"), QStringLiteral("Select All")},
+                        QStringList{QStringLiteral("Copy"), QStringLiteral("Select all")},
                 "OCR context menu should expose Copy and Select All");
         requireContextMenuShortcutsHidden(menu);
         contextMenuAction(menu, QStringLiteral("Copy"))->trigger();
@@ -3341,7 +3351,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
     presentation->clearTextSelection();
     window.updateOcrSelection();
     inspectContextMenu(window, window.rect().center(), [](adqt::widgets::AdContextMenu& menu) {
-        contextMenuAction(menu, QStringLiteral("Select All"))->trigger();
+        contextMenuAction(menu, QStringLiteral("Select all"))->trigger();
     });
     require(presentation->selectedText() == QStringLiteral("Alpha\nBeta"),
             "OCR context Select All should update the presentation selection");
@@ -3358,7 +3368,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
         *qr->viewport(), qr->viewport()->rect().center(), [](adqt::widgets::AdContextMenu& menu) {
             require(menu.objectName() == QStringLiteral("screenshotQrContextMenu") &&
                         contextMenuActionTexts(menu) ==
-                            QStringList{QStringLiteral("Copy"), QStringLiteral("Select All")},
+                            QStringList{QStringLiteral("Copy"), QStringLiteral("Select all")},
                     "QR context menu should expose Copy and Select All");
             requireContextMenuShortcutsHidden(menu);
             contextMenuAction(menu, QStringLiteral("Copy"))->trigger();
@@ -3375,7 +3385,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
             "QR context Copy should fall back to all displayed payloads");
     inspectContextMenu(*qr->viewport(), qr->viewport()->rect().center(),
                        [](adqt::widgets::AdContextMenu& menu) {
-                           contextMenuAction(menu, QStringLiteral("Select All"))->trigger();
+                           contextMenuAction(menu, QStringLiteral("Select all"))->trigger();
                        });
     require(qr->textCursor().hasSelection() && qr->textCursor().selectionStart() == 0 &&
                 qr->textCursor().selectionEnd() == qr->document()->characterCount() - 1,
@@ -3396,7 +3406,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
         [](adqt::widgets::AdContextMenu& menu) {
             require(menu.objectName() == QStringLiteral("screenshotImageConversionContextMenu") &&
                         contextMenuActionTexts(menu) ==
-                            QStringList{QStringLiteral("Copy"), QStringLiteral("Select All")},
+                            QStringList{QStringLiteral("Copy"), QStringLiteral("Select all")},
                     "conversion context menu should use Ant Design actions");
             requireContextMenuShortcutsHidden(menu);
             contextMenuAction(menu, QStringLiteral("Copy"))->trigger();
@@ -3413,7 +3423,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
             "conversion context Copy should fall back to the full source");
     inspectContextMenu(*preview->viewport(), preview->viewport()->rect().center(),
                        [](adqt::widgets::AdContextMenu& menu) {
-                           contextMenuAction(menu, QStringLiteral("Select All"))->trigger();
+                           contextMenuAction(menu, QStringLiteral("Select all"))->trigger();
                        });
     require(preview->textCursor().hasSelection() && preview->textCursor().selectionStart() == 0 &&
                 preview->textCursor().selectionEnd() == preview->document()->characterCount() - 1,
@@ -3473,7 +3483,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
                         contextMenuActionTexts(menu) ==
                             QStringList{QStringLiteral("Copy"), QStringLiteral("Cut"),
                                         QStringLiteral("Paste"), QStringLiteral("Delete"),
-                                        QStringLiteral("|"), QStringLiteral("Select All")},
+                                        QStringLiteral("|"), QStringLiteral("Select all")},
                     "text editor menu should expose all requested actions");
             requireContextMenuShortcutsHidden(menu);
             require(contextMenuAction(menu, QStringLiteral("Copy"))->isEnabled() &&
@@ -3518,7 +3528,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
             "text editor context Delete should remove selected text");
     inspectContextMenu(*textEditor->viewport(), textEditor->viewport()->rect().center(),
                        [](adqt::widgets::AdContextMenu& menu) {
-                           contextMenuAction(menu, QStringLiteral("Select All"))->trigger();
+                           contextMenuAction(menu, QStringLiteral("Select all"))->trigger();
                        });
     require(textEditor->textCursor().selectedText() == QStringLiteral(" !"),
             "text editor context Select All should select the document");
@@ -3530,7 +3540,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
                         !contextMenuAction(menu, QStringLiteral("Cut"))->isEnabled() &&
                         !contextMenuAction(menu, QStringLiteral("Paste"))->isEnabled() &&
                         !contextMenuAction(menu, QStringLiteral("Delete"))->isEnabled() &&
-                        contextMenuAction(menu, QStringLiteral("Select All"))->isEnabled(),
+                        contextMenuAction(menu, QStringLiteral("Select all"))->isEnabled(),
                     "read-only translation should expose only Copy and Select All");
         });
 
@@ -3575,14 +3585,14 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
                         contextMenuActionTexts(menu) ==
                             QStringList{QStringLiteral("Copy"), QStringLiteral("Cut"),
                                         QStringLiteral("Paste"), QStringLiteral("Delete"),
-                                        QStringLiteral("|"), QStringLiteral("Select All")},
+                                        QStringLiteral("|"), QStringLiteral("Select all")},
                     "inline table text should use the OCR-style Ant Design edit menu");
             requireContextMenuShortcutsHidden(menu);
             require(contextMenuAction(menu, QStringLiteral("Copy"))->isEnabled() &&
                         contextMenuAction(menu, QStringLiteral("Cut"))->isEnabled() &&
                         contextMenuAction(menu, QStringLiteral("Paste"))->isEnabled() &&
                         contextMenuAction(menu, QStringLiteral("Delete"))->isEnabled() &&
-                        contextMenuAction(menu, QStringLiteral("Select All"))->isEnabled(),
+                        contextMenuAction(menu, QStringLiteral("Select all"))->isEnabled(),
                     "selected inline table text should enable every edit command");
             contextMenuAction(menu, QStringLiteral("Copy"))->trigger();
         });
@@ -3625,7 +3635,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
             "inline table context Delete should remove the character selection");
     inspectContextMenu(*cellEditor->viewport(), cellEditor->viewport()->rect().center(),
                        [](adqt::widgets::AdContextMenu& menu) {
-                           contextMenuAction(menu, QStringLiteral("Select All"))->trigger();
+                           contextMenuAction(menu, QStringLiteral("Select all"))->trigger();
                        });
     require(cellEditor->textCursor().selectedText() == QStringLiteral(" cell"),
             "inline table context Select All should select the cell text");
@@ -3969,6 +3979,10 @@ void originalImagePreviewPreservesSelectionAndOwnerLifecycle() {
 }
 
 void latexPreviewStreamsWithoutWaitingForPause() {
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto originalTheme = themes.theme();
+    const auto restoreTheme = qScopeGuard([&] { themes.setTheme(originalTheme); });
+    themes.setPreset(adqt::theme::ThemeScheme::Light, adqt::theme::ThemeDensity::Compact);
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen != nullptr, "streaming preview fixture has a screen");
     auto document = std::make_shared<QTextDocument>();
@@ -4018,11 +4032,13 @@ void latexPreviewStreamsWithoutWaitingForPause() {
     require(preview && preview->isVisible() && editor && editor->isReadOnly() && spin &&
                 spin->spinning(),
             "source and passive preview are visible while formula conversion remains busy");
-    const QImage initial = preview->grab().toImage();
+    const QImage initial = ScreenshotOriginalImagePreviewWindowTestAccess::source(*preview);
     document->setPlainText(QStringLiteral("x+\\frac{x}"));
     waitFor([&] { return invalidRenders > 0; },
             "an incomplete formula reaches the preview renderer");
-    require(preview->accessibleDescription().isEmpty() && preview->grab().toImage() == initial,
+    require(preview->accessibleDescription().isEmpty() &&
+                !ScreenshotOriginalImagePreviewWindowTestAccess::dimmed(*preview) &&
+                ScreenshotOriginalImagePreviewWindowTestAccess::source(*preview) == initial,
             "an incomplete streamed formula retains the undimmed valid image without an error");
     require(window.updateSelectionGeometry(QRect(geometry.topLeft(), QSize(280, 160)),
                                            QRectF(0, 0, 280, 160)),
@@ -4301,7 +4317,7 @@ void latexPreviewUsesPassiveCompanionAndSurvivesEditing() {
                                QStringLiteral("Translated LaTeX formula preview") &&
                            preview()->accessibleDescription() ==
                                QStringLiteral("Translated Unable to preview this formula. Check "
-                                              "the LaTeX source.");
+                                              "the LaTeX source");
                 }),
                 "live language changes retranslate formula source, preview name and cached error");
         window.showTextEditor(&document);

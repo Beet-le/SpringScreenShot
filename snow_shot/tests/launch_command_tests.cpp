@@ -75,16 +75,18 @@ void startupWiringKeepsOpenDrawFastPath() {
     require(mainSource.open(QIODevice::ReadOnly),
             "the application startup source must be readable for the wiring check");
     const QString source = QString::fromUtf8(mainSource.readAll());
-    const qsizetype earlyForward = source.indexOf(QStringLiteral("tryForwardToRunningInstance"));
-    const qsizetype applicationCreation =
-        source.indexOf(QStringLiteral("QApplication app(argc, argv)"));
-    require(earlyForward >= 0, "--open-draw must use the early single-instance forward fast path");
-    require(applicationCreation >= 0 && earlyForward < applicationCreation,
-            "the early forward must run before the application object is constructed");
+    const qsizetype forward = source.indexOf(QStringLiteral("acquireOrForward"));
+    const qsizetype controllerCreation =
+        source.indexOf(QStringLiteral("ApplicationController applicationController"));
+    require(forward >= 0, "--open-draw must use the single-instance forward fast path");
+    require(controllerCreation > forward,
+            "a forwarded launch must return before the primary instance is constructed");
     require(source.contains(QStringLiteral("launchActionForColdStart")),
             "cold start must dispatch the parsed launch action");
     require(source.contains(QStringLiteral("requestScreenshot")),
             "cold start --open-draw must request a screenshot");
+    require(source.contains(QStringLiteral("handleLaunchRequest")),
+            "forwarded requests must reach the launch action dispatcher");
 #endif
 }
 } // namespace

@@ -1,4 +1,5 @@
 #include "physical_key_test_support.h"
+#include "../src/presentation/recording/screenshotrecordingworkflow.h"
 #include <QLineEdit>
 #include <QWheelEvent>
 #include "snow_shot/image/screenshotregionpoints.h"
@@ -612,6 +613,15 @@ void directImagesPersistWithoutTouchingTheEditor(
         auto repository = storage::makeCaptureHistoryRepository(root);
         auto draft = directCaptureHistoryDraft(
             request, frame, storage::PreparedPngImage::fromBytes(image.size(), png));
+        const QImage scaled = solidImage(QSize(20, 10), qRgb(24, 50, 70));
+        const auto scaledDraft = directCaptureHistoryDraft(
+            request, frame,
+            storage::PreparedPngImage::fromBytes(scaled.size(),
+                                                 snow_shot::image_codec::encodePng(scaled, 9)));
+        require(!scaledDraft.resultImage && scaledDraft.preparedResultImage &&
+                    scaledDraft.preparedResultImage->pixelSize() == scaled.size() &&
+                    scaledDraft.displays.front().image == image && frame.isValid(),
+                "downscaled direct output must retain native capture geometry and source pixels");
         require(draft.desktopGeometry &&
                     draft.desktopGeometry->canvasOrigin == physicalBounds.topLeft() &&
                     !draft.desktopGeometry->canvasUsesPoints,
@@ -2280,7 +2290,7 @@ void quickSelectionModificationControlsBorderResize() {
     require(settings.quickSelectionModification(), "quick selection modification defaults on");
     require(settings.setQuickSelectionModification(false), "disable quick selection modification");
     for (const auto tool :
-         {ScreenshotActiveTool::Shape, ScreenshotActiveTool::FreeDraw, ScreenshotActiveTool::Select,
+         {ScreenshotActiveTool::Shape, ScreenshotActiveTool::Brush, ScreenshotActiveTool::Select,
           ScreenshotActiveTool::Text, ScreenshotActiveTool::Ocr,
           ScreenshotActiveTool::TextTranslation, ScreenshotActiveTool::Table,
           ScreenshotActiveTool::Qr, ScreenshotActiveTool::Latex, ScreenshotActiveTool::Markdown,
@@ -2435,6 +2445,10 @@ void recognitionAndScrollingToolsResizeSelectionBorder() {
             }
             return true;
         };
+        actions.showToolbar = [&] {
+            require(interaction.activeTool() == tool && interaction.editing(),
+                    "resized recognition must be restored before toolbar presentation");
+        };
         ScreenshotOverlayInputHandler handler({
             captureState,
             interaction,
@@ -2479,6 +2493,10 @@ void recognitionAndScrollingToolsResizeSelectionBorder() {
     actions.resumeScrollingCapture = [&resumeCount, &interaction]() {
         ++resumeCount;
         interaction.enterScrollingCapture();
+    };
+    actions.showToolbar = [&] {
+        require(interaction.scrollingCapture(),
+                "scrolling must resume before toolbar presentation after a resize");
     };
     ScreenshotOverlayInputHandler handler({
         captureState,
@@ -2557,7 +2575,7 @@ void eraserWheelUsesBrushCreationWidthOnly() {
     interaction.confirmSelection();
     QList<int> directions;
     ScreenshotOverlayInputActions actions;
-    actions.stepPenFilterStrokeWidth = [&](int direction) {
+    actions.stepBrushFilterStrokeWidth = [&](int direction) {
         directions.append(direction);
         return true;
     };
@@ -2664,20 +2682,20 @@ void completionGesturesUseSharedEligibilityAcrossTools() {
             ScreenshotActiveTool::Shape,
             ScreenshotActiveTool::Arrow,
             ScreenshotActiveTool::Line,
-            ScreenshotActiveTool::FreeDraw,
+            ScreenshotActiveTool::Brush,
             ScreenshotActiveTool::RectangleHighlight,
-            ScreenshotActiveTool::PenHighlight,
+            ScreenshotActiveTool::BrushHighlight,
             ScreenshotActiveTool::Eraser,
             ScreenshotActiveTool::RectangleEraser,
             ScreenshotActiveTool::BrushEraser,
             ScreenshotActiveTool::RectangleFilter,
             ScreenshotActiveTool::Watermark,
             ScreenshotActiveTool::Text,
-            ScreenshotActiveTool::SerialNumber,
+            ScreenshotActiveTool::SequenceNumber,
             ScreenshotActiveTool::Ocr,
             ScreenshotActiveTool::Table,
             ScreenshotActiveTool::Qr,
-            ScreenshotActiveTool::PenFilter,
+            ScreenshotActiveTool::BrushFilter,
             ScreenshotActiveTool::Spotlight,
             ScreenshotActiveTool::Markdown,
             ScreenshotActiveTool::Html,
@@ -3035,12 +3053,14 @@ void selectAllShortcutSelectsCurrentScreenThenDesktop() {
         int preparations = 0;
         int confirmations = 0;
         int presentations = 0;
+        int replacements = 0;
         bool inputAllowed = true;
         QPoint cursor(120, 80);
         ScreenshotOverlayInputActions actions;
         actions.currentLogicalCursorPosition = [&] { return cursor; };
         actions.localShortcutInputAllowed = [&] { return inputAllowed; };
         actions.prepareExplicitSelectionCommand = [&] { ++preparations; };
+        actions.prepareSelectionReplacement = [&] { ++replacements; };
         actions.showToolbar = [&] { ++presentations; };
         actions.selectionConfirmed = [&] { ++confirmations; };
         ScreenshotOverlayInputHandler handler(
@@ -3076,8 +3096,9 @@ void selectAllShortcutSelectsCurrentScreenThenDesktop() {
                         !intelligent.pressActive(),
                     "full-screen selection must replace the old region with exact display bounds");
             const int count = slot == 1 ? 1 : 2;
-            require(preparations == count && confirmations == count && presentations == count,
-                    "full-screen selection must prepare and confirm exactly once");
+            require(preparations == 0 && replacements == count && confirmations == count &&
+                        presentations == count,
+                    "full-screen selection must confirm without replacing the capture action");
             static_cast<void>(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier, true));
             require(confirmations == count, "held Ctrl+A must not repeat selection confirmation");
             static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_A, Qt::ControlModifier));
@@ -3089,7 +3110,8 @@ void selectAllShortcutSelectsCurrentScreenThenDesktop() {
             require(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier),
                     "a fresh Ctrl+A press must select a screen or expand to the desktop");
             require(selection.pixelSelection() == expected && selection.rectangular() &&
-                        preparations == count && confirmations == count && presentations == count,
+                        preparations == 0 && replacements == count && confirmations == count &&
+                        presentations == count,
                     "Ctrl+A must confirm the exact target once, excluding inactive displays");
             static_cast<void>(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier, true));
             require(selection.pixelSelection() == expected && confirmations == count,
@@ -3201,6 +3223,71 @@ void selectAllShortcutWithSingleScreen() {
                     "repeated Ctrl+A must retain the single display's exact canvas extent");
             static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_A, Qt::ControlModifier));
         }
+    }
+}
+
+void selectAllShortcutHandsConfirmedRegionToPendingRecording() {
+    for (const bool smartSelection : {false, true}) {
+        ScreenshotCaptureState capture;
+        capture.sessionState = ScreenshotSessionState::OverlayVisible;
+        ScreenshotDisplaySession displays;
+        auto screen = display(QStringLiteral("recording"), QStringLiteral("Recording"),
+                              QRect(-1200, -300, 1200, 600), {});
+        screen.logicalRect = QRect(-800, -200, 800, 400);
+        screen.logicalToPhysicalScale = 1.5;
+        screen.geometryResolved = true;
+        displays.appendDisplay(screen);
+        ScreenshotGeometryMapper geometry;
+        geometry.rebuild(displays);
+        ScreenshotSelectionModel selection;
+        selection.setSelectionRect(QRect(10, 20, 80, 60));
+        ScreenshotIntelligentSelectionModel intelligent;
+        ScreenshotInteractionState interaction;
+        interaction.enterOverlayVisible(smartSelection);
+        QObject recordingOwner;
+        bool pendingRecording = true;
+        int confirmations = 0;
+        int toolbarShows = 0;
+        int recordingOpens = 0;
+        QRect recordingRegion;
+        ScreenshotOverlayInputActions actions;
+        actions.currentLogicalCursorPosition = [&] { return screen.logicalRect.center(); };
+        actions.prepareExplicitSelectionCommand = [&] { pendingRecording = false; };
+        actions.showToolbar = [&] { ++toolbarShows; };
+        actions.selectionConfirmed = [&] {
+            ++confirmations;
+            if (!std::exchange(pendingRecording, false))
+                return;
+            const auto noOp = [] {};
+            snow_shot::presentation::recording::startScreenshotRecording(
+                selection.pixelSelection(), geometry.canvasOrigin(),
+                {recordingOwner, [] { return true; }, noOp, noOp, noOp,
+                 [&] {
+                     interaction.reset();
+                     selection.clearSelection();
+                     capture.sessionState = ScreenshotSessionState::IdlePrepared;
+                 },
+                 noOp,
+                 [&](const QRect& region) {
+                     ++recordingOpens;
+                     recordingRegion = region;
+                 }});
+        };
+        ScreenshotOverlayInputHandler handler(
+            {capture, interaction, selection, intelligent, geometry, displays, actions});
+        QWidget receiver;
+        snow_shot::presentation::WindowShortcutManager manager;
+        manager.addScopeWindow(&receiver);
+        ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction, intelligent,
+                                                      actions);
+        require(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier) && confirmations == 1 &&
+                    interaction.inactive() && selection.pixelSelection().isEmpty() &&
+                    toolbarShows == 0 && recordingOpens == 0,
+                "Ctrl+A must hand off the pending recording before presenting screenshot tools");
+        static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_A, Qt::ControlModifier));
+        QCoreApplication::processEvents();
+        require(recordingOpens == 1 && recordingRegion == screen.physicalRect && toolbarShows == 0,
+                "recording must open once with the full display's physical bounds after cleanup");
     }
 }
 
@@ -4776,18 +4863,18 @@ void nonMoveToolsReselectOnlyOutsideCaptureBounds() {
         ScreenshotActiveTool::Shape,
         ScreenshotActiveTool::Arrow,
         ScreenshotActiveTool::Line,
-        ScreenshotActiveTool::FreeDraw,
+        ScreenshotActiveTool::Brush,
         ScreenshotActiveTool::RectangleHighlight,
-        ScreenshotActiveTool::PenHighlight,
+        ScreenshotActiveTool::BrushHighlight,
         ScreenshotActiveTool::Eraser,
         ScreenshotActiveTool::RectangleFilter,
         ScreenshotActiveTool::Watermark,
         ScreenshotActiveTool::Text,
-        ScreenshotActiveTool::SerialNumber,
+        ScreenshotActiveTool::SequenceNumber,
         ScreenshotActiveTool::Ocr,
         ScreenshotActiveTool::Table,
         ScreenshotActiveTool::Qr,
-        ScreenshotActiveTool::PenFilter,
+        ScreenshotActiveTool::BrushFilter,
         ScreenshotActiveTool::Spotlight,
         ScreenshotActiveTool::Markdown,
         ScreenshotActiveTool::Html,
@@ -4849,7 +4936,7 @@ void nonMoveToolsReselectOnlyOutsideCaptureBounds() {
 
 void rightClickReselectionRestoresAfterManualAndSmartConfirmation() {
     for (const bool smart : {false, true}) {
-        RightClickReselectionFixture fixture(ScreenshotActiveTool::FreeDraw);
+        RightClickReselectionFixture fixture(ScreenshotActiveTool::Brush);
         fixture.smart = smart;
         fixture.beginReselection();
         fixture.input.confirmSelection();
@@ -4870,7 +4957,7 @@ void rightClickReselectionRestoresAfterManualAndSmartConfirmation() {
             fixture.input.handleMouseMove(nullptr, QPointF(229, 199));
             fixture.input.handleMouseRelease(nullptr, QPointF(229, 199));
         }
-        fixture.requireRestored(ScreenshotActiveTool::FreeDraw);
+        fixture.requireRestored(ScreenshotActiveTool::Brush);
         require(fixture.confirmations == 1 &&
                     fixture.selection.pixelSelection() == QRect(70, 60, 160, 140),
                 "manual and smart reselection must confirm the replacement exactly once");
@@ -4920,7 +5007,7 @@ void rightClickReselectionWaitsForCustomRegionCompletion() {
 
 void selectionShortcutsRestorePendingReselectionTool() {
     for (const bool previousSelection : {false, true}) {
-        RightClickReselectionFixture fixture(ScreenshotActiveTool::PenHighlight);
+        RightClickReselectionFixture fixture(ScreenshotActiveTool::BrushHighlight);
         fixture.beginReselection();
         const QRect expected = previousSelection ? QRect(70, 60, 160, 140) : QRect(0, 0, 400, 300);
         if (previousSelection) {
@@ -4932,7 +5019,7 @@ void selectionShortcutsRestorePendingReselectionTool() {
             require(fixture.input.selectCurrentScreen(),
                     "select-screen shortcut must confirm a pending reselection");
         }
-        fixture.requireRestored(ScreenshotActiveTool::PenHighlight);
+        fixture.requireRestored(ScreenshotActiveTool::BrushHighlight);
         fixture.input.resetTransientShortcuts();
         require(fixture.selection.pixelSelection() == expected && fixture.confirmations == 1 &&
                     fixture.activatedTools.size() == 2,
@@ -5308,18 +5395,18 @@ void cursorMovementShortcutsAreIndependentOfActiveTool() {
         ScreenshotActiveTool::Shape,
         ScreenshotActiveTool::Arrow,
         ScreenshotActiveTool::Line,
-        ScreenshotActiveTool::FreeDraw,
+        ScreenshotActiveTool::Brush,
         ScreenshotActiveTool::RectangleHighlight,
-        ScreenshotActiveTool::PenHighlight,
+        ScreenshotActiveTool::BrushHighlight,
         ScreenshotActiveTool::Eraser,
         ScreenshotActiveTool::RectangleFilter,
         ScreenshotActiveTool::Watermark,
         ScreenshotActiveTool::Text,
-        ScreenshotActiveTool::SerialNumber,
+        ScreenshotActiveTool::SequenceNumber,
         ScreenshotActiveTool::Ocr,
         ScreenshotActiveTool::Table,
         ScreenshotActiveTool::Qr,
-        ScreenshotActiveTool::PenFilter,
+        ScreenshotActiveTool::BrushFilter,
         ScreenshotActiveTool::Spotlight,
         ScreenshotActiveTool::Markdown,
         ScreenshotActiveTool::Html,
@@ -5588,9 +5675,10 @@ void selectionStagesActivateEveryToolbarShortcut() {
 
 using GlobalAction = snow_shot::presentation::GlobalShortcutAction;
 constexpr std::pair<GlobalAction, const char*> kGlobalScreenshotTools[] = {
-    {GlobalAction::ScreenshotFixed, "pin_to_screen"},
+    {GlobalAction::ScreenshotPinToScreen, "pin_to_screen"},
     {GlobalAction::ScreenshotOcr, "text_recognition"},
     {GlobalAction::ScreenshotTranslation, "text_translation"},
+    {GlobalAction::ScreenshotScrolling, "scrolling_screenshot"},
     {GlobalAction::ScreenshotCopy, "copy_to_clipboard"},
     {GlobalAction::ScreenshotSave, "save_as_file"},
     {GlobalAction::ScreenshotQuickSave, "quick_save"},
@@ -5909,7 +5997,7 @@ void unrelatedGlobalShortcutsLeaveScreenshotToolsUntouched() {
           GlobalAction::OpenScreenRecordingFolder, GlobalAction::OpenCaptureHistory,
           GlobalAction::OpenSettings, GlobalAction::PinClipboardContent,
           GlobalAction::TranslateSelectedText, GlobalAction::PinSelectedFiles,
-          GlobalAction::RestoreLastClosedWindows, GlobalAction::ToggleGlobalHotkeys,
+          GlobalAction::RestoreLastClosedWindows, GlobalAction::ToggleGlobalShortcuts,
           GlobalAction::ToggleDisableOnFocusedFullscreenWindow,
           GlobalAction::OpenPinToScreenManagement, GlobalAction::GlobalCanvas,
           GlobalAction::SwitchWindowGroup})
@@ -5921,7 +6009,7 @@ void unrelatedGlobalShortcutsLeaveScreenshotToolsUntouched() {
 }
 
 void globalCompletionShortcutsDoNotReopenCapture() {
-    for (const auto action : {GlobalAction::ScreenshotFixed, GlobalAction::ScreenshotCopy,
+    for (const auto action : {GlobalAction::ScreenshotPinToScreen, GlobalAction::ScreenshotCopy,
                               GlobalAction::ScreenshotQuickSave, GlobalAction::ScreenRecord,
                               GlobalAction::ScreenRecordCopy}) {
         ScreenshotCaptureState capture;
@@ -6093,6 +6181,82 @@ void selectionToolbarCommandsDoNotReopenRetiredCaptures() {
         }) && presentations == 0 &&
                     confirmations == 0,
                 "a completed command must not reopen or notify a retired or hidden capture");
+    }
+}
+
+void pendingSelectionCommandsDoNotPresentRetiredCaptures() {
+    enum class Confirmation { Direct, Drag, PreviousSelection, CurrentScreen, Silent };
+    for (const auto confirmation :
+         {Confirmation::Direct, Confirmation::Drag, Confirmation::PreviousSelection,
+          Confirmation::CurrentScreen, Confirmation::Silent}) {
+        for (int completion = 0; completion < 3; ++completion) {
+            ScreenshotCaptureState capture;
+            capture.sessionState = ScreenshotSessionState::OverlayVisible;
+            capture.presentationSuppressed = confirmation == Confirmation::Silent;
+            ScreenshotDisplaySession displays;
+            displays.appendDisplay(display(QStringLiteral("confirmation"),
+                                           QStringLiteral("confirmation"), QRect(0, 0, 400, 300),
+                                           solidImage(QSize(400, 300), Qt::white)));
+            ScreenshotGeometryMapper geometry;
+            geometry.rebuild(displays);
+            ScreenshotSelectionModel selection;
+            selection.setSelectionRect(QRectF(10, 20, 80, 60));
+            ScreenshotIntelligentSelectionModel intelligent;
+            ScreenshotInteractionState interaction;
+            interaction.enterOverlayVisible(false);
+            int commands = 0;
+            int presentations = 0;
+            ScreenshotOverlayInputActions actions;
+            actions.currentLogicalCursorPosition = [] { return QPoint(100, 100); };
+            actions.prepareExplicitSelectionCommand = [] {
+                require(false, "region confirmation must preserve the pending capture action");
+            };
+            actions.showToolbar = [&] { ++presentations; };
+            actions.showSelectionToolbar = [&] { ++presentations; };
+            actions.updateOverlayState = [&] { ++presentations; };
+            actions.updateColorPickerForOverlay = [&](auto*, const auto&) { ++presentations; };
+            actions.selectionConfirmed = [&] {
+                require(!interaction.selecting() && !interaction.dragging() &&
+                            capture.sessionState == ScreenshotSessionState::Editing &&
+                            selection.hasPixelSelection() && presentations == 0,
+                        "pending capture commands must receive committed geometry before UI");
+                ++commands;
+                if (completion == 0)
+                    interaction.reset();
+                else if (completion == 1)
+                    ++capture.sessionId;
+                else
+                    capture.presentationSuppressed = true;
+            };
+            ScreenshotOverlayInputHandler handler(
+                {capture, interaction, selection, intelligent, geometry, displays, actions});
+            if (confirmation == Confirmation::Drag) {
+                handler.handleMousePress(nullptr, QPointF(10, 20));
+                handler.handleMouseMove(nullptr, QPointF(90, 80));
+                presentations = 0;
+                handler.handleMouseRelease(nullptr, QPointF(90, 80));
+            } else if (confirmation == Confirmation::PreviousSelection) {
+                ScreenshotSelectionParams params;
+                params.selection = QRect(10, 20, 80, 60);
+                require(handler.restorePreviousSelection(params),
+                        "previous selection should confirm through the shared command path");
+            } else if (confirmation == Confirmation::CurrentScreen) {
+                QWidget receiver;
+                snow_shot::presentation::WindowShortcutManager manager;
+                manager.addScopeWindow(&receiver);
+                ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction,
+                                                              intelligent, actions);
+                require(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier) &&
+                            selection.pixelSelection() == QRect(0, 0, 400, 300),
+                        "Ctrl+A must commit the full display before dispatching a pending action");
+                static_cast<void>(
+                    dispatchShortcutRelease(receiver, Qt::Key_A, Qt::ControlModifier));
+            } else {
+                handler.confirmSelection();
+            }
+            require(commands == 1 && presentations == 0,
+                    "retired, replaced, and silent captures must not show editing UI");
+        }
     }
 }
 
@@ -8166,6 +8330,8 @@ int main(int argc, char** argv) {
     if (QCoreApplication::arguments().contains(QStringLiteral("--select-all-screens-only"))) {
         selectAllShortcutSelectsCurrentScreenThenDesktop();
         selectAllShortcutWithSingleScreen();
+        selectAllShortcutHandsConfirmedRegionToPendingRecording();
+        pendingSelectionCommandsDoNotPresentRetiredCaptures();
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -8205,6 +8371,7 @@ int main(int argc, char** argv) {
     if (QCoreApplication::arguments().contains(QStringLiteral("--shortcut-input-only"))) {
         selectAllShortcutSelectsCurrentScreenThenDesktop();
         selectAllShortcutWithSingleScreen();
+        selectAllShortcutHandsConfirmedRegionToPendingRecording();
         previousSelectionShortcutUsesSharedConfirmation();
         selectionHistoryShortcutsKeepShiftContextAndConfiguration(
             QDir(temporary.path()).filePath(QStringLiteral("selection-history-shortcuts")));
@@ -8232,11 +8399,13 @@ int main(int argc, char** argv) {
         toolbarSelectionPreparationRejectsIncompleteRegions();
         explicitToolbarCommandFinishesCanvasResize();
         selectionToolbarCommandsDoNotReopenRetiredCaptures();
+        pendingSelectionCommandsDoNotPresentRetiredCaptures();
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     selectAllShortcutSelectsCurrentScreenThenDesktop();
     selectAllShortcutWithSingleScreen();
+    selectAllShortcutHandsConfirmedRegionToPendingRecording();
     previousSelectionShortcutUsesSharedConfirmation();
     selectionHistoryShortcutsKeepShiftContextAndConfiguration(
         QDir(temporary.path()).filePath(QStringLiteral("selection-history-shortcuts")));
@@ -8303,6 +8472,7 @@ int main(int argc, char** argv) {
     toolbarSelectionPreparationRejectsIncompleteRegions();
     explicitToolbarCommandFinishesCanvasResize();
     selectionToolbarCommandsDoNotReopenRetiredCaptures();
+    pendingSelectionCommandsDoNotPresentRetiredCaptures();
     canvasColorSamplingConsumesOneCanvasClick();
     storage::ApplicationStorage::instance().shutdown();
     return 0;

@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
+#include "snow_shot/proxyconfiguration.h"
 #if SNOW_SHOT_ENABLE_API_CONFIGURATION
 #include "snow_shot/serverconfiguration.h"
 #endif
@@ -295,6 +296,10 @@ bool SettingsRuntimeSession::submitDraftInternal(const QString& fieldId, const Q
         next.error = writeError(*descriptor);
         m_pendingWrites.remove(fieldId);
     } else if (pending) {
+        // An accepted asynchronous retry may clear the previous backend error. The same
+        // error on completion must still count as a new failure of this generation.
+        if (m_backend.fieldError(fieldId).isEmpty())
+            m_pendingWrites[fieldId].fieldError.clear();
         next.acceptedValue = pending ? previousAccepted : current;
         next.dirty = !valuesEqual(*descriptor, next.draftValue, next.acceptedValue);
         next.busy = true;
@@ -396,11 +401,14 @@ bool SettingsRuntimeSession::reset(SettingsSectionReset resetGroup) {
             next.acceptedValue = external;
             next.draftValue = external;
             next.dirty = false;
-            // Built-in reset providers only have asynchronous completion for
-            // capture-history policy updates. Do not mistake an older field
-            // write that was just retired for reset work still in flight.
+            // Only track work admitted by this reset, not an older retired field write.
             const bool operationPending =
-                descriptor.reset == SettingsSectionReset::HistoryPolicy && isPending(descriptor);
+                fieldResult.pendingValue.isValid() ||
+                (descriptor.reset == SettingsSectionReset::HistoryPolicy && isPending(descriptor));
+            if (fieldResult.pendingValue.isValid()) {
+                next.draftValue = fieldResult.pendingValue;
+                next.dirty = !valuesEqual(descriptor, next.draftValue, next.acceptedValue);
+            }
             next.busy = operationPending;
             next.conflicted = false;
             next.phase = operationPending ? SettingsWritePhase::Pending : SettingsWritePhase::Clean;
@@ -408,7 +416,7 @@ bool SettingsRuntimeSession::reset(SettingsSectionReset resetGroup) {
             ++next.revision;
             if (operationPending) {
                 PendingWrite operation;
-                operation.target = external;
+                operation.target = next.draftValue;
                 operation.baseline = beforeStates.value(descriptor.id).acceptedValue;
                 operation.revision = next.revision;
                 operation.fieldError = m_backend.fieldError(descriptor.id);
@@ -451,6 +459,8 @@ void SettingsRuntimeSession::refreshField(const QString& fieldId) {
 
 QString SettingsRuntimeSession::backendError(const SettingsFieldDescriptor& descriptor) const {
     const QString fieldFailure = m_backend.fieldError(descriptor.id);
+    if (!m_backend.fieldUsesStorageErrors(descriptor.id))
+        return fieldFailure;
     if (!fieldFailure.isEmpty()) {
         return fieldFailure;
     }
@@ -477,6 +487,8 @@ bool SettingsRuntimeSession::operationErrorChanged(const SettingsFieldDescriptor
     if (!fieldFailure.isEmpty() && fieldFailure != operation.fieldError) {
         return true;
     }
+    if (!m_backend.fieldUsesStorageErrors(descriptor.id))
+        return false;
     const storage::StorageStatus status = storageStatus();
     const bool historyField =
         descriptor.reset == SettingsSectionReset::HistoryPolicy ||
@@ -672,11 +684,10 @@ void SettingsRuntimeSession::refreshField(const QString& fieldId,
         const bool operationPending = backendPending || m_backend.fieldPending(fieldId);
         const bool operationFailed = operationErrorChanged(*descriptor, operation);
         if (operationFailed) {
-            // A reset has no independent draft buffer. If the backend changed
-            // the value before reporting failure, expose that target as a
-            // retryable draft against the pre-reset baseline.
+            // Preserve the reset target as a retryable draft even if the native operation
+            // failed before changing the observed value.
             next.acceptedValue = operation.baseline;
-            next.draftValue = external;
+            next.draftValue = operation.target;
             next.dirty = !valuesEqual(*descriptor, next.draftValue, next.acceptedValue);
             next.busy = false;
             next.conflicted = false;
@@ -685,8 +696,8 @@ void SettingsRuntimeSession::refreshField(const QString& fieldId,
             m_pendingResets.remove(fieldId);
         } else if (operationPending) {
             next.acceptedValue = external;
-            next.draftValue = external;
-            next.dirty = false;
+            next.draftValue = operation.target;
+            next.dirty = !valuesEqual(*descriptor, next.draftValue, next.acceptedValue);
             next.busy = true;
             next.conflicted = false;
             next.phase = SettingsWritePhase::Pending;
@@ -771,6 +782,10 @@ void SettingsRuntimeSession::refreshField(const QString& fieldId,
             next.enabled = next.enabled &&
                            m_backend.switchValue(SettingsSwitchBinding::OriginalImageTranslation);
         }
+        if (descriptor->configurationKey == QStringLiteral("network/http_proxy"))
+            next.enabled =
+                next.enabled && m_backend.selectValue(SettingsSelectBinding::Proxy).toString() ==
+                                    QStringLiteral("manual");
         const bool pinnedField =
             descriptor->reset == SettingsSectionReset::PinnedHistoryPolicy ||
             descriptor->configurationKey.startsWith(QStringLiteral("pinned_history/"));
@@ -1175,6 +1190,12 @@ bool SettingsRuntimeSession::isPending(const SettingsFieldDescriptor& descriptor
 }
 
 QString SettingsRuntimeSession::writeError(const SettingsFieldDescriptor& descriptor) const {
+    if (descriptor.configurationKey == QStringLiteral("network/http_proxy") &&
+        !normalizedHttpProxyUrl(state(descriptor.id).draftValue.toString())) {
+        return QCoreApplication::translate(
+            "SettingsBackend",
+            "Enter a valid HTTP proxy address, for example http://127.0.0.1:7890");
+    }
 #if SNOW_SHOT_ENABLE_API_CONFIGURATION
     if (descriptor.configurationKey == QStringLiteral("api_configuration/server_url") &&
         !normalizedServerUrl(state(descriptor.id).draftValue.toString())) {
@@ -1192,6 +1213,11 @@ QString SettingsRuntimeSession::writeError(const SettingsFieldDescriptor& descri
 
 bool SettingsRuntimeSession::valuesEqual(const SettingsFieldDescriptor& descriptor,
                                          const QVariant& first, const QVariant& second) const {
+    if (descriptor.configurationKey == QStringLiteral("network/http_proxy")) {
+        const auto a = normalizedHttpProxyUrl(first.toString());
+        const auto b = normalizedHttpProxyUrl(second.toString());
+        return a && b && *a == *b;
+    }
 #if SNOW_SHOT_ENABLE_API_CONFIGURATION
     if (descriptor.configurationKey == QStringLiteral("api_configuration/server_url")) {
         const auto a = normalizedServerUrl(first.toString());

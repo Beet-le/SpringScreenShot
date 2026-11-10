@@ -368,7 +368,7 @@ struct AboutPageWidget::Ui {
     QWidget* updateActionBlank = nullptr;
     QStackedLayout* updateActions = nullptr;
     QGridLayout* resourceLayout = nullptr;
-    std::array<AboutResourceButton*, 4> resources{};
+    std::array<AboutResourceButton*, 5> resources{};
     QLabel* linkError = nullptr;
     AdDivider* footerDivider = nullptr;
     QBoxLayout* footerLayout = nullptr;
@@ -567,11 +567,10 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
             using snow_shot::update::UpdateState;
             switch (m_ui->updates->status().state) {
             case UpdateState::Available:
-#ifdef Q_OS_MACOS
-                openProjectLink(m_ui->updates->status().downloadUrl);
-#else
-                m_ui->updates->download();
-#endif
+                if (m_ui->updates->capabilities().download)
+                    m_ui->updates->download();
+                else
+                    openProjectLink(m_ui->updates->status().downloadUrl);
                 break;
             case UpdateState::Ready:
                 m_ui->updates->requestRestart();
@@ -588,7 +587,8 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
         new AboutResourceButton(QStringLiteral("aboutWebsite"), outlined::Global(), m_ui->body),
         new AboutResourceButton(QStringLiteral("aboutSourceCode"), outlined::Code(), m_ui->body),
         new AboutResourceButton(QStringLiteral("aboutFeedback"), outlined::Comment(), m_ui->body),
-        new AboutResourceButton(QStringLiteral("aboutQqGroup3"), outlined::Qq(), m_ui->body)};
+        new AboutResourceButton(QStringLiteral("aboutQqGroup3"), outlined::Qq(), m_ui->body),
+        new AboutResourceButton(QStringLiteral("aboutQqGroup4"), outlined::Qq(), m_ui->body)};
     m_ui->bodyLayout->addLayout(m_ui->resourceLayout);
     m_ui->linkError = aboutLabel(QStringLiteral("aboutLinkError"), m_ui->body);
     m_ui->linkError->setTextInteractionFlags(Qt::TextSelectableByMouse |
@@ -658,6 +658,8 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
             [this]() { openProjectLink(aboutProjectUrl(QStringLiteral("/issues"))); });
     connect(m_ui->resources[3], &QAbstractButton::clicked, this,
             [this]() { openProjectLink(QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_3_URL))); });
+    connect(m_ui->resources[4], &QAbstractButton::clicked, this,
+            [this]() { openProjectLink(QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_4_URL))); });
     connect(m_ui->privacyPolicy, &AdButton::clicked, this,
             [this] { openProjectLink(QUrl(snow_shot::app::distribution::privacyPolicyUrl())); });
     connect(&themeManager, &styles::ThemeManager::themeChanged, this, &AboutPageWidget::applyTheme);
@@ -823,7 +825,7 @@ void AboutPageWidget::retranslateUi() {
     m_ui->logo->setAccessibleName(snow_shot::app::edition::isMini
                                       ? tr("%1 logo").arg(snow_shot::app::edition::productName())
                                       : tr("Snow Shot logo"));
-    m_ui->openSource->setText(tr("Free · Open source"));
+    m_ui->openSource->setText(tr("Free · open source"));
     const QColor violet(m_ui->scheme.appearance == styles::ThemeAppearance::Dark ? "#b58aec"
                                                                                  : "#7052d8");
     m_ui->tagline->setText(QStringLiteral("<span style=\"color:%1\">%2</span>%3")
@@ -865,9 +867,13 @@ void AboutPageWidget::retranslateUi() {
                                 tr("Make the next experience better"),
                                 aboutProjectUrl(QStringLiteral("/issues")));
     m_ui->resources[3]->setCopy(
-        tr("QQ Group 3"),
-        tr("Discussion and support · Group No. %1").arg(QStringLiteral("1037819112")),
+        tr("QQ group 3"),
+        tr("Discussion and support · group no. %1").arg(QStringLiteral("1037819112")),
         QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_3_URL)));
+    m_ui->resources[4]->setCopy(
+        tr("QQ group 4"),
+        tr("Discussion and support · group no. %1").arg(QStringLiteral("1131891935")),
+        QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_4_URL)));
     m_ui->community->setText(tr("Built for daily work, and growing with the community"));
     m_ui->license->setText(
         tr("%1 · %2").arg(tr("GNU General Public License v3.0 or later"),
@@ -881,7 +887,7 @@ void AboutPageWidget::retranslateUi() {
     m_ui->slogan->setText(
         snow_shot::app::edition::isMini
             ? tr("%1 · Make expression clearer").arg(snow_shot::app::edition::productName())
-            : tr("Snow Shot · Make expression clearer"));
+            : tr("Snow Shot · make expression clearer"));
     m_ui->linkError->setText(m_failedUrl.isEmpty()
                                  ? QString()
                                  : tr("Could not open the link. Open %1 in your browser")
@@ -947,7 +953,7 @@ void AboutPageWidget::updateLayout() {
         separator->setFixedHeight(separatorHeight);
     }
     // Wide layouts share a six-column grid: the three project links span two columns each
-    // and the QQ group card spans the second row. Narrow layouts stack.
+    // and the two QQ group cards span three columns each in the second row. Narrow layouts stack.
     const int resourceColumns = wide ? 6 : 1;
     if (m_ui->resourceColumns != resourceColumns) {
         for (auto* resource : m_ui->resources) {
@@ -961,7 +967,8 @@ void AboutPageWidget::updateLayout() {
                 m_ui->resourceLayout->addWidget(m_ui->resources[static_cast<size_t>(i)], 0, i * 2,
                                                 1, 2);
             }
-            m_ui->resourceLayout->addWidget(m_ui->resources[3], 1, 0, 1, 6);
+            m_ui->resourceLayout->addWidget(m_ui->resources[3], 1, 0, 1, 3);
+            m_ui->resourceLayout->addWidget(m_ui->resources[4], 1, 3, 1, 3);
         } else {
             for (size_t i = 0; i < m_ui->resources.size(); ++i) {
                 m_ui->resourceLayout->addWidget(m_ui->resources[i], static_cast<int>(i), 0);
@@ -1035,12 +1042,10 @@ void AboutPageWidget::refreshUpdateStatus() {
         break;
     case UpdateState::Available:
         text = tr("Update available: %1").arg(status.version);
-#ifdef Q_OS_MACOS
-        action = status.downloadUrl.host() == u"gitee.com" ? tr("Download from Gitee")
-                                                           : tr("Download from GitHub");
-#else
-        action = tr("Download update");
-#endif
+        action = m_ui->updates->capabilities().download
+                     ? tr("Download update")
+                     : (status.downloadUrl.host() == u"gitee.com" ? tr("Download from Gitee")
+                                                                  : tr("Download from GitHub"));
         statusIcon = outlined::CloudDownload();
         actionIcon = outlined::Download();
         statusColor = colors.colorInfoText;

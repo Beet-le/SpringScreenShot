@@ -34,6 +34,7 @@ struct SnowCanvasRuntime::Impl {
     bool setAutomaticallySelectNewlyCreatedElements(bool enabled);
     bool setAutomaticSelectionExcludedTools(const QSet<SnowCanvasTool>& tools);
     bool setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& tools);
+    bool setSharedCreationColor(const std::optional<QColor>& color);
     void destroyAsync();
     QImage renderToImage(const QRectF& virtualSelectionRect, const QSize& outputSize,
                          const QList<CanvasExportSource>& sources, const QImage& background,
@@ -179,6 +180,10 @@ bool SnowCanvasRuntime::Impl::setAutomaticSelectionExcludedTools(
 bool SnowCanvasRuntime::Impl::setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& tools) {
     return hasThreadAccess("setQuickSelectionDisabledTools") &&
            session.setQuickSelectionDisabledTools(tools);
+}
+
+bool SnowCanvasRuntime::Impl::setSharedCreationColor(const std::optional<QColor>& color) {
+    return hasThreadAccess("setSharedCreationColor") && session.setSharedCreationColor(color);
 }
 
 void SnowCanvasRuntime::Impl::destroyAsync() {
@@ -363,6 +368,10 @@ bool SnowCanvasRuntime::setQuickSelectionDisabledTools(const QSet<SnowCanvasTool
     return m_impl->setQuickSelectionDisabledTools(tools);
 }
 
+bool SnowCanvasRuntime::setSharedCreationColor(const std::optional<QColor>& color) {
+    return m_impl->setSharedCreationColor(color);
+}
+
 QByteArray SnowCanvasRuntime::applyAnnotationTransaction(const QByteArray& payload) {
     if (!isOwnerThread() || payload.isEmpty() || payload.size() > 1024 * 1024)
         return {};
@@ -461,6 +470,14 @@ QImage SnowCanvasRuntime::renderImageSourcesToImage(const QRectF& canvasRect,
                                                     const QSize& outputSize,
                                                     const QList<CanvasExportSource>& sources) {
     return snow_canvas_export::renderImageSourcesToImage(canvasRect, outputSize, sources);
+}
+
+QImage SnowCanvasRuntime::renderImageSourcesToImage(const QRectF& canvasRect,
+                                                    const QSize& outputSize,
+                                                    const QList<CanvasExportSource>& sources,
+                                                    const QRect& outputPixelRect) {
+    return snow_canvas_export::renderImageSourcesToImage(canvasRect, outputSize, sources,
+                                                         outputPixelRect);
 }
 
 QImage SnowCanvasRuntime::renderToImage(const QRectF& virtualSelectionRect, const QSize& outputSize,

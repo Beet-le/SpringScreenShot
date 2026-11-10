@@ -155,6 +155,10 @@ class ScreenshotPinnedWindowPool final : public QObject {
         if (screen != nullptr) {
             m_targetScreen = screen;
         }
+        if (m_suspended) {
+            schedulePrewarm(screen);
+            return nullptr;
+        }
 
         ScreenshotPinnedWindow* window = m_spare;
         [[maybe_unused]] bool usedSpare = false;
@@ -195,6 +199,11 @@ class ScreenshotPinnedWindowPool final : public QObject {
         if (screen != nullptr) {
             m_targetScreen = screen;
         }
+        if (m_suspended) {
+            m_prewarmPending = true;
+            return;
+        }
+        m_prewarmPending = false;
         QScreen* targetScreen = resolvedTargetScreen();
         if (targetScreen == nullptr) {
             return;
@@ -224,16 +233,23 @@ class ScreenshotPinnedWindowPool final : public QObject {
         if (screen != nullptr) {
             m_targetScreen = screen;
         }
-        if (m_prewarmScheduled) {
+        m_prewarmPending = true;
+        if (m_suspended || m_prewarmScheduled) {
             return;
         }
         m_prewarmScheduled = true;
         QTimer::singleShot(0, this, snow_shot::runtime::trackRuntimeWork([this]() {
                                m_prewarmScheduled = false;
-                               if (m_spare == nullptr) {
+                               if (!m_suspended && m_prewarmPending && m_spare == nullptr) {
                                    prewarm(m_targetScreen.data());
                                }
                            }));
+    }
+
+    void setSuspended(bool suspended) {
+        m_suspended = suspended;
+        if (!suspended && m_prewarmPending)
+            schedulePrewarm(m_targetScreen.data());
     }
 
   private:
@@ -250,6 +266,9 @@ class ScreenshotPinnedWindowPool final : public QObject {
     QPointer<ScreenshotPinnedWindow> m_spare;
     QPointer<QScreen> m_targetScreen;
     bool m_prewarmScheduled = false;
+    // This resource owner retains its own retry/replenishment intent across application pauses.
+    bool m_prewarmPending = false;
+    bool m_suspended = false;
 };
 
 class ScreenshotPendingPinCoordinator final : public QObject {
@@ -545,6 +564,8 @@ bool presentPinnedWindowAndSynchronize(
     const std::function<void(const QString&)>& imageEditingRequested,
     std::function<void(bool, QImage)> completion = {}) {
     ScreenshotPinnedWindow::Config config = requestedConfig;
+    // Runtime preferences also apply when saved pins are recreated by a group switch or restore.
+    applyPinRuntimeSettings(&config);
     if (!config.placement.isValid() && config.screen)
         config.placement =
             snow_shot::presentation::pinnedPlacement(config.nativeGeometry, *config.screen);
@@ -605,19 +626,25 @@ ScreenshotSelectionExportUiServices::ScreenshotSelectionExportUiServices(
     snow_shot::presentation::PinnedWindowGroupManager* groupManager,
     std::function<void(const QVector<ScreenshotPinnedImageSnapshot>&)> imageStitchingRequested,
     std::function<void(const ScreenshotPinnedImageSnapshot&)> imageSplittingRequested,
-    std::function<void(const QString&)> imageEditingRequested)
+    std::function<void(const QString&)> imageEditingRequested,
+    std::function<void()> automaticRestoreRequested)
     : m_recognition(recognition), m_qrRecognition(qrRecognition),
       m_tableRecognition(tableRecognition),
       m_showMainWindowRequested(std::move(showMainWindowRequested)),
       m_imageSplittingRequested(std::move(imageSplittingRequested)),
       m_imageEditingRequested(std::move(imageEditingRequested)),
+      m_automaticRestoreRequested(std::move(automaticRestoreRequested)),
       m_recognitionProvider(std::move(recognitionProvider)), m_groupManager(groupManager),
       m_selectionController(
           std::make_unique<snow_shot::presentation::PinnedWindowSelectionController>(
               nullptr, [this](const QVector<QString>& ids) { return tryDestroyRecords(ids); })),
       m_windowPool(std::make_unique<ScreenshotPinnedWindowPool>()),
-      m_pendingPinCoordinator(std::make_unique<ScreenshotPendingPinCoordinator>(
-          [this]() { restorePersistedWindows(); })) {
+      m_pendingPinCoordinator(std::make_unique<ScreenshotPendingPinCoordinator>([this]() {
+          if (m_automaticRestoreRequested)
+              m_automaticRestoreRequested();
+          else
+              restorePersistedWindows();
+      })) {
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
     if (!m_groupManager && storage.isInitialized())
         m_ownedStacking =
@@ -687,6 +714,11 @@ void ScreenshotSelectionExportUiServices::prewarmPinnedWindow(QScreen* screen) {
     }
 }
 
+void ScreenshotSelectionExportUiServices::setPresentationSuspended(bool suspended) {
+    if (m_windowPool)
+        m_windowPool->setSuspended(suspended);
+}
+
 bool ScreenshotSelectionExportUiServices::presentPinnedSelection(
     const ScreenshotPinnedSelectionRequest& request, ScreenshotPinnedSelectionResultHandle result,
     PinnedCompletion completion) {
@@ -705,8 +737,18 @@ bool ScreenshotSelectionExportUiServices::presentPinnedSelection(
                         callback(success ? std::move(image) : QImage{});
                     });
             }));
-    const bool presented =
-        presentPinnedArtifact(request, std::move(artifact), std::move(completion));
+    const bool presented = presentPinnedArtifact(
+        request, std::move(artifact),
+        [receiver = QPointer<ScreenshotPinnedWindowPool>(m_windowPool.get()), cancellation,
+         completion = std::move(completion)](bool success, auto) mutable {
+            if (!completion)
+                return;
+            if (!success || !receiver) {
+                completion(false, {});
+                return;
+            }
+            static_cast<void>(cancellation.subscribe(receiver, std::move(completion)));
+        });
     if (!presented) {
         cancellation.cancel();
     }
@@ -715,10 +757,11 @@ bool ScreenshotSelectionExportUiServices::presentPinnedSelection(
 
 bool ScreenshotSelectionExportUiServices::presentPinnedArtifact(
     const ScreenshotPinnedSelectionRequest& request,
-    std::shared_ptr<ScreenshotExportArtifact> artifact, PinnedCompletion completion,
+    std::shared_ptr<ScreenshotExportArtifact> artifact, PinnedArtifactCompletion completion,
     std::optional<ScreenshotAutomaticSaveRequest> automaticSave) {
     SNOW_SHOT_PIN_PERF_SCOPE("ui.present_pinned_artifact");
-    if (!request.isPrepared() || artifact == nullptr || !artifact->isValid()) {
+    if (!request.isPrepared() || artifact == nullptr || !artifact->isValid() ||
+        (!request.canvasSession.isEmpty() && request.layoutCompaction.enabled)) {
         return false;
     }
 
@@ -733,9 +776,10 @@ bool ScreenshotSelectionExportUiServices::presentPinnedArtifact(
     config.canvasSourceRect = request.surfaceCanvasRect;
     config.contentCanvasRect = request.surfaceCanvasRect;
     config.surfaceCanvasRect = request.surfaceCanvasRect;
-    // The worker loader returns a fully composited result image. Keep the live
-    // renderer neutral so the result style is not applied twice after loading.
+    // Selection effects are already baked into the image in both modes.
+    // The pin only adds the transferred annotations, if any.
     config.resultStyle = ScreenshotResultStyle{};
+    config.initialCanvasSession = request.canvasSession;
     config.borderAppearance = screenshotSelectionBorderAppearance(
         request.selection.size(), request.resultStyle, request.layoutCompaction);
     config.checkerboardEnabled = screenshotSelectionNeedsCheckerboard(config.borderAppearance);
@@ -755,7 +799,6 @@ bool ScreenshotSelectionExportUiServices::presentPinnedArtifact(
     config.translationVisible = !layoutChanged && request.translationVisible;
     config.formattedTextDocument.reset();
     config.formattedPlainText.clear();
-    applyPinRuntimeSettings(&config);
     config.groupManager = m_groupManager;
     config.selectionController = m_selectionController.get();
     config.groupId =
@@ -785,9 +828,11 @@ bool ScreenshotSelectionExportUiServices::presentPinnedArtifact(
     const QPointer<ScreenshotPendingPinCoordinator> coordinator(m_pendingPinCoordinator.get());
     const QString persistenceId = config.persistenceId;
     auto synchronizedCompletion = [coordinator, persistenceId, operation = artifact->diagnosticId(),
-                                   artifact, automaticSave = std::move(automaticSave),
+                                   window = QPointer<ScreenshotPinnedWindow>(pinnedWindow),
+                                   editable = !request.canvasSession.isEmpty(), artifact,
+                                   automaticSave = std::move(automaticSave),
                                    completion = std::move(completion)](bool success,
-                                                                       QImage image) mutable {
+                                                                       QImage) mutable {
         snow_shot::diagnostics::logEvent(
             QStringLiteral("snow_shot.export"), QStringLiteral("pin.finished"),
             {{QStringLiteral("operation"), operation},
@@ -798,12 +843,17 @@ bool ScreenshotSelectionExportUiServices::presentPinnedArtifact(
         if (!coordinator.isNull()) {
             coordinator->completeFirstFrame(persistenceId, success);
         }
-        if (success) {
-            startAutomaticPinSave(artifact, std::move(automaticSave));
-        }
-        if (completion) {
-            completion(success, image);
-        }
+        // Capture the transferred annotations once. All optional outputs share the
+        // same immutable snapshot and render it only when requested.
+        success = success && !artifact->isCancelled();
+        auto output = artifact;
+        if (success && editable)
+            output = window ? window->fileSaveArtifact() : nullptr;
+        success = success && output != nullptr;
+        if (success)
+            startAutomaticPinSave(output, std::move(automaticSave));
+        if (completion)
+            completion(success, std::move(output));
     };
     trackSourceWindow(pinnedWindow, config.sourceIdentity);
     const bool presented = presentPinnedWindowAndSynchronize(
@@ -854,7 +904,6 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImageArtifact(
     config.qrRecognition = m_qrRecognition;
     config.tableRecognition = m_tableRecognition;
     config.recognitionProvider = m_recognitionProvider;
-    applyPinRuntimeSettings(&config);
     config.groupManager = m_groupManager;
     config.selectionController = m_selectionController.get();
     config.groupId =
@@ -1085,7 +1134,6 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImageOnCanvas(
         config.initialCanvasTool = document->tool;
         config.recognitionResults = document->recognitionResults;
     }
-    applyPinRuntimeSettings(&config);
     config.groupManager = m_groupManager;
     config.selectionController = m_selectionController.get();
     config.groupId =
@@ -1176,7 +1224,6 @@ bool ScreenshotSelectionExportUiServices::presentLiveWindow(
     config.groupId = m_groupManager ? m_groupManager->activeGroupId() : QStringLiteral("default");
     config.creationSource = snow_shot::storage::PinnedWindowCreationSource::Screenshot;
     config.recognitionProvider = m_recognitionProvider;
-    applyPinRuntimeSettings(&config);
     config.persistenceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     // Supply ordinary callbacks for conversion, without reserving a recoverable live record.
     applyPersistence(&config, config.persistenceId);

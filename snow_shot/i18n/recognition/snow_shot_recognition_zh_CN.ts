@@ -24,7 +24,7 @@
             <translation>移除换行</translation>
         </message>
         <message>
-            <source>Smart Typesetting</source>
+            <source>Smart typesetting</source>
             <translation>智能排版</translation>
         </message>
     </context>
@@ -75,7 +75,7 @@
             <translation>无法加载视觉模型</translation>
         </message>
         <message>
-            <source>Vision Model</source>
+            <source>Vision model</source>
             <translation>视觉模型</translation>
         </message>
     </context>
@@ -102,7 +102,7 @@
             <translation>重试</translation>
         </message>
         <message>
-            <source>Select All</source>
+            <source>Select all</source>
             <translation>全选</translation>
         </message>
     </context>
@@ -130,11 +130,11 @@
         </message>
         <message>
             <source>The bundled text recognition runtime is damaged or incompatible. Reinstall Snow Shot for this Mac</source>
-            <translation>内置文字识别运行时已损坏或不兼容。请重新安装适用于此 Mac 的 Snow Shot</translation>
+            <translation>内置文本识别运行时已损坏或不兼容。请重新安装适用于此 Mac 的 Snow Shot</translation>
         </message>
         <message>
             <source>The packaged text recognition runtime is missing or damaged. Repair or reinstall Snow Shot from Microsoft Store</source>
-            <translation>软件包中的文字识别运行时缺失或已损坏。请通过 Microsoft Store 修复或重新安装 Snow Shot</translation>
+            <translation>软件包中的文本识别运行时缺失或已损坏。请通过 Microsoft Store 修复或重新安装 Snow Shot</translation>
         </message>
         <message>
             <source>The text recognition component could not be started: %1</source>
@@ -156,12 +156,12 @@
             <translation>条码识别失败</translation>
         </message>
         <message>
-            <source>Barcode recognition is unavailable</source>
-            <translation>条码识别服务不可用</translation>
-        </message>
-        <message>
             <source>Barcode recognition request could not be prepared</source>
             <translation>无法准备条码识别请求</translation>
+        </message>
+        <message>
+            <source>Barcode recognition service is unavailable</source>
+            <translation>条码识别服务不可用</translation>
         </message>
         <message>
             <source>Converting to HTML</source>
@@ -351,7 +351,7 @@
             <translation>重试识别</translation>
         </message>
         <message>
-            <source>Select All</source>
+            <source>Select all</source>
             <translation>全选</translation>
         </message>
         <message>
@@ -429,7 +429,7 @@
             <translation>重置表格</translation>
         </message>
         <message>
-            <source>Select All</source>
+            <source>Select all</source>
             <translation>全选</translation>
         </message>
         <message>

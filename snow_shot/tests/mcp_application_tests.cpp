@@ -1,3 +1,5 @@
+#include "login_item_test_support.h"
+#include <QSemaphore>
 #include "snow_shot/app/mcp/mcpapplicationservice.h"
 #include "snow_shot/app/mcp/mcpjobregistry.h"
 #include "snow_shot/presentation/globalshortcutmanager.h"
@@ -955,7 +957,7 @@ void runMcpApplicationTests() {
         translation_tests::waitUntil([&] { return !storage.status().pinnedClearing; },
                                      "cleanup finishes independently of its retired observer");
     }
-    for (int variant = 0; variant < 3; ++variant) {
+    for (int variant = 0; variant < 4; ++variant) {
         McpJobRegistry lifetimeJobs;
         auto lifetimePorts = ports;
         lifetimePorts.jobs = &lifetimeJobs;
@@ -1002,9 +1004,13 @@ void runMcpApplicationTests() {
                            storage.status().appUsage.thumbnailCacheBytes >= 64;
                 },
                 "thumbnail cleanup is admitted after the seeded cache usage scan finishes");
-            request.method = QStringLiteral("snow_shot_settings_action");
-            request.params = {
-                {QStringLiteral("field_id"), QStringLiteral("storage.clear-thumbnails")}};
+            request.method = variant == 2 ? QStringLiteral("snow_shot_settings_action")
+                                          : QStringLiteral("snow_shot_storage_cleanup");
+            request.params =
+                variant == 2
+                    ? QJsonObject{{QStringLiteral("field_id"),
+                                   QStringLiteral("storage.clear-thumbnails")}}
+                    : QJsonObject{{QStringLiteral("kind"), QStringLiteral("thumbnail_cache")}};
             request.expectedRevision = configuration.revision();
         }
         QString terminalStatus;
@@ -1037,7 +1043,7 @@ void runMcpApplicationTests() {
         translation_tests::waitUntil([&] { return !ownedService; },
                                      "terminal job observers can retire owned observations");
         require(responses == 1, "terminal observers retire their service after its accepted reply");
-        if (variant == 2) {
+        if (variant >= 2) {
             const auto message =
                 QStringLiteral("thumbnail cleanup completes after observer retirement: "
                                "status=%1 error=%2 file_exists=%3 cache_clearing=%4")
@@ -1153,4 +1159,85 @@ void runMcpTranslationTests() {
     };
     translationRetries(call, translation, jobs, provider, selectionCaptures);
     service.shutdown();
+}
+
+void runMcpLoginItemImportTests() {
+#ifdef Q_OS_MACOS
+    using namespace platform::macos;
+    auto& storage = storage::ApplicationStorage::instance();
+    auto& configuration = storage.configuration();
+    presentation::GlobalShortcutManager shortcuts;
+    static_cast<void>(shortcuts.suspendRegistrations());
+    const auto registry = settings::buildBuiltInSettingsRegistry();
+    const QString enabledKey = QStringLiteral("system/auto_start_at_boot");
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        require(configuration.setValue(enabledKey, false), "MCP login import baseline");
+        bool enabled = false;
+        std::atomic_bool blockQuery{false};
+        QSemaphore entered;
+        QSemaphore release;
+        LoginItemService login(
+            {[&] {
+                 if (blockQuery.exchange(false)) {
+                     entered.release();
+                     release.acquire();
+                 }
+                 return LoginItemSnapshot{
+                     enabled ? LoginItemStatus::Enabled : LoginItemStatus::Unregistered, {}};
+             },
+             [&](bool value) {
+                 if (scenario == 1)
+                     return LoginItemResult{false, QStringLiteral("native failure")};
+                 enabled = value;
+                 return LoginItemResult{};
+             },
+             [] { return true; }, [] { return true; },
+             [&](bool value) { return configuration.setValue(enabledKey, value); }, [] {}});
+        login_item_test::idle(login);
+        settings::BuiltInSettingsBackend backend(shortcuts, nullptr, nullptr, nullptr, &login);
+        settings::SettingsRuntimeSession session(registry, backend);
+        McpJobRegistry jobs;
+        McpApplicationService::Ports ports;
+        ports.storage = &storage;
+        ports.settings = &session;
+        ports.jobs = &jobs;
+        auto service = std::make_unique<McpApplicationService>(ports);
+        QTemporaryDir directory;
+        const QString path = directory.filePath(QStringLiteral("import.zip"));
+        auto values = configuration.snapshot();
+        values.insert(enabledKey, true);
+        require(storage::ConfigurationArchive::write(
+                    path, values, storage::ConfigurationStore::currentSchemaVersion())
+                    .isEmpty(),
+                "MCP import fixture");
+        blockQuery = true;
+        ScreenshotMcpRequest request;
+        request.connectionId = 71;
+        request.requestId = QStringLiteral("login-import");
+        request.method = QStringLiteral("snow_shot_configuration_import");
+        request.params = {{QStringLiteral("path"), path}};
+        request.expectedRevision = configuration.revision();
+        std::optional<ScreenshotMcpResponse> response;
+        service->request(request, [&](auto result) { response = std::move(result); });
+        login_item_test::waitFor([&] { return entered.tryAcquire(); });
+        require(response && response->ok, "MCP responds with job while native query is blocked");
+        const auto id = response->result.value(QStringLiteral("job_id")).toString();
+        require(jobs.get(71, id)->value(QStringLiteral("status")).toString() == u"running",
+                "MCP does not report native import success before completion");
+        if (scenario == 2) {
+            service.reset();
+            require(login.pending(), "MCP destruction never waits for blocked native completion");
+        }
+        release.release();
+        login_item_test::idle(login);
+        if (scenario != 2) {
+            login_item_test::waitFor([&] {
+                return jobs.get(71, id)->value(QStringLiteral("status")).toString() != u"running";
+            });
+            require(jobs.get(71, id)->value(QStringLiteral("status")).toString() ==
+                        (scenario == 1 ? u"failed" : u"completed"),
+                    "MCP reports the actual asynchronous native outcome");
+        }
+    }
+#endif
 }

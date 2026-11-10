@@ -1,4 +1,5 @@
 #include "snow_shot/app/distribution.h"
+#include "snow_shot/app/mcp/mcpstartuperror.h"
 #include "snow_shot/presentation/components/clouduploadsettingswidget.h"
 #include "snow_shot/presentation/components/settingscustomwidget.h"
 #include "snow_shot/presentation/components/formfields.h"
@@ -139,7 +140,7 @@ constexpr int kHiddenZoneHeight = 56;
     QT_TRANSLATE_NOOP(
         "DrawingToolbarEditorSettingsWidget",
         "Drop beside a tool to create a position. Drop above a tool to stack it. The bottom "
-        "tool stays on the main toolbar row. Separator Component occupies its own position"),
+        "tool stays on the main toolbar row. Separator component occupies its own position"),
     QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Annotation toolbar preview"),
     QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Hidden tools"),
     QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget",
@@ -165,8 +166,8 @@ constexpr int kHiddenZoneHeight = 56;
     QT_TRANSLATE_NOOP(
         "PinnedToolbarEditorSettingsWidget",
         "Drop beside a tool to create a position. Drop above a tool to stack it. The bottom "
-        "tool stays on the main toolbar row. Separator Component occupies its own position"),
-    QT_TRANSLATE_NOOP("PinnedToolbarEditorSettingsWidget", "Pin to Screen toolbar preview"),
+        "tool stays on the main toolbar row. Separator component occupies its own position"),
+    QT_TRANSLATE_NOOP("PinnedToolbarEditorSettingsWidget", "Pin to screen toolbar preview"),
     QT_TRANSLATE_NOOP("PinnedToolbarEditorSettingsWidget", "Hidden tools"),
     QT_TRANSLATE_NOOP("PinnedToolbarEditorSettingsWidget",
                       "Drag tools here to hide them from the pinned toolbar"),
@@ -178,7 +179,7 @@ constexpr int kHiddenZoneHeight = 56;
     QT_TRANSLATE_NOOP(
         "RecordingToolbarEditorSettingsWidget",
         "Drop beside a tool to create a position. Drop above a tool to stack it. The bottom "
-        "tool stays on the main toolbar row. Recording duration and Separator Component "
+        "tool stays on the main toolbar row. Recording duration and separator component "
         "occupy their own positions"),
     QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Recording toolbar preview"),
     QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Hidden tools"),
@@ -1272,12 +1273,12 @@ struct ToolbarEditorSettingsWidget::Private {
             translationContext,
             layoutKind == storage::ScreenshotToolbarLayoutKind::RecordingActionTools
                 ? "Drop beside a tool to create a position. Drop above a tool to stack it. The "
-                  "bottom tool stays on the main toolbar row. Recording duration and Separator "
-                  "Component occupy their own positions"
+                  "bottom tool stays on the main toolbar row. Recording duration and separator "
+                  "component occupy their own positions"
             : layoutKind == storage::ScreenshotToolbarLayoutKind::DrawingTools ||
                     layoutKind == storage::ScreenshotToolbarLayoutKind::PinnedActionTools
                 ? "Drop beside a tool to create a position. Drop above a tool to stack it. The "
-                  "bottom tool stays on the main toolbar row. Separator Component occupies its "
+                  "bottom tool stays on the main toolbar row. Separator component occupies its "
                   "own position"
                 : "Drop beside a tool to create a position. Drop above a tool to stack it. The "
                   "bottom tool stays on the main toolbar row"));
@@ -1286,7 +1287,7 @@ struct ToolbarEditorSettingsWidget::Private {
             layoutKind == storage::ScreenshotToolbarLayoutKind::DrawingTools
                 ? "Annotation toolbar preview"
             : layoutKind == storage::ScreenshotToolbarLayoutKind::PinnedActionTools
-                ? "Pin to Screen toolbar preview"
+                ? "Pin to screen toolbar preview"
             : layoutKind == storage::ScreenshotToolbarLayoutKind::FloatingTools
                 ? "Floating toolbar preview"
             : layoutKind == storage::ScreenshotToolbarLayoutKind::RecordingActionTools
@@ -1524,6 +1525,8 @@ class McpStatusSettingsWidget final : public SettingsCustomWidget {
     }
     void refresh() {
         const bool running = qApp->property("snowShotMcpRunning").toBool();
+        const QString error = snow_shot::app::mcp::mcpStartupErrorText(
+            qApp->property("snowShotMcpStartError").value<snow_shot::app::mcp::McpStartupError>());
         const int count = qApp->property("snowShotMcpConnections").toInt();
         m_status->setText(
             running ? QCoreApplication::translate("ScreenshotMcpSettings", "Running")
@@ -1533,8 +1536,9 @@ class McpStatusSettingsWidget final : public SettingsCustomWidget {
         m_clients->setText(
             running ? QCoreApplication::translate("ScreenshotMcpSettings", "Connected clients: %1")
                           .arg(count)
-                    : QCoreApplication::translate("ScreenshotMcpSettings",
-                                                  "MCP is disabled or unavailable"));
+            : !error.isEmpty() ? error
+                               : QCoreApplication::translate("ScreenshotMcpSettings",
+                                                             "MCP is disabled or unavailable"));
     }
     adqt::widgets::AdTag* m_status = nullptr;
     QLabel* m_clients = nullptr;

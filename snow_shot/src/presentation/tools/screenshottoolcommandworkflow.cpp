@@ -72,7 +72,7 @@ void ScreenshotToolCommandWorkflow::setBracketTool() {
     setCanvasTool(SnowCanvasTool::Bracket);
 }
 
-void ScreenshotToolCommandWorkflow::setFreeDrawTool() {
+void ScreenshotToolCommandWorkflow::setBrushTool() {
     setCanvasTool(SnowCanvasTool::FreeDraw);
 }
 
@@ -80,7 +80,7 @@ void ScreenshotToolCommandWorkflow::setHighlightTool() {
     setCanvasTool(SnowCanvasTool::RectangleHighlight);
 }
 
-void ScreenshotToolCommandWorkflow::setPenHighlightTool() {
+void ScreenshotToolCommandWorkflow::setBrushHighlightTool() {
     setCanvasTool(SnowCanvasTool::PenHighlight);
 }
 
@@ -116,7 +116,7 @@ void ScreenshotToolCommandWorkflow::setAutoFilterTool() {
     setCanvasTool(SnowCanvasTool::AutoFilter);
 }
 
-void ScreenshotToolCommandWorkflow::setPenFilterTool() {
+void ScreenshotToolCommandWorkflow::setBrushFilterTool() {
     setCanvasTool(SnowCanvasTool::PenFilter);
 }
 
@@ -143,20 +143,20 @@ void ScreenshotToolCommandWorkflow::setTextTool() {
     setCanvasTool(SnowCanvasTool::Text);
 }
 
-void ScreenshotToolCommandWorkflow::setSerialNumberTool() {
+void ScreenshotToolCommandWorkflow::setSequenceNumberTool() {
     setCanvasTool(SnowCanvasTool::SerialNumber);
 }
 
-void ScreenshotToolCommandWorkflow::decrementSelectedSerialNumbers() {
-    m_context.actions.adjustSelectedSerialNumbers(-1);
+void ScreenshotToolCommandWorkflow::decrementSelectedSequenceNumbers() {
+    m_context.actions.adjustSelectedSequenceNumbers(-1);
 }
 
-void ScreenshotToolCommandWorkflow::incrementSelectedSerialNumbers() {
-    m_context.actions.adjustSelectedSerialNumbers(1);
+void ScreenshotToolCommandWorkflow::incrementSelectedSequenceNumbers() {
+    m_context.actions.adjustSelectedSequenceNumbers(1);
 }
 
-void ScreenshotToolCommandWorkflow::createTextForSelectedSerialNumber() {
-    m_context.actions.createCanvasTextForSelectedSerialNumber();
+void ScreenshotToolCommandWorkflow::createTextForSelectedSequenceNumber() {
+    m_context.actions.createCanvasTextForSelectedSequenceNumber();
 }
 
 SnowCanvasShapeStyle ScreenshotToolCommandWorkflow::currentRectangleStyle() const {
@@ -175,9 +175,9 @@ void ScreenshotToolCommandWorkflow::setTextStyleFromToolbar(const SnowCanvasText
     m_context.actions.setTextStyle(style, properties);
 }
 
-void ScreenshotToolCommandWorkflow::setSerialNumberStyleFromToolbar(
+void ScreenshotToolCommandWorkflow::setSequenceNumberStyleFromToolbar(
     const SnowCanvasSerialNumberStyle& style, std::optional<quint32> properties) {
-    m_context.actions.setSerialNumberStyle(style, properties);
+    m_context.actions.setSequenceNumberStyle(style, properties);
 }
 
 bool ScreenshotToolCommandWorkflow::stepStrokeWidth(int delta) {

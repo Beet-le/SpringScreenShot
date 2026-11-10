@@ -997,9 +997,9 @@ void magnifierSourcesTrackOriginalImageLayersAndCaptureModes() {
         {{original, bounds, coverage},
          {cursor, QRectF(25, 25, 10, 10), QRectF(25, 25, 10, 10), false}}));
     sources = renderer.baseImageSources();
-    require(sources.size() == 2 && sources[0].coverage == coverage &&
-                sources[1].image.cacheKey() == cursor.cacheKey(),
-            "magnifier sources must retain layer coverage and captured cursor paint order");
+    require(sources.size() == 2 && sources[0].coverage == coverage && sources[0].smartEraseSource &&
+                sources[1].image.cacheKey() == cursor.cacheKey() && !sources[1].smartEraseSource,
+            "sampling sources retain coverage, cursor paint order and donor eligibility");
     renderer.setRenderMode(ScreenshotCanvasRenderer::RenderMode::ScrollingCapture);
     require(renderer.baseImageSources().isEmpty(),
             "scrolling mode must not sample the previous screenshot without a preview");
@@ -2128,7 +2128,7 @@ void shortcutHintStagesUseTheExactRequiredLines() {
     };
     const QStringList commonLines{
         QStringLiteral("Copy color: C"),
-        keyLine(QStringLiteral("Toggle Global/Relative Coordinates"), {QStringLiteral("Shift+P")}),
+        keyLine(QStringLiteral("Toggle global/relative coordinates"), {QStringLiteral("Shift+P")}),
         keyLine(QStringLiteral("Toggle cursor visibility"), {QStringLiteral("`")}),
         QStringLiteral("Switch color format: %1")
             .arg(snow_shot::shortcuts::ShortcutDisplayService::instance().modifierText(
@@ -2139,16 +2139,15 @@ void shortcutHintStagesUseTheExactRequiredLines() {
     QStringList selectionLines = cursorLines;
     selectionLines.append({
         keyLine(QStringLiteral("Move entire selection"), {QStringLiteral("Space")}),
-        keyLine(QStringLiteral("Keep selection width and height consistent"),
-                {QStringLiteral("Shift")}),
-        QStringLiteral("Selection Aspect Ratio Snap: Q"),
+        keyLine(QStringLiteral("Maintain selection aspect ratio"), {QStringLiteral("Shift")}),
+        QStringLiteral("Selection aspect ratio snap: Q"),
     });
     selectionLines.append(commonLines);
     QStringList smartLines = cursorLines;
     smartLines.append({
-        QStringLiteral("Switch element level: mouse wheel"),
+        QStringLiteral("Switch element level: Mouse wheel"),
         keyLine(QStringLiteral("Select window/window sub-element"), {QStringLiteral("Tab")}),
-        QStringLiteral("Selection Aspect Ratio Snap: Q"),
+        QStringLiteral("Selection aspect ratio snap: Q"),
     });
     smartLines.append(commonLines);
 
@@ -7205,7 +7204,7 @@ void scrollingResultPreviewRestoresTransparencyAndReadout() {
         QString translate(const char* context, const char* source, const char*,
                           int) const override {
             if (QByteArray(context) == "CanvasStatusReadout" &&
-                QByteArray(source) == "Result Preview in Progress") {
+                QByteArray(source) == "Result preview in progress") {
                 return QStringLiteral("Result preview translated");
             }
             return {};
@@ -7236,7 +7235,7 @@ void scrollingResultPreviewRestoresTransparencyAndReadout() {
     require(readout && readout->message() == CanvasStatusReadout::Message::ResultPreview &&
                 !readout->dismissalTimer()->isActive(),
             "scrolling result status must use the shared persistent hint component");
-    require(label->toolTip() == QStringLiteral("Result Preview in Progress") &&
+    require(label->toolTip() == QStringLiteral("Result preview in progress") &&
                 label->accessibleName() == label->toolTip(),
             "result preview status must retain complete accessible text");
     const QRect logicalAnchor = selection.translated(canvas->pos());
@@ -8651,7 +8650,7 @@ void overlayRightQuickSelection() {
     display.logicalToPhysicalScale = 2.0;
     displays.appendDisplay(display, &overlay);
     selection.setSelectionRect(QRectF(-600, 420, 280, 280));
-    interaction.setCanvasTool(ScreenshotActiveTool::FreeDraw);
+    interaction.setCanvasTool(ScreenshotActiveTool::Brush);
     enterSelectionOnFallback = true;
 
     require(canvas_quick_selection_test::mouse(*canvas, QEvent::MouseButtonPress, {120, 135},
@@ -8660,7 +8659,7 @@ void overlayRightQuickSelection() {
     canvas_quick_selection_test::mouse(*canvas, QEvent::MouseButtonRelease, {120, 135},
                                        Qt::RightButton, Qt::NoButton);
     require(fallbacks == 1 && toolActivations == 0 &&
-                interaction.activeTool() == ScreenshotActiveTool::FreeDraw &&
+                interaction.activeTool() == ScreenshotActiveTool::Brush &&
                 canvas->canvasStyleToolbarState().source ==
                     SnowCanvasStyleToolbarSource::SelectedFreeDraw,
             "inside annotation selection preserves the annotation tool and capture region");
@@ -8670,7 +8669,7 @@ void overlayRightQuickSelection() {
     canvas_quick_selection_test::mouse(*canvas, QEvent::MouseButtonRelease, {130, 80},
                                        Qt::RightButton, Qt::NoButton);
     require(fallbacks == 1 && toolActivations == 0 &&
-                interaction.activeTool() == ScreenshotActiveTool::FreeDraw,
+                interaction.activeTool() == ScreenshotActiveTool::Brush,
             "empty space inside the capture must not reselect while an annotation tool is active");
     for (const QPointF point : {QPointF(100, 60), QPointF(240, 200)}) {
         require(handler.handleRightClick(&overlay, point) ==
@@ -8690,7 +8689,7 @@ void overlayRightQuickSelection() {
     require(handler.handleRightClick(&overlay, {300, 220}) ==
                     ScreenshotOverlayRightClickResult::Ignored &&
                 QWidget::mouseGrabber() == canvas && fallbacks == 1 && toolActivations == 0 &&
-                interaction.activeTool() == ScreenshotActiveTool::FreeDraw,
+                interaction.activeTool() == ScreenshotActiveTool::Brush,
             "an outside right-click must preserve an active drawing gesture and its tool");
     canvas_quick_selection_test::mouse(*canvas, QEvent::MouseButtonRelease, {320, 220},
                                        Qt::LeftButton, Qt::NoButton);

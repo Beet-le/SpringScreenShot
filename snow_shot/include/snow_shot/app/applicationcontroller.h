@@ -21,6 +21,7 @@ class ApplicationController final : public QObject {
     void start(const QStringList& initialArguments = {}, std::function<void()> maintenance = {});
     void showMainWindow();
     void requestScreenshot();
+    [[nodiscard]] bool acceptsLaunchRequest(const QStringList& arguments) const;
     void handleLaunchRequest(const QStringList& arguments,
                              std::function<void()> firstFileFinished = {});
     void restorePinnedWindows();

@@ -23,7 +23,7 @@
     <context>
         <name>ScreenshotAutoFilterController</name>
         <message>
-            <source>Region identification failed. Try Auto Filter again</source>
+            <source>Region identification failed. Try auto filter again</source>
             <translation>区域识别失败。请再次尝试自动滤镜</translation>
         </message>
     </context>
@@ -82,7 +82,7 @@
             <translation>选区内未找到可捕获的窗口</translation>
         </message>
         <message>
-            <source>No recognized result is available to copy</source>
+            <source>No recognition result is available to copy</source>
             <translation>没有可复制的识别结果</translation>
         </message>
         <message>
@@ -106,7 +106,7 @@
             <translation>滚动截图已停止。请检查屏幕录制权限和显示器设置，然后重试</translation>
         </message>
         <message>
-            <source>Smart selection is using window mode. Enable Accessibility access in Screenshot settings to select window elements</source>
+            <source>Smart selection is using window mode. Enable Accessibility access in screenshot settings to select window elements</source>
             <translation>智能选择正在使用窗口模式。请在截图设置中启用辅助功能权限，以选择窗口元素</translation>
         </message>
         <message>
@@ -223,19 +223,19 @@
     <context>
         <name>ScreenshotQrController</name>
         <message>
-            <source>Copy Text</source>
+            <source>Copy text</source>
             <translation>复制文本</translation>
         </message>
         <message>
-            <source>Open URL</source>
+            <source>Open link</source>
             <translation>打开链接</translation>
         </message>
         <message>
-            <source>QR Code</source>
+            <source>QR code</source>
             <translation>二维码</translation>
         </message>
         <message>
-            <source>QR Code %1</source>
+            <source>QR code %1</source>
             <translation>二维码 %1</translation>
         </message>
         <message>
@@ -345,14 +345,6 @@
             <translation>请输入预设名称</translation>
         </message>
         <message>
-            <source>Position X</source>
-            <translation>X 坐标</translation>
-        </message>
-        <message>
-            <source>Position Y</source>
-            <translation>Y 坐标</translation>
-        </message>
-        <message>
             <source>Preset</source>
             <translation>预设</translation>
         </message>
@@ -391,6 +383,14 @@
         <message>
             <source>Width (points)</source>
             <translation>宽度（点）</translation>
+        </message>
+        <message>
+            <source>X coordinate</source>
+            <translation>X 坐标</translation>
+        </message>
+        <message>
+            <source>Y coordinate</source>
+            <translation>Y 坐标</translation>
         </message>
     </context>
     <context>
@@ -496,11 +496,11 @@
         </message>
         <message>
             <source>X coordinate</source>
-            <translation> X 坐标</translation>
+            <translation>X 坐标</translation>
         </message>
         <message>
             <source>Y coordinate</source>
-            <translation> Y 坐标</translation>
+            <translation>Y 坐标</translation>
         </message>
         <message>
             <source>dp</source>
@@ -542,11 +542,15 @@
             <translation>保持宽高比</translation>
         </message>
         <message>
+            <source>Mouse wheel</source>
+            <translation>鼠标滚轮</translation>
+        </message>
+        <message>
             <source>Scale from center</source>
             <translation>从中心缩放</translation>
         </message>
         <message>
-            <source>Selection Aspect Ratio Snap</source>
+            <source>Selection aspect ratio snap</source>
             <translation>选区宽高比吸附</translation>
         </message>
         <message>
@@ -564,10 +568,6 @@
         <message>
             <source>Vertical scroll</source>
             <translation>垂直滚动</translation>
-        </message>
-        <message>
-            <source>mouse wheel</source>
-            <translation>鼠标滚轮</translation>
         </message>
     </context>
     <context>
@@ -610,16 +610,16 @@
             <translation>捕获失败：%1</translation>
         </message>
         <message>
-            <source>History publication could not be queued</source>
-            <translation>无法将历史记录写入操作加入队列</translation>
-        </message>
-        <message>
             <source>The capture operation failed</source>
             <translation>捕获操作失败</translation>
         </message>
         <message>
-            <source>The clipboard publication could not be queued</source>
+            <source>The clipboard write operation could not be queued</source>
             <translation>无法将剪贴板写入操作加入队列</translation>
+        </message>
+        <message>
+            <source>The history write operation could not be queued</source>
+            <translation>无法将历史记录写入操作加入队列</translation>
         </message>
     </context>
 </TS>

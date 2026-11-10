@@ -313,7 +313,13 @@ void transport() {
     descriptor.close();
     require(data.value(QStringLiteral("token")).toString().size() == 64, "256-bit token");
     ScreenshotMcpServer competing(nullptr, directory.path());
-    require(!competing.start(), "exclusive endpoint owner");
+    require(!competing.start(&error) &&
+                competing.startupError() == McpStartupError::EndpointOwned &&
+                error == mcpStartupErrorText(McpStartupError::EndpointOwned),
+            "exclusive endpoint owner reports a stable error and a localized explanation");
+    competing.stop();
+    require(competing.startupError() == McpStartupError::EndpointOwned,
+            "failed graph cleanup retains the startup failure identity");
     QLocalSocket invalid;
     invalid.connectToServer(server.socketName());
     require(invalid.waitForConnected(2000), "invalid peer connects");
@@ -419,7 +425,13 @@ void transport() {
     server.stop();
     require(!QFile::exists(server.descriptorPath()), "descriptor removed on disable");
     await([&] { return client.state() == QLocalSocket::UnconnectedState; });
-    require(server.start(), "runtime re-enable");
+    require(competing.start(&error) && competing.startupError() == McpStartupError::None &&
+                error.isEmpty(),
+            "successful retry clears the retained failure identity and localized output");
+    competing.stop();
+    require(server.start(&error) && server.startupError() == McpStartupError::None &&
+                error.isEmpty(),
+            "runtime re-enable clears the previous error output");
     server.stop();
     require(snow_shot::runtime::RuntimeActivityTracker::shared().snapshot().activeCount == baseline,
             "completed socket work and shutdown release activity leases");
@@ -475,19 +487,27 @@ void descriptorOverride() {
         scopedDirectory = QFileInfo(scoped.socketName()).absolutePath();
     }
     require(!QFileInfo::exists(scopedDirectory), "destruction releases the socket directory");
+#endif
     // An existing directory cannot be replaced by the descriptor's atomic file publication.
     const QString unpublishable = directory.filePath(QStringLiteral("failed/descriptor.json"));
     require(QDir().mkpath(unpublishable), "create unpublishable descriptor destination");
     qputenv("SNOW_SHOT_MCP_DESCRIPTOR", unpublishable.toUtf8());
     ScreenshotMcpServer failedPublication;
-    require(!failedPublication.start(&error), "descriptor publication failure is reported");
+    require(!failedPublication.start(&error) &&
+                failedPublication.startupError() == McpStartupError::Descriptor &&
+                error == mcpStartupErrorText(McpStartupError::Descriptor),
+            "descriptor publication failure reports its stable error after listener cleanup");
+#ifdef Q_OS_MACOS
     const QString failedDirectory = QFileInfo(failedPublication.socketName()).absolutePath();
     require(!failedPublication.socketName().isEmpty() && !QFileInfo::exists(failedDirectory),
             "failed publication releases the listening socket and its directory");
 #endif
     qputenv("SNOW_SHOT_MCP_DESCRIPTOR", QByteArrayLiteral("relative/descriptor.json"));
     ScreenshotMcpServer relativeOverride;
-    require(!relativeOverride.start(), "relative override rejected");
+    require(!relativeOverride.start(&error) &&
+                relativeOverride.startupError() == McpStartupError::RuntimeDirectory &&
+                error == mcpStartupErrorText(McpStartupError::RuntimeDirectory),
+            "relative override reports an invalid runtime directory");
     if (wasSet)
         qputenv("SNOW_SHOT_MCP_DESCRIPTOR", previous);
     else
@@ -666,7 +686,7 @@ void session() {
             "current revision applies");
     QTemporaryDir coldOutput(QDir(QDir::tempPath()).canonicalPath() +
                              QStringLiteral("/mcp-save-XXXXXX"));
-    for (const auto* format : {"jpeg", "pdf"}) {
+    for (const auto* format : {"jpeg", "tiff", "pdf"}) {
         const QString coldPath = coldOutput.filePath(QString::fromLatin1(format) + u'.' + format);
         const auto saved = call(QStringLiteral("snow_shot_screenshot_save"),
                                 {{QStringLiteral("path"), coldPath},
@@ -689,6 +709,12 @@ void session() {
                         QString::fromLatin1(
                             QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()),
                 "non-PNG saves report their actual bytes without a canonical PNG encode");
+        if (QLatin1String(format) == QStringLiteral("tiff")) {
+            const auto decoded =
+                snow_shot::image_codec::decode(bytes, snow::image::Format::tiff, "saved.tiff");
+            require(decoded.size() == QSize(32, 20),
+                    "MCP TIFF output reopens through the native image codec");
+        }
     }
     const QString customPngPath = coldOutput.filePath(QStringLiteral("custom-compression.png"));
     for (int index = 0; index < 2; ++index) {
@@ -978,7 +1004,7 @@ void annotationRuntime() {
     runtime.setDocumentChangedHandler({});
     require(runtime.undo() && changes == 4, "observation can be repeatedly detached");
 }
-void serialNumberPatchesPreserveMixedSelectionProperties(bool useWidget) {
+void sequenceNumberPatchesPreserveMixedSelectionProperties(bool useWidget) {
     SnowCanvasRuntime runtime;
     const auto created =
         QJsonDocument::fromJson(
@@ -1117,14 +1143,20 @@ void completeToolStyleContract() {
             properties = flags;
             ++updates;
         }
-        void setSerialNumberStyleFromToolbar(const SnowCanvasSerialNumberStyle& value,
-                                             quint32 flags) {
+        void setSequenceNumberStyleFromToolbar(const SnowCanvasSerialNumberStyle& value,
+                                               quint32 flags) {
             state.serialNumberStyle = value;
             properties = flags;
             ++updates;
         }
         bool setAngleStyleFromToolbar(const SnowCanvasAngleStyle& value, quint32 flags) {
             state.angleStyle = value;
+            properties = flags;
+            ++updates;
+            return true;
+        }
+        bool setBracketStyleFromToolbar(const SnowCanvasBracketStyle& value, quint32 flags) {
+            state.bracketStyle = value;
             properties = flags;
             ++updates;
             return true;
@@ -1377,6 +1409,10 @@ int main(int argc, char** argv) {
         ScreenshotExportCoordinator::shared().shutdown();
         storage.shutdown();
     });
+    if (app.arguments().contains(QStringLiteral("--save-formats-only"))) {
+        session();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--selection-style-only"))) {
         selectionStyle();
         return 0;
@@ -1398,8 +1434,8 @@ int main(int argc, char** argv) {
     }
     replaySubscriptions();
     sessionCompletionReentry();
-    serialNumberPatchesPreserveMixedSelectionProperties(false);
-    serialNumberPatchesPreserveMixedSelectionProperties(true);
+    sequenceNumberPatchesPreserveMixedSelectionProperties(false);
+    sequenceNumberPatchesPreserveMixedSelectionProperties(true);
     completeToolStyleContract();
     workflowOperations();
     annotationRuntime();

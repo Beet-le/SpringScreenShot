@@ -225,8 +225,8 @@ void projectLinkSurfacesMatchStandardButtons() {
     for (const auto appearance : {styles::ThemeAppearance::Light, styles::ThemeAppearance::Dark}) {
         manager.setThemeAppearance(appearance);
         flushEvents();
-        for (const char* name :
-             {"aboutWebsite", "aboutSourceCode", "aboutFeedback", "aboutQqGroup3"}) {
+        for (const char* name : {"aboutWebsite", "aboutSourceCode", "aboutFeedback",
+                                 "aboutQqGroup3", "aboutQqGroup4"}) {
             auto* button = child<AdButton>(page, name);
             require(button->buttonStyle() == AdButton::ButtonStyle::Outline &&
                         button->accentRole() == AdButton::AccentRole::Neutral,
@@ -327,19 +327,24 @@ void projectLinksAreExplicitAccessibleAndRecoverable() {
     require(page.findChild<QAbstractButton*>(QStringLiteral("aboutQqGroup2")) == nullptr,
             "About no longer offers QQ Group 2");
     auto* group = child<QAbstractButton>(page, "aboutQqGroup3");
+    auto* group4 = child<QAbstractButton>(page, "aboutQqGroup4");
     auto* website = child<QAbstractButton>(page, "aboutWebsite");
     auto* feedback = child<QAbstractButton>(page, "aboutFeedback");
     require(group->geometry().left() == website->geometry().left() &&
-                group->geometry().right() == feedback->geometry().right(),
-            "the remaining QQ group spans the full project link row width");
+                group4->geometry().right() == feedback->geometry().right() &&
+                group->geometry().top() == group4->geometry().top() &&
+                group->geometry().right() < group4->geometry().left() &&
+                qAbs(group->width() - group4->width()) <= 1,
+            "both QQ groups share the second project link row equally");
     snapshot(page, QStringLiteral("about-actions"));
     const QString project = QStringLiteral(SNOW_SHOT_TEST_PROJECT_URL);
-    const std::array<std::pair<const char*, QUrl>, 6> links{{
+    const std::array<std::pair<const char*, QUrl>, 7> links{{
         {"aboutWebsite", QUrl(QStringLiteral(SNOW_SHOT_TEST_WEBSITE_URL))},
         {"aboutSourceCode", QUrl(project)},
         {"aboutFeedback", QUrl(project + QStringLiteral("/issues"))},
         {"aboutReleaseNotes", QUrl(project + QStringLiteral("/releases"))},
         {"aboutQqGroup3", QUrl(QStringLiteral(SNOW_SHOT_TEST_QQ_GROUP_3_URL))},
+        {"aboutQqGroup4", QUrl(QStringLiteral(SNOW_SHOT_TEST_QQ_GROUP_4_URL))},
         {"aboutPrivacyPolicy", QUrl(snow_shot::app::distribution::privacyPolicyUrl())},
     }};
     for (const auto& [name, url] : links) {
@@ -417,9 +422,9 @@ void largerTypeKeepsEveryActionReachable() {
     auto* artwork = child<QWidget>(page, "aboutArtwork");
     require(artwork->width() <= scroll->viewport()->width() && artwork->height() > 0,
             "artwork scales down to the available width with larger fonts");
-    for (const char* name :
-         {"aboutCopyVersion", "aboutReleaseNotes", "aboutUpdateAction", "aboutWebsite",
-          "aboutSourceCode", "aboutFeedback", "aboutQqGroup3", "aboutPrivacyPolicy"}) {
+    for (const char* name : {"aboutCopyVersion", "aboutReleaseNotes", "aboutUpdateAction",
+                             "aboutWebsite", "aboutSourceCode", "aboutFeedback", "aboutQqGroup3",
+                             "aboutQqGroup4", "aboutPrivacyPolicy"}) {
         auto* button = child<QAbstractButton>(page, name);
         scroll->ensureWidgetVisible(button);
         flushEvents();
@@ -466,7 +471,7 @@ void updatePolicyAndUnavailableCopy() {
         {},
         0,
         0,
-        QUrl(QStringLiteral("https://github.com/mg-chao/snow-apps/releases/tag/v2.0.0_snow-shot"))};
+        QUrl(QStringLiteral("https://github.com/mg-chao/snow-shot/releases/tag/v2.0.0_snow-shot"))};
     updates.statusChanged();
     auto* action = child<adqt::widgets::AdButton>(page, "aboutUpdateAction");
     require(action->text() == QStringLiteral("Download from GitHub"),

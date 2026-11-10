@@ -9,13 +9,15 @@
 
 namespace snow_shot::presentation::components {
 
-class CollagePdfTemplateCanvas final : public QWidget {
+class ImageStitchingPdfTemplateCanvas final : public QWidget {
     Q_OBJECT
   public:
-    explicit CollagePdfTemplateCanvas(CollageDocument* document, QWidget* parent = nullptr);
-    ~CollagePdfTemplateCanvas() override;
+    explicit ImageStitchingPdfTemplateCanvas(ImageStitchingDocument* document,
+                                             QWidget* parent = nullptr);
+    ~ImageStitchingPdfTemplateCanvas() override;
     [[nodiscard]] int pageIndex() const;
     void setPageIndex(int pageIndex);
+    void fitToCanvas();
     [[nodiscard]] QRectF pageViewportRect() const;
     [[nodiscard]] QRectF imageViewportRect(quint64 id) const;
     [[nodiscard]] QRectF cellViewportRect(quint64 id) const;
@@ -36,6 +38,7 @@ class CollagePdfTemplateCanvas final : public QWidget {
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
+    void wheelEvent(QWheelEvent*) override;
     void keyPressEvent(QKeyEvent*) override;
     void hideEvent(QHideEvent*) override;
     void showEvent(QShowEvent*) override;
@@ -51,12 +54,13 @@ class CollagePdfTemplateCanvas final : public QWidget {
 };
 
 // A single composed page and a bounded, virtualized strip of all input images.
-class CollagePdfTemplateWidget final : public QWidget {
+class ImageStitchingPdfTemplateWidget final : public QWidget {
     Q_OBJECT
   public:
-    explicit CollagePdfTemplateWidget(CollageDocument* document, QWidget* parent = nullptr);
-    ~CollagePdfTemplateWidget() override;
-    [[nodiscard]] CollagePdfTemplateCanvas* canvas() const;
+    explicit ImageStitchingPdfTemplateWidget(ImageStitchingDocument* document,
+                                             QWidget* parent = nullptr);
+    ~ImageStitchingPdfTemplateWidget() override;
+    [[nodiscard]] ImageStitchingPdfTemplateCanvas* canvas() const;
     void setLoading(bool loading);
     void setExportBusy(bool busy);
     void retranslateUi();

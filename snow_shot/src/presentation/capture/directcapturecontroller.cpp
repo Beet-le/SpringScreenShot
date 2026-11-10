@@ -5,6 +5,7 @@
 #include "snow_shot/presentation/directcapturebudget.h"
 #include "snow_shot/presentation/capture/screenshotcapturepolicy.h"
 #include "snow_shot/presentation/screenshotencodingsettings.h"
+#include "snow_shot/presentation/screenshotgeometry.h"
 
 #include "directcapturenative.h"
 #include "snow_shot/platform/screenshotnative.h"
@@ -22,6 +23,7 @@
 #include <QDebug>
 #include <QMimeData>
 #include <QThread>
+#include <QScreen>
 
 #include <atomic>
 #include <exception>
@@ -52,9 +54,10 @@ class DirectCaptureController::Impl {
                       [this, request, done = std::move(done)](DirectCaptureFrame frame) mutable {
                           emit owner.captureActivityChanged(QStringLiteral("direct"), false);
                           if (frame.isValid()) {
+                              auto source = ScreenshotExportSource::fromImage(frame.image);
+                              source.setOutputScale(directCaptureImageScale(request, frame));
                               artifact = std::make_unique<ScreenshotExportArtifact>(
-                                  ScreenshotExportSource::fromImage(frame.image),
-                                  request.encoding.compressionLevel);
+                                  std::move(source), request.encoding.compressionLevel);
                           }
                           done(std::move(frame));
                       });
@@ -97,7 +100,8 @@ class DirectCaptureController::Impl {
                                                  repository->publish(std::move(draft));
                                              if (!future.valid())
                                                  return OutputResult{DirectCaptureController::tr(
-                                                     "History publication could not be queued")};
+                                                     "The history write operation could not be "
+                                                     "queued")};
                                              const auto result = future.get();
                                              return OutputResult{result.storage.success
                                                                      ? QString()
@@ -107,7 +111,7 @@ class DirectCaptureController::Impl {
                                              (*completion)(result.error);
                                          })) {
                                      (*completion)(DirectCaptureController::tr(
-                                         "History publication could not be queued"));
+                                         "The history write operation could not be queued"));
                                  }
                              });
               },
@@ -180,7 +184,7 @@ class DirectCaptureController::Impl {
                                });
                            if (!clipboard.isValid())
                                done(DirectCaptureController::tr(
-                                   "The clipboard publication could not be queued"));
+                                   "The clipboard write operation could not be queued"));
                        },
                        request.pdf, request.requestedAt);
         }
@@ -198,7 +202,7 @@ class DirectCaptureController::Impl {
                            });
                        if (!clipboard.isValid())
                            done(DirectCaptureController::tr(
-                               "The clipboard publication could not be queued"));
+                               "The clipboard write operation could not be queued"));
                    });
     }
 
@@ -228,6 +232,14 @@ class DirectCaptureController::Impl {
                 .toString());
         result.pdf.pageSize = screenshot_pdf::pageSizeForKey(settings.pdfPageSize());
         result.filenameFormat = settings.autoSaveFilenameFormat();
+        result.hiDpiImageScaling = settings.hiDpiImageScaling();
+        if (result.hiDpiImageScaling == QStringLiteral("auto")) {
+            for (QScreen* screen : QGuiApplication::screens()) {
+                const auto display = ScreenshotGeometryMapper::preCaptureDisplayModel(*screen);
+                result.scalingDisplays.append(
+                    {QRectF(display.canvasRect), screen->devicePixelRatio()});
+            }
+        }
         return result;
     }
 
