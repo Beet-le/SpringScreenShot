@@ -27,6 +27,8 @@ fn capture_config(config: &DirectRecordingConfig) -> Result<DesktopConfig> {
         height: f64::from(config.region.height),
     }));
     capture.fps = config.capture_fps;
+    capture.follow_mouse = config.follow_mouse;
+    capture.follow_mouse_options = config.follow_mouse_options;
     capture.cursor = if config.show_cursor {
         snow_media::CursorMode::Embedded
     } else {
@@ -156,6 +158,7 @@ enum Command {
     Finish(Instant),
 }
 pub struct DirectSession {
+    capture_viewport: crate::capture_viewport::CaptureViewportState,
     config: Option<DirectRecordingConfig>,
     commands: Option<crossbeam_channel::Sender<Command>>,
     worker: Option<JoinHandle<Result<NativeRecordingReport>>>,
@@ -188,6 +191,7 @@ impl DirectSession {
             config.microphone_gain_db,
         )?;
         Ok(Self {
+            capture_viewport: Default::default(),
             config: Some(config),
             commands: None,
             worker: None,
@@ -212,6 +216,7 @@ impl DirectSession {
         let exclusion_control = self.exclusion_control.clone();
         let stop_boundary = Arc::clone(&self.stop_boundary);
         let control_clock = Arc::clone(&self.control_clock);
+        let capture_viewport = self.capture_viewport.clone();
         let worker = std::thread::Builder::new()
             .name("snow-macos-recording".into())
             .spawn(move || {
@@ -258,8 +263,12 @@ impl DirectSession {
                             }
                             None => {}
                         }
-                        if let Err(error) = recording.step(Duration::from_millis(20)) {
-                            return Err(recording.preserve_failure(error));
+                        match recording.step(Duration::from_millis(20)) {
+                            Ok(NativeRecordingEvent::Frame { .. }) => {
+                                capture_viewport.publish(Some(recording.source_transform()));
+                            }
+                            Ok(_) => {}
+                            Err(error) => return Err(recording.preserve_failure(error)),
                         }
                     }
                 })();
@@ -296,6 +305,10 @@ impl DirectSession {
             .try_send(command)
             .map_err(|_| ScreenRecorderError::Encode("recording worker stopped".into()))
     }
+    pub fn capture_viewport(&self) -> Option<crate::CaptureViewport> {
+        self.capture_viewport.snapshot()
+    }
+
     pub fn audio_control(&self) -> AudioControlHandle {
         self.audio_control.clone()
     }
@@ -403,6 +416,8 @@ impl Drop for DirectSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use snow_media::follow_mouse::FollowMouseOptions;
+
     fn output_dimensions(config: &DirectRecordingConfig, native: PixelSize) -> Result<PixelSize> {
         super::output_dimensions(
             native,
@@ -419,6 +434,8 @@ mod tests {
             system_audio_gain_db: 0,
             microphone_gain_db: 0,
             loop_animated_images: true,
+            follow_mouse: false,
+            follow_mouse_options: FollowMouseOptions::default(),
             region: crate::RecordingRegion::new(-321, -99, 641, 359),
             capture_backend: crate::CaptureBackendKind::Auto,
             output_path: "test.mp4".into(),
@@ -462,6 +479,30 @@ mod tests {
         assert_eq!(capture.excluded_windows, [123]);
         assert_eq!(capture.excluded_processes, [456]);
         assert_eq!(capture.fps, 60);
+    }
+    #[test]
+    fn follow_mouse_preserves_options_nominal_point_region_and_native_exclusions() {
+        let mut config = config();
+        config.follow_mouse = true;
+        config.follow_mouse_options = FollowMouseOptions {
+            smooth_movement: true,
+            reduce_jitter: false,
+        };
+        let capture = capture_config(&config).unwrap();
+        assert!(capture.follow_mouse);
+        assert_eq!(capture.follow_mouse_options, config.follow_mouse_options);
+        assert_eq!(capture.excluded_windows, [123]);
+        assert_eq!(capture.excluded_processes, [456]);
+        assert_eq!(
+            capture.target,
+            DesktopTarget::Region(DesktopRect {
+                space: DesktopSpace::Points,
+                x: -321.0,
+                y: -99.0,
+                width: 641.0,
+                height: 359.0,
+            })
+        );
     }
     #[test]
     fn output_uses_native_resolution_then_quality_and_codec_alignment() {

@@ -156,7 +156,7 @@ typedef struct SnowCaptureExclusions {
 } SnowCaptureExclusions;
 #endif
 
-#define SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION 17u
+#define SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION 19u
 
 /* Strings are bounded UTF-8 key names, copied during session creation. */
 typedef struct SnowCaptureKeyboardLabel {
@@ -248,6 +248,12 @@ typedef struct SnowCaptureDirectRecordingConfig {
     uint32_t record_letters_and_symbols;
     uint32_t record_control_keys;
     uint32_t preserve_keyboard_shortcuts;
+    /* Version 18: follow the mouse within its monitor. 0 disables, 1 enables.
+       The nominal source extent and encoded output size remain fixed. */
+    uint32_t follow_mouse;
+    /* Version 19: follow motion options, each 0 or 1. Older callers use immediate centering. */
+    uint32_t follow_mouse_smooth_movement;
+    uint32_t follow_mouse_reduce_jitter;
 } SnowCaptureDirectRecordingConfig;
 
 #define SNOW_RECORDING_DEFERRED_OPTIONS_VERSION 1u
@@ -416,6 +422,22 @@ typedef struct SnowRecordingExclusionStatus {
     /* 0: ready; 1: pending; 2: failed. */
     uint32_t status;
 } SnowRecordingExclusionStatus;
+
+typedef struct SnowRecordingCaptureViewport {
+    uint64_t revision;
+    double x;
+    double y;
+    double width;
+    double height;
+} SnowRecordingCaptureViewport;
+/* Nonblocking snapshot of the last successfully submitted video frame. Desktop
+ * coordinates are physical pixels on Windows and points on macOS. Returns 0
+ * without modifying output when unavailable (including before the first frame).
+ * Revision changes only when the rectangle changes; it is local to this session.
+ * Do not call concurrently with session destruction, stop, or finalization. */
+uint8_t snow_recording_session_capture_viewport(const SnowRecordingSession* session,
+                                                SnowRecordingCaptureViewport* viewport);
+
 /* Copies all IDs immediately. Required windows must appear in the native content snapshot. */
 uint8_t snow_recording_session_request_exclusions(SnowRecordingSession* session,
                                                   const SnowCaptureExclusions* exclusions,

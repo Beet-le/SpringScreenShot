@@ -15,17 +15,22 @@ class ScreenshotOcrTextLayout final {
   public:
     enum class PaintMode { TextAndSelection, SelectionOnly, TextOnly };
 
-    struct StreamingLayout {
+    // Available space at the source font size. Shared by previews and completed translations.
+    struct TranslationLayout {
         qreal width;
+        qreal height;
+        qreal firstLineIndent;
+        qreal lineAdvance;
         std::optional<ScreenshotOcrSourceTextMetrics> source;
-        bool operator==(const StreamingLayout&) const = default;
+        bool operator==(const TranslationLayout&) const = default;
     };
 
     void configure(const QString& text, const QFont& font, const QColor& textColor,
                    const ScreenshotOcrTextRange& selection, ScreenshotOcrTextDirection direction,
                    qreal targetAspectRatio, bool paragraph, const QVector<QRectF>& sourceRows = {},
                    std::optional<qreal> fontSizeCapRatio = {},
-                   std::optional<StreamingLayout> streaming = {});
+                   std::optional<TranslationLayout> translation = {},
+                   const QVector<QColor>& sourceRowColors = {});
     void setSelection(const ScreenshotOcrTextRange& selection);
     [[nodiscard]] int cursorPositionAt(const QPointF& itemPosition) const;
     [[nodiscard]] QVector<ScreenshotTextAnnotationFragment>
@@ -81,12 +86,13 @@ class ScreenshotOcrTextLayout final {
     std::vector<VerticalGlyph> m_verticalGlyphs;
     std::vector<FittedRow> m_fittedRows;
     QVector<QRectF> m_sourceRows;
+    QVector<QColor> m_sourceRowColors;
     QVector<int> m_graphemeBoundaries;
     qreal m_verticalCellAdvance = 0.0;
     qreal m_targetAspectRatio = 0.0;
     qreal m_sourceRowScale = 1.0;
     std::optional<qreal> m_fontSizeCapRatio;
-    std::optional<StreamingLayout> m_streaming;
+    std::optional<TranslationLayout> m_translation;
     bool m_paragraph = false;
     bool m_glyphRasterCacheable = true;
     QPointF m_layoutOrigin;
@@ -100,7 +106,7 @@ configureScreenshotOcrTextLayout(ScreenshotOcrTextLayout& layout, const Screensh
                                  const QColor& textColor, const ScreenshotOcrTextRange& selection,
                                  QTransform* textToOutput, qreal* fittedFontPixelSize = nullptr);
 
-// Capture source font sizes and spacing once for translation fitting and streaming.
+// Capture source font sizes and baseline metrics once for translation fitting.
 void setScreenshotOcrTranslationFontCaps(QVector<ScreenshotOcrLine>& translation,
                                          const QVector<ScreenshotOcrLine>& source,
                                          const QVector<QVector<int>>& sourceIndices,

@@ -131,13 +131,13 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
                 return ensureRecognitionWindow() ? m_recognitionWindow.data() : nullptr;
             },
             [this](std::shared_ptr<ScreenshotOcrPresentation> presentation) {
+                m_presentation = presentation;
                 if (m_recognitionWindow != nullptr) {
                     m_recognitionWindow->setOcrPresentation(std::move(presentation));
                 }
             },
             [this](std::shared_ptr<ScreenshotOcrPresentation> presentation) {
-                m_presentation = std::move(presentation);
-                applyOcrBackgroundToOverlays(m_presentation);
+                applyOcrBackgroundToOverlays(presentation);
             },
             [](std::shared_ptr<QTextDocument>) {},
             [this]() { clearOcrBackgroundFromOverlays(); },
@@ -285,12 +285,13 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
             },
             [this](int mode, const ScreenshotRecognitionModelState& state) {
                 if (auto* toolbar = m_context.overlayCoordinator.toolbar()) {
-                    toolbar->setRecognitionModelState(
-                        mode == static_cast<int>(
-                                    ScreenshotRecognitionSessionController::Mode::Table)
-                            ? ScreenshotToolPalette::Tool::Table
-                            : ScreenshotToolPalette::Tool::Latex,
-                        state);
+                    using Mode = ScreenshotRecognitionSessionController::Mode;
+                    using Tool = ScreenshotToolPalette::Tool;
+                    const auto tool = mode == int(Mode::Table)   ? Tool::Table
+                                      : mode == int(Mode::Latex) ? Tool::Latex
+                                      : mode == int(Mode::Html)  ? Tool::Html
+                                                                 : Tool::Markdown;
+                    toolbar->setRecognitionModelState(tool, state);
                 }
             },
             [this]() -> QImage {
@@ -320,6 +321,11 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
                     if (auto* palette = toolbar->palette())
                         palette->setTextTranslationServices(models, selection, loading);
                 }
+            },
+            {},
+            [this]() {
+                return !m_copyAndEndCapture && (!m_context.shouldRenderTextBackground ||
+                                                m_context.shouldRenderTextBackground());
             },
         },
         this);

@@ -1013,7 +1013,6 @@ StorageResult ApplicationStorage::requestDirectoryChange(const QString& director
     m_status.writeAvailable = false;
     m_configuration->suspendWrites(true);
     m_captureHistory->suspendWrites(true);
-    emitStatusChanged();
     auto* active = operation.get();
     m_directoryChange = std::move(operation);
     auto work = [this, before, destination, migrate, diagnosticOptions, active] {
@@ -1057,6 +1056,8 @@ StorageResult ApplicationStorage::requestDirectoryChange(const QString& director
                 return StorageDirectoryChangeResult{false, flush.error, {}};
             auto& diagnostics = diagnostics::DiagnosticsService::instance();
             const bool hadDiagnostics = !diagnosticOptions.directories.isEmpty();
+            // Standalone logs stay with the startup-selected crash database for this process.
+            // The next startup resolves the newly selected data directory for both kinds of log.
             const bool fixedDiagnostics = !app::distribution::isStoreManaged();
             const QString captureDatabase = diagnostics.crashCaptureDirectory();
             if (hadDiagnostics && !fixedDiagnostics) {
@@ -1177,6 +1178,10 @@ StorageResult ApplicationStorage::requestDirectoryChange(const QString& director
     m_preparingDirectoryChange = false;
     clearPreparing.dismiss();
     active->poll->start();
+    // A listener may synchronously shut storage down or replace its repositories. Publish
+    // the busy snapshot only after teardown can join this operation's valid worker. Nothing
+    // below this callback may use the operation or the repositories it originally borrowed.
+    emitStatusChanged();
     return StorageResult::ok();
 #endif
 }

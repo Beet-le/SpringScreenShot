@@ -15,6 +15,8 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
+#include <QStringView>
 #include <QVector>
 
 #include <functional>
@@ -23,6 +25,7 @@
 
 class QNetworkAccessManager;
 class QJsonObject;
+class QJsonValue;
 class QTimer;
 class SnowShotApiClient;
 class LocalGatewayProxy;
@@ -48,6 +51,10 @@ struct SnowShotLatexResult {
         return !latex.trimmed().isEmpty() && error.isEmpty();
     }
 };
+
+[[nodiscard]] inline bool snowShotExpertModelId(QStringView id) {
+    return id == QStringLiteral("expert-model");
+}
 
 struct SnowShotChatModel {
     QString id;
@@ -144,6 +151,7 @@ class SnowShotApiClient final : public QObject {
     using ChatModelsCompletion = std::function<void(SnowShotChatModelsResult)>;
     using TranslationDelta = std::function<void(const QString&)>;
     using TranslationCompletion = std::function<void(SnowShotTranslationResult)>;
+    using BatchTranslationCompletion = std::function<void(SnowShotTranslationResult, QStringList)>;
 
     enum class ChatModelsCachePolicy { UseCached, Refresh };
 
@@ -158,7 +166,10 @@ class SnowShotApiClient final : public QObject {
 
     [[nodiscard]] bool usesSystemProxy() const;
     void setUseSystemProxy(bool enabled);
+    // Applies only to official requests; custom provider credentials remain independent.
+    void setAccountAccessToken(const QByteArray& token, bool sameAccountRefresh = false);
     void setProxyConfiguration(const QString& mode, const QString& address);
+    void configureNetworkProxy(QNetworkAccessManager& manager) const;
     [[nodiscard]] const QVector<SnowShotChatModel>& cachedChatModels() const;
     [[nodiscard]] QString cachedChatModelsLocale() const {
         return m_cachedChatModelsLocale;
@@ -188,6 +199,12 @@ class SnowShotApiClient final : public QObject {
     [[nodiscard]] RequestToken
     ensureChatModels(const QString& locale, QObject* receiver, ChatModelsCompletion completion,
                      ChatModelsCachePolicy cachePolicy = ChatModelsCachePolicy::UseCached);
+    [[nodiscard]] RequestToken
+    fetchFastTranslationAvailability(QObject* receiver,
+                                     std::function<void(std::optional<bool>)> completion);
+    [[nodiscard]] RequestToken translateFastBatch(const QStringList& texts, const QString& source,
+                                                  const QString& target, QObject* receiver,
+                                                  BatchTranslationCompletion completion);
     [[nodiscard]] RequestToken streamTranslation(const SnowShotTranslationRequest& request,
                                                  QObject* receiver, TranslationDelta delta,
                                                  TranslationCompletion completion);
@@ -208,15 +225,18 @@ class SnowShotApiClient final : public QObject {
     [[nodiscard]] QString modelFingerprint(const QString& id) const;
 
   signals:
+    void proxyConfigurationChanged();
     void baseUrlChanged();
     void chatModelsChanged();
+    void officialCallSettled();
+    void accountIdentityChanged();
     void customModelInvalidated(const QString& id, bool translation, bool vision);
 
   public:
     [[nodiscard]] static QImage prepareImage(const QImage& image);
     [[nodiscard]] static QByteArray encodeWebp(const QImage& image);
     [[nodiscard]] static QString formatFailure(int httpStatus, const QString& failureCode,
-                                               const QString& description);
+                                               const QString& description, QStringView model = {});
 
   private:
     friend class SnowShotApiClientTestAccess;
@@ -237,6 +257,10 @@ class SnowShotApiClient final : public QObject {
     void finish(RequestToken token, SnowShotTableResult result);
     void finishChatModels(RequestToken token, SnowShotChatModelsResult result);
     void finishTranslation(RequestToken token, SnowShotTranslationResult result);
+    RequestToken requestTranslationJson(const QString& path, const QByteArray& body,
+                                        QObject* receiver,
+                                        std::function<bool(const QJsonValue&)> decode,
+                                        TranslationCompletion completion);
     bool finishExpiredImageRequest(RequestToken token);
     void submitChatStream(RequestToken token, QByteArray body);
     void pumpCustomChatStreams();
@@ -278,6 +302,7 @@ class SnowShotApiClient final : public QObject {
     snow_shot::CustomAiModels m_customModels;
     QVector<SnowShotChatModel> m_availableModels;
 
+    QByteArray m_accountAccessToken;
     QString m_proxyMode = QStringLiteral("none");
     QString m_proxyAddress;
     RequestToken m_nextToken = 0;

@@ -388,7 +388,7 @@ class ScreenshotToolPalette final : public QWidget,
     void setSpotlightConfig(const SnowCanvasSpotlightConfig& config);
     void setSelectionOpacity(qreal opacity, bool mixed = false);
     void installWheelFilters(QObject* receiver, QWidget* scope = nullptr);
-    bool handleToolbarWheel(QWheelEvent* event);
+    bool handleToolbarWheel(QWheelEvent* event, const QWidget* receiver = nullptr);
     void resetAngleWheelInput();
     [[nodiscard]] bool canActivateRecordingShortcut(const QString& actionId) const;
     bool activateRecordingShortcut(const QString& actionId);
@@ -420,6 +420,10 @@ class ScreenshotToolPalette final : public QWidget,
     void setRecordingSettingsOwnerWindow(QWidget* owner);
     void setRecordingKeyboardSize(int value);
     [[nodiscard]] int recordingKeyboardSize() const;
+    void setRecordingFollowMouseEnabled(bool enabled);
+    [[nodiscard]] bool recordingFollowMouseEnabled() const;
+    void setRecordingFollowMouseOptions(bool smoothMovement, bool reduceJitter);
+    [[nodiscard]] adqt::widgets::AdPopover* recordingFollowMousePopover() const;
     void setRecordingWebcamEnabled(bool enabled);
     [[nodiscard]] bool recordingWebcamEnabled() const;
     void setRecordingWebcamSize(int size);
@@ -647,6 +651,9 @@ class ScreenshotToolPalette final : public QWidget,
     void recordingStartDelaySecondsChanged(int seconds);
     void recordingMouseTrailDurationMsChanged(int value);
     void recordingKeyboardSizeChanged(int value);
+    void recordingFollowMouseEnabledChanged(bool enabled);
+    void recordingFollowMouseSmoothMovementChanged(bool enabled);
+    void recordingFollowMouseReduceJitterChanged(bool enabled);
     void recordingWebcamEnabledChanged(bool enabled);
     void recordingWebcamSizeChanged(int size);
     void recordingWebcamShapeChanged(const QString& shape);
@@ -699,6 +706,8 @@ class ScreenshotToolPalette final : public QWidget,
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     void createTableRecognitionActionFamily();
 #endif
+    void createRecognitionModelSelect();
+    [[nodiscard]] ScreenshotRecognitionModelState* recognitionModelStateForTool(Tool tool);
     void refreshRecognitionModelSelect();
     void refreshTextTranslationServiceSelect();
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
@@ -753,10 +762,12 @@ class ScreenshotToolPalette final : public QWidget,
     [[nodiscard]] bool ensureRecordingEffectSettingsModal();
     void setRecordingExportSettingsVisible(bool visible);
     void updateRecordingExportSettingsControls();
+    void updateRecordingDrawingControls();
     void refreshRecordingExportSettingsText();
     void refreshRecordingEffectSettingsModalText();
     void refreshRecordingMouseOptions();
     void refreshRecordingKeyboardOptions();
+    void refreshRecordingFollowMouseOptions();
     void refreshRecordingPostProcessingOptions();
     void refreshRecordingHighlightSwatch();
     bool activateTableQrTool(Tool tool, bool toggleVisibleButton = true);
@@ -1022,6 +1033,7 @@ class ScreenshotToolPalette final : public QWidget,
     QSpacerItem* m_recognitionModelSpacer = nullptr;
     ScreenshotRecognitionModelState m_tableRecognitionModelState;
     ScreenshotRecognitionModelState m_latexRecognitionModelState;
+    ScreenshotRecognitionModelState m_conversionModelState;
     adqt::widgets::AdSelect* m_textFormattingSelect = nullptr;
     adqt::widgets::AdSelect* m_textPunctuationSelect = nullptr;
     adqt::widgets::AdSelect* m_textTargetLanguageSelect = nullptr;
@@ -1078,6 +1090,13 @@ class ScreenshotToolPalette final : public QWidget,
     bool m_recordingRecordLettersAndSymbols = true;
     bool m_recordingRecordControlKeys = true;
     bool m_recordingPreserveKeyboardShortcuts = true;
+    adqt::widgets::AdButton* m_recordFollowMouseButton = nullptr;
+    adqt::widgets::AdPopover* m_recordFollowMousePopover = nullptr;
+    QPointer<adqt::widgets::AdCheckbox> m_recordFollowMouseSmoothMovementCheckbox;
+    QPointer<adqt::widgets::AdCheckbox> m_recordFollowMouseReduceJitterCheckbox;
+    bool m_recordingFollowMouseEnabled = false;
+    bool m_recordingFollowMouseSmoothMovement = true;
+    bool m_recordingFollowMouseReduceJitter = true;
     adqt::widgets::AdButton* m_recordWebcamButton = nullptr;
     adqt::widgets::AdInputNumber* m_recordWebcamSizeInput = nullptr;
     adqt::widgets::AdSelect* m_recordWebcamShapeSelect = nullptr;

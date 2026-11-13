@@ -6,8 +6,8 @@
 #include <cmath>
 
 screenshot_pinned_click_through::ControlsGeometry screenshot_pinned_click_through::controlsGeometry(
-    const QRect& pinnedNativeGeometry, const QRect& screenPhysicalBounds, qreal devicePixelRatio) {
-    if (!pinnedNativeGeometry.isValid() || pinnedNativeGeometry.isEmpty() ||
+    const QRect& pinnedContentGeometry, const QRect& screenPhysicalBounds, qreal devicePixelRatio) {
+    if (!pinnedContentGeometry.isValid() || pinnedContentGeometry.isEmpty() ||
         !screenPhysicalBounds.isValid() || screenPhysicalBounds.isEmpty() ||
         !std::isfinite(devicePixelRatio) || devicePixelRatio <= 0.0) {
         return {};
@@ -23,20 +23,27 @@ screenshot_pinned_click_through::ControlsGeometry screenshot_pinned_click_throug
     }
 
     const int preferredLeft =
-        pinnedNativeGeometry.x() + pinnedNativeGeometry.width() - inset - totalWidth;
-    const int preferredTop = pinnedNativeGeometry.y() - inset - size;
+        pinnedContentGeometry.x() + pinnedContentGeometry.width() - inset - totalWidth;
     const int maximumLeft = screenPhysicalBounds.x() + screenPhysicalBounds.width() - totalWidth;
     const int maximumTop = screenPhysicalBounds.y() + screenPhysicalBounds.height() - size;
+    const int aboveTop = pinnedContentGeometry.top() - inset - size;
+    const int belowTop = pinnedContentGeometry.bottom() + 1 + inset;
+    int top = pinnedContentGeometry.top() + inset;
+    if (aboveTop >= screenPhysicalBounds.top() && aboveTop <= maximumTop) {
+        top = aboveTop;
+    } else if (belowTop >= screenPhysicalBounds.top() && belowTop <= maximumTop) {
+        top = belowTop;
+    }
     const QPoint origin(qBound(screenPhysicalBounds.x(), preferredLeft, maximumLeft),
-                        qBound(screenPhysicalBounds.y(), preferredTop, maximumTop));
+                        qBound(screenPhysicalBounds.y(), top, maximumTop));
     return {QRect(origin, QSize(editorWidth, size)),
             QRect(origin + QPoint(editorWidth + spacing, 0), QSize(size, size)),
             QRect(origin + QPoint(editorWidth + 2 * spacing + size, 0), QSize(size, size))};
 }
 
-QRect screenshot_pinned_click_through::exitButtonGeometry(const QRect& pinnedNativeGeometry,
+QRect screenshot_pinned_click_through::exitButtonGeometry(const QRect& pinnedContentGeometry,
                                                           const QRect& screenPhysicalBounds,
                                                           qreal devicePixelRatio) {
-    return controlsGeometry(pinnedNativeGeometry, screenPhysicalBounds, devicePixelRatio)
+    return controlsGeometry(pinnedContentGeometry, screenPhysicalBounds, devicePixelRatio)
         .exitButton;
 }

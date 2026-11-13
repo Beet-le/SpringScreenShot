@@ -129,6 +129,7 @@ pub(crate) enum Command {
 }
 #[derive(Clone)]
 pub(crate) struct DeferredCaptureControls {
+    pub viewport: crate::capture_viewport::CaptureViewportState,
     pub audio: AudioControlHandle,
     #[cfg(target_os = "macos")]
     pub exclusions: snow_macos::desktop::ExclusionControl,
@@ -183,6 +184,7 @@ impl DeferredRecordingSession {
             stop_boundary: Arc::new(Mutex::new(None)),
             control_clock: Arc::new(Mutex::new(None)),
             capture_controls: DeferredCaptureControls {
+                viewport: Default::default(),
                 audio,
                 #[cfg(target_os = "macos")]
                 exclusions: Default::default(),
@@ -253,6 +255,10 @@ impl DeferredRecordingSession {
             _ => RecordingState::Created,
         }
     }
+    pub fn capture_viewport(&self) -> Option<crate::CaptureViewport> {
+        self.capture_controls.viewport.snapshot()
+    }
+
     pub fn audio_control(&self) -> AudioControlHandle {
         self.capture_controls.audio.clone()
     }
@@ -949,8 +955,13 @@ fn run_capture(
                     frame.metadata().capture_transform(),
                 )?;
                 if geometry_generation != Some(frame.metadata().configuration_generation()) {
+                    // Moving viewports are streamed as PointerViewport input events.
+                    // The encoded source is already a fixed canvas; retaining every
+                    // pan in its footer would grow memory and the manifest without bound.
+                    let retain_geometry = geometry_generation.is_none() || !config.follow_mouse;
                     geometry_generation = Some(frame.metadata().configuration_generation());
-                    if let Some(transform) = frame.metadata().capture_transform() {
+                    if retain_geometry && let Some(transform) = frame.metadata().capture_transform()
+                    {
                         geometry.push(snow_recording_model::media::GeometryChange {
                             timestamp_ms: slot_ms,
                             generation: frame.metadata().configuration_generation(),
@@ -1024,6 +1035,9 @@ fn run_capture(
                         }
                     }
                 }
+                capture_controls
+                    .viewport
+                    .publish(frame.metadata().capture_transform());
                 source_changed = false;
                 frame_index.push(slot.pts)?;
                 admitted = true;
@@ -1419,6 +1433,7 @@ fn project_canvas_point(
     )
 }
 pub(crate) struct InputRecorder {
+    follow_mouse: bool,
     writer: InputStoreWriter,
     sequence: u64,
     last_ms: u64,
@@ -1447,27 +1462,39 @@ impl InputRecorder {
     pub fn new(config: &DirectRecordingConfig, path: &Path, logical: (u32, u32)) -> Result<Self> {
         let (click_tx, clicks) = crossbeam_channel::bounded(128);
         let (movement_tx, movement) = crossbeam_channel::bounded(64);
-        let mouse = MouseHookObserver::start_with_movement(
-            (
-                config.region.x,
-                config.region.y,
-                config.region.width,
-                config.region.height,
-            ),
-            click_tx,
-            Some((movement_tx, movement.clone())),
-        )
+        let mouse = if config.follow_mouse {
+            MouseHookObserver::start_desktop_with_movement(
+                click_tx,
+                Some((movement_tx, movement.clone())),
+            )
+        } else {
+            MouseHookObserver::start_with_movement(
+                (
+                    config.region.x,
+                    config.region.y,
+                    config.region.width,
+                    config.region.height,
+                ),
+                click_tx,
+                Some((movement_tx, movement.clone())),
+            )
+        }
         .map_err(ScreenRecorderError::Encode)?;
         let keyboard = (config.show_keyboard && config.keyboard.is_some())
             .then(KeyboardInput::start)
             .transpose()
             .map_err(ScreenRecorderError::Encode)?;
         Ok(Self {
+            follow_mouse: config.follow_mouse,
             writer: InputStoreWriter::new(path)?,
             sequence: 0,
             last_ms: 0,
             logical,
-            region_origin: (config.region.x, config.region.y),
+            region_origin: if config.follow_mouse {
+                (0, 0)
+            } else {
+                (config.region.x, config.region.y)
+            },
             geometry: InputGeometry {
                 source: (config.region.width, config.region.height),
                 desktop: DesktopRect {
@@ -1711,11 +1738,29 @@ impl InputRecorder {
             destination: fitted_rect(source, self.logical)?,
         };
         if self.geometry != geometry {
-            self.keyboard_filter.reset();
+            if self.follow_mouse {
+                let transform = snow_recording_model::PointerTransform::between(
+                    self.geometry.desktop,
+                    self.geometry.destination,
+                    geometry.desktop,
+                    geometry.destination,
+                )?;
+                self.push(clock, at, RecordedInput::PointerViewport(transform))?;
+                if self.geometry.source != geometry.source
+                    || self.geometry.destination != geometry.destination
+                    || self.geometry.desktop.width != geometry.desktop.width
+                    || self.geometry.desktop.height != geometry.desktop.height
+                {
+                    self.last_shape = None;
+                    self.shapes.clear();
+                }
+            } else {
+                self.keyboard_filter.reset();
+                self.last_shape = None;
+                self.shapes.clear();
+                self.push(clock, at, RecordedInput::Reset)?;
+            }
             self.geometry = geometry;
-            self.last_shape = None;
-            self.shapes.clear();
-            self.push(clock, at, RecordedInput::Reset)?;
             return Ok(true);
         }
         Ok(false)
@@ -1882,6 +1927,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn follow_mouse_deferred_geometry_preserves_input_and_records_reprojection() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("follow-inputs");
+        let mut config = test_config(directory.path().join("out.mp4"));
+        config.follow_mouse = true;
+        config.region = crate::RecordingRegion::new(-200, 10, 100, 100);
+        let mut input = InputRecorder::new(&config, &path, (200, 200)).unwrap();
+        assert_eq!(input.hook_point((-150, 60)), (100, 100));
+        let clock = RecordingClock::new(Instant::now());
+        let source = DesktopRect {
+            space: DesktopSpace::PhysicalPixels,
+            x: -150.0,
+            y: 30.0,
+            width: 50.0,
+            height: 50.0,
+        };
+        let transform = DesktopTransform::new(source, PixelSize::new(50, 50).unwrap()).unwrap();
+        assert!(
+            input
+                .update_geometry(&clock, Instant::now(), (50, 50), Some(transform))
+                .unwrap()
+        );
+        assert_eq!(input.hook_point((-150, 60)), (0, 120));
+        assert!(
+            !input
+                .update_geometry(&clock, Instant::now(), (50, 50), Some(transform))
+                .unwrap()
+        );
+        input.writer.finish().unwrap();
+        let mut reader = snow_recording_model::InputStoreReader::open(&path).unwrap();
+        let event = reader.next_event().unwrap().unwrap();
+        let RecordedInput::PointerViewport(mapping) = event.event else {
+            panic!("moving capture must preserve effects instead of resetting input")
+        };
+        assert_eq!(mapping.project((100, 100)), (0, 120));
+        assert!(reader.next_event().unwrap().is_none());
+    }
+
+    #[test]
     fn deferred_input_store_excludes_filtered_keys_and_keeps_complete_shortcuts() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("filtered-inputs");
@@ -2017,6 +2101,8 @@ mod tests {
     }
     fn test_config(output_path: PathBuf) -> DirectRecordingConfig {
         DirectRecordingConfig {
+            follow_mouse: false,
+            follow_mouse_options: Default::default(),
             keyboard_filter: Default::default(),
             webcam: None,
             loop_animated_images: false,

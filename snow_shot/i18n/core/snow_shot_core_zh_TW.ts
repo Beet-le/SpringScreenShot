@@ -254,6 +254,10 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>更新由 Microsoft Store 管理</translation>
         </message>
         <message>
+            <source>User agreement</source>
+            <translation>使用者協議</translation>
+        </message>
+        <message>
             <source>Verifying update…</source>
             <translation>正在驗證更新…</translation>
         </message>
@@ -760,6 +764,18 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>沒有可用的翻譯服務</translation>
         </message>
         <message>
+            <source>Paid calls are paused because your account has an outstanding balance. Settle the balance in Account to continue</source>
+            <translation>帳號有欠款，付費呼叫已暫停。請前往「帳號」結清欠款後繼續</translation>
+        </message>
+        <message>
+            <source>Sign in to your Snow Shot account to use Expert Model</source>
+            <translation>請登入 Snow Shot 帳號以使用專家模型</translation>
+        </message>
+        <message>
+            <source>Sign in to your Snow Shot account to use this service</source>
+            <translation>請登入 Snow Shot 帳號後使用此服務</translation>
+        </message>
+        <message>
             <source>Table recognition failed</source>
             <translation>表格辨識失敗</translation>
         </message>
@@ -808,12 +824,20 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>模型服務已變更。請重試以載入其模型</translation>
         </message>
         <message>
+            <source>The service has reached its usage limit. Try again later</source>
+            <translation>服務已達用量上限，請稍後重試</translation>
+        </message>
+        <message>
             <source>The text is too large to translate</source>
             <translation>文字過長，無法翻譯</translation>
         </message>
         <message>
             <source>The translation response is too large</source>
             <translation>翻譯回應過大</translation>
+        </message>
+        <message>
+            <source>This request requires payment. Check your balance in Account</source>
+            <translation>此請求需要付費，請前往「帳號」查看餘額</translation>
         </message>
         <message>
             <source>This service does not support the selected language combination</source>
@@ -838,6 +862,26 @@ so every moment on screen can be expressed clearly and shared easily</source>
         <message>
             <source>Translation stream ended unexpectedly</source>
             <translation>翻譯串流意外結束</translation>
+        </message>
+        <message>
+            <source>Your Snow Shot session is no longer valid. Sign in again</source>
+            <translation>Snow Shot 登入已失效，請重新登入</translation>
+        </message>
+        <message>
+            <source>Your available credits cannot cover this request. Purchase credits in Account</source>
+            <translation>可用餘額不足以支付本次請求，請前往「帳號」儲值</translation>
+        </message>
+        <message>
+            <source>Your credits are reserved by other calls that are still running. Wait for them to finish and try again</source>
+            <translation>餘額已被其他進行中的呼叫預留，請等待這些呼叫結束後重試</translation>
+        </message>
+        <message>
+            <source>Your credits cannot cover this Expert Model request. Purchase credits from Account to continue</source>
+            <translation>點數不足，無法使用專家模型完成此請求。請前往帳號頁面購買點數後繼續</translation>
+        </message>
+        <message>
+            <source>Your daily free allowance is exhausted. Try again after it resets</source>
+            <translation>今日免費額度已用盡，請在額度重設後重試</translation>
         </message>
     </context>
     <context>
@@ -885,20 +929,12 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>%1 %2 已發布。請開啟「關於」查看更新選項</translation>
         </message>
         <message>
-            <source>%1 will close and restart to install the update. Continue?</source>
-            <translation>%1 將關閉並重新啟動以安裝更新。是否繼續？</translation>
-        </message>
-        <message>
             <source>An update is ready. Open About to restart and update %1</source>
             <translation>更新已就緒。請開啟「關於」重新啟動並更新 %1</translation>
         </message>
         <message>
             <source>An update is ready. Open About to restart and update Snow Shot</source>
             <translation>更新已準備就緒。請開啟「關於」頁面，重新啟動並更新 Snow Shot</translation>
-        </message>
-        <message>
-            <source>Cancel</source>
-            <translation>取消</translation>
         </message>
         <message>
             <source>Could not open the selected file: %1</source>
@@ -917,20 +953,12 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>請先完成截圖、螢幕錄製或匯出，再進行更新</translation>
         </message>
         <message>
-            <source>Restart and update</source>
-            <translation>重新啟動並更新</translation>
-        </message>
-        <message>
             <source>Restart failed</source>
             <translation>重新啟動失敗</translation>
         </message>
         <message>
             <source>Snow Shot %1 is available. Open About for update options</source>
             <translation>Snow Shot %1 已推出。開啟「關於」查看更新選項</translation>
-        </message>
-        <message>
-            <source>Snow Shot will close and restart to install the update. Continue?</source>
-            <translation>Snow Shot 將關閉並重新啟動以安裝更新。是否繼續？</translation>
         </message>
         <message>
             <source>The selected file path is invalid</source>

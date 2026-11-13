@@ -186,15 +186,19 @@ void conversionAiModelMigrationPreservesHistoricalOutput(const QString& legacy) 
     until([&] { return controller.state() == Controller::State::Completed; });
     require(settings.visionModel() == legacy, "older catalog preserves conversion preference");
     const QString original = controller.source();
+    const auto expert = QStringLiteral("expert-model");
     server.models = QJsonArray{QJsonObject{{QStringLiteral("model"), QStringLiteral("ai-model")},
-                                           {QStringLiteral("name"), QStringLiteral("AI Model")},
+                                           {QStringLiteral("name"), QStringLiteral("Fast Model")},
+                                           {QStringLiteral("supports_vision"), true}},
+                               QJsonObject{{QStringLiteral("model"), expert},
+                                           {QStringLiteral("name"), QStringLiteral("Expert Model")},
                                            {QStringLiteral("supports_vision"), true}}};
     bool completed = false;
     const auto catalogToken = api.fetchChatModels(QLocale().name(), &controller, [&](auto result) {
-        require(result.succeeded(), "load AI Model conversion catalog");
+        require(result.succeeded(), "load the Fast and Expert conversion catalog");
         completed = true;
     });
-    require(catalogToken != 0, "AI Model catalog refresh starts");
+    require(catalogToken != 0, "conversion catalog refresh starts");
     until([&] { return completed; });
     require(settings.visionModel() == QStringLiteral("ai-model") &&
                 controller.source() == original &&
@@ -216,7 +220,7 @@ void conversionAiModelMigrationPreservesHistoricalOutput(const QString& legacy) 
     controller.activate(QStringLiteral("future-ai"), sampleImage(), Format::Html);
     until([&] { return controller.state() == Controller::State::Completed; });
     require(server.requests.last().value(QStringLiteral("model")) == QStringLiteral("ai-model"),
-            "future conversion uses AI Model");
+            "future conversion uses Fast Model");
     controller.activate(QStringLiteral("historical-ai"), sampleImage(), Format::Markdown);
     server.source = QStringLiteral("# Refreshed");
     controller.retry();
@@ -232,6 +236,86 @@ void conversionAiModelMigrationPreservesHistoricalOutput(const QString& legacy) 
     require(controller.activeModel() == QStringLiteral("ai-model") &&
                 controller.source() == server.source && server.requests.size() == 3,
             "an exact canonical cache entry takes precedence over a more recent legacy result");
+    require(settings.setVisionModel(expert), "explicitly select Expert for conversion");
+    controller.activate(QStringLiteral("expert-image"), sampleImage(), Format::Markdown);
+    until([&] { return controller.state() == Controller::State::Completed; });
+    require(controller.activeModel() == expert && settings.visionModel() == expert &&
+                server.requests.size() == 4 &&
+                server.requests.last().value(QStringLiteral("model")) == expert,
+            "image conversion sends and retains the explicitly selected Expert Model");
+}
+
+void expertConversionRequiresAnExplicitSelection() {
+    using Controller = ScreenshotImageConversionController;
+    using Format = SnowShotImageConversionFormat;
+    const snow_shot::storage::ScreenshotImageConversionSettings settings;
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    const QString previousLocale = language.currentLocale().name();
+    const QString previousModel = settings.visionModel();
+    const auto restore = qScopeGuard([&] {
+        settings.setVisionModel(previousModel);
+        static_cast<void>(language.setLanguage(previousLocale));
+    });
+    require(language.setLanguage(QStringLiteral("en_US")), "load English settings labels");
+    require(settings.setVisionModel({}), "clear the saved model");
+
+    ConversionServer server;
+    const auto expert = QStringLiteral("expert-model");
+    const auto fast = QStringLiteral("ai-model");
+    const QJsonObject expertEntry{{QStringLiteral("model"), expert},
+                                  {QStringLiteral("name"), QStringLiteral("Expert Model")},
+                                  {QStringLiteral("supports_vision"), true}};
+    server.models =
+        QJsonArray{expertEntry, QJsonObject{{QStringLiteral("model"), fast},
+                                            {QStringLiteral("name"), QStringLiteral("Fast Model")},
+                                            {QStringLiteral("supports_vision"), true}}};
+    SnowShotApiClient api(server.url());
+    Controller controller;
+    controller.setProvider(&api);
+    controller.activate(QStringLiteral("first-conversion"), sampleImage(), Format::Markdown);
+    until([&] { return controller.state() == Controller::State::Completed; });
+    require(settings.visionModel() == fast && server.requests.size() == 1 &&
+                server.requests.last().value(QStringLiteral("model")) == fast,
+            "the first conversion picks Fast even when Expert leads the catalog");
+
+    server.models = QJsonArray{expertEntry};
+    require(settings.setVisionModel({}), "clear the automatically chosen Fast model");
+    controller.retry();
+    until([&] { return controller.state() == Controller::State::Failed; });
+    require(settings.visionModel().isEmpty() && server.requests.size() == 1 &&
+                api.fallbackModel(true).isEmpty() && api.builtInVisionModel().isEmpty(),
+            "an Expert-only catalog does not submit a conversion or resolve an implicit default");
+
+    QWidget owner;
+    owner.show();
+    controller.openSettings(&owner);
+    auto* modal = controller.findChild<adqt::widgets::AdModal*>();
+    require(modal && modal->acceptButton(), "conversion settings opens with an OK button");
+    auto* select = modal->contentWidget()->findChild<adqt::widgets::AdSelect*>(
+        QStringLiteral("screenshotVisionModel"));
+    auto* alert =
+        modal->contentWidget()->findChild<QWidget*>(QStringLiteral("screenshotVisionModelsError"));
+    require(select && alert && select->isEnabled() && select->options().size() == 1 &&
+                select->options().first().label == QStringLiteral("Expert Model") &&
+                !select->currentValue().isValid() && !modal->acceptButton()->isEnabled(),
+            "the settings show the catalog name for Expert and require a choice");
+
+    server.models = {};
+    require(language.setLanguage(QStringLiteral("zh_CN")), "switch the open settings to Chinese");
+    until([&] { return alert->isVisible(); }, "the language change's catalog refresh fails");
+    require(select->options().size() == 1 &&
+                select->options().first().label == QStringLiteral("Expert Model") &&
+                !select->currentValue().isValid(),
+            "the cached Expert option keeps its catalog name after a failed language refresh");
+
+    server.models = QJsonArray{expertEntry};
+    select->setCurrentValue(expert);
+    require(modal->acceptButton()->isEnabled(), "choosing Expert enables OK");
+    modal->closeRequested(adqt::widgets::AdModal::CloseReason::OkAction);
+    until([&] { return controller.state() == Controller::State::Completed; });
+    require(settings.visionModel() == expert && server.requests.size() == 2 &&
+                server.requests.last().value(QStringLiteral("model")) == expert,
+            "the explicit Expert choice is saved and sent");
 }
 
 void conversionNotificationsAllowOwnerDeletion() {
@@ -1620,6 +1704,65 @@ void renderingCopyAndPersistence() {
             "the persistence byte budget retains the newest usable result instead of losing all");
 }
 
+void conversionSessionSwitchesVisionModels() {
+    using Mode = ScreenshotRecognitionSessionController::Mode;
+    const auto settings = snow_shot::storage::ScreenshotImageConversionSettings();
+    const QString previous = settings.visionModel();
+    const auto restore = qScopeGuard([&] { settings.setVisionModel(previous); });
+    const QString firstModel = QStringLiteral("vision-a");
+    const QString secondModel = QStringLiteral("vision-b");
+    require(settings.setVisionModel(firstModel), "save the initial conversion model");
+
+    ConversionServer server;
+    server.hold = true;
+    SnowShotApiClient api(server.url());
+    ScreenshotRecognitionModelState modelState;
+    auto modelMode = Mode::Text;
+    ScreenshotRecognitionSessionActions actions;
+    actions.setRecognitionModelState = [&](int mode, const ScreenshotRecognitionModelState& state) {
+        modelMode = static_cast<Mode>(mode);
+        modelState = state;
+    };
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, &api, actions);
+    session.setTarget({QStringLiteral("conversion-models"), sampleImage(), QRectF(0, 0, 240, 120)});
+    session.activate(Mode::Markdown);
+    require(modelMode == Mode::Markdown && modelState.loading && modelState.selection == firstModel,
+            "the Markdown toolbar reports the saved model while loading the catalog");
+    until([&] { return server.requests.size() == 1; });
+    require(!modelState.loading && modelState.models.size() == 3 && server.modelRequests == 1 &&
+                server.requests.first().value(QStringLiteral("model")) == firstModel,
+            "the toolbar and conversion share one catalog request");
+
+    server.hold = false;
+    session.setRecognitionModel(secondModel);
+    until([&] { return session.recognitionResultsSnapshot().visibleConversion.has_value(); });
+    const auto markdown = session.recognitionResultsSnapshot();
+    require(settings.visionModel() == secondModel && modelState.selection == secondModel &&
+                server.requests.size() == 2 &&
+                server.requests.last().value(QStringLiteral("model")) == secondModel &&
+                markdown.conversions.size() == 1 &&
+                markdown.conversions.first().model == secondModel,
+            "selecting a new Markdown model replaces the pending request and saves its result");
+
+    server.source = QStringLiteral("<p>HTML</p>");
+    session.activate(Mode::Html);
+    until([&] { return session.recognitionResultsSnapshot().visibleConversion.has_value(); });
+    require(modelMode == Mode::Html && modelState.selection == secondModel &&
+                server.requests.size() == 3 &&
+                server.requests.last().value(QStringLiteral("model")) == secondModel,
+            "HTML starts with the same saved model");
+    session.setRecognitionModel(firstModel);
+    until([&] { return session.recognitionResultsSnapshot().visibleConversion.has_value(); });
+    require(settings.visionModel() == firstModel && modelState.selection == firstModel &&
+                server.requests.size() == 4 &&
+                server.requests.last().value(QStringLiteral("model")) == firstModel,
+            "selecting a model in HTML reruns the active format");
+    session.setRecognitionModel(secondModel);
+    require(session.recognitionResultsSnapshot().visibleConversion.has_value() &&
+                modelState.selection == secondModel && server.requests.size() == 4,
+            "switching back reuses the result for that format and model");
+}
+
 void conversionSessionRoutesSourceAndClearsOldViews() {
     ConversionServer server;
     SnowShotApiClient api(server.url());
@@ -2119,6 +2262,7 @@ void runImageConversionNetworkTests() {
     initializeRecognitionTestFonts();
     for (const auto& legacy : {QStringLiteral("qwen3.8-flash"), QStringLiteral("qwen-mt-flash")})
         conversionAiModelMigrationPreservesHistoricalOutput(legacy);
+    expertConversionRequiresAnExplicitSelection();
     settingsInitialAvailability();
     settingsIgnoreRetiredProviderCallbacks();
     conversionCacheUsesRecognitionKeys();
@@ -2147,6 +2291,7 @@ void runRecognitionNotificationLifetimeTests() {
 
 void runImageConversionTests() {
     runImageConversionNetworkTests();
+    conversionSessionSwitchesVisionModels();
     conversionClipboardPreservesFormats();
     conversionSessionRoutesSourceAndClearsOldViews();
     recognitionFileSnapshotTracksPartialConversionAndQrValues();

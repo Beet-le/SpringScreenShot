@@ -2161,7 +2161,7 @@ void manualSelectionUsesSharedMarqueeTransaction() {
     require((handler.handleRightClick(nullptr, {}) == ScreenshotOverlayRightClickResult::Handled) &&
                 handler.handleWheel(nullptr, wheelInput({0, 120})),
             "external drags must consume ordinary right-click and wheel commands");
-    handler.handleUnhandledMiddleClick();
+    handler.handleUnhandledMiddleClick(nullptr, {});
     handler.handleUnhandledLeftDoubleClick();
     require(!selection.hasPixelSelection() && !interaction.dragging() &&
                 selectionConfirmedCount == 0 && handler.shouldBlockUnhandledKeyInput(),
@@ -2625,12 +2625,26 @@ void completionGesturesUseSharedEligibilityAcrossTools() {
 
     QStringList dispatched;
     bool commandEnabled = true;
+    bool shortcutInputAllowed = true;
+    QString availableCommand;
+    int selectionPreparations = 0;
     int directCopies = 0;
+    auto sessionStateAtDispatch = captureState.sessionState;
     ScreenshotOverlayInputActions actions;
+    actions.localShortcutInputAllowed = [&] { return shortcutInputAllowed; };
+    actions.canActivateScreenshotShortcut = [&](const QString& actionId) {
+        return commandEnabled && actionId == availableCommand;
+    };
+    actions.prepareSelection = [&](ScreenshotSelectionIntent intent) {
+        require(intent == ScreenshotSelectionIntent::SupersedeWithCommand,
+                "a smart selection middle click must supersede the capture launch action");
+        ++selectionPreparations;
+    };
     actions.activateScreenshotShortcut = [&](const QString& actionId) {
         if (!commandEnabled) {
             return false;
         }
+        sessionStateAtDispatch = captureState.sessionState;
         dispatched.append(actionId);
         return true;
     };
@@ -2646,7 +2660,7 @@ void completionGesturesUseSharedEligibilityAcrossTools() {
     });
 
     handler.handleUnhandledLeftDoubleClick();
-    handler.handleUnhandledMiddleClick();
+    handler.handleUnhandledMiddleClick(nullptr, {});
     require(dispatched.isEmpty(),
             "completion gestures must not run while the initial selection is active");
 
@@ -2657,11 +2671,29 @@ void completionGesturesUseSharedEligibilityAcrossTools() {
             "double-click must use the Copy toolbar command for the confirmed Move tool");
 
     interaction.setCanvasTool(ScreenshotActiveTool::Shape);
-    handler.handleUnhandledMiddleClick();
+    handler.handleUnhandledMiddleClick(nullptr, {});
     require(dispatched ==
                 QStringList{QStringLiteral("copy_to_clipboard"), QStringLiteral("save_as_file")},
             "middle-click must use its configured toolbar command for a drawing tool");
 
+    ScreenshotOverlayEventAdapter adapter;
+    adapter.setEventTargets(handler, [] {});
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    canvas.setInteractionEnabled(false);
+    QObject::connect(
+        &canvas, &SnowCanvasWidget::unhandledMiddleClick, &canvas,
+        [&](const QPointF& position) { adapter.handleUnhandledMiddleClick(nullptr, position); });
+    const auto middleClickPreview = [&](const QPointF& pressPosition = QPointF(10, 10),
+                                        const QPointF& releasePosition = QPointF(10, 10)) {
+        QMouseEvent press(QEvent::MouseButtonPress, pressPosition, pressPosition, Qt::MiddleButton,
+                          Qt::MiddleButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &press);
+        require(dispatched.isEmpty(), "middle-click must wait for the release");
+        QMouseEvent release(QEvent::MouseButtonRelease, releasePosition, releasePosition,
+                            Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &release);
+    };
     const std::pair<QString, QString> commands[] = {
         {QStringLiteral("copy"), QStringLiteral("copy_to_clipboard")},
         {QStringLiteral("save"), QStringLiteral("save_as_file")},
@@ -2713,7 +2745,7 @@ void completionGesturesUseSharedEligibilityAcrossTools() {
             for (const bool middleClick : {false, true}) {
                 const auto trigger = [&]() {
                     if (middleClick) {
-                        handler.handleUnhandledMiddleClick();
+                        handler.handleUnhandledMiddleClick(nullptr, {});
                     } else {
                         handler.handleUnhandledLeftDoubleClick();
                     }
@@ -2737,34 +2769,74 @@ void completionGesturesUseSharedEligibilityAcrossTools() {
             }
         }
         dispatched.clear();
+        selectionPreparations = 0;
+        captureState.sessionState = ScreenshotSessionState::OverlayVisible;
         interaction.enterOverlayVisible(true);
+        selection.setRegionType(ScreenshotRegionType::Rectangle);
+        const QRect preview = selection.pixelSelection();
         handler.handleUnhandledLeftDoubleClick();
-        handler.handleUnhandledMiddleClick();
-        require(dispatched.isEmpty(),
-                "every mouse action requires a confirmed screenshot selection");
+        require(dispatched.isEmpty(), "double-click requires a confirmed screenshot selection");
+        availableCommand =
+            setting == QStringLiteral("ocr_copy") ? QStringLiteral("text_recognition") : command;
+        shortcutInputAllowed = false;
+        middleClickPreview();
+        shortcutInputAllowed = true;
+        require(dispatched.isEmpty() && selectionPreparations == 0 &&
+                    interaction.intelligentSelecting(),
+                "text input must retain ownership during smart selection");
+        commandEnabled = false;
+        middleClickPreview();
+        commandEnabled = true;
+        require(dispatched.isEmpty() && selectionPreparations == 0 &&
+                    interaction.intelligentSelecting(),
+                "an unavailable command must leave the smart selection preview intact");
+        const bool confirmsPreview = !command.isEmpty() && setting != QStringLiteral("cancel");
+        if (confirmsPreview) {
+            middleClickPreview(QPointF(preview.right(), preview.center().y()),
+                               QPointF(preview.right() + 1, preview.center().y()));
+            require(dispatched.isEmpty() && selectionPreparations == 0 &&
+                        captureState.sessionState == ScreenshotSessionState::OverlayVisible &&
+                        interaction.intelligentSelecting() && selection.pixelSelection() == preview,
+                    "a middle-button release outside the preview must leave it unconfirmed");
+        }
+        middleClickPreview();
+        require(dispatched == (command.isEmpty() ? QStringList{} : QStringList{command}) &&
+                    selectionPreparations == (confirmsPreview ? 1 : 0) &&
+                    interaction.intelligentSelecting() == !confirmsPreview &&
+                    selection.pixelSelection() == preview,
+                qPrintable(QStringLiteral("middle-click must dispatch %1 using the smart preview")
+                               .arg(setting)));
+        if (confirmsPreview) {
+            require(sessionStateAtDispatch == ScreenshotSessionState::Editing,
+                    "the smart selection must be confirmed before dispatching the command");
+        }
+        dispatched.clear();
+        interaction.enterOverlayVisible(false);
+        handler.handleUnhandledMiddleClick(nullptr, {});
+        require(dispatched.isEmpty(), "middle-click must defer to unfinished manual selection");
         interaction.confirmSelection();
         interaction.setCanvasTool(ScreenshotActiveTool::Ocr);
         require(interaction.enterSelectionDrag(ScreenshotSelectionDragMode::All),
                 "begin a selection drag before testing mouse action eligibility");
         handler.handleUnhandledLeftDoubleClick();
-        handler.handleUnhandledMiddleClick();
+        handler.handleUnhandledMiddleClick(nullptr, {});
         require(dispatched.isEmpty(), "mouse actions must defer to unfinished selection drags");
         interaction.finishDrag();
         interaction.confirmSelection();
         selection.setRegionType(ScreenshotRegionType::Polyline);
         selection.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
         handler.handleUnhandledLeftDoubleClick();
-        handler.handleUnhandledMiddleClick();
+        handler.handleUnhandledMiddleClick(nullptr, {});
         require(dispatched.isEmpty(), "mouse actions must defer to region construction");
         selection.cancelRegionOperation();
         handler.handleUnhandledLeftDoubleClick();
-        handler.handleUnhandledMiddleClick();
+        handler.handleUnhandledMiddleClick(nullptr, {});
         require(dispatched == (command.isEmpty() ? QStringList{} : QStringList{command, command}),
                 "each mouse action must resume after region construction ends");
         dispatched.clear();
         selection.clearSelection();
         handler.handleUnhandledLeftDoubleClick();
-        handler.handleUnhandledMiddleClick();
+        handler.handleUnhandledMiddleClick(nullptr, {});
         require(dispatched.isEmpty(), "mouse actions require a nonempty screenshot selection");
         selection.setSelectionRect(QRectF(1, 2, 20, 21));
     }
@@ -2777,7 +2849,7 @@ void completionGesturesUseSharedEligibilityAcrossTools() {
     require(interaction.enterSelectionDrag(ScreenshotSelectionDragMode::All),
             "begin a selection drag with a non-drawing tool");
     handler.handleUnhandledLeftDoubleClick();
-    handler.handleUnhandledMiddleClick();
+    handler.handleUnhandledMiddleClick(nullptr, {});
     require(dispatched.isEmpty(), "neither gesture may complete an unfinished selection drag");
     interaction.finishDrag();
     interaction.confirmSelection();
@@ -2785,11 +2857,11 @@ void completionGesturesUseSharedEligibilityAcrossTools() {
     selection.setRegionType(ScreenshotRegionType::Polyline);
     selection.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
     handler.handleUnhandledLeftDoubleClick();
-    handler.handleUnhandledMiddleClick();
+    handler.handleUnhandledMiddleClick(nullptr, {});
     require(dispatched.isEmpty(), "both completion gestures must defer to region construction");
     selection.cancelRegionOperation();
     handler.handleUnhandledLeftDoubleClick();
-    handler.handleUnhandledMiddleClick();
+    handler.handleUnhandledMiddleClick(nullptr, {});
     require(dispatched == QStringList{QStringLiteral("copy_to_clipboard"),
                                       QStringLiteral("copy_to_clipboard")},
             "both gestures resume after the region transaction ends");
@@ -2801,7 +2873,7 @@ void completionGesturesUseSharedEligibilityAcrossTools() {
             "failed to configure empty selection regression");
     selection.clearSelection();
     handler.handleUnhandledLeftDoubleClick();
-    handler.handleUnhandledMiddleClick();
+    handler.handleUnhandledMiddleClick(nullptr, {});
     require(dispatched.isEmpty(), "scrolling completion requires a nonempty selection");
     require(settings.setDoubleClickAction(originalDoubleClick) &&
                 settings.setMiddleMouseButtonAction(originalMiddleClick),
@@ -3059,8 +3131,12 @@ void selectAllShortcutSelectsCurrentScreenThenDesktop() {
         ScreenshotOverlayInputActions actions;
         actions.currentLogicalCursorPosition = [&] { return cursor; };
         actions.localShortcutInputAllowed = [&] { return inputAllowed; };
-        actions.prepareExplicitSelectionCommand = [&] { ++preparations; };
-        actions.prepareSelectionReplacement = [&] { ++replacements; };
+        actions.prepareSelection = [&](ScreenshotSelectionIntent intent) {
+            if (intent == ScreenshotSelectionIntent::SupersedeWithCommand)
+                ++preparations;
+            else
+                ++replacements;
+        };
         actions.showToolbar = [&] { ++presentations; };
         actions.selectionConfirmed = [&] { ++confirmations; };
         ScreenshotOverlayInputHandler handler(
@@ -3252,7 +3328,10 @@ void selectAllShortcutHandsConfirmedRegionToPendingRecording() {
         QRect recordingRegion;
         ScreenshotOverlayInputActions actions;
         actions.currentLogicalCursorPosition = [&] { return screen.logicalRect.center(); };
-        actions.prepareExplicitSelectionCommand = [&] { pendingRecording = false; };
+        actions.prepareSelection = [&](ScreenshotSelectionIntent intent) {
+            if (intent == ScreenshotSelectionIntent::SupersedeWithCommand)
+                pendingRecording = false;
+        };
         actions.showToolbar = [&] { ++toolbarShows; };
         actions.selectionConfirmed = [&] {
             ++confirmations;
@@ -3342,7 +3421,9 @@ void previousSelectionShortcutUsesSharedConfirmation() {
                     int presentations = 0;
                     int preparations = 0;
                     ScreenshotOverlayInputActions actions;
-                    actions.prepareExplicitSelectionCommand = [&] {
+                    actions.prepareSelection = [&](ScreenshotSelectionIntent intent) {
+                        require(intent == ScreenshotSelectionIntent::SupersedeWithCommand,
+                                "toolbar commands explicitly supersede the launch action");
                         ++preparations;
                         pending = false;
                     };
@@ -3647,6 +3728,11 @@ void smartSelectionWheelAccumulatesMovement() {
 }
 
 void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitchOnly = false) {
+    using snow_shot::SmartSelectionMode;
+    auto& appStorage = storage::ApplicationStorage::instance();
+    const auto originalMode = appStorage.smartSelectionMode();
+    require(appStorage.requestSmartSelectionMode(SmartSelectionMode::Window),
+            "failed to configure window-only smart selection");
     const storage::ScreenshotShortcutSettings shortcutSettings;
     const snow_shot::shortcuts::ShortcutBindingMap originalShortcuts =
         shortcutSettings.allShortcuts();
@@ -3670,11 +3756,7 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
     ScreenshotIntelligentSelectionModel intelligent;
     ScreenshotInteractionState interaction;
     interaction.enterOverlayVisible(true);
-    intelligent.beginCaptureSession(snow_shot::SmartSelectionMode::WindowSubElement);
-    require(intelligent.selectionTarget() ==
-                    ScreenshotIntelligentSelectionTarget::WindowSubElement &&
-                intelligent.toggleSelectionTarget(),
-            "an enabled screenshot must initially use child-element mode");
+    intelligent.beginCaptureSession(appStorage.smartSelectionMode());
     const QRectF windowSelection(10, 10, 40, 30);
     const QRectF childSelection(15, 15, 20, 12);
     const QRectF nestedChildSelection(17, 17, 12, 8);
@@ -3698,20 +3780,12 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
     int brushCalls = 0;
     bool coordinateInputAllowed = true;
     int selectorHitTestRequests = 0;
-    int persistedTargetChanges = 0;
-    ScreenshotIntelligentSelectionTarget persistedTarget =
-        ScreenshotIntelligentSelectionTarget::Window;
     bool previousSelectionAvailable = true;
     ScreenshotOverlayInputActions actions;
     actions.updateOverlayState = [&overlayUpdates]() { ++overlayUpdates; };
     actions.requestUiSelectorHitTest = [&selectorHitTestRequests](const QPoint&) {
         ++selectorHitTestRequests;
     };
-    actions.persistSelectionTarget =
-        [&persistedTargetChanges, &persistedTarget](ScreenshotIntelligentSelectionTarget target) {
-            ++persistedTargetChanges;
-            persistedTarget = target;
-        };
     actions.navigateHistoryPrevious = [&previousHistoryCalls]() {
         ++previousHistoryCalls;
         return true;
@@ -3768,9 +3842,8 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
                 selection.normalizedSelection() == nestedChildSelection &&
                 !intelligent.pressActive() && selectorHitTestRequests == 1,
             "Tab did not switch intelligent selection to window sub-elements");
-    require(persistedTargetChanges == 1 &&
-                persistedTarget == ScreenshotIntelligentSelectionTarget::WindowSubElement,
-            "Tab did not persist the selected window sub-element mode");
+    require(appStorage.smartSelectionMode() == SmartSelectionMode::Window,
+            "switching to window sub-elements must preserve the saved smart selection setting");
     require(intelligent.setIndex(1) && intelligent.index() == 1 &&
                 intelligent.currentSelection() == childSelection,
             "window sub-element mode did not retain full-path navigation");
@@ -3789,9 +3862,6 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
                 selection.normalizedSelection() == nextWindowSelection &&
                 selectorHitTestRequests == 2,
             "Tab did not switch intelligent selection back to windows");
-    require(persistedTargetChanges == 2 &&
-                persistedTarget == ScreenshotIntelligentSelectionTarget::Window,
-            "Tab did not persist the selected window mode");
     require(intelligent.setIndex(0) && intelligent.index() == 2,
             "window mode allowed a window sub-element selection level");
     require(intelligent.applyCanvasHitPath({nestedChildSelection, childSelection, windowSelection},
@@ -3817,7 +3887,15 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
     require(selectorHitTestRequests == 5,
             "switching back to window mode did not request a fresh hit test");
 
-    intelligent.beginCaptureSession(snow_shot::SmartSelectionMode::Disabled);
+    require(dispatchShortcut(shortcutWindow, Qt::Key_Tab) &&
+                intelligent.smartSelectionMode() == SmartSelectionMode::WindowSubElement &&
+                selectorHitTestRequests == 6,
+            "Tab must switch to sub-elements before starting another capture");
+    intelligent.beginCaptureSession(appStorage.smartSelectionMode());
+    require(intelligent.smartSelectionMode() == SmartSelectionMode::Window,
+            "the next capture must start in the saved window mode");
+
+    intelligent.beginCaptureSession(SmartSelectionMode::Disabled);
     require(!intelligent.applyCanvasHitPath({nestedChildSelection, childSelection, windowSelection},
                                             QRectF(0, 0, 100, 100), 1.0),
             "disabled intelligent selection must reject candidates");
@@ -3826,10 +3904,10 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
                 !intelligent.smartSelectionEnabled() &&
                 intelligent.selectionTarget() == ScreenshotIntelligentSelectionTarget::Window &&
                 !intelligent.hasCurrentSelection() && selection.normalizedSelection().isEmpty() &&
-                selectorHitTestRequests == 5,
+                selectorHitTestRequests == 6,
             "disabled Smart selection must reject Tab and remain manual");
-    require(persistedTargetChanges == 4,
-            "disabled Smart selection must not persist a rejected Tab shortcut");
+    require(appStorage.requestSmartSelectionMode(originalMode),
+            "failed to restore the smart selection setting");
     if (targetSwitchOnly) {
         require(shortcutSettings.setAllShortcutsAtomic(originalShortcuts),
                 "failed to restore selection shortcuts after target-switch test");
@@ -3899,7 +3977,7 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
             "failed to restore intelligent-selection candidates after remapping");
     selection.setSelectionRect(windowSelection);
     require(!dispatchShortcut(shortcutWindow, Qt::Key_Tab) &&
-                dispatchShortcut(shortcutWindow, Qt::Key_J) && selectorHitTestRequests == 6,
+                dispatchShortcut(shortcutWindow, Qt::Key_J) && selectorHitTestRequests == 7,
             "remapped Tab shortcut did not replace the default key");
     interaction.confirmSelection();
     require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ShiftModifier) &&
@@ -5599,7 +5677,9 @@ void selectionStagesActivateEveryToolbarShortcut() {
                 actions.canActivateDrawingShortcut = [&](const QString& command) {
                     return drawing && command == id && available;
                 };
-                actions.prepareExplicitSelectionCommand = [&] {
+                actions.prepareSelection = [&](ScreenshotSelectionIntent intent) {
+                    require(intent == ScreenshotSelectionIntent::SupersedeWithCommand,
+                            "tool commands explicitly supersede the launch action");
                     ++preparations;
                     pendingQuickAction = false;
                     rememberedTool = false;
@@ -5722,7 +5802,9 @@ void globalScreenshotShortcutsUseCurrentSelection() {
             actions.canActivateScreenshotShortcut = [&](const QString& id) {
                 return id == QLatin1String(localAction);
             };
-            actions.prepareExplicitSelectionCommand = [&] {
+            actions.prepareSelection = [&](ScreenshotSelectionIntent intent) {
+                require(intent == ScreenshotSelectionIntent::SupersedeWithCommand,
+                        "local commands explicitly supersede the launch action");
                 ++preparations;
                 pendingAction = false;
             };
@@ -5907,7 +5989,11 @@ void rejectedGlobalScreenshotShortcutsPreserveSession() {
                 interaction.setCanvasTool(ScreenshotActiveTool::Shape);
                 return true;
             };
-            actions.prepareExplicitSelectionCommand = [&] { ++mutations; };
+            actions.prepareSelection = [&](ScreenshotSelectionIntent intent) {
+                require(intent == ScreenshotSelectionIntent::SupersedeWithCommand,
+                        "drawing commands explicitly supersede the launch action");
+                ++mutations;
+            };
             actions.showToolbar = [&] { ++mutations; };
             actions.selectionConfirmed = [&] { ++mutations; };
             const auto region = selection.selectionRegion();
@@ -6055,7 +6141,11 @@ void toolbarSelectionPreparationRejectsIncompleteRegions() {
     interaction.enterOverlayVisible(true);
     int preparations = 0;
     ScreenshotOverlayInputActions actions;
-    actions.prepareExplicitSelectionCommand = [&] { ++preparations; };
+    actions.prepareSelection = [&](ScreenshotSelectionIntent intent) {
+        require(intent == ScreenshotSelectionIntent::SupersedeWithCommand,
+                "toolbar preparation explicitly supersedes the launch action");
+        ++preparations;
+    };
     ScreenshotOverlayInputHandler handler(
         {capture, interaction, selection, intelligent, geometry, displays, actions});
     const auto rejected = [&] {
@@ -6208,8 +6298,9 @@ void pendingSelectionCommandsDoNotPresentRetiredCaptures() {
             int presentations = 0;
             ScreenshotOverlayInputActions actions;
             actions.currentLogicalCursorPosition = [] { return QPoint(100, 100); };
-            actions.prepareExplicitSelectionCommand = [] {
-                require(false, "region confirmation must preserve the pending capture action");
+            actions.prepareSelection = [](ScreenshotSelectionIntent intent) {
+                require(intent == ScreenshotSelectionIntent::PreserveLaunchAction,
+                        "region confirmation must preserve the pending capture action");
             };
             actions.showToolbar = [&] { ++presentations; };
             actions.showSelectionToolbar = [&] { ++presentations; };

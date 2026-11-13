@@ -3885,10 +3885,12 @@ void ScreenshotPinnedWindow::createContextMenu() {
                     return;
                 }
                 const QPointer<ScreenshotPinnedWindow> receiver(this);
-                requestRenderedImageSnapshot([receiver](ScreenshotPinnedImageSnapshot snapshot) {
-                    if (receiver && !receiver->m_closing)
-                        emit receiver->splitRequested(snapshot);
-                });
+                requestRenderedImageSnapshot(
+                    [receiver](ScreenshotPinnedImageSnapshot snapshot) {
+                        if (receiver && !receiver->m_closing)
+                            emit receiver->splitRequested(snapshot);
+                    },
+                    ScreenshotPinnedRenderMode::SourceResolution);
             });
             m_imageEditingAction =
                 processMenu->addItem(tr("Image editing"), custom_outlined_icons::ImageEditing());
@@ -5921,12 +5923,13 @@ void ScreenshotPinnedWindow::configureRecognitionSession() {
             [this](int mode, const ScreenshotRecognitionModelState& state) {
                 if (m_editController != nullptr && m_editController->toolbarWindow() != nullptr) {
                     if (auto* palette = m_editController->toolbarWindow()->palette()) {
-                        palette->setRecognitionModelState(
-                            mode == static_cast<int>(
-                                        ScreenshotRecognitionSessionController::Mode::Table)
-                                ? ScreenshotToolPalette::Tool::Table
-                                : ScreenshotToolPalette::Tool::Latex,
-                            state);
+                        using Mode = ScreenshotRecognitionSessionController::Mode;
+                        using Tool = ScreenshotToolPalette::Tool;
+                        const auto tool = mode == int(Mode::Table)   ? Tool::Table
+                                          : mode == int(Mode::Latex) ? Tool::Latex
+                                          : mode == int(Mode::Html)  ? Tool::Html
+                                                                     : Tool::Markdown;
+                        palette->setRecognitionModelState(tool, state);
                     }
                 }
             },
@@ -6467,15 +6470,9 @@ ScreenshotPinnedWindow::renderedImageSnapshot(ViewportExportMode mode) {
     };
     if (m_closing || m_destroying)
         return fail();
-    // Recognition rendering owns both the final text marks and output opacity.
-    const bool complete = mode == ViewportExportMode::Complete;
+    const bool sourceResolution = mode == ViewportExportMode::SourceResolution;
     if (isLiveWindow()) {
-        snapshot.source = liveExportSource(complete);
-        const bool logical = pinned_platform::kPinnedGeometryUnits ==
-                             pinned_platform::PinnedGeometryUnits::LogicalPixels;
-        snapshot.outputSize = (QSizeF(authoritativeContentNativeGeometry().size()) *
-                               (logical ? devicePixelRatioF() : 1.0))
-                                  .toSize();
+        snapshot.source = liveExportSource(mode, snapshot.outputSize);
         return snapshot.source.isValid() ? snapshot : fail();
     }
     if (!m_firstContentFramePublished || m_transformedImage.isNull()) {
@@ -6497,19 +6494,23 @@ ScreenshotPinnedWindow::renderedImageSnapshot(ViewportExportMode mode) {
                                    : m_resultSurfaceCanvasRect;
     const QTransform imageTransform =
         m_animationTransformSnapshot ? m_animationTransformSnapshot->transform : m_imageTransform;
-    if (surfaceRect.isEmpty()) {
+    if (surfaceRect.isEmpty() || backgroundRect.isEmpty()) {
         return fail();
     }
     // m_scalePercent retains the expanded geometry while a pin is a thumbnail.
     const qreal surfaceScale =
-        screenshotPinnedRenderScale(m_scalePercent, m_transformedImage.size(), backgroundRect);
+        sourceResolution ? m_transformedImage.width() / backgroundRect.width()
+                         : screenshotPinnedRenderScale(m_scalePercent, m_transformedImage.size(),
+                                                       backgroundRect);
     if (!(surfaceScale > 0.0)) {
         return fail();
     }
-    const QSize contentPixelSize(std::max(1, qRound(backgroundRect.width() * surfaceScale)),
+    const QSize contentPixelSize =
+        sourceResolution ? m_transformedImage.size()
+                         : QSize(std::max(1, qRound(backgroundRect.width() * surfaceScale)),
                                  std::max(1, qRound(backgroundRect.height() * surfaceScale)));
-    const PinnedExportAppearance appearance =
-        pinnedExportAppearance(m_resultStyle, complete ? m_opacityPercent : 100, surfaceScale);
+    const PinnedExportAppearance appearance = pinnedExportAppearance(
+        m_resultStyle, mode == ViewportExportMode::Complete ? m_opacityPercent : 100, surfaceScale);
     ScreenshotPinnedViewportExportSource request{
         {},
         m_transformedImage,
@@ -6578,7 +6579,7 @@ ScreenshotPinnedWindow::renderedImageSnapshot(ViewportExportMode mode) {
         clipboardAppearance.borderAppearance.reset();
     }
     request.clipboardAppearance = std::move(clipboardAppearance);
-    if (complete) {
+    if (mode != ViewportExportMode::RecognitionBackground) {
         request.textAnnotations = textAnnotationSnapshot();
         const bool recognitionVisible = m_recognitionSession && m_recognitionContent &&
                                         m_recognitionSession->active() &&
@@ -6881,7 +6882,7 @@ void ScreenshotPinnedWindow::copyOriginalImage(
 }
 
 void ScreenshotPinnedWindow::requestRenderedImageSnapshot(
-    std::function<void(ScreenshotPinnedImageSnapshot)> ready) {
+    std::function<void(ScreenshotPinnedImageSnapshot)> ready, ScreenshotPinnedRenderMode mode) {
     if (!ready)
         return;
     struct Pending final {
@@ -6911,10 +6912,13 @@ void ScreenshotPinnedWindow::requestRenderedImageSnapshot(
         fail();
         return;
     }
+    const auto exportMode = mode == ScreenshotPinnedRenderMode::SourceResolution
+                                ? ViewportExportMode::SourceResolution
+                                : ViewportExportMode::Complete;
     // Ready pins, including animations, freeze their published frame immediately.
     if (isLiveWindow() ||
         (!m_imageLoader && !m_originalImage.isNull() && m_firstContentFramePublished)) {
-        finish(renderedImageSnapshot());
+        finish(renderedImageSnapshot(exportMode));
         return;
     }
     pending->invalidated =
@@ -6923,7 +6927,8 @@ void ScreenshotPinnedWindow::requestRenderedImageSnapshot(
     const auto generation = m_presentationGeneration;
     const auto replacement = m_contentReplacementGeneration;
     const QPointer<ScreenshotPinnedWindow> receiver(this);
-    auto materialized = [receiver, pending, generation, replacement, finish, fail](bool success) {
+    auto materialized = [receiver, pending, generation, replacement, exportMode, finish,
+                         fail](bool success) {
         if (!pending->ready)
             return;
         if (!success || !receiver || receiver->m_closing || receiver->m_destroying ||
@@ -6932,7 +6937,7 @@ void ScreenshotPinnedWindow::requestRenderedImageSnapshot(
             fail();
             return;
         }
-        finish(receiver->renderedImageSnapshot());
+        finish(receiver->renderedImageSnapshot(exportMode));
     };
     if (!m_imageLoader && !m_originalImage.isNull() && m_firstFramePaintPending) {
         m_materializationCallbacks.push_back(std::move(materialized));
@@ -6944,22 +6949,17 @@ void ScreenshotPinnedWindow::requestRenderedImageSnapshot(
 ScreenshotPinnedImageSnapshot ScreenshotPinnedWindow::stitchingSnapshot() {
     if (isLiveWindow())
         return {};
-    return processedImageSnapshot(true);
+    return renderedImageSnapshot();
 }
 
 ScreenshotPinnedImageSnapshot ScreenshotPinnedWindow::splittingSnapshot() {
-    auto snapshot = processedImageSnapshot(false);
+    auto snapshot = renderedImageSnapshot(ViewportExportMode::SourceResolution);
     if (!snapshot.error.isEmpty())
         snapshot.error = QCoreApplication::translate(
             "ImageSplitWindow",
             QT_TRANSLATE_NOOP("ImageSplitWindow",
                               "The image is too large or there is not enough memory to load it"));
     return snapshot;
-}
-
-ScreenshotPinnedImageSnapshot ScreenshotPinnedWindow::processedImageSnapshot(bool finishEditing) {
-    Q_UNUSED(finishEditing);
-    return renderedImageSnapshot();
 }
 
 std::shared_ptr<ScreenshotExportArtifact> ScreenshotPinnedWindow::fileSaveArtifact() {
@@ -8880,7 +8880,7 @@ bool ScreenshotPinnedWindow::updateClickThroughExitButtonGeometry() {
     if (m_clickThroughExitButton == nullptr || !isVisible()) {
         return false;
     }
-    const QRect pinnedGeometry = currentNativeGeometry();
+    const QRect contentGeometry = currentContentNativeGeometry();
     QScreen* screen = windowHandle() != nullptr ? windowHandle()->screen() : nullptr;
     if (screen == nullptr) {
         screen = QGuiApplication::screenAt(geometry().center());
@@ -8890,7 +8890,7 @@ bool ScreenshotPinnedWindow::updateClickThroughExitButtonGeometry() {
     }
     const QRect physicalBounds = screenshot_pinned_hide_to_top::screenGeometry(screen).workArea;
     const auto geometry = screenshot_pinned_click_through::controlsGeometry(
-        pinnedGeometry, physicalBounds,
+        contentGeometry, physicalBounds,
         pinned_platform::pinnedGeometryScale(screen->devicePixelRatio()));
     if (geometry.exitButton.isEmpty() || geometry.opacityEditor.isEmpty() ||
         m_clickThroughOpacityEditor == nullptr || m_clickThroughMoveButton == nullptr) {

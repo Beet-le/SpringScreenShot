@@ -337,15 +337,17 @@ void projectLinksAreExplicitAccessibleAndRecoverable() {
                 qAbs(group->width() - group4->width()) <= 1,
             "both QQ groups share the second project link row equally");
     snapshot(page, QStringLiteral("about-actions"));
+    const QUrl websiteUrl(QStringLiteral(SNOW_SHOT_TEST_WEBSITE_URL));
     const QString project = QStringLiteral(SNOW_SHOT_TEST_PROJECT_URL);
-    const std::array<std::pair<const char*, QUrl>, 7> links{{
-        {"aboutWebsite", QUrl(QStringLiteral(SNOW_SHOT_TEST_WEBSITE_URL))},
+    const std::array<std::pair<const char*, QUrl>, 8> links{{
+        {"aboutWebsite", websiteUrl},
         {"aboutSourceCode", QUrl(project)},
         {"aboutFeedback", QUrl(project + QStringLiteral("/issues"))},
-        {"aboutReleaseNotes", QUrl(project + QStringLiteral("/releases"))},
+        {"aboutReleaseNotes", websiteUrl.resolved(QUrl(QStringLiteral("/changelog.html")))},
         {"aboutQqGroup3", QUrl(QStringLiteral(SNOW_SHOT_TEST_QQ_GROUP_3_URL))},
         {"aboutQqGroup4", QUrl(QStringLiteral(SNOW_SHOT_TEST_QQ_GROUP_4_URL))},
         {"aboutPrivacyPolicy", QUrl(snow_shot::app::distribution::privacyPolicyUrl())},
+        {"aboutUserAgreement", QUrl(QStringLiteral("https://snowshot.top/terms.html"))},
     }};
     for (const auto& [name, url] : links) {
         auto* button = child<QAbstractButton>(page, name);
@@ -419,12 +421,16 @@ void largerTypeKeepsEveryActionReachable() {
     auto* scroll = child<adqt::widgets::AdScrollArea>(page, "pageScrollArea");
     require(scroll->horizontalScrollBar()->maximum() == 0,
             "larger fonts and a narrow page never require horizontal scrolling");
+    const auto agreementRect = child<QAbstractButton>(page, "aboutUserAgreement")->geometry();
+    const auto privacyRect = child<QAbstractButton>(page, "aboutPrivacyPolicy")->geometry();
+    require(agreementRect.top() == privacyRect.top() && agreementRect.right() < privacyRect.left(),
+            "legal links share one row without overlap even with larger fonts");
     auto* artwork = child<QWidget>(page, "aboutArtwork");
     require(artwork->width() <= scroll->viewport()->width() && artwork->height() > 0,
             "artwork scales down to the available width with larger fonts");
     for (const char* name : {"aboutCopyVersion", "aboutReleaseNotes", "aboutUpdateAction",
                              "aboutWebsite", "aboutSourceCode", "aboutFeedback", "aboutQqGroup3",
-                             "aboutQqGroup4", "aboutPrivacyPolicy"}) {
+                             "aboutQqGroup4", "aboutPrivacyPolicy", "aboutUserAgreement"}) {
         auto* button = child<QAbstractButton>(page, name);
         scroll->ensureWidgetVisible(button);
         flushEvents();
@@ -646,6 +652,13 @@ void updateStatesFitTheVersionPanel() {
                 label->palette().color(QPalette::WindowText) ==
                     styles::ThemeManager::instance().themeColorScheme().map.colorWarningText,
             "blocked restarts keep their action and show the reason in the warning color");
+#ifdef Q_OS_WIN
+    int restartRequests = 0;
+    QObject::connect(&updates, &UpdateService::restartRequested, &page, [&] { ++restartRequests; });
+    action->click();
+    require(restartRequests == 1 && QApplication::activeModalWidget() == nullptr,
+            "clicking restart and update immediately requests the update without a dialog");
+#endif
     page.hide();
     styles::ThemeManager::instance().setThemeAppearance(styles::ThemeAppearance::Light);
 }

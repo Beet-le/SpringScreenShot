@@ -307,6 +307,11 @@ class AboutResourceButton final : public AdButton {
     qreal m_contentDpr = 0;
 };
 
+QUrl aboutChangelogUrl() {
+    return QUrl(QStringLiteral(SNOW_SHOT_WEBSITE_URL))
+        .resolved(QUrl(QStringLiteral("/changelog.html")));
+}
+
 QUrl aboutProjectUrl(const QString& suffix = {}) {
     QUrl url(QStringLiteral(SNOW_SHOT_PROJECT_URL));
     QString path = url.path();
@@ -354,6 +359,7 @@ struct AboutPageWidget::Ui {
     AdButton* releaseNotes = nullptr;
     AdButton* copyButton = nullptr;
     AdButton* privacyPolicy = nullptr;
+    AdButton* userAgreement = nullptr;
     QTimer* copyFeedbackTimer = nullptr;
     snow_shot::update::UpdateService* updates = nullptr;
     QLabel* updateStatus = nullptr;
@@ -610,16 +616,24 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
     footerText->addLayout(community);
     m_ui->license = aboutLabel(QStringLiteral("aboutLicense"), m_ui->body);
     footerText->addWidget(m_ui->license);
+    m_ui->userAgreement = new AdButton(m_ui->body);
+    m_ui->userAgreement->setObjectName(QStringLiteral("aboutUserAgreement"));
     m_ui->privacyPolicy = new AdButton(m_ui->body);
     m_ui->privacyPolicy->setObjectName(QStringLiteral("aboutPrivacyPolicy"));
-    m_ui->privacyPolicy->setButtonStyle(AdButton::ButtonStyle::Link);
-    m_ui->privacyPolicy->setIconRef(outlined::Export());
-    m_ui->privacyPolicy->setIconPosition(AdButton::IconPosition::Trailing);
-    m_ui->privacyPolicy->setContentPaddingEnabled(false);
-    m_ui->privacyPolicy->setSizeClass(AdButton::SizeClass::Small);
-    m_ui->privacyPolicy->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
-    m_ui->privacyPolicy->setFocusPolicy(Qt::StrongFocus);
-    footerText->addWidget(m_ui->privacyPolicy, 0, Qt::AlignLeft);
+    auto* policyLinks = new QHBoxLayout;
+    policyLinks->setSpacing(8);
+    for (auto* button : {m_ui->userAgreement, m_ui->privacyPolicy}) {
+        button->setButtonStyle(AdButton::ButtonStyle::Link);
+        button->setIconRef(outlined::Export());
+        button->setIconPosition(AdButton::IconPosition::Trailing);
+        button->setContentPaddingEnabled(false);
+        button->setSizeClass(AdButton::SizeClass::Small);
+        button->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+        button->setFocusPolicy(Qt::StrongFocus);
+        policyLinks->addWidget(button);
+    }
+    policyLinks->addStretch();
+    footerText->addLayout(policyLinks);
     m_ui->footerLayout->addLayout(footerText, 1);
     auto* legalWidget = new QWidget(m_ui->body);
     auto* legal = new QVBoxLayout(legalWidget);
@@ -649,7 +663,7 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
     });
     connect(m_ui->copyFeedbackTimer, &QTimer::timeout, this, &AboutPageWidget::retranslateUi);
     connect(m_ui->releaseNotes, &AdButton::clicked, this,
-            [this]() { openProjectLink(aboutProjectUrl(QStringLiteral("/releases"))); });
+            [this]() { openProjectLink(aboutChangelogUrl()); });
     connect(m_ui->resources[0], &QAbstractButton::clicked, this,
             [this]() { openProjectLink(QUrl(QStringLiteral(SNOW_SHOT_WEBSITE_URL))); });
     connect(m_ui->resources[1], &QAbstractButton::clicked, this,
@@ -662,6 +676,8 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
             [this]() { openProjectLink(QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_4_URL))); });
     connect(m_ui->privacyPolicy, &AdButton::clicked, this,
             [this] { openProjectLink(QUrl(snow_shot::app::distribution::privacyPolicyUrl())); });
+    connect(m_ui->userAgreement, &AdButton::clicked, this,
+            [this] { openProjectLink(QUrl(snow_shot::app::distribution::userAgreementUrl())); });
     connect(&themeManager, &styles::ThemeManager::themeChanged, this, &AboutPageWidget::applyTheme);
     connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
             [this] { updateSkinBackgrounds(); });
@@ -735,10 +751,12 @@ void AboutPageWidget::applyTheme(const styles::ThemeColorScheme& scheme) {
     for (QLabel* label : {m_ui->license, m_ui->slogan}) {
         styleAboutLabel(label, metric.fontSizeSM - 2, QFont::Normal, colors.colorTextTertiary);
     }
-    adqt::theme::ThemeOverride privacyTheme;
-    privacyTheme.fontSize = metric.fontSizeSM;
-    adqt::theme::ThemeManager::instance().setScopeOverride(m_ui->privacyPolicy, privacyTheme);
-    m_ui->privacyPolicy->setIconSize(QSize(metric.fontSizeSM, metric.fontSizeSM));
+    adqt::theme::ThemeOverride legalTheme;
+    legalTheme.fontSize = metric.fontSizeSM;
+    for (auto* button : {m_ui->userAgreement, m_ui->privacyPolicy}) {
+        adqt::theme::ThemeManager::instance().setScopeOverride(button, legalTheme);
+        button->setIconSize(QSize(metric.fontSizeSM, metric.fontSizeSM));
+    }
     styleAboutLabel(m_ui->linkError, metric.fontSizeSM, QFont::Normal, colors.colorErrorText);
     const int logoSize = metric.controlHeight;
     m_ui->logo->setFixedSize(logoSize, logoSize);
@@ -857,7 +875,7 @@ void AboutPageWidget::retranslateUi() {
                                                                      : outlined::Copy());
     m_ui->releaseNotes->setText(tr("Changelog"));
     m_ui->releaseNotes->setAccessibleName(tr("Changelog"));
-    m_ui->releaseNotes->setToolTip(aboutProjectUrl(QStringLiteral("/releases")).toDisplayString());
+    m_ui->releaseNotes->setToolTip(aboutChangelogUrl().toDisplayString());
     m_ui->resources[0]->setCopy(tr("Official website"),
                                 tr("Discover more features and ways to use it"),
                                 QUrl(QStringLiteral(SNOW_SHOT_WEBSITE_URL)));
@@ -882,6 +900,10 @@ void AboutPageWidget::retranslateUi() {
     m_ui->privacyPolicy->setAccessibleName(tr("Privacy policy"));
     m_ui->privacyPolicy->setToolTip(
         QUrl(snow_shot::app::distribution::privacyPolicyUrl()).toDisplayString());
+    m_ui->userAgreement->setText(tr("User agreement"));
+    m_ui->userAgreement->setAccessibleName(tr("User agreement"));
+    m_ui->userAgreement->setToolTip(
+        QUrl(snow_shot::app::distribution::userAgreementUrl()).toDisplayString());
     m_ui->copyright->setText(
         tr("Copyright © %1 %2").arg(QStringLiteral("2025–2026"), QStringLiteral("mg-chao")));
     m_ui->slogan->setText(
