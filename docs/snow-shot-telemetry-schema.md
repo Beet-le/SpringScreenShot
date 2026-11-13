@@ -14,8 +14,10 @@ logEvent(category, event, fields)
   → DiagnosticsService::record()
     → EventTap（实时旁路，字段白名单之前）
     → UsageSample（512 槽环形缓冲）
-    → 60s 批量 POST → Seq CLEF 端点
+    → 60s 批量 POST → https://desktop.cqczy.cn/seq/api/events/raw?clef
 ```
+
+上报端点：Seq 标准 Raw Events Ingestion API（`POST /api/events/raw?clef`，NDJSON CLEF，Content-Type `application/vnd.serilog.clef`，无认证头、内网匿名写入）。请求/响应契约与重试策略详见集成规范文档 `snow-shot-telemetry-integration-spec.md` §3。
 
 ## 2. Seq 端字段清单
 
@@ -33,8 +35,8 @@ logEvent(category, event, fields)
 | `Count` | int | ✅ | 固定 `1` | `1` |
 | `AppVersion` | string | ⭕ | 应用版本号 | `1.4.2` |
 | `SessionId` | string | ⭕ | 会话 UUID | `178dbc09-e241-...` |
-| `Outcome` | string | ⭕ | 结果（见 §4.1） | `success` |
-| `Feature` | string | ⭕ | 功能模块（见 §4.2） | `capture` |
+| `Outcome` | string | ⭕ | 结果（见 §4.1） | `succeeded` |
+| `Feature` | string | ⭕ | AI 请求用途（仅 `api.request_finished`，见 §4.2） | `translation` |
 | `Tool` | string | ⭕ | 标注工具（见 §4.3，**新增**） | `arrow` |
 | `Surface` | string | ⭕ | 使用界面（见 §4.4，**新增**） | `capture` |
 
@@ -54,7 +56,7 @@ logEvent(category, event, fields)
 
 | EventName | 触发时机 | 附带维度 |
 |---|---|---|
-| `capture.finished` | 截图完成/取消 | `Outcome`, `Feature` |
+| `capture.finished` | 截图完成/取消 | `Outcome` |
 
 ### 3.3 标注（annotation）✨ 新增
 
@@ -67,7 +69,7 @@ logEvent(category, event, fields)
 
 | EventName | 触发时机 | 附带维度 |
 |---|---|---|
-| `ocr.submitted` | 发起文本识别 | `Feature` |
+| `ocr.submitted` | 发起文本识别 | — |
 | `ocr.finished` | 识别完成 | `Outcome` |
 | `ocr.cancelled` | 识别取消 | — |
 
@@ -112,21 +114,24 @@ logEvent(category, event, fields)
 
 | 值 | 说明 |
 |---|---|
-| `success` | 操作成功完成 |
-| `failure` | 操作失败 |
+| `succeeded` | 操作成功完成 |
+| `failed` | 操作失败 |
 | `cancelled` | 操作被用户取消 |
+| `rejected` | 操作被拒绝（如固定窗口被拒） |
 
-### 4.2 Feature（功能模块）
+> `Unknown` 不落字段：Outcome 未知时该记录不包含 `Outcome` 字段。
 
-| 值 | 说明 |
-|---|---|
-| `capture` | 截图 |
-| `ocr` | 文本识别 |
-| `pin` | 固定到屏幕 |
-| `export` | 图片导出 |
-| `recording` | 录屏 |
-| `print` | 打印 |
-| `api` | 后端 API 请求 |
+### 4.2 Feature（AI 请求用途，仅 `api.request_finished` 携带）
+
+| 值 | 说明 | 对应 request_kind |
+|---|---|---|
+| `translation` | 文本翻译 | `translation` |
+| `table_extraction` | 表格提取 | `table_extract` / `table_vision_extract` |
+| `latex_extraction` | 公式提取 | `latex_extract` / `latex_vision_extract` |
+| `image_conversion` | 图片转文字 | `image_conversion` |
+| `other` | 其他（保留） | — |
+
+> 其余事件不携带 `Feature` 字段；模型目录刷新（`chat_models`）等无关请求不上报。
 
 ### 4.3 Tool（标注工具，21 个）
 
@@ -192,9 +197,10 @@ FROM SNOW_SHOT_USAGE
 GROUP BY Date
 ORDER BY Date
 
--- 各功能使用量
+-- AI 请求用途分布（Feature 仅随 api.request_finished 出现）
 SELECT Feature, COUNT(*) AS Count
 FROM SNOW_SHOT_USAGE
+WHERE EventName = 'api.request_finished'
 GROUP BY Feature
 ORDER BY Count DESC
 
@@ -267,7 +273,7 @@ ORDER BY Week
 ## 7. 注意事项
 
 1. **事件名大小写**：Seq 端 `EventName` 字段值为 **snake_case**（如 `annotation.stroke_committed`），不是 PascalCase。
-2. **维度值大小写**：`Tool` / `Surface` / `Outcome` / `Feature` 字段值均为 **snake_case**（如 `arrow` / `capture` / `success`）。
+2. **维度值大小写**：`Tool` / `Surface` / `Outcome` / `Feature` 字段值均为 **snake_case**（如 `arrow` / `capture` / `succeeded`）。
 3. **新增字段**：`Tool` 和 `Surface` 仅在标注相关事件中出现，其他事件这两列为空。
 4. **去重规则**：`annotation.tool_selected` 按 `(UserId, Surface, Tool)` 去重，同一会话中同一工具在同一界面只上报一次；`annotation.stroke_committed` 不去重，每次落笔都上报。
 5. **上报延迟**：客户端 60 秒批量聚合，Seq 端看到的数据有最多 60 秒延迟。
