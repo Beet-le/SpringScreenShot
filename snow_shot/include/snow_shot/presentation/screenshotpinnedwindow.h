@@ -286,6 +286,9 @@ class ScreenshotPinnedWindow final : public QWidget {
         return m_groupId;
     }
     [[nodiscard]] QJsonObject automationState() const;
+#if SNOW_SHOT_ENABLE_DOCUMENT_RECOGNITION
+    [[nodiscard]] ScreenshotDocumentCopyRequest automationDocumentCopyRequest() const;
+#endif
     [[nodiscard]] bool blocksMemoryTrimming() const;
     [[nodiscard]] bool automationUpdate(const QJsonObject& properties, QString* error);
     [[nodiscard]] bool automationAction(const QString& action);
@@ -295,6 +298,9 @@ class ScreenshotPinnedWindow final : public QWidget {
     [[nodiscard]] std::shared_ptr<ScreenshotExportArtifact>
     automationArtifact(bool original = false, bool viewport = false);
     [[nodiscard]] std::unique_ptr<QMimeData> automationClipboardMimeData(bool original) const;
+    bool
+    prepareAutomationSmartClipboard(bool original,
+                                    std::function<void(std::unique_ptr<QMimeData>)> completion);
     [[nodiscard]] std::optional<ScreenshotRecognitionFileSnapshot> automationFileSnapshot() const;
     [[nodiscard]] ScreenshotRecognitionResults recognitionSnapshot() const;
     [[nodiscard]] static ScreenshotRecognitionResults
@@ -757,6 +763,9 @@ class ScreenshotPinnedWindow final : public QWidget {
     QPointer<ScreenshotCloudUploadJob> m_cloudUploadJob;
     bool m_cloudUploadPreparing = false;
     ScreenshotClipboardCommitHandle m_clipboardCommit;
+#if SNOW_SHOT_ENABLE_DOCUMENT_RECOGNITION
+    ScreenshotExportJobHandle m_documentCopyJob;
+#endif
     std::vector<MaterializationCallback> m_materializationCallbacks;
     PresentationCompletion m_presentationCompletion;
     ScreenshotImageLoader m_imageLoader;

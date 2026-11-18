@@ -374,8 +374,14 @@ impl Editor {
                 })
             }
             ToolEmptyCanvasAction::CreateArrow => {
-                let start_canvas_position =
-                    self.snap_creation_start_position(canvas_point, event.modifiers);
+                let endpoint = if self.state.active_tool == ActiveTool::Line {
+                    self.nearby_line_endpoint(document, canvas_point, None)
+                } else {
+                    None
+                };
+                let start_canvas_position = endpoint.unwrap_or_else(|| {
+                    self.snap_creation_start_position(canvas_point, event.modifiers)
+                });
                 self.begin_arrow_creation(
                     document,
                     event.pointer_id,
@@ -465,6 +471,11 @@ impl Editor {
                         start_view_position: event.position,
                         text: None,
                         label_measured: false,
+                        mode: if event.modifiers.shift {
+                            SerialNumberDragMode::NewArrow
+                        } else {
+                            SerialNumberDragMode::Text
+                        },
                     });
                 self.set_creation_preview(None, snap_guides);
                 Ok(InteractionOutput {
@@ -549,6 +560,23 @@ impl Editor {
             return Ok(output);
         }
         match intent {
+            PrimaryPointerIntent::BeginSerialNumberArrow { id } => {
+                self.state.interaction =
+                    InteractionState::CreatingSerialNumber(CreateSerialNumberState {
+                        pointer_id: event.pointer_id,
+                        serial_id: id,
+                        start_view_position: event.position,
+                        text: None,
+                        label_measured: false,
+                        mode: SerialNumberDragMode::ExistingArrow,
+                    });
+                self.clear_transient_visuals();
+                Ok(InteractionOutput {
+                    consumed: true,
+                    capture: self.capture_command_for_start(event.pointer_id),
+                    cursor: CursorCommand::Set(CursorStyle::Crosshair),
+                })
+            }
             PrimaryPointerIntent::BeginMagnifierLens { id } => {
                 let original = *document.magnifier(id)?;
                 if !self.state.selection.contains(id) {

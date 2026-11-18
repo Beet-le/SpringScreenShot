@@ -790,7 +790,8 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                 error(QStringLiteral("unsupported"));
                 return;
             }
-            if (ports.updates->busy() || !activeUpdateJob.isEmpty()) {
+            if (ports.updates->busy() || !activeUpdateJob.isEmpty() ||
+                (action == u"check" && !ports.updates->canCheck())) {
                 error(QStringLiteral("busy"));
                 return;
             }
@@ -1194,10 +1195,6 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                     });
             };
             completion(std::move(response));
-            return;
-        }
-        if (binding == settings::SettingsActionBinding::OpenLoginItemSettings) {
-            change([&] { return ports.settings->triggerAction(binding); });
             return;
         }
         const auto id = ports.jobs->start(request.connectionId, method);

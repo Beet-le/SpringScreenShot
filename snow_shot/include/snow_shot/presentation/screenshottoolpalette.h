@@ -104,6 +104,7 @@ class ScreenshotToolPalette final : public QWidget,
         Magnifier,
         SpeechBubble,
         Bracket,
+        Document,
     };
 
     enum class MoveToolPresentation {
@@ -562,16 +563,17 @@ class ScreenshotToolPalette final : public QWidget,
     void ocrRequested();
     void textTranslationRequested();
     void tableRequested();
+    void documentRequested();
     void qrRequested();
     void latexRequested();
     void recognitionModelChanged(const QString& selection);
     void markdownRequested();
     void htmlRequested();
-    void imageConversionSettingsRequested();
     void tableMergeRequested();
     void tableSplitRequested();
     void tableResetRequested();
     void openSpreadsheetFileRequested();
+    void openDocumentFileRequested();
     void showOriginalImageRequested(bool show);
     void textEditRequested();
     void textTranslateRequested();
@@ -710,9 +712,6 @@ class ScreenshotToolPalette final : public QWidget,
     [[nodiscard]] ScreenshotRecognitionModelState* recognitionModelStateForTool(Tool tool);
     void refreshRecognitionModelSelect();
     void refreshTextTranslationServiceSelect();
-#if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
-    void createImageConversionActionFamily();
-#endif
     void createScrollingRecognitionActionFamily();
     void openScrollingSettings();
     void closeScrollingSettings();
@@ -1003,13 +1002,17 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdButton* m_sequenceNumberButton = nullptr;
     adqt::widgets::AdButton* m_ocrButton = nullptr;
     adqt::widgets::AdButton* m_textTranslationButton = nullptr;
+    adqt::widgets::AdButton* m_documentButton = nullptr;
+    adqt::widgets::AdButton* m_openDocumentFileButton = nullptr;
+    QFrame* m_openDocumentFileSeparator = nullptr;
+    QVector<QSpacerItem*> m_documentActionSpacers;
+    ScreenshotRecognitionModelState m_documentRecognitionModelState;
     adqt::widgets::AdButton* m_tableButton = nullptr;
     adqt::widgets::AdButton* m_tableOptionButton = nullptr;
     adqt::widgets::AdButton* m_qrButton = nullptr;
     adqt::widgets::AdButton* m_latexButton = nullptr;
     adqt::widgets::AdButton* m_markdownButton = nullptr;
     adqt::widgets::AdButton* m_htmlButton = nullptr;
-    adqt::widgets::AdButton* m_conversionSettingsButton = nullptr;
     adqt::widgets::AdPopover* m_tableQrPopover = nullptr;
     QVector<adqt::widgets::AdButton*> m_tableQrOptionButtons;
     QVector<int> m_tableQrOptionValues;

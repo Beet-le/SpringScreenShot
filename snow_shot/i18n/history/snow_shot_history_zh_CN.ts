@@ -1317,12 +1317,20 @@
             <translation>放弃此图像拼接？</translation>
         </message>
         <message>
+            <source>Dropped image</source>
+            <translation>拖放的图像</translation>
+        </message>
+        <message>
             <source>Export could not be started. Try again</source>
             <translation>无法开始导出，请重试</translation>
         </message>
         <message>
             <source>Exporting PDF page %1 of %2: %3%</source>
             <translation>正在导出 PDF 第 %1 页，共 %2 页：%3%</translation>
+        </message>
+        <message>
+            <source>Image editing</source>
+            <translation>图像编辑</translation>
         </message>
         <message>
             <source>Image loading could not be started. Try again</source>

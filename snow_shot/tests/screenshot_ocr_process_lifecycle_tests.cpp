@@ -233,7 +233,7 @@ int runOcrLifecycleChild() {
         QByteArray frame;
         QDataStream stream(&frame, QIODevice::WriteOnly);
         stream.setByteOrder(QDataStream::LittleEndian);
-        const quint16 version = qEnvironmentVariableIsSet("SNOW_TEST_OCR_OLD_PROTOCOL") ? 6 : 7;
+        const quint16 version = qEnvironmentVariableIsSet("SNOW_TEST_OCR_OLD_PROTOCOL") ? 7 : 8;
         stream << quint32(0x52434f53) << version << kind << token << quint32(payload.size());
         frame.append(payload);
         std::fwrite(frame.constData(), 1, static_cast<std::size_t>(frame.size()), stdout);
@@ -250,7 +250,19 @@ int runOcrLifecycleChild() {
         QDataStream stream(&payload, QIODevice::WriteOnly);
         stream.setByteOrder(QDataStream::LittleEndian);
         stream << quint8(1) << quint32(0);
-        if (qEnvironmentVariableIsSet("SNOW_TEST_OCR_TEXT_COLOR")) {
+        if (qEnvironmentVariableIsSet("SNOW_TEST_OCR_PARAGRAPH_CHAIN")) {
+            stream << quint32(2) << quint32(5);
+            stream.writeRawData("First", 5);
+            stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
+            stream << 0.95F;
+            for (float coordinate : {1.F, 1.F, 7.F, 1.F, 7.F, 3.F, 1.F, 3.F})
+                stream << coordinate;
+            stream << quint32(6);
+            stream.writeRawData("Second", 6);
+            stream << 0.95F;
+            for (float coordinate : {1.F, 4.F, 7.F, 4.F, 7.F, 6.F, 1.F, 6.F})
+                stream << coordinate;
+        } else if (qEnvironmentVariableIsSet("SNOW_TEST_OCR_TEXT_COLOR")) {
             stream << quint32(1) << quint32(7);
             stream.writeRawData("Colored", 7);
             stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
@@ -272,7 +284,7 @@ int runOcrLifecycleChild() {
         quint16 version = 0, kind = 0;
         quint64 token = 0;
         input >> magic >> version >> kind >> token >> size;
-        if (magic != 0x52434f53 || version != 7 || size > 1024 * 1024)
+        if (magic != 0x52434f53 || version != 8 || size > 1024 * 1024)
             return 2;
         QByteArray payload(size, '\0');
         if (std::fread(payload.data(), 1, size, stdin) != size)
@@ -297,8 +309,8 @@ int runOcrLifecycleChild() {
             QDataStream output(&ready, QIODevice::WriteOnly);
             output.setByteOrder(QDataStream::LittleEndian);
             output << quint8(1) << quint32(0) << quint32(5);
-            output.writeRawData("1.2.2", 5);
-            output << quint32(7);
+            output.writeRawData("1.3.0", 5);
+            output << quint32(8);
             reply(2, 0, ready);
         } else if (kind == 19) {
             event("acceleration " + payload.toHex());
@@ -406,6 +418,14 @@ int runOcrLifecycleChild() {
             if (!marker.open(QIODevice::WriteOnly | QIODevice::Append))
                 return 5;
             marker.write(QByteArray::number(token) + '\n');
+        } else if (kind == 21 && qEnvironmentVariableIsSet("SNOW_TEST_OCR_PARAGRAPH_CHAIN")) {
+            event("group " + QByteArray::number(token));
+            QByteArray grouped;
+            QDataStream output(&grouped, QIODevice::WriteOnly);
+            output.setByteOrder(QDataStream::LittleEndian);
+            output << quint8(1) << quint32(2) << quint32(1) << quint32(0) << quint32(1)
+                   << quint32(1);
+            reply(22, token, grouped);
         } else if (kind == 6) {
             if (qEnvironmentVariableIsSet("SNOW_TEST_OCR_LIFECYCLE_COMPLETE"))
                 return 0;
@@ -928,6 +948,65 @@ void ocrProcessLifecycleTests() {
     }
     qputenv("SNOW_TEST_OCR_LIFECYCLE_COMPLETE", "1");
     {
+        qputenv("SNOW_TEST_OCR_PARAGRAPH_CHAIN", "1");
+        QSemaphore entered, resume;
+        auto chainOptions = options;
+        chainOptions.paragraphModelPath = chainOptions.processPath;
+        chainOptions.beforeLocalRender = [&]() {
+            entered.release();
+            require(resume.tryAcquire(1, 5000), "paragraph-chain barrier must be released");
+        };
+        const qsizetype initialStarts = recordsFor(QStringLiteral("ocr.process_started")).size();
+        const qsizetype initialExits = processExits().size();
+        ScreenshotOcrRecognitionService service(chainOptions);
+        QObject receiver;
+        QImage image(8, 8, QImage::Format_RGBA8888);
+        image.fill(Qt::white);
+        bool paragraphCompleted = false;
+        ScreenshotOcrRequest request;
+        request.image = image;
+        request.canvasRect = QRectF(0, 0, 8, 8);
+        request.retainProcessThroughCompletion = true;
+        require(service.recognize(
+                    request, &receiver,
+                    [&](ScreenshotOcrRecognitionResult result) {
+                        require(result.error.isEmpty() && result.presentation &&
+                                    result.presentation->lines.size() == 2,
+                                "the OCR completion must expose lines before paragraph grouping");
+                        QVector<QPolygonF> quads;
+                        for (const auto& line : result.presentation->lines)
+                            quads.push_back(line.quad);
+                        require(service.groupParagraphs(
+                                    {image, QRectF(0, 0, 8, 8), quads}, &receiver,
+                                    [&](ScreenshotOcrParagraphResult grouped) {
+                                        require(grouped.error.isEmpty() &&
+                                                    grouped.groups.size() == 2,
+                                                "the follow-up paragraph request must complete");
+                                        paragraphCompleted = true;
+                                    }) != 0,
+                                "the OCR callback must enqueue paragraph grouping");
+                    }) != 0,
+                "the nonresident paragraph-chain OCR request must be accepted");
+        require(waitUntil([&] { return entered.available() == 1; }),
+                "OCR result preparation must pause before its completion callback");
+        const qint64 childPid = service.processId();
+        require(childPid != 0, "the OCR worker must remain available during local preparation");
+        QElapsedTimer reconcileWindow;
+        reconcileWindow.start();
+        require(waitUntil([&] { return reconcileWindow.elapsed() >= 50; }),
+                "the idle reconciliation must run while local preparation is paused");
+        require(service.processId() == childPid && processExits().size() == initialExits &&
+                    recordsFor(QStringLiteral("ocr.process_started")).size() == initialStarts + 1,
+                "local result preparation must hold the same worker for its callback follow-up");
+        resume.release();
+        require(waitUntil([&] { return paragraphCompleted && service.processId() == 0; }),
+                "paragraph grouping must finish before the nonresident worker exits");
+        require(recordsFor(QStringLiteral("ocr.process_started")).size() == initialStarts + 1 &&
+                    processExits().size() == initialExits + 1 && countEvent("group ") == 1,
+                "OCR and paragraph grouping must share one child-process lifetime");
+        qunsetenv("SNOW_TEST_OCR_PARAGRAPH_CHAIN");
+    }
+    {
         auto crashOptions = options;
         crashOptions.retryTimeUnitMilliseconds = 20;
         ScreenshotOcrRecognitionService service(crashOptions);
@@ -1117,7 +1196,7 @@ void ocrProcessLifecycleTests() {
             {image, QRectF(0, 0, 8, 8)}, &receiver,
             [&](ScreenshotOcrRecognitionResult result) { rejected = !result.error.isEmpty(); });
         require(waitUntil([&] { return rejected; }),
-                "protocol 6 workers must be rejected explicitly");
+                "protocol 7 workers must be rejected explicitly");
         qunsetenv("SNOW_TEST_OCR_OLD_PROTOCOL");
     }
     qputenv("SNOW_TEST_OCR_TEXT_COLOR", "1");

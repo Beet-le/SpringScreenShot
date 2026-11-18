@@ -467,6 +467,10 @@
             <translation>Decimal places</translation>
         </message>
         <message>
+            <source>Dedicated Models</source>
+            <translation>Dedicated Models</translation>
+        </message>
+        <message>
             <source>Dedicated model</source>
             <translation>Dedicated model</translation>
         </message>
@@ -537,6 +541,14 @@
         <message>
             <source>Distribute vertically</source>
             <translation>Distribute vertically</translation>
+        </message>
+        <message>
+            <source>Document Recognition Model</source>
+            <translation>Document Recognition Model</translation>
+        </message>
+        <message>
+            <source>Document recognition</source>
+            <translation>Document recognition</translation>
         </message>
         <message>
             <source>Dotted arrow line</source>
@@ -991,6 +1003,10 @@
             <translation>Opacity</translation>
         </message>
         <message>
+            <source>Open document file</source>
+            <translation>Open document file</translation>
+        </message>
+        <message>
             <source>Open recording folder</source>
             <translation>Open recording folder</translation>
         </message>
@@ -1415,8 +1431,8 @@
             <translation>Start arrowhead triangle outline</translation>
         </message>
         <message>
-            <source>Start moving the recording area when the cursor enters the outer quarter of its width or height.</source>
-            <translation>Start moving the recording area when the cursor enters the outer quarter of its width or height.</translation>
+            <source>Start moving the recording area when the cursor enters the outer twelfth of its width or height.</source>
+            <translation>Start moving the recording area when the cursor enters the outer twelfth of its width or height.</translation>
         </message>
         <message>
             <source>Start recording</source>

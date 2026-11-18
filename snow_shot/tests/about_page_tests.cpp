@@ -11,6 +11,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/update/updateservice.h"
+#include "../src/update/macosupdatedriver_p.h"
 #include "snow_shot/app/distribution.h"
 
 #include "widgets/button.h"
@@ -27,6 +28,7 @@
 #include <QClipboard>
 #include <QDir>
 #include <QEvent>
+#include <QEventLoop>
 #include <QFileInfo>
 #include <QImage>
 #include <QFontDatabase>
@@ -52,6 +54,37 @@ namespace settings = snow_shot::presentation::settings;
 namespace styles = snow_shot::presentation::styles;
 
 namespace {
+#ifdef Q_OS_MACOS
+class AboutUpdateDriver final : public snow_shot::update::detail::MacOSUpdateDriver {
+  public:
+    void start(const QString&) override {
+        changed({snow_shot::update::UpdateState::Idle, {}, {}, 0, 0}, true, true, true);
+    }
+    void setMode(const QString&) override {}
+    void check(bool) override {
+        finished(QStringLiteral("check"), QStringLiteral("failed"));
+    }
+    void download() override {}
+    void cancel() override {}
+    void install() override {}
+    void retranslate() override {}
+};
+#endif
+snow_shot::update::UpdateService::Options aboutUpdateOptions() {
+    snow_shot::update::UpdateService::Options options;
+#ifdef Q_OS_MACOS
+    options.macOSDriverFactory = [] { return std::make_unique<AboutUpdateDriver>(); };
+#endif
+    return options;
+}
+void startAboutUpdates(snow_shot::update::UpdateService& service) {
+#ifdef Q_OS_MACOS
+    service.start();
+#else
+    Q_UNUSED(service);
+#endif
+}
+
 void require(bool condition, const char* message) {
     if (!condition) {
         std::cerr << message << '\n';
@@ -225,8 +258,8 @@ void projectLinkSurfacesMatchStandardButtons() {
     for (const auto appearance : {styles::ThemeAppearance::Light, styles::ThemeAppearance::Dark}) {
         manager.setThemeAppearance(appearance);
         flushEvents();
-        for (const char* name : {"aboutWebsite", "aboutSourceCode", "aboutFeedback",
-                                 "aboutQqGroup3", "aboutQqGroup4"}) {
+        for (const char* name :
+             {"aboutWebsite", "aboutSourceCode", "aboutFeedback", "aboutQqGroup4"}) {
             auto* button = child<AdButton>(page, name);
             require(button->buttonStyle() == AdButton::ButtonStyle::Outline &&
                         button->accentRole() == AdButton::AccentRole::Neutral,
@@ -304,6 +337,7 @@ void storeUpdatesOpenMicrosoftStore() {
                 child<QLabel>(page, "aboutUpdateStatus")->text() ==
                     QStringLiteral("Updates are managed by Microsoft Store") &&
                 !child<QProgressBar>(page, "aboutUpdateProgress")->isVisible() &&
+                !child<adqt::widgets::AdButton>(page, "aboutUpdateCheck")->isVisible() &&
                 !child<adqt::widgets::AdButton>(page, "aboutUpdateCancel")->isVisible(),
             "Store About exposes only the external update manager");
     action->click();
@@ -326,25 +360,23 @@ void projectLinksAreExplicitAccessibleAndRecoverable() {
     require(opened.isEmpty(), "About does not open links or check for updates on construction");
     require(page.findChild<QAbstractButton*>(QStringLiteral("aboutQqGroup2")) == nullptr,
             "About no longer offers QQ Group 2");
-    auto* group = child<QAbstractButton>(page, "aboutQqGroup3");
+    require(page.findChild<QAbstractButton*>(QStringLiteral("aboutQqGroup3")) == nullptr,
+            "About no longer offers QQ Group 3");
     auto* group4 = child<QAbstractButton>(page, "aboutQqGroup4");
     auto* website = child<QAbstractButton>(page, "aboutWebsite");
     auto* feedback = child<QAbstractButton>(page, "aboutFeedback");
-    require(group->geometry().left() == website->geometry().left() &&
+    require(group4->geometry().left() == website->geometry().left() &&
                 group4->geometry().right() == feedback->geometry().right() &&
-                group->geometry().top() == group4->geometry().top() &&
-                group->geometry().right() < group4->geometry().left() &&
-                qAbs(group->width() - group4->width()) <= 1,
-            "both QQ groups share the second project link row equally");
+                group4->geometry().top() > website->geometry().bottom(),
+            "QQ Group 4 spans the second project link row");
     snapshot(page, QStringLiteral("about-actions"));
     const QUrl websiteUrl(QStringLiteral(SNOW_SHOT_TEST_WEBSITE_URL));
     const QString project = QStringLiteral(SNOW_SHOT_TEST_PROJECT_URL);
-    const std::array<std::pair<const char*, QUrl>, 8> links{{
+    const std::array<std::pair<const char*, QUrl>, 7> links{{
         {"aboutWebsite", websiteUrl},
         {"aboutSourceCode", QUrl(project)},
         {"aboutFeedback", QUrl(project + QStringLiteral("/issues"))},
         {"aboutReleaseNotes", websiteUrl.resolved(QUrl(QStringLiteral("/changelog.html")))},
-        {"aboutQqGroup3", QUrl(QStringLiteral(SNOW_SHOT_TEST_QQ_GROUP_3_URL))},
         {"aboutQqGroup4", QUrl(QStringLiteral(SNOW_SHOT_TEST_QQ_GROUP_4_URL))},
         {"aboutPrivacyPolicy", QUrl(snow_shot::app::distribution::privacyPolicyUrl())},
         {"aboutUserAgreement", QUrl(QStringLiteral("https://snowshot.top/terms.html"))},
@@ -407,9 +439,10 @@ void largerTypeKeepsEveryActionReachable() {
     config.fontSize = 20;
     manager.setThemeStyleConfig(config);
     QCoreApplication::setApplicationVersion(QStringLiteral("12.34.56-beta.7+build.89"));
-    snow_shot::update::UpdateService updates({});
+    snow_shot::update::UpdateService updates(aboutUpdateOptions());
+    startAboutUpdates(updates);
     const_cast<snow_shot::update::UpdateStatus&>(updates.status()) = {
-        snow_shot::update::UpdateState::Ready,
+        snow_shot::update::UpdateState::Available,
         QStringLiteral("12.34.56-beta.8+build.90"),
         {},
         0,
@@ -428,9 +461,10 @@ void largerTypeKeepsEveryActionReachable() {
     auto* artwork = child<QWidget>(page, "aboutArtwork");
     require(artwork->width() <= scroll->viewport()->width() && artwork->height() > 0,
             "artwork scales down to the available width with larger fonts");
-    for (const char* name : {"aboutCopyVersion", "aboutReleaseNotes", "aboutUpdateAction",
-                             "aboutWebsite", "aboutSourceCode", "aboutFeedback", "aboutQqGroup3",
-                             "aboutQqGroup4", "aboutPrivacyPolicy", "aboutUserAgreement"}) {
+    for (const char* name :
+         {"aboutCopyVersion", "aboutReleaseNotes", "aboutUpdateCheck", "aboutUpdateAction",
+          "aboutWebsite", "aboutSourceCode", "aboutFeedback", "aboutQqGroup4", "aboutPrivacyPolicy",
+          "aboutUserAgreement"}) {
         auto* button = child<QAbstractButton>(page, name);
         scroll->ensureWidgetVisible(button);
         flushEvents();
@@ -449,9 +483,10 @@ void updatePolicyAndUnavailableCopy() {
     settings::BuiltInSettingsBackend backend(shortcuts);
     const auto binding = settings::SettingsSelectBinding::UpdateMode;
 #ifdef Q_OS_MACOS
-    require(backend.selectValue(binding).toString() == QStringLiteral("check"),
-            "macOS defaults to automatic checks");
-    for (const QString& value : {QStringLiteral("manual"), QStringLiteral("check")}) {
+    require(backend.selectValue(binding).toString() == QStringLiteral("next_launch"),
+            "macOS defaults to next-launch updates");
+    for (const QString& value :
+         {QStringLiteral("manual"), QStringLiteral("check"), QStringLiteral("next_launch")}) {
         require(backend.applySelectValue(binding, value) &&
                     backend.selectValue(binding).toString() == value,
                 "macOS check policies round-trip");
@@ -459,7 +494,8 @@ void updatePolicyAndUnavailableCopy() {
     require(backend.applySelectValue(binding, QStringLiteral("download")) &&
                 backend.selectValue(binding).toString() == QStringLiteral("check"),
             "legacy policy maps to check");
-    snow_shot::update::UpdateService updates({});
+    snow_shot::update::UpdateService updates(aboutUpdateOptions());
+    startAboutUpdates(updates);
     QList<QUrl> opened;
     AboutPageWidget page(
         nullptr,
@@ -480,7 +516,7 @@ void updatePolicyAndUnavailableCopy() {
         QUrl(QStringLiteral("https://github.com/mg-chao/snow-shot/releases/tag/v2.0.0_snow-shot"))};
     updates.statusChanged();
     auto* action = child<adqt::widgets::AdButton>(page, "aboutUpdateAction");
-    require(action->text() == QStringLiteral("Download from GitHub"),
+    require(action->text() == QStringLiteral("View update details"),
             "About explains external download");
     action->click();
     require(opened == QList<QUrl>{status.downloadUrl}, "About opens the exact GitHub release");
@@ -488,13 +524,13 @@ void updatePolicyAndUnavailableCopy() {
         QUrl(QStringLiteral("https://gitee.com/mg-chao/snow-apps/releases/tag/v2.0.0_snow-shot"));
     emit updates.statusChanged();
     flushEvents();
-    require(action->text() == QStringLiteral("Download from Gitee"),
+    require(action->text() == QStringLiteral("View update details"),
             "About identifies Gitee release");
     action->click();
     require(opened.last() == status.downloadUrl, "About opens the exact Gitee release");
 #else
-    require(backend.selectValue(binding).toString() == QStringLiteral("download"),
-            "automatic download is the default update policy");
+    require(backend.selectValue(binding).toString() == QStringLiteral("next_launch"),
+            "next-launch updates are the default update policy");
     for (const QString& value :
          {QStringLiteral("manual"), QStringLiteral("check"), QStringLiteral("download")}) {
         require(backend.applySelectValue(binding, value) &&
@@ -504,7 +540,8 @@ void updatePolicyAndUnavailableCopy() {
     require(!backend.applySelectValue(binding, QStringLiteral("invalid")) &&
                 backend.selectValue(binding).toString() == QStringLiteral("download"),
             "invalid update policy preserves the previous value");
-    snow_shot::update::UpdateService updates({});
+    snow_shot::update::UpdateService updates(aboutUpdateOptions());
+    startAboutUpdates(updates);
     AboutPageWidget page(nullptr, {}, &updates);
     require(!child<adqt::widgets::AdButton>(page, "aboutUpdateAction")->isEnabled(),
             "development copies cannot overwrite themselves");
@@ -512,26 +549,34 @@ void updatePolicyAndUnavailableCopy() {
                 QStringLiteral("Automatic updates are unavailable for this copy"),
             "unavailable update status explains the disabled action");
 #endif
+    require(backend.applySelectValue(binding, QStringLiteral("next_launch")),
+            "restore the update default for subsequent settings tests");
 }
 
 void updateStatesFitTheVersionPanel() {
     using namespace snow_shot::update;
     using adqt::widgets::AdButton;
-    UpdateService updates({});
+    UpdateService updates(aboutUpdateOptions());
+    startAboutUpdates(updates);
     // Inject presentation snapshots without networking, downloads, or restart side effects.
     auto& status = const_cast<UpdateStatus&>(updates.status());
     QCoreApplication::setApplicationVersion(QStringLiteral(SNOW_SHOT_TEST_VERSION));
     AboutPageWidget page(nullptr, [](const QUrl&) { return true; }, &updates);
     auto* panel = child<QFrame>(page, "aboutVersionPanel");
     auto* label = child<QLabel>(page, "aboutUpdateStatus");
+    auto* check = child<AdButton>(page, "aboutUpdateCheck");
     auto* action = child<AdButton>(page, "aboutUpdateAction");
     auto* cancel = child<AdButton>(page, "aboutUpdateCancel");
     auto* progress = child<QProgressBar>(page, "aboutUpdateProgress");
     auto* scroll = child<adqt::widgets::AdScrollArea>(page, "pageScrollArea");
-    require(panel->isAncestorOf(label) && panel->isAncestorOf(action) &&
-                panel->isAncestorOf(cancel) && panel->isAncestorOf(progress),
+    require(panel->isAncestorOf(label) && panel->isAncestorOf(check) &&
+                panel->isAncestorOf(action) && panel->isAncestorOf(cancel) &&
+                panel->isAncestorOf(progress),
             "update feedback and actions belong to the current version surface");
-    require(action->sizeClass() == AdButton::SizeClass::Small &&
+    require(check->buttonStyle() == AdButton::ButtonStyle::Link &&
+                check->sizeClass() == AdButton::SizeClass::Small &&
+                check->focusPolicy() == Qt::StrongFocus &&
+                action->sizeClass() == AdButton::SizeClass::Small &&
                 cancel->sizeClass() == AdButton::SizeClass::Small &&
                 action->focusPolicy() == Qt::StrongFocus &&
                 cancel->focusPolicy() == Qt::StrongFocus,
@@ -567,8 +612,27 @@ void updateStatesFitTheVersionPanel() {
                     const bool actionable =
                         state == UpdateState::Idle || state == UpdateState::Available ||
                         state == UpdateState::Ready || state == UpdateState::Failed;
+                    if (action->isVisible() != actionable || action->isEnabled() != actionable) {
+                        std::cerr << "Unexpected update action in state " << static_cast<int>(state)
+                                  << ": visible=" << action->isVisible()
+                                  << " enabled=" << action->isEnabled()
+                                  << " canCheck=" << updates.canCheck() << '\n';
+                    }
                     require(action->isVisible() == actionable && action->isEnabled() == actionable,
                             "only actionable update states display a primary control");
+                    require(check->isVisible() == (state == UpdateState::Available),
+                            "the check link appears with the download action");
+                    if (check->isVisible()) {
+                        require(check->isEnabled() &&
+                                    check->text() == expectedTranslation(translator, locale,
+                                                                         "AboutPageWidget",
+                                                                         "Check for updates") &&
+                                    check->accessibleName() == check->text(),
+                                "the check link uses the active language");
+                        require(check->geometry().center().y() == action->geometry().center().y() &&
+                                    check->geometry().right() < action->geometry().left(),
+                                "the check link fits to the left of the download button");
+                    }
                     require(cancel->isVisible() == (state == UpdateState::Downloading) &&
                                 progress->isVisible() == (state == UpdateState::Downloading),
                             "download controls are confined to the downloading state");
@@ -604,7 +668,7 @@ void updateStatesFitTheVersionPanel() {
                     }
                     require(label->height() >= label->heightForWidth(label->width()),
                             "wrapped update status text is not clipped");
-                    for (auto* button : {action, cancel}) {
+                    for (auto* button : {check, action, cancel}) {
                         if (!button->isVisible()) {
                             continue;
                         }
@@ -663,11 +727,76 @@ void updateStatesFitTheVersionPanel() {
     styles::ThemeManager::instance().setThemeAppearance(styles::ThemeAppearance::Light);
 }
 
+void checkLinkStartsManualUpdateCheck() {
+    using namespace snow_shot::update;
+    QTemporaryDir directory;
+    require(directory.isValid(), "create isolated update directory");
+    auto options = aboutUpdateOptions();
+    options.applicationDirectory = directory.path();
+    options.root = directory.path();
+    options.storeManaged = false;
+    UpdateService updates(std::move(options));
+    startAboutUpdates(updates);
+    updates.setMode(QStringLiteral("manual"));
+    const_cast<UpdateStatus&>(updates.status()).state = UpdateState::Available;
+    AboutPageWidget page(nullptr, {}, &updates);
+
+    QString operation;
+    QEventLoop loop;
+    QObject::connect(&updates, &UpdateService::operationFinished, &loop,
+                     [&](const QString& finishedOperation, const QString&) {
+                         operation = finishedOperation;
+                         loop.quit();
+                     });
+    // The Windows fixture and injected macOS driver finish without networking.
+    child<adqt::widgets::AdButton>(page, "aboutUpdateCheck")->click();
+    if (operation.isEmpty()) {
+        QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+        loop.exec();
+    }
+    require(operation == QStringLiteral("check"), "the check link begins a manual update check");
+}
+
+void updateModuleKeepsItsHeightAcrossStates() {
+    using namespace snow_shot::update;
+    UpdateService updates(aboutUpdateOptions());
+    startAboutUpdates(updates);
+    auto& status = const_cast<UpdateStatus&>(updates.status());
+    QCoreApplication::setApplicationVersion(QStringLiteral(SNOW_SHOT_TEST_VERSION));
+    AboutPageWidget page(nullptr, [](const QUrl&) { return true; }, &updates);
+    auto* panel = child<QFrame>(page, "aboutVersionPanel");
+    page.show();
+    for (const int width : {660, 360}) {
+        page.resize(width, 460);
+        flushEvents();
+        int panelHeight = -1;
+        // Unavailable is a static property of the copy and never transitions at runtime;
+        // every state the update flow can actually move through must keep one height.
+        for (const auto state : {UpdateState::Idle, UpdateState::Checking, UpdateState::Available,
+                                 UpdateState::Downloading, UpdateState::Verifying,
+                                 UpdateState::Ready, UpdateState::Applying, UpdateState::Failed}) {
+            status = {state, QStringLiteral("1.2.3"), {}, 5 * 1048576, 20 * 1048576};
+            if (state == UpdateState::Failed) {
+                status.error = QStringLiteral("network error");
+            }
+            updates.statusChanged();
+            flushEvents();
+            if (panelHeight < 0) {
+                panelHeight = panel->height();
+            }
+            require(panel->height() == panelHeight,
+                    "update state transitions never change the version panel height");
+        }
+    }
+    page.hide();
+}
+
 void dividersFollowTheComponentLibraryAndUpdatesBreathe() {
     using adqt::widgets::AdButton;
     using adqt::widgets::AdDivider;
     QCoreApplication::setApplicationVersion(QStringLiteral(SNOW_SHOT_TEST_VERSION));
-    snow_shot::update::UpdateService updates({});
+    snow_shot::update::UpdateService updates(aboutUpdateOptions());
+    startAboutUpdates(updates);
     const_cast<snow_shot::update::UpdateStatus&>(updates.status()).state =
         snow_shot::update::UpdateState::Idle;
     AboutPageWidget page(nullptr, [](const QUrl&) { return true; }, &updates);
@@ -885,6 +1014,16 @@ int main(int argc, char** argv) {
     require(storage.initialize({directory.path(), directory.path(), 8000}).success,
             "initialize isolated storage");
     styles::ThemeManager::instance().initialize(application);
+    if (application.arguments().contains(QStringLiteral("--updates-only"))) {
+        updatePolicyAndUnavailableCopy();
+        updateStatesFitTheVersionPanel();
+        checkLinkStartsManualUpdateCheck();
+        updateModuleKeepsItsHeightAcrossStates();
+        dividersFollowTheComponentLibraryAndUpdatesBreathe();
+        largerTypeKeepsEveryActionReachable();
+        storage.shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--tray-icon-color-only"))) {
         traySystemIconColorSettings();
         storage.shutdown();
@@ -904,6 +1043,8 @@ int main(int argc, char** argv) {
     storeUpdatesOpenMicrosoftStore();
     updatePolicyAndUnavailableCopy();
     updateStatesFitTheVersionPanel();
+    checkLinkStartsManualUpdateCheck();
+    updateModuleKeepsItsHeightAcrossStates();
     dividersFollowTheComponentLibraryAndUpdatesBreathe();
     traySystemIconColorSettings();
     traySettingsAndFunctionNavigation();

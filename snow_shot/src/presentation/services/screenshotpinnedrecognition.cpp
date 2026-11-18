@@ -11,7 +11,7 @@
 
 namespace {
 constexpr quint32 kTextTranslationPayloadMarker = 0x53535452;
-constexpr quint8 kTextTranslationPayloadVersion = 2;
+constexpr quint8 kTextTranslationPayloadVersion = 3;
 QTransform imagePixelsToCanvasTransform(const QTransform& imageTransform,
                                         const QSize& transformedPixels, const QRectF& contentRect) {
     QTransform pixelsToCanvas;
@@ -184,7 +184,7 @@ ScreenshotRecognitionResults decodeScreenshotPinnedRecognition(const QByteArray&
             continue;
         }
         if (marker != kTextTranslationPayloadMarker ||
-            (version != 1 && version != kTextTranslationPayloadVersion) ||
+            (version != 1 && version != 2 && version != kTextTranslationPayloadVersion) ||
             !results.text.has_value() || !results.text->error.isEmpty() ||
             results.text->presentation == nullptr) {
             return {};
@@ -214,16 +214,24 @@ ScreenshotRecognitionResults decodeScreenshotPinnedRecognition(const QByteArray&
                 quint8 direction = 0;
                 stream >> line.text >> line.confidence >> line.quad >> direction >>
                     line.paragraph >> line.sourceLineQuads;
+                if (version >= 3)
+                    stream >> line.sourceLineIndices;
                 line.direction = direction != 0 ? ScreenshotOcrTextDirection::Vertical
                                                 : ScreenshotOcrTextDirection::Horizontal;
                 results.translatedText->lines.push_back(std::move(line));
             }
         }
         results.translatedText->prepareForRendering();
+        QVector<int> paragraphsToRestore;
+        bool smartMerge = false;
         if (const auto indices = snow_shot::presentation::ocrTranslationSourceIndices(
-                *results.translatedText, *results.text->presentation)) {
-            setScreenshotOcrTranslationFontCaps(results.translatedText->lines,
-                                                results.text->presentation->lines, *indices, font);
+                *results.translatedText, *results.text->presentation, &paragraphsToRestore,
+                &smartMerge)) {
+            for (const int index : paragraphsToRestore)
+                results.translatedText->lines[index].paragraph = true;
+            prepareScreenshotOcrTranslationLayout(results.translatedText->lines,
+                                                  results.text->presentation->lines, *indices, font,
+                                                  smartMerge);
         }
 #else
         // Consume the legacy extension without constructing a translated presentation.
@@ -245,6 +253,8 @@ ScreenshotRecognitionResults decodeScreenshotPinnedRecognition(const QByteArray&
                 quint8 ignoredDirection = 0;
                 stream >> ignoredLine.text >> ignoredLine.confidence >> ignoredLine.quad >>
                     ignoredDirection >> ignoredLine.paragraph >> ignoredLine.sourceLineQuads;
+                if (version >= 3)
+                    stream >> ignoredLine.sourceLineIndices;
             }
         }
 #endif

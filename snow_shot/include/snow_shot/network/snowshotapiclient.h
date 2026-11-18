@@ -10,6 +10,7 @@
 #endif
 
 #include <QHash>
+#include <QJsonObject>
 #include <QElapsedTimer>
 #include <QImage>
 #include <QObject>
@@ -29,6 +30,16 @@ class QJsonValue;
 class QTimer;
 class SnowShotApiClient;
 class LocalGatewayProxy;
+
+struct SnowShotDocumentResult {
+    QJsonObject raw;
+    QString error;
+    QString code;
+    int httpStatus = 0;
+    [[nodiscard]] bool succeeded() const {
+        return !raw.isEmpty() && error.isEmpty();
+    }
+};
 
 struct SnowShotTableResult {
     QString html;
@@ -134,6 +145,7 @@ using SnowShotImageConversionResult = SnowShotTranslationResult;
 class SnowShotTableVisionConversation final {
     friend class SnowShotApiClient;
     QByteArray m_body;
+    QString m_reasoningContent;
     QString m_model;
     QString m_fingerprint;
 };
@@ -147,10 +159,13 @@ class SnowShotApiClient final : public QObject {
   public:
     using RequestToken = quint64;
     using Completion = std::function<void(SnowShotTableResult)>;
+    using DocumentCompletion = std::function<void(SnowShotDocumentResult)>;
     using LatexCompletion = std::function<void(SnowShotLatexResult)>;
     using ChatModelsCompletion = std::function<void(SnowShotChatModelsResult)>;
     using TranslationDelta = std::function<void(const QString&)>;
     using TranslationCompletion = std::function<void(SnowShotTranslationResult)>;
+    // Reports when a streamed reasoning phase starts or ends.
+    using ReasoningProgress = std::function<void(bool)>;
     using BatchTranslationCompletion = std::function<void(SnowShotTranslationResult, QStringList)>;
 
     enum class ChatModelsCachePolicy { UseCached, Refresh };
@@ -174,6 +189,8 @@ class SnowShotApiClient final : public QObject {
     [[nodiscard]] QString cachedChatModelsLocale() const {
         return m_cachedChatModelsLocale;
     }
+    [[nodiscard]] RequestToken extractDocument(const QImage& image, QObject* receiver,
+                                               DocumentCompletion completion);
     [[nodiscard]] RequestToken extractTable(const QImage& image, QObject* receiver,
                                             Completion completion);
     [[nodiscard]] RequestToken extractLatex(const QImage& image, QObject* receiver,
@@ -183,15 +200,17 @@ class SnowShotApiClient final : public QObject {
     [[nodiscard]] RequestToken
     streamTableVision(const QImage& image, const QString& model,
                       std::shared_ptr<SnowShotTableVisionConversation> conversation,
-                      QObject* receiver, TranslationDelta delta, TranslationCompletion completion);
+                      QObject* receiver, TranslationDelta delta, TranslationCompletion completion,
+                      ReasoningProgress reasoningProgress = {});
     [[nodiscard]] RequestToken
     correctTableVision(std::shared_ptr<SnowShotTableVisionConversation> conversation,
                        const QString& source, QObject* receiver, TranslationDelta delta,
-                       TranslationCompletion completion);
+                       TranslationCompletion completion, ReasoningProgress reasoningProgress = {});
     // Optional progress receives raw content chunks; only completion publishes validated LaTeX.
     [[nodiscard]] RequestToken extractLatexVision(const QImage& image, const QString& model,
                                                   QObject* receiver, LatexCompletion completion,
-                                                  TranslationDelta delta = {});
+                                                  TranslationDelta delta = {},
+                                                  ReasoningProgress reasoningProgress = {});
     [[nodiscard]] RequestToken fetchChatModels(const QString& locale, QObject* receiver,
                                                ChatModelsCompletion completion);
     // Discovery reuses the cache unless refreshing. Concurrent subscribers, including normal
@@ -211,7 +230,8 @@ class SnowShotApiClient final : public QObject {
     [[nodiscard]] RequestToken
     streamImageConversion(const SnowShotImageConversionRequest& request, QObject* receiver,
                           TranslationDelta delta,
-                          std::function<void(SnowShotImageConversionResult)> completion);
+                          std::function<void(SnowShotImageConversionResult)> completion,
+                          ReasoningProgress reasoningProgress = {});
     void cancel(RequestToken token);
     [[nodiscard]] bool isQueued(RequestToken token) const;
     void setTextTranslationConfigurations(const snow_shot::TextTranslationConfigurations& values);
@@ -239,6 +259,8 @@ class SnowShotApiClient final : public QObject {
                                                const QString& description, QStringView model = {});
 
   private:
+    void startDocumentUpload(RequestToken token, const QByteArray& png);
+    void finishDocument(RequestToken token, SnowShotDocumentResult result);
     friend class SnowShotApiClientTestAccess;
     std::function<QByteArray(const QImage&)> m_tableImagePreparation;
     int m_latexTimeoutMs = 65000;
@@ -273,6 +295,7 @@ class SnowShotApiClient final : public QObject {
     streamImageRequest(const QString& model, const QImage& image, const QString& format,
                        const QString& prompt, QObject* receiver, TranslationDelta delta,
                        TranslationCompletion completion, bool absoluteDeadline,
+                       ReasoningProgress reasoningProgress = {},
                        std::shared_ptr<SnowShotTableVisionConversation> conversation = {},
                        std::optional<QString> correction = std::nullopt);
     void finishModelCatalogSubscribers(RequestToken owner, SnowShotChatModelsResult result);

@@ -43,6 +43,15 @@ struct ScreenshotOcrLine {
     QColor sourceTextColor{};
     // Aligned with sourceLineQuads, including separate word boxes on the same visual row.
     QVector<QColor> sourceLineTextColors{};
+    // Derived translation provenance; never produced by OCR recognition.
+    QVector<int> sourceLineIndices{};
+    bool smartMergeTranslation = false;
+};
+
+struct ScreenshotOcrTextUpdate {
+    int index;
+    QString text;
+    bool streaming;
 };
 
 struct ScreenshotOcrTextPosition {
@@ -75,6 +84,8 @@ class ScreenshotOcrPresentation final {
     bool solidBackgroundFill = false;
 
     void prepareForRendering();
+    // Publish worker-prepared colors without replacing live text or selection state.
+    bool applyPreparedColors(const ScreenshotOcrPresentation& source);
     void setLineText(int lineIndex, const QString& text, bool streaming = false);
     [[nodiscard]] bool empty() const;
     [[nodiscard]] int lineAt(const QPointF& canvasPosition) const;
@@ -111,13 +122,22 @@ class ScreenshotOcrPresentation final {
   private:
     friend void prepareScreenshotOcrTextColors(ScreenshotOcrPresentation&, const QImage&,
                                                const QRectF&, const std::atomic_bool*);
+    friend void prepareScreenshotOcrFillColors(ScreenshotOcrPresentation&, const QImage&,
+                                               const QRectF&, bool, const std::atomic_bool*);
     struct ColorGeometry {
         QPolygonF quad;
         QVector<QPolygonF> sourceLineQuads;
     };
+    struct FillGeometry {
+        QPolygonF quad;
+        bool solid;
+    };
     qint64 m_textColorImageKey = 0;
     QRectF m_textColorCanvasRect;
     QVector<ColorGeometry> m_textColorGeometry;
+    qint64 m_fillColorImageKey = 0;
+    QRectF m_fillColorCanvasRect;
+    QVector<FillGeometry> m_fillColorGeometry;
 
     struct CachedLineGeometry {
         QRectF bounds;

@@ -1317,12 +1317,20 @@
             <translation>Discard this stitching session?</translation>
         </message>
         <message>
+            <source>Dropped image</source>
+            <translation>Dropped image</translation>
+        </message>
+        <message>
             <source>Export could not be started. Try again</source>
             <translation>Export could not be started. Try again</translation>
         </message>
         <message>
             <source>Exporting PDF page %1 of %2: %3%</source>
             <translation>Exporting PDF page %1 of %2: %3%</translation>
+        </message>
+        <message>
+            <source>Image editing</source>
+            <translation>Image editing</translation>
         </message>
         <message>
             <source>Image loading could not be started. Try again</source>

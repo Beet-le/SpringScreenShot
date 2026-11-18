@@ -1185,10 +1185,11 @@ Session* ImageEditingWindow::Impl::ensureSession() {
             active && busy && format == SnowShotImageConversionFormat::Html);
     };
     actions.setRecognitionModelState = [this](int mode, const auto& state) {
-        const auto tool = mode == int(Session::Mode::Table)   ? Tool::Table
-                          : mode == int(Session::Mode::Latex) ? Tool::Latex
-                          : mode == int(Session::Mode::Html)  ? Tool::Html
-                                                              : Tool::Markdown;
+        const auto tool = mode == int(Session::Mode::Document) ? Tool::Document
+                          : mode == int(Session::Mode::Table)  ? Tool::Table
+                          : mode == int(Session::Mode::Latex)  ? Tool::Latex
+                          : mode == int(Session::Mode::Html)   ? Tool::Html
+                                                               : Tool::Markdown;
         palette->setRecognitionModelState(tool, state);
     };
     session = new Session(providers.recognition, providers.qrRecognition,
@@ -1250,11 +1251,12 @@ void ImageEditingWindow::Impl::activate(Session::Mode mode, bool translate) {
             return;
     }
     const Tool tool = mode == Session::Mode::Text ? (translate ? Tool::TextTranslation : Tool::Ocr)
-                      : mode == Session::Mode::Table ? Tool::Table
-                      : mode == Session::Mode::Qr    ? Tool::Qr
-                      : mode == Session::Mode::Latex ? Tool::Latex
-                      : mode == Session::Mode::Html  ? Tool::Html
-                                                     : Tool::Markdown;
+                      : mode == Session::Mode::Document ? Tool::Document
+                      : mode == Session::Mode::Table    ? Tool::Table
+                      : mode == Session::Mode::Qr       ? Tool::Qr
+                      : mode == Session::Mode::Latex    ? Tool::Latex
+                      : mode == Session::Mode::Html     ? Tool::Html
+                                                        : Tool::Markdown;
     host->setActiveTool(tool);
     placeToolbar();
 }
@@ -1263,6 +1265,8 @@ void ImageEditingWindow::Impl::bindRecognition() {
                      [this] { activate(Session::Mode::Text); });
     QObject::connect(palette, &ScreenshotToolPalette::textTranslationRequested, &q,
                      [this] { activate(Session::Mode::Text, true); });
+    QObject::connect(palette, &ScreenshotToolPalette::documentRequested, &q,
+                     [this] { activate(Session::Mode::Document); });
     QObject::connect(palette, &ScreenshotToolPalette::tableRequested, &q,
                      [this] { activate(Session::Mode::Table); });
     QObject::connect(palette, &ScreenshotToolPalette::qrRequested, &q,
@@ -1318,6 +1322,14 @@ void ImageEditingWindow::Impl::bindRecognition() {
     SESSION_ACTION(tableMergeRequested, mergeTableSelection);
     SESSION_ACTION(tableSplitRequested, splitTableSelection);
     SESSION_ACTION(tableResetRequested, resetTable);
+    QObject::connect(palette, &ScreenshotToolPalette::openDocumentFileRequested, &q, [this] {
+        const QPointer<ImageEditingWindow> lifetime(&q);
+        if (session)
+            static_cast<void>(session->openDocumentFile([this, lifetime] {
+                if (lifetime)
+                    drawing(ImageEditingCanvas::Mode::Pan);
+            }));
+    });
     QObject::connect(palette, &ScreenshotToolPalette::openSpreadsheetFileRequested, &q, [this] {
         const QPointer<ImageEditingWindow> lifetime(&q);
         if (session && session->openSpreadsheetFile() && lifetime)
@@ -1326,7 +1338,6 @@ void ImageEditingWindow::Impl::bindRecognition() {
     SESSION_ACTION(textResetRequested, resetTextEditing);
     SESSION_ACTION(textSettingsRequested, openTranslationSettings);
     SESSION_ACTION(textTranslationServicesRequested, requestTextTranslationServices);
-    SESSION_ACTION(imageConversionSettingsRequested, openImageConversionSettings);
 #undef SESSION_ACTION
 #define SESSION_VALUE(signal, method)                                                              \
     QObject::connect(palette, &ScreenshotToolPalette::signal, &q, [this](const QString& value) {   \
@@ -1380,15 +1391,28 @@ bool ImageEditingWindow::Impl::exportContent(ExportOperation operation) {
     if (recognition && recognition->originalImageTranslationActive())
         checkpoint.clear();
     if (recognition && operation == ExportOperation::Copy) {
-        auto mime = recognition->recognitionClipboardMimeData();
-        if (!mime) {
-            finish({}, false,
-                   ImageEditingWindow::tr("No recognition result is available to export"));
-            return false;
+#if SNOW_SHOT_ENABLE_DOCUMENT_RECOGNITION
+        if (recognition->mode() == Session::Mode::Document) {
+            auto request = recognition->documentCopyRequest();
+            if (!request.document) {
+                finish({}, false,
+                       ImageEditingWindow::tr("No recognition result is available to export"));
+                return false;
+            }
+            content = std::move(request);
+        } else
+#endif
+        {
+            auto mime = recognition->recognitionClipboardMimeData();
+            if (!mime) {
+                finish({}, false,
+                       ImageEditingWindow::tr("No recognition result is available to export"));
+                return false;
+            }
+            if (ocrOverlay && (!mime->hasText() || mime->text() != recognition->textDraft()))
+                checkpoint.clear();
+            content = std::move(mime);
         }
-        if (ocrOverlay && (!mime->hasText() || mime->text() != recognition->textDraft()))
-            checkpoint.clear();
-        content = std::move(mime);
     } else if (recognition &&
                (operation == ExportOperation::Save || operation == ExportOperation::QuickSave)) {
         if (recognition->mode() == Session::Mode::Text && recognition->hasTextResult()) {
@@ -1501,7 +1525,26 @@ void ImageEditingWindow::paste() {
     if (!d.canPaste())
         return;
     auto* clipboard = QApplication::clipboard();
-    const auto paths = ScreenshotClipboardContentReader::localImageFilePaths(clipboard->mimeData());
+    auto paths = ScreenshotClipboardContentReader::localImageFilePaths(clipboard->mimeData());
+    auto reservation = reserveImageStitchingImport(0);
+    bool rejected = !reservation;
+    std::optional<ScreenshotClipboardContentSnapshot> snapshot;
+    if (paths.isEmpty()) {
+        snapshot = ScreenshotClipboardContentReader::snapshotImage(
+            clipboard, d.surface->devicePixelRatioF(), [&reservation, &rejected](qint64 bytes) {
+                rejected = rejected || !reservation->resize(bytes);
+                return !rejected;
+            });
+        if (!snapshot && !rejected)
+            return;
+    }
+    loadImportedImage(std::move(paths), std::move(snapshot), std::move(reservation), rejected);
+}
+
+void ImageEditingWindow::loadImportedImage(
+    QStringList paths, std::optional<ScreenshotClipboardContentSnapshot> snapshot,
+    std::shared_ptr<ImageStitchingImportReservation> reservation, bool reservationRejected) {
+    auto& d = *m_impl;
     struct PastedImage {
         ImageEditingSource source;
         QStringList additionalFiles;
@@ -1509,18 +1552,8 @@ void ImageEditingWindow::paste() {
         bool rejected = false;
     };
     auto pasted = std::make_shared<PastedImage>();
-    pasted->reservation = reserveImageStitchingImport(0);
-    pasted->rejected = !pasted->reservation;
-    std::optional<ScreenshotClipboardContentSnapshot> snapshot;
-    if (paths.isEmpty()) {
-        snapshot = ScreenshotClipboardContentReader::snapshotImage(
-            clipboard, d.surface->devicePixelRatioF(), [pasted](qint64 bytes) {
-                pasted->rejected = pasted->rejected || !pasted->reservation->resize(bytes);
-                return !pasted->rejected;
-            });
-        if (!snapshot && !pasted->rejected)
-            return;
-    }
+    pasted->reservation = std::move(reservation);
+    pasted->rejected = reservationRejected || !pasted->reservation;
     const auto generation = ++d.loadGeneration;
     d.cancelLoading();
     d.errorSource = nullptr;
@@ -2133,6 +2166,14 @@ void ImageEditingWindowCoordinator::presentFiles(const QStringList& paths) {
     if (auto* window = createWindow()) {
         window->presentEmpty();
         window->openFiles(paths);
+    }
+}
+void ImageEditingWindowCoordinator::presentDroppedImage(
+    ScreenshotClipboardContentSnapshot snapshot,
+    std::shared_ptr<ImageStitchingImportReservation> reservation) {
+    if (auto* window = createWindow()) {
+        window->presentEmpty();
+        window->loadImportedImage({}, std::move(snapshot), std::move(reservation), false);
     }
 }
 void ImageEditingWindowCoordinator::presentSelectedFiles(

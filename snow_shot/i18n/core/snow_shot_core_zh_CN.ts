@@ -102,14 +102,6 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>交流与答疑 · 群号 %1</translation>
         </message>
         <message>
-            <source>Download from GitHub</source>
-            <translation>从 GitHub 下载</translation>
-        </message>
-        <message>
-            <source>Download from Gitee</source>
-            <translation>从 Gitee 下载</translation>
-        </message>
-        <message>
             <source>Download update</source>
             <translation>下载更新</translation>
         </message>
@@ -182,10 +174,6 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>隐私政策</translation>
         </message>
         <message>
-            <source>QQ group 3</source>
-            <translation>QQ 交流群 3</translation>
-        </message>
-        <message>
             <source>QQ group 4</source>
             <translation>QQ 交流群 4</translation>
         </message>
@@ -238,6 +226,14 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>不可用</translation>
         </message>
         <message>
+            <source>Update %1 is ready. It will install after you quit and be available on your next launch</source>
+            <translation>更新 %1 已就绪。退出应用程序后将进行安装，下次启动时即可使用</translation>
+        </message>
+        <message>
+            <source>Update %1 will install when you quit</source>
+            <translation>更新 %1 将在退出应用时安装</translation>
+        </message>
+        <message>
             <source>Update available: %1</source>
             <translation>发现新版本：%1</translation>
         </message>
@@ -264,6 +260,10 @@ so every moment on screen can be expressed clearly and shared easily</source>
         <message>
             <source>View the source and improve it together</source>
             <translation>查看源码，一起改进</translation>
+        </message>
+        <message>
+            <source>View update details</source>
+            <translation>查看更新详情</translation>
         </message>
         <message>
             <source>You are up to date</source>
@@ -326,6 +326,10 @@ so every moment on screen can be expressed clearly and shared easily</source>
         <message>
             <source>Scale: %1%</source>
             <translation>缩放：%1%</translation>
+        </message>
+        <message>
+            <source>Thinking…</source>
+            <translation>思考中…</translation>
         </message>
     </context>
     <context>
@@ -692,6 +696,14 @@ so every moment on screen can be expressed clearly and shared easily</source>
     <context>
         <name>SnowShotApiClient</name>
         <message>
+            <source>Document recognition request timed out</source>
+            <translation>文档识别请求超时</translation>
+        </message>
+        <message>
+            <source>Document recognition response is too large</source>
+            <translation>文档识别结果过大</translation>
+        </message>
+        <message>
             <source>Image conversion failed</source>
             <translation>图像转换失败</translation>
         </message>
@@ -726,6 +738,10 @@ so every moment on screen can be expressed clearly and shared easily</source>
         <message>
             <source>Invalid LaTeX recognition response</source>
             <translation>无效的 LaTeX 识别响应</translation>
+        </message>
+        <message>
+            <source>Invalid document recognition response</source>
+            <translation>文档识别结果无效</translation>
         </message>
         <message>
             <source>Invalid model stream response</source>
@@ -792,6 +808,10 @@ so every moment on screen can be expressed clearly and shared easily</source>
             <translation>表格识别未返回表格</translation>
         </message>
         <message>
+            <source>The document image could not be encoded</source>
+            <translation>无法编码文档图像</translation>
+        </message>
+        <message>
             <source>The image could not be prepared for conversion</source>
             <translation>无法准备待转换的图像</translation>
         </message>
@@ -806,6 +826,10 @@ so every moment on screen can be expressed clearly and shared easily</source>
         <message>
             <source>The image is too large to recognize. Select a smaller area</source>
             <translation>图像过大，无法识别。请选择较小的区域</translation>
+        </message>
+        <message>
+            <source>The image is too large. Select a smaller area.</source>
+            <translation>图像过大，请选择较小的区域。</translation>
         </message>
         <message>
             <source>The model response is too large</source>

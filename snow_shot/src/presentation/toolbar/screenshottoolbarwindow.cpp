@@ -248,6 +248,14 @@ void ScreenshotToolbarWindow::connectToolCommands(ScreenshotToolPalette& toolPal
         setActiveToolAndReposition(ScreenshotToolPalette::Tool::TextTranslation);
     });
 #endif
+#if SNOW_SHOT_ENABLE_DOCUMENT_RECOGNITION
+    connect(&toolPalette, &ScreenshotToolPalette::documentRequested, this, [this]() {
+        m_commands.setDocumentTool();
+        setActiveToolAndReposition(ScreenshotToolPalette::Tool::Document);
+    });
+    connect(&toolPalette, &ScreenshotToolPalette::openDocumentFileRequested, this,
+            [this]() { m_commands.openDocumentFile(); });
+#endif
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     connect(&toolPalette, &ScreenshotToolPalette::tableRequested, this, [this]() {
         m_commands.setTableTool();
@@ -271,10 +279,6 @@ void ScreenshotToolbarWindow::connectToolCommands(ScreenshotToolPalette& toolPal
         m_commands.setHtmlTool();
         setActiveToolAndReposition(ScreenshotToolPalette::Tool::Html);
     });
-#endif
-#if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
-    connect(&toolPalette, &ScreenshotToolPalette::imageConversionSettingsRequested, this,
-            [this]() { m_commands.openImageConversionSettings(); });
 #endif
 #if SNOW_SHOT_ENABLE_QR_RECOGNITION
     connect(&toolPalette, &ScreenshotToolPalette::qrRequested, this, [this]() {

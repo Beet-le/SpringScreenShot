@@ -34,6 +34,58 @@ void expect(const QVector<ScreenshotOcrLine>& input, const QStringList& expected
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
     using snow_shot::presentation::mergeOcrLayout;
+    {
+        using snow_shot::presentation::mergeOcrParagraphs;
+        const QVector<ScreenshotOcrLine> lines{box(QStringLiteral("second"), 0, 24, 100),
+                                               box(QStringLiteral("first"), 0, 0, 100),
+                                               box(QStringLiteral("distant"), 0, 1000, 100)};
+        const auto separate = mergeOcrParagraphs(lines, {{0}, {2}, {1}});
+        require(separate && separate->size() == 3 &&
+                    separate->at(0).text == QStringLiteral("first"),
+                "spatial order ignores model enumeration and cannot merge model singletons");
+        const auto combined = mergeOcrParagraphs(lines, {{2, 0, 1}});
+        const auto permuted = mergeOcrParagraphs(lines, {{1, 2, 0}});
+        require(combined && permuted && combined->size() == 1 &&
+                    combined->front().text == QStringLiteral("first second distant") &&
+                    combined->front().text == permuted->front().text &&
+                    combined->front().sourceLineIndices == QVector<int>{1, 0, 2},
+                "model membership overrides gaps while host geometry determines reading order");
+        require(!mergeOcrParagraphs(lines, {{0, 1}}) &&
+                    !mergeOcrParagraphs(lines, {{0, 1}, {1, 2}}) &&
+                    !mergeOcrParagraphs(lines, {{0, 1, 3}}),
+                "incomplete, duplicate and out-of-range membership must fail without guessing");
+        ScreenshotOcrPresentation source, translated;
+        source.lines = lines;
+        translated.lines = *combined;
+        require(snow_shot::presentation::ocrTranslationSourceIndices(translated, source) ==
+                    std::optional{QVector<QVector<int>>{{1, 0, 2}}},
+                "translation provenance restores without heuristic regrouping");
+    }
+    {
+        using snow_shot::presentation::mergeOcrParagraphs;
+        QVector<ScreenshotOcrLine> lines{box(QStringLiteral("left bottom"), 63, 53, 12, 44),
+                                         box(QStringLiteral("right bottom"), 79, 53, 14, 44),
+                                         box(QStringLiteral("left top"), 62, 1, 12, 44),
+                                         box(QStringLiteral("right top"), 80, 8, 12, 40)};
+        for (auto& line : lines)
+            line.direction = ScreenshotOcrTextDirection::Vertical;
+        const auto paragraph = mergeOcrParagraphs(lines, {{0, 2, 3, 1}});
+        require(
+            paragraph && paragraph->size() == 1 &&
+                paragraph->front().text ==
+                    QStringLiteral("right top right bottom left top left bottom") &&
+                paragraph->front().sourceLineIndices == QVector<int>{3, 1, 2, 0} &&
+                paragraph->front().sourceLineQuads ==
+                    QVector<QPolygonF>{lines[3].quad, lines[1].quad, lines[2].quad, lines[0].quad},
+            "vertical paragraphs read down each column before moving to the left");
+
+        lines.push_back(box(QStringLiteral("header"), 0, -40, 150));
+        lines.push_back(box(QStringLiteral("footer"), 0, 110, 150));
+        QVector<QVector<int>> order;
+        const auto separate = mergeOcrParagraphs(lines, {{2, 0}, {5}, {1, 3}, {4}}, &order);
+        require(separate && order == QVector<QVector<int>>{{4}, {3, 1}, {2, 0}, {5}},
+                "separate vertical paragraphs read right to left between horizontal blocks");
+    }
     // Fixtures adapted from STranslate OcrLayoutAnalyzerTests (MIT).
     const QVector<ScreenshotOcrLine> paragraph{
         box(QStringLiteral("This is the first line"), 0, 0, 180),
@@ -109,6 +161,12 @@ int main(int argc, char** argv) {
            "embedded list");
     const QString ordinary = QStringLiteral("Ordinary multiline\nOCR block");
     expect({box(ordinary, 0, 0, 200, 40)}, {ordinary}, "ordinary multiline block");
+    const QString embeddedBreak = QStringLiteral("First row\u2028second row");
+    const auto embeddedBlock = mergeOcrLayout(
+        {box(QStringLiteral("Prefix"), 0, 0, 48, 40), box(embeddedBreak, 52, 0, 160, 40)});
+    require(embeddedBlock.size() == 1 && embeddedBlock[0].paragraph &&
+                embeddedBlock[0].text == QStringLiteral("Prefix ") + embeddedBreak,
+            "same-row merging retains an embedded Unicode line break in a later OCR box");
     const QString numbers = QStringLiteral("1. First\n3. Third");
     expect({box(numbers, 0, 0, 200, 40)}, {numbers}, "nonsequential list");
     expect({box(QStringLiteral("A large heading"), 0, 0, 240, 36),
@@ -191,6 +249,9 @@ int main(int argc, char** argv) {
     const auto split = mergeOcrLayout(splitSource, {}, &indices);
     require(split.size() == 3 && indices == QVector<QVector<int>>{{0}, {0}, {0}},
             "every split list item inherits its original block's font baseline provenance");
+    require(split[0].paragraph && split[0].quad.boundingRect() == QRectF(0, 0, 200, 40) &&
+                !split[1].paragraph && !split[2].paragraph,
+            "a flattened list continuation retains its multiline area for translation");
     ScreenshotOcrPresentation source;
     source.selection = QRect(0, 0, 200, 80);
     source.lines = splitSource;
@@ -198,13 +259,42 @@ int main(int argc, char** argv) {
     translation.lines = split;
     for (auto& line : translation.lines)
         line.text = QStringLiteral("translated");
-    require(snow_shot::presentation::ocrTranslationSourceIndices(translation, source) == indices,
+    QVector<int> paragraphsToRestore;
+    bool smartMerge = false;
+    require(snow_shot::presentation::ocrTranslationSourceIndices(
+                translation, source, &paragraphsToRestore, &smartMerge) == indices &&
+                paragraphsToRestore.isEmpty() && smartMerge,
             "restoration reconstructs captured Smart Merge provenance without translated text");
+    translation.lines[0].paragraph = false;
+    require(snow_shot::presentation::ocrTranslationSourceIndices(translation, source,
+                                                                 &paragraphsToRestore) == indices &&
+                paragraphsToRestore == QVector<int>{0},
+            "legacy pins restore paragraph layout only for matching list continuation geometry");
+    translation.lines[0].quad.translate(1, 0);
+    require(!snow_shot::presentation::ocrTranslationSourceIndices(translation, source,
+                                                                  &paragraphsToRestore) &&
+                paragraphsToRestore.isEmpty(),
+            "legacy migration still requires the original captured quad");
+    translation.lines[0].quad = split[0].quad;
+    translation.lines[1].paragraph = true;
+    require(!snow_shot::presentation::ocrTranslationSourceIndices(translation, source,
+                                                                  &paragraphsToRestore) &&
+                paragraphsToRestore.isEmpty(),
+            "unrelated paragraph flag changes do not qualify a capture for migration");
     translation.lines = source.lines;
     translation.lines[0].text = QStringLiteral("short");
-    require(snow_shot::presentation::ocrTranslationSourceIndices(translation, source) ==
-                QVector<QVector<int>>{{0}},
+    require(snow_shot::presentation::ocrTranslationSourceIndices(
+                translation, source, nullptr, &smartMerge) == QVector<QVector<int>>{{0}} &&
+                !smartMerge,
             "restoration also matches the original unmerged layout");
+    const auto singleton = snow_shot::presentation::mergeOcrParagraphs(source.lines, {{0}});
+    require(singleton.has_value(), "a Smart Merge group may contain a single source box");
+    translation.lines = *singleton;
+    require(snow_shot::presentation::ocrTranslationSourceIndices(
+                translation, source, nullptr, &smartMerge) == QVector<QVector<int>>{{0}} &&
+                smartMerge,
+            "saved single-box Smart Merge retains its explicit provenance");
+    translation.lines = source.lines;
     translation.lines[0].quad.translate(10, 0);
     require(!snow_shot::presentation::ocrTranslationSourceIndices(translation, source),
             "unrelated geometry must not inherit another source's font cap");

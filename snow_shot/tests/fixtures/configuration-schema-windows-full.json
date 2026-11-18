@@ -104,6 +104,21 @@
       "valueKind": "Boolean"
     },
     {
+      "allowedStringValues": [
+        "pin_to_screen",
+        "image_stitching",
+        "image_splitting",
+        "image_editing"
+      ],
+      "defaultJsonType": 3,
+      "defaultStringIsNull": false,
+      "defaultValue": "pin_to_screen",
+      "integerRange": null,
+      "key": "floating_toolbar/drop_behavior",
+      "maximumListItems": -1,
+      "valueKind": "String"
+    },
+    {
       "allowedStringValues": [],
       "defaultJsonType": 2,
       "defaultStringIsNull": false,
@@ -235,10 +250,10 @@
       "allowedStringValues": [],
       "defaultJsonType": 2,
       "defaultStringIsNull": false,
-      "defaultValue": 5,
+      "defaultValue": 7,
       "integerRange": [
-        5,
-        5,
+        7,
+        7,
         1
       ],
       "key": "storage/schema_version",
@@ -481,6 +496,20 @@
     },
     {
       "allowedStringValues": [
+        "performance",
+        "normal",
+        "power_saving"
+      ],
+      "defaultJsonType": 3,
+      "defaultStringIsNull": false,
+      "defaultValue": "performance",
+      "integerRange": null,
+      "key": "system/power_qos",
+      "maximumListItems": -1,
+      "valueKind": "String"
+    },
+    {
+      "allowedStringValues": [
         "smart_control",
         "disabled"
       ],
@@ -555,7 +584,7 @@
       ],
       "defaultJsonType": 3,
       "defaultStringIsNull": false,
-      "defaultValue": "download",
+      "defaultValue": "next_launch",
       "integerRange": null,
       "key": "updates/mode",
       "maximumListItems": -1,
@@ -775,7 +804,7 @@
       "allowedStringValues": [],
       "defaultJsonType": 3,
       "defaultStringIsNull": false,
-      "defaultValue": "dedicated",
+      "defaultValue": "snow-shot:vision",
       "integerRange": null,
       "key": "screenshot_table/model",
       "maximumListItems": -1,
@@ -785,7 +814,7 @@
       "allowedStringValues": [],
       "defaultJsonType": 3,
       "defaultStringIsNull": false,
-      "defaultValue": "dedicated",
+      "defaultValue": "snow-shot:vision",
       "integerRange": null,
       "key": "screenshot_latex/model",
       "maximumListItems": -1,
@@ -1308,6 +1337,16 @@
       "defaultStringIsNull": false,
       "defaultValue": [],
       "integerRange": null,
+      "key": "global_shortcuts/toggle_global_mouse",
+      "maximumListItems": 2,
+      "valueKind": "ShortcutList"
+    },
+    {
+      "allowedStringValues": [],
+      "defaultJsonType": 4,
+      "defaultStringIsNull": false,
+      "defaultValue": [],
+      "integerRange": null,
       "key": "global_shortcuts/toggle_disable_on_focused_fullscreen_window",
       "maximumListItems": 2,
       "valueKind": "ShortcutList"
@@ -1334,6 +1373,21 @@
       "key": "global_shortcuts/fullscreen_window_filter",
       "maximumListItems": -1,
       "valueKind": "String"
+    },
+    {
+      "allowedStringValues": [
+        "global_shortcuts",
+        "global_mouse"
+      ],
+      "defaultJsonType": 4,
+      "defaultStringIsNull": false,
+      "defaultValue": [
+        "global_shortcuts"
+      ],
+      "integerRange": null,
+      "key": "global_shortcuts/fullscreen_disable_scope",
+      "maximumListItems": -1,
+      "valueKind": "StringList"
     },
     {
       "allowedStringValues": [],
@@ -3961,6 +4015,7 @@
             "convert-to-markdown",
             "latex-recognition",
             "barcode-recognition",
+            "document-recognition",
             "table-recognition"
           ],
           [
@@ -4010,7 +4065,8 @@
         ],
         "positions": [
           [
-            "barcode-recognition"
+            "barcode-recognition",
+            "document-recognition"
           ],
           [
             "record-screen"
@@ -4237,6 +4293,16 @@
       "defaultValue": false,
       "integerRange": null,
       "key": "screenshot_ui/show_guides_by_default",
+      "maximumListItems": -1,
+      "valueKind": "Boolean"
+    },
+    {
+      "allowedStringValues": [],
+      "defaultJsonType": 1,
+      "defaultStringIsNull": false,
+      "defaultValue": true,
+      "integerRange": null,
+      "key": "screenshot_ui/adaptive_guide_colors",
       "maximumListItems": -1,
       "valueKind": "Boolean"
     },
@@ -4762,6 +4828,7 @@
         "quick.translate-selected-text",
         "quick.toggle-window-under-cursor-always-on-top",
         "quick.toggle-global-hotkeys",
+        "quick.toggle-global-mouse",
         "quick.toggle-disable-on-focused-fullscreen-window",
         "tray.window-grouping",
         "tray.show-main-window",
@@ -5528,6 +5595,20 @@
       "key": "collage/pdf_export_mode",
       "maximumListItems": -1,
       "valueKind": "String"
+    },
+    {
+      "allowedStringValues": [],
+      "defaultJsonType": 2,
+      "defaultStringIsNull": false,
+      "defaultValue": 100,
+      "integerRange": [
+        0,
+        100,
+        1
+      ],
+      "key": "collage/pdf_image_quality",
+      "maximumListItems": -1,
+      "valueKind": "Integer"
     },
     {
       "allowedStringValues": [],

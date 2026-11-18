@@ -146,10 +146,42 @@ class ScreenshotOcrRecognitionService::Impl final {
                         scheduleAssetRetry();
                     });
         }
+        if (!options.processPath.isEmpty() && !options.paragraphModelPath.isEmpty()) {
+            m_paragraphAssets.runtimeVersion = QString::fromLatin1(kRuntimeVersion);
+            m_paragraphAssets.modelId = QStringLiteral("line2para-1-c8cede9");
+            m_paragraphAssets.processPath = options.processPath;
+            m_paragraphAssets.runtimeDirectory = QFileInfo(options.processPath).absolutePath();
+            m_paragraphAssets.paragraphModelPath = options.paragraphModelPath;
+        } else {
+            ScreenshotOcrAssets::Options paragraphOptions;
+            paragraphOptions.offlineRoot = options.offlineRoot.isEmpty()
+                                               ? QDir(QCoreApplication::applicationDirPath())
+                                                     .filePath(QStringLiteral("assets/ocr"))
+                                               : options.offlineRoot;
+            paragraphOptions.cacheRoot = options.cacheRoot;
+            paragraphOptions.proxyUrl = options.proxyUrl;
+            paragraphOptions.paragraphGrouping = true;
+            m_paragraphAssetManager =
+                std::make_unique<ScreenshotOcrAssets>(paragraphOptions, owner);
+            connect(m_paragraphAssetManager.get(), &ScreenshotOcrAssets::ready, owner,
+                    [this](const ScreenshotOcrResolvedAssets& assets) {
+                        m_paragraphPreparing = false;
+                        m_paragraphAssets = assets;
+                        scheduleReconcile();
+                    });
+            connect(m_paragraphAssetManager.get(), &ScreenshotOcrAssets::failed, owner,
+                    [this](const QString& error) {
+                        m_paragraphPreparing = false;
+                        const auto pending = m_pending;
+                        for (const auto& job : pending)
+                            if (job->paragraph)
+                                failJobLocked(job, error);
+                    });
+        }
     }
 
     bool storageBusy() const {
-        return !m_jobs.isEmpty() || m_assetPreparing;
+        return !m_jobs.isEmpty() || m_assetPreparing || m_paragraphPreparing;
     }
     ScreenshotOcrRuntimeConfiguration configuration() const {
         return m_configuration;
@@ -159,8 +191,12 @@ class ScreenshotOcrRecognitionService::Impl final {
     }
 
     RequestToken enqueue(RequestToken token, ScreenshotOcrRequest request, QObject* receiver,
-                         Completion completion) {
+                         Completion completion,
+                         std::optional<ScreenshotOcrParagraphRequest> paragraph = {},
+                         ParagraphCompletion paragraphCompletion = {}) {
         auto job = makeJob(token, std::move(request), receiver, std::move(completion));
+        job->paragraph = std::move(paragraph);
+        job->paragraphCompletion = std::move(paragraphCompletion);
         {
             if (m_stopping) {
                 QObject::disconnect(job->receiverDestroyed);
@@ -187,6 +223,17 @@ class ScreenshotOcrRecognitionService::Impl final {
             m_pending.push_back(job);
         }
         m_deliveryQueue.push_back(job);
+        if (job->paragraph && job->paragraph->quads.size() < 2) {
+            m_pending.erase(std::remove(m_pending.begin(), m_pending.end(), job), m_pending.end());
+            QTimer::singleShot(0, m_owner, [this, alive = m_alive, job] {
+                if (!alive->load() || job->cancelled.load())
+                    return;
+                if (!job->paragraph->quads.isEmpty())
+                    job->paragraphGroups = {{0}};
+                deliver(job, {});
+            });
+            return token;
+        }
         if (job->request.priority == ScreenshotOcrRequestPriority::Interactive)
             rearmResidency();
         if (m_sessionState == SessionState::Failed)
@@ -230,34 +277,48 @@ class ScreenshotOcrRecognitionService::Impl final {
         }
         const QPointer<ScreenshotOcrRecognitionService> service(m_owner);
         const auto alive = m_alive;
-        m_localPool->start(
-            QRunnable::create([service, job, alive, beforeRender = m_beforeLocalRender]() {
-                snow_shot::platform::applyApplicationQoSToCurrentThread();
-                if (alive->load(std::memory_order_acquire) && beforeRender)
-                    beforeRender();
-                SnowCanvasRegionFilterScratch scratch;
-                ScreenshotOcrRecognitionResult result;
-                if (alive->load(std::memory_order_acquire) &&
-                    !job->cancelled.load(std::memory_order_acquire)) {
-                    result.filteredImage =
-                        renderFilteredImage(std::move(job->request.image), job->request.canvasRect,
-                                            job->request.presentation, job->request.backgroundColor,
-                                            &scratch, &result.filteredImageCanvasRect);
-                    if (result.filteredImage.isNull() && job->request.presentation != nullptr) {
-                        result.error = QCoreApplication::translate("ScreenshotOcrController",
-                                                                   "Text recognition failed");
-                    }
+        m_localPool->start(QRunnable::create([service, job, alive,
+                                              beforeRender = m_beforeLocalRender]() {
+            snow_shot::platform::applyApplicationQoSToCurrentThread();
+            if (alive->load(std::memory_order_acquire) &&
+                !job->cancelled.load(std::memory_order_acquire) && beforeRender)
+                beforeRender();
+            SnowCanvasRegionFilterScratch scratch;
+            ScreenshotOcrRecognitionResult result;
+            if (alive->load(std::memory_order_acquire) &&
+                !job->cancelled.load(std::memory_order_acquire)) {
+                auto& request = job->request;
+                if (request.prepareVisualColors) {
+                    const auto colors = request.colorSource.value_or(ScreenshotOcrColorSource{
+                        request.image, request.canvasRect, request.presentation});
+                    prepareScreenshotOcrTextColors(*colors.presentation, colors.image,
+                                                   colors.canvasRect, &job->cancelled);
+                    prepareScreenshotOcrFillColors(*colors.presentation, colors.image,
+                                                   colors.canvasRect, request.backgroundFill,
+                                                   &job->cancelled);
+                    result.presentation = colors.presentation;
+                    if (request.presentation != colors.presentation)
+                        request.presentation->applyPreparedColors(*colors.presentation);
                 }
-                QMetaObject::invokeMethod(
-                    service,
-                    [service, job, alive, result = std::move(result)]() mutable {
-                        if (alive->load(std::memory_order_acquire) && service != nullptr &&
-                            service->m_impl != nullptr) {
-                            service->m_impl->finishLocalJob(job, std::move(result));
-                        }
-                    },
-                    Qt::QueuedConnection);
-            }));
+                if (request.renderFilteredImage && !job->cancelled.load(std::memory_order_acquire))
+                    result.filteredImage = renderFilteredImage(
+                        std::move(request.image), request.canvasRect, request.presentation,
+                        request.backgroundColor, &scratch, &result.filteredImageCanvasRect);
+                if (request.renderFilteredImage && result.filteredImage.isNull()) {
+                    result.error = QCoreApplication::translate("ScreenshotOcrController",
+                                                               "Text recognition failed");
+                }
+            }
+            QMetaObject::invokeMethod(
+                service,
+                [service, job, alive, result = std::move(result)]() mutable {
+                    if (alive->load(std::memory_order_acquire) && service != nullptr &&
+                        service->m_impl != nullptr) {
+                        service->m_impl->finishLocalJob(job, std::move(result));
+                    }
+                },
+                Qt::QueuedConnection);
+        }));
         return token;
     }
 
@@ -305,23 +366,29 @@ class ScreenshotOcrRecognitionService::Impl final {
         if (it == m_jobs.end() || it.value()->cancelled.load())
             return false;
         it.value()->request.priority = priority;
-        if (priority == ScreenshotOcrRequestPriority::Interactive)
+        if (priority == ScreenshotOcrRequestPriority::Interactive) {
+            it.value()->request.retainProcessThroughCompletion = true;
             rearmResidency();
+        }
         scheduleReconcile();
         return true;
     }
 
-    bool setRenderFilteredImage(RequestToken token, bool enabled, const QColor& backgroundColor) {
+    bool setRenderFilteredImage(RequestToken token, bool enabled, const QColor& backgroundColor,
+                                bool backgroundFill) {
         auto it = m_jobs.find(token);
         if (it == m_jobs.end() || it.value()->request.renderOnly || it.value()->localRendering ||
             it.value()->cancelled.load())
             return false;
         it.value()->request.renderFilteredImage = enabled;
         it.value()->request.backgroundColor = enabled ? backgroundColor : QColor();
+        it.value()->request.backgroundFill = enabled && backgroundFill;
         return true;
     }
 
     void setProxyUrl(const QString& proxyUrl) {
+        if (m_paragraphAssetManager)
+            m_paragraphAssetManager->setProxyUrl(proxyUrl);
         if (m_assetManager != nullptr)
             m_assetManager->setProxyUrl(proxyUrl);
     }
@@ -375,7 +442,9 @@ class ScreenshotOcrRecognitionService::Impl final {
         return m_transport != nullptr ? m_childPid : 0;
     }
     QString processPath() const {
-        return m_transport != nullptr ? m_assets.processPath : QString();
+        return m_transport != nullptr
+                   ? (assetsReady() ? m_assets.processPath : m_paragraphAssets.processPath)
+                   : QString();
     }
 
     bool modelFilesReady() const {
@@ -403,11 +472,15 @@ class ScreenshotOcrRecognitionService::Impl final {
         QSize imageSize;
         QPointer<QObject> receiver;
         Completion completion;
+        std::optional<ScreenshotOcrParagraphRequest> paragraph;
+        ParagraphCompletion paragraphCompletion;
+        QVector<QVector<int>> paragraphGroups;
         QMetaObject::Connection receiverDestroyed;
         std::atomic_bool cancelled{false};
         bool running = false;
         bool processSubmitted = false;
         bool localRendering = false;
+        bool processContinuationPending = false;
         qint64 submittedAt = -1;
         qint64 completedAt = -1;
         qint64 childPid = 0;
@@ -434,7 +507,7 @@ class ScreenshotOcrRecognitionService::Impl final {
     }
 
     bool ensureProcess() {
-        if (!assetsReady() || m_stopping)
+        if ((!assetsReady() && !m_paragraphAssets.valid()) || m_stopping)
             return false;
         if (m_transport != nullptr)
             return !processStopping();
@@ -524,12 +597,12 @@ class ScreenshotOcrRecognitionService::Impl final {
         environment.insert(QStringLiteral("SNOW_SHOT_CRASHPAD_PIPE"), diagnostics.crashPipeName());
         environment.insert(QStringLiteral("SNOW_SHOT_DIAGNOSTICS_SESSION"),
                            diagnostics.status().sessionId);
-        QMetaObject::invokeMethod(m_transport,
-                                  snow_shot::runtime::trackRuntimeWork(
-                                      [transport = m_transport, assets = m_assets, environment]() {
-                                          transport->start(assets, environment);
-                                      }),
-                                  Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            m_transport,
+            snow_shot::runtime::trackRuntimeWork(
+                [transport = m_transport, assets = assetsReady() ? m_assets : m_paragraphAssets,
+                 environment]() { transport->start(assets, environment); }),
+            Qt::QueuedConnection);
         QTimer::singleShot(5000, m_owner, [this, valid]() {
             if (valid() && m_transport != nullptr && !processReady() && !processStopping())
                 processFailed("ready_timeout");
@@ -732,7 +805,8 @@ class ScreenshotOcrRecognitionService::Impl final {
             ++m_configurationGeneration;
         }
         if (!demand && !residentEffective()) {
-            if (m_transport != nullptr) {
+            // The OCR completion callback may synchronously enqueue paragraph recognition.
+            if (m_processContinuations == 0 && m_transport != nullptr) {
                 m_processState = ProcessState::Stopping;
 
                 m_processStopReason = ProcessStopReason::Shutdown;
@@ -748,7 +822,18 @@ class ScreenshotOcrRecognitionService::Impl final {
             releaseBuffer();
         if (m_retryPending && !demand)
             return;
-        if (!assetsReady()) {
+        const bool paragraph = (m_active && m_active->paragraph.has_value()) ||
+                               (!m_pending.empty() && m_pending.front()->paragraph.has_value());
+        if (paragraph && !m_paragraphAssets.valid()) {
+            if (!m_paragraphPreparing && m_paragraphAssetManager) {
+                m_paragraphPreparing = true;
+                m_paragraphAssetManager->prepare();
+            } else if (!m_paragraphAssetManager) {
+                failJobLocked(m_pending.front(), QStringLiteral("paragraph model is unavailable"));
+            }
+            return;
+        }
+        if (!paragraph && !assetsReady()) {
             // Old inference may drain while the next model is being acquired.
             if (m_runningCount == 0 && m_sessionState == SessionState::Ready)
                 releaseSession();
@@ -809,7 +894,7 @@ class ScreenshotOcrRecognitionService::Impl final {
             m_sessionState == SessionState::Releasing)
             return;
         const bool idle = m_pending.empty();
-        if (m_sessionState == SessionState::Ready &&
+        if (!paragraph && m_sessionState == SessionState::Ready &&
             (m_sessionGeneration != m_configurationGeneration ||
              (m_sessionWarm && m_invalidateWarmSession) ||
              (idle && (m_sessionUsed || !m_sessionWarm ||
@@ -825,13 +910,13 @@ class ScreenshotOcrRecognitionService::Impl final {
             releaseSession();
             return;
         }
-        if (m_sessionState == SessionState::Empty && (!idle || hotEffective())) {
+        if (!paragraph && m_sessionState == SessionState::Empty && (!idle || hotEffective())) {
             // Idle warm-up begins only after the image mapping is completely detached.
             if (!idle || m_bufferState == BufferState::Empty)
                 prepareSession(idle);
             return;
         }
-        if (!idle && m_sessionState == SessionState::Ready && m_staged != nullptr) {
+        if (!idle && (paragraph || m_sessionState == SessionState::Ready) && m_staged != nullptr) {
             const auto job = m_staged;
             if (m_pending.front() != job) {
                 processFailed("queue_order");
@@ -845,13 +930,33 @@ class ScreenshotOcrRecognitionService::Impl final {
             job->submittedAt = job->elapsed.elapsed();
             job->childPid = m_childPid;
             m_runningCount = 1;
-            m_sessionUsed = true;
-            m_sessionWarm = false;
+            if (!paragraph) {
+                m_sessionUsed = true;
+                m_sessionWarm = false;
+            }
             auto fields = jobFields(job);
             fields.insert(QStringLiteral("pending_count"), static_cast<int>(m_pending.size()));
             snow_shot::diagnostics::logEvent(QStringLiteral("snow_shot.ocr"),
                                              QStringLiteral("ocr.submitted"), fields);
-            sendFrame(makeFrame(kRecognize, job->token));
+            if (job->paragraph) {
+                QByteArray payload;
+                appendString(payload, m_paragraphAssets.paragraphModelPath);
+                appendU8(payload, m_configuration.hardwareAcceleration ? 1 : 0);
+                appendU32(payload, static_cast<quint32>(job->paragraph->quads.size()));
+                const auto rect = job->request.canvasRect;
+                for (const auto& quad : job->paragraph->quads)
+                    for (const auto& point : quad) {
+                        appendF32(payload,
+                                  static_cast<float>((point.x() - rect.left()) *
+                                                     job->imageSize.width() / rect.width()));
+                        appendF32(payload,
+                                  static_cast<float>((point.y() - rect.top()) *
+                                                     job->imageSize.height() / rect.height()));
+                    }
+                sendFrame(makeFrame(kGroupParagraphs, job->token, payload));
+            } else {
+                sendFrame(makeFrame(kRecognize, job->token));
+            }
             scheduleReconcile();
         }
     }
@@ -899,6 +1004,8 @@ class ScreenshotOcrRecognitionService::Impl final {
                 handleReady(payload);
             else if (kind == kComplete)
                 handleComplete(id, payload);
+            else if (kind == kParagraphsComplete)
+                handleParagraphsComplete(id, payload);
             else
                 handleControl(kind, id, payload);
             if (generation != m_processGeneration)
@@ -985,11 +1092,61 @@ class ScreenshotOcrRecognitionService::Impl final {
         m_processState = ProcessState::Ready;
         m_accelerationReadyPending = false;
         configureAcceleration();
-        m_assetStatus = {m_assets.offline ? ScreenshotOcrAssetPhase::ReadyOffline
-                                          : ScreenshotOcrAssetPhase::ReadyCached,
-                         QStringLiteral("assets")};
+        if (assetsReady())
+            m_assetStatus = {m_assets.offline ? ScreenshotOcrAssetPhase::ReadyOffline
+                                              : ScreenshotOcrAssetPhase::ReadyCached,
+                             QStringLiteral("assets")};
         flushPending();
         maybeShutdownProcess();
+    }
+
+    void handleParagraphsComplete(quint64 id, const QByteArray& payload) {
+        const auto job = m_jobs.value(id);
+        if (processStopping())
+            return;
+        if (!job || !job->paragraph || !job->processSubmitted || m_active != job) {
+            processFailed("paragraph_completion_ownership");
+            return;
+        }
+        ScreenshotOcrRecognitionResult delivery;
+        qsizetype offset = 0;
+        quint8 status = 0;
+        quint32 count = 0;
+        bool valid = takeU8(payload, offset, &status);
+        const auto lineCount = job->paragraph->quads.size();
+        QVector<bool> seen(lineCount, false);
+        if (valid && status == 1) {
+            valid = takeU32(payload, offset, &count) && count <= lineCount;
+            for (quint32 group = 0; valid && group < count; ++group) {
+                quint32 members = 0;
+                valid = takeU32(payload, offset, &members) && members > 0 && members <= lineCount;
+                QVector<int> indices;
+                for (quint32 member = 0; valid && member < members; ++member) {
+                    quint32 index = 0;
+                    valid = takeU32(payload, offset, &index) && index < lineCount && !seen[index];
+                    if (valid) {
+                        seen[index] = true;
+                        indices.push_back(static_cast<int>(index));
+                    }
+                }
+                job->paragraphGroups.push_back(std::move(indices));
+            }
+            valid = valid && std::all_of(seen.cbegin(), seen.cend(), [](bool v) { return v; });
+        } else if (valid && (status == 0 || status == 2)) {
+            valid = takeString(payload, offset, &delivery.error) && !delivery.error.isEmpty();
+        } else {
+            valid = false;
+        }
+        if (!valid || offset != payload.size())
+            delivery.error = QStringLiteral("invalid paragraph result");
+        if (!delivery.error.isEmpty())
+            job->paragraphGroups.clear();
+        job->running = job->processSubmitted = false;
+        job->completedAt = job->elapsed.elapsed();
+        m_active.reset();
+        m_runningCount = 0;
+        deliver(job, std::move(delivery));
+        scheduleReconcile();
     }
 
     void handleComplete(quint64 id, const QByteArray& payload) {
@@ -1056,7 +1213,6 @@ class ScreenshotOcrRecognitionService::Impl final {
                     line.direction = textDirectionForQuad(line.quad);
                     result.presentation->lines.push_back(std::move(line));
                 }
-                result.presentation->prepareForRendering();
             } else {
                 result.error = QCoreApplication::translate("ScreenshotOcrController",
                                                            "Text recognition failed");
@@ -1073,31 +1229,41 @@ class ScreenshotOcrRecognitionService::Impl final {
             if (prepareColors) {
                 job->localRendering = true;
                 ++m_localRenderingCount;
+                if (job->request.retainProcessThroughCompletion) {
+                    job->processContinuationPending = true;
+                    ++m_processContinuations;
+                }
             }
         }
-        if (!job->cancelled.load() && result.error.isEmpty() && result.presentation != nullptr &&
-            (!result.presentation->lines.isEmpty() || job->request.renderFilteredImage)) {
+        if (job->localRendering) {
             const QImage source = job->request.image;
             const QRectF canvasRect = job->request.canvasRect;
             const QColor background = job->request.backgroundColor;
             const bool renderFiltered = job->request.renderFilteredImage;
+            const bool backgroundFill = job->request.backgroundFill;
             const QPointer<ScreenshotOcrRecognitionService> service(m_owner);
             const auto alive = m_alive;
             m_localPool->start(
                 QRunnable::create([service, job, alive, beforeRender = m_beforeLocalRender,
                                    result = std::move(result), source, canvasRect, background,
-                                   renderFiltered]() mutable {
+                                   renderFiltered, backgroundFill]() mutable {
                     snow_shot::platform::applyApplicationQoSToCurrentThread();
-                    if (renderFiltered && alive->load(std::memory_order_acquire) && beforeRender)
+                    if (alive->load(std::memory_order_acquire) &&
+                        !job->cancelled.load(std::memory_order_acquire) && beforeRender)
                         beforeRender();
                     SnowCanvasRegionFilterScratch scratch;
                     if (alive->load(std::memory_order_acquire) && !job->cancelled.load()) {
+                        result.presentation->prepareForRendering();
                         prepareScreenshotOcrTextColors(*result.presentation, source, canvasRect,
                                                        &job->cancelled);
-                        if (renderFiltered && !job->cancelled.load())
-                            result.filteredImage = renderFilteredImage(
-                                source, canvasRect, result.presentation, background, &scratch,
-                                &result.filteredImageCanvasRect);
+                        if (renderFiltered && !job->cancelled.load()) {
+                            prepareScreenshotOcrFillColors(*result.presentation, source, canvasRect,
+                                                           backgroundFill, &job->cancelled);
+                            if (!job->cancelled.load())
+                                result.filteredImage = renderFilteredImage(
+                                    source, canvasRect, result.presentation, background, &scratch,
+                                    &result.filteredImageCanvasRect);
+                        }
                     }
                     QMetaObject::invokeMethod(
                         service,
@@ -1128,8 +1294,12 @@ class ScreenshotOcrRecognitionService::Impl final {
         if (job->request.renderOnly) {
             QObject::disconnect(job->receiverDestroyed);
             m_jobs.remove(job->token);
-            if (!job->cancelled.load() && job->receiver != nullptr && job->completion)
-                job->completion(std::move(result));
+            if (!job->cancelled.load() && job->receiver != nullptr) {
+                if (job->paragraphCompletion)
+                    job->paragraphCompletion({std::move(job->paragraphGroups), result.error});
+                else if (job->completion)
+                    job->completion(std::move(result));
+            }
             return;
         }
         job->result = std::move(result);
@@ -1150,10 +1320,23 @@ class ScreenshotOcrRecognitionService::Impl final {
             QObject::disconnect(job->receiverDestroyed);
             auto result = std::move(*job->result);
             job->result.reset();
-            if (!job->cancelled.load() && job->receiver != nullptr && job->completion)
-                job->completion(std::move(result));
+            if (!job->cancelled.load() && job->receiver != nullptr) {
+                if (job->paragraphCompletion)
+                    job->paragraphCompletion({std::move(job->paragraphGroups), result.error});
+                else if (job->completion)
+                    job->completion(std::move(result));
+            }
+            releaseProcessContinuation(job);
         }
         m_delivering = false;
+    }
+
+    void releaseProcessContinuation(const std::shared_ptr<Job>& job) {
+        if (!job->processContinuationPending)
+            return;
+        job->processContinuationPending = false;
+        if (m_processContinuations > 0)
+            --m_processContinuations;
     }
 
     void finishLocalJob(const std::shared_ptr<Job>& job, ScreenshotOcrRecognitionResult result) {
@@ -1273,7 +1456,8 @@ class ScreenshotOcrRecognitionService::Impl final {
                                               "Text recognition components could not be prepared");
         const auto failed = m_pending;
         for (const auto& job : failed)
-            failJobLocked(job, message);
+            if (!job->paragraph)
+                failJobLocked(job, message);
     }
 
     bool assetsReady() const {
@@ -1307,6 +1491,7 @@ class ScreenshotOcrRecognitionService::Impl final {
             m_jobs.clear();
             m_pending.clear();
             m_localRenderingCount = 0;
+            m_processContinuations = 0;
             releaseTransport();
         }
     }
@@ -1346,6 +1531,9 @@ class ScreenshotOcrRecognitionService::Impl final {
     const std::function<void()> m_beforeLocalRender;
     ScreenshotOcrModelType m_modelType = ScreenshotOcrModelType::Small;
     ScreenshotOcrResolvedAssets m_assets;
+    ScreenshotOcrResolvedAssets m_paragraphAssets;
+    std::unique_ptr<ScreenshotOcrAssets> m_paragraphAssetManager;
+    bool m_paragraphPreparing = false;
     ScreenshotOcrAssetStatus m_assetStatus;
     std::unique_ptr<ScreenshotOcrAssets> m_assetManager;
     QHash<RequestToken, std::shared_ptr<Job>> m_jobs;
@@ -1359,7 +1547,7 @@ class ScreenshotOcrRecognitionService::Impl final {
     ScreenshotOcrTransport* m_transport = nullptr;
     ProcessStopReason m_processStopReason = ProcessStopReason::None;
     qsizetype m_slotBytes = 0;
-    int m_runningCount = 0, m_localRenderingCount = 0;
+    int m_runningCount = 0, m_localRenderingCount = 0, m_processContinuations = 0;
     QByteArray m_readBuffer;
     QByteArray m_stderrBuffer;
     qint64 m_childPid = 0;
@@ -1390,6 +1578,29 @@ ScreenshotOcrRecognitionService::ScreenshotOcrRecognitionService(const Options& 
       m_storageOptions(options), m_runtimeConfiguration(m_impl->configuration()) {}
 ScreenshotOcrRecognitionService::~ScreenshotOcrRecognitionService() = default;
 
+ScreenshotOcrRecognitionPort::RequestToken ScreenshotOcrRecognitionService::groupParagraphs(
+    ScreenshotOcrParagraphRequest request, QObject* receiver, ParagraphCompletion completion) {
+    if (!receiver || !completion || !m_impl || request.quads.size() > 10000)
+        return 0;
+    if (request.quads.size() >= 2 && (request.image.isNull() || !request.canvasRect.isValid()))
+        return 0;
+    for (const auto& quad : request.quads) {
+        if (quad.size() != 4)
+            return 0;
+        for (const auto& point : quad)
+            if (!std::isfinite(point.x()) || !std::isfinite(point.y()))
+                return 0;
+    }
+    ScreenshotOcrRequest image;
+    image.image = request.image;
+    image.canvasRect = request.canvasRect;
+    do {
+        ++m_nextToken;
+    } while (m_nextToken == 0);
+    return m_impl->enqueue(m_nextToken, std::move(image), receiver, {}, std::move(request),
+                           std::move(completion));
+}
+
 ScreenshotOcrRecognitionPort::RequestToken
 ScreenshotOcrRecognitionService::recognize(ScreenshotOcrRequest request, QObject* receiver,
                                            Completion completion) {
@@ -1405,19 +1616,23 @@ ScreenshotOcrRecognitionPort::RequestToken
 ScreenshotOcrRecognitionService::render(ScreenshotOcrRequest request, QObject* receiver,
                                         Completion completion) {
     if (request.image.isNull() || !request.canvasRect.isValid() || request.canvasRect.isEmpty() ||
-        request.presentation == nullptr || receiver == nullptr || !completion || m_impl == nullptr)
+        request.presentation == nullptr ||
+        (request.colorSource && request.colorSource->presentation == nullptr) ||
+        receiver == nullptr || !completion || m_impl == nullptr)
         return 0;
     request.renderOnly = true;
-    request.renderFilteredImage = false;
+    if (!request.prepareVisualColors)
+        request.renderFilteredImage = true;
     do {
         ++m_nextToken;
     } while (m_nextToken == 0);
     return m_impl->render(m_nextToken, std::move(request), receiver, std::move(completion));
 }
 bool ScreenshotOcrRecognitionService::setRenderFilteredImage(RequestToken token, bool enabled,
-                                                             const QColor& backgroundColor) {
+                                                             const QColor& backgroundColor,
+                                                             bool backgroundFill) {
     return m_impl != nullptr && token != 0 &&
-           m_impl->setRenderFilteredImage(token, enabled, backgroundColor);
+           m_impl->setRenderFilteredImage(token, enabled, backgroundColor, backgroundFill);
 }
 void ScreenshotOcrRecognitionService::cancel(RequestToken token) {
     if (m_impl != nullptr && token != 0)

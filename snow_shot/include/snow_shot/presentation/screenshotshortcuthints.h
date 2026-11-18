@@ -50,6 +50,7 @@ struct ScreenshotShortcutHintRow {
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Maintain aspect ratio"),
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Selection aspect ratio snap"),
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Fixed-angle rotation"),
+    QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Bind arrow"),
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Scale from center"),
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Auto-align"),
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Delete selected elements"),
@@ -151,6 +152,9 @@ screenshotShortcutHintSelectionModeForContext(const ScreenshotShortcutHintContex
     }
     if (sourceText == QStringLiteral("Fixed-angle rotation: Shift")) {
         return row("Fixed-angle rotation", display.modifierText(Qt::ShiftModifier));
+    }
+    if (sourceText == QStringLiteral("Bind arrow: Shift")) {
+        return row("Bind arrow", display.modifierText(Qt::ShiftModifier));
     }
     if (sourceText == QStringLiteral("Scale from center: Alt")) {
         return row("Scale from center", display.modifierText(Qt::AltModifier));
@@ -391,6 +395,7 @@ screenshotShortcutHintRows(const ScreenshotShortcutHintContext& context) {
         context.activeTool != ScreenshotActiveTool::BrushEraser &&
         context.activeTool != ScreenshotActiveTool::Ocr &&
         context.activeTool != ScreenshotActiveTool::TextTranslation &&
+        context.activeTool != ScreenshotActiveTool::Document &&
         context.activeTool != ScreenshotActiveTool::Table &&
         context.activeTool != ScreenshotActiveTool::Qr &&
         context.activeTool != ScreenshotActiveTool::Markdown &&
@@ -487,6 +492,7 @@ screenshotShortcutHintRows(const ScreenshotShortcutHintContext& context) {
         append(rows, "Delete selected elements: Delete", !disabled(SnowCanvasTool::Text));
         break;
     case ScreenshotActiveTool::SequenceNumber:
+        append(rows, "Bind arrow: Shift");
         append(rows, "Fixed-angle rotation: Shift", !disabled(SnowCanvasTool::SerialNumber));
         append(rows, "Scale from center: Alt", !disabled(SnowCanvasTool::SerialNumber));
         append(rows, "Auto-align: Ctrl", !disabled(SnowCanvasTool::SerialNumber));
@@ -523,6 +529,7 @@ screenshotShortcutHintRows(const ScreenshotShortcutHintContext& context) {
     case ScreenshotActiveTool::Eraser:
     case ScreenshotActiveTool::Ocr:
     case ScreenshotActiveTool::TextTranslation:
+    case ScreenshotActiveTool::Document:
     case ScreenshotActiveTool::Table:
     case ScreenshotActiveTool::Qr:
     case ScreenshotActiveTool::Latex:

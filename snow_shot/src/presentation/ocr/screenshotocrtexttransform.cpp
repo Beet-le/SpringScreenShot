@@ -5,7 +5,6 @@
 
 #include <QStringList>
 #include <QVector>
-#include <utility>
 
 namespace snow_shot::presentation {
 
@@ -16,27 +15,6 @@ QString originalOcrText(const ScreenshotOcrPresentation& presentation) {
         lines.push_back(line.text);
     }
     return lines.join(QChar('\n'));
-}
-
-QString smartOcrText(const ScreenshotOcrPresentation& presentation, bool selectedOnly) {
-    auto lines = presentation.lines;
-    if (selectedOnly) {
-        lines.clear();
-        for (int index = 0; index < presentation.lines.size(); ++index) {
-            const auto range = presentation.textSelectionForLine(index);
-            if (range.empty()) {
-                continue;
-            }
-            auto line = presentation.lines.at(index);
-            line.text = line.text.mid(range.start, range.length);
-            lines.append(std::move(line));
-        }
-    }
-    QStringList paragraphs;
-    for (const auto& line : mergeOcrLayout(lines, presentation.selection.topLeft())) {
-        paragraphs.append(line.text);
-    }
-    return paragraphs.join(QChar('\n'));
 }
 
 QString removeOcrLineBreaks(const QString& text) {
@@ -85,11 +63,8 @@ QString applyOcrTextTransforms(const QString& text, const QString& formatting,
 
 QString applyOcrTextTransforms(const ScreenshotOcrPresentation& presentation,
                                const QString& formatting, const QString& punctuation) {
-    const bool selectedOnly = presentation.hasTextSelection();
-    const QString text =
-        formatting == QStringLiteral("smart")
-            ? smartOcrText(presentation, selectedOnly)
-            : (selectedOnly ? presentation.selectedText() : originalOcrText(presentation));
+    // Smart formatting is prepared asynchronously by the session controller.
+    const QString text = originalOcrText(presentation);
     return applyOcrTextTransforms(text, formatting, punctuation);
 }
 

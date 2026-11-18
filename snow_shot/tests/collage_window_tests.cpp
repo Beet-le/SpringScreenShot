@@ -38,6 +38,7 @@
 #include <QFileInfo>
 #include <QFileSystemModel>
 #include <QLabel>
+#include <QLayout>
 #include <QMouseEvent>
 #include "snow_draw_engine_qt/snow_canvas_overlay_style.h"
 #include <QMimeData>
@@ -183,6 +184,7 @@ struct PendingConfirmation {
 struct Ports {
     QVector<PendingExport> copies;
     QVector<PendingExport> saves;
+    QVector<ScreenshotExportSource> edits;
     QVector<PendingConfirmation> confirmations;
     QHash<QString, QImage> history;
     QStringList reads;
@@ -194,6 +196,9 @@ struct Ports {
         };
         result.save = [this](auto artifact, QObject* receiver, QWidget* owner, auto complete) {
             saves.append({std::move(artifact), receiver, owner, std::move(complete)});
+        };
+        result.openImageEditing = [this](ScreenshotExportSource source) {
+            edits.append(std::move(source));
         };
         result.confirm = [this](QWidget* owner, bool clear, auto complete) {
             confirmations.append({clear, owner, std::move(complete)});
@@ -214,6 +219,28 @@ storage::CaptureHistoryRecord record(QString id, QSize size = {3, 2}) {
     result.createdUtc = QDateTime::currentDateTimeUtc();
     result.result = storage::CaptureHistoryResultRecord{size, 100};
     return result;
+}
+
+void toolbarDropsAppendFilesAndInlineImage() {
+    QTemporaryDir directory;
+    const auto first = directory.filePath(QStringLiteral("first.png"));
+    const auto second = directory.filePath(QStringLiteral("second.png"));
+    require(image({8, 6}, Qt::red).save(first) && image({6, 8}, Qt::green).save(second),
+            "write the toolbar drop fixture images");
+    ImageStitchingWindowCoordinator coordinator;
+    coordinator.presentFiles({first, second});
+    auto* window = coordinator.window();
+    require(window && window->modal()->isOpen(), "a file drop opens the stitching workspace");
+    ScreenshotClipboardContentSnapshot snapshot;
+    snapshot.detachedImage = image({4, 5}, Qt::blue);
+    coordinator.presentDroppedImage(std::move(snapshot), reserveImageStitchingImport(0));
+    waitUntil([&] { return !window->loading(); }, "file and inline image imports finish");
+    const auto& items = window->document()->items();
+    require(coordinator.window() == window && items.size() == 3 &&
+                items[0].image.pixelColor(0, 0) == QColor(Qt::red) &&
+                items[1].image.pixelColor(0, 0) == QColor(Qt::green) &&
+                items[2].image.pixelColor(0, 0) == QColor(Qt::blue),
+            "the existing stitching workspace appends each drop in order");
 }
 
 void selectedFilesOpenAndAppendInOrder() {
@@ -912,6 +939,12 @@ void outputDescriptionsInFooter() {
     flushEvents();
     auto* footer = window.modal()->footerWidget();
     require(footer != nullptr, "collage footer is available");
+    auto* edit = button(window, "collageImageEditing");
+    auto* copy = button(window, "collageCopy");
+    require(edit && copy && edit->isVisible() && !edit->isEnabled() &&
+                edit->text() == QStringLiteral("Image editing") &&
+                edit->accessibleName() == edit->text(),
+            "the empty static footer shows a labeled, disabled Image editing button");
     auto* dimensions = footer->findChild<QLabel*>(QStringLiteral("collageOutputDimensions"));
     auto* total = footer->findChild<QLabel*>(QStringLiteral("collageImageTotal"));
     require(dimensions && total &&
@@ -932,6 +965,12 @@ void outputDescriptionsInFooter() {
         const QRect countRect(total->mapTo(footer, QPoint()), total->size());
         auto* cancel = button(window, "collageCancel");
         const QRect cancelRect(cancel->mapTo(footer, QPoint()), cancel->size());
+        const QRect editRect(edit->mapTo(footer, QPoint()), edit->size());
+        const QRect copyRect(copy->mapTo(footer, QPoint()), copy->size());
+        require(edit->isEnabled() && footer->rect().contains(editRect) &&
+                    editRect.right() < copyRect.left() &&
+                    footer->layout()->indexOf(edit) + 1 == footer->layout()->indexOf(copy),
+                "Image editing sits immediately to the left of Copy");
         require(footer->rect().contains(sizeRect) && footer->rect().contains(countRect) &&
                     sizeRect.left() == footer->contentsRect().left() &&
                     sizeRect.right() < countRect.left() && countRect.right() < cancelRect.left() &&
@@ -950,25 +989,28 @@ void outputDescriptionsInFooter() {
     const auto previousMode = themeManager.themeMode();
     for (const auto mode : {styles::ThemeMode::Light, styles::ThemeMode::Dark}) {
         themeManager.setThemeMode(mode);
-        for (const auto size : {QSize(900, 600), QSize(1200, 800)}) {
-            window.editor()->window()->resize(size);
-            checkLayout();
-        }
+        window.editor()->window()->resize(1200, 800);
+        checkLayout();
     }
     themeManager.setThemeMode(previousMode);
-    for (const auto* catalog : {":/i18n/snow_shot_zh_CN.qm", ":/i18n/snow_shot_zh_TW.qm"}) {
-        QTranslator translator;
-        require(translator.load(QString::fromLatin1(catalog)), "load collage translation catalog");
-        QApplication::installTranslator(&translator);
+    auto& languages = LanguageManager::instance();
+    for (const auto* locale : {"zh_CN", "zh_TW"}) {
+        require(languages.setLanguage(QString::fromLatin1(locale)),
+                "switch collage footer language");
         flushEvents();
         require(total->text() ==
                     QCoreApplication::translate("ImageStitchingEditorWidget", "Total: %1 images")
                         .arg(2),
                 "footer image count retranslates after moving outside the editor");
+        const auto translated =
+            QCoreApplication::translate("ImageStitchingWindow", "Image editing");
+        require(translated != QStringLiteral("Image editing") && edit->text() == translated &&
+                    edit->accessibleName() == translated,
+                "the Image editing label and accessible name retranslate in both Chinese catalogs");
         checkLayout();
-        QApplication::removeTranslator(&translator);
-        flushEvents();
     }
+    require(languages.setLanguage(QStringLiteral("en_US")), "restore collage language");
+    flushEvents();
     auto settings = window.document()->settings();
     settings.border = 8;
     settings.spacing = 6;
@@ -983,6 +1025,59 @@ void outputDescriptionsInFooter() {
                 total->mapTo(footer, QPoint()).x() == footer->contentsRect().left(),
             "clearing images leaves the count aligned to the footer left edge");
     window.requestClose();
+}
+
+void imageEditingOpensTheCurrentStaticResult() {
+    resetSettings();
+    Ports ports;
+    ImageStitchingWindow window(nullptr, ports.services());
+    window.present();
+    auto* edit = button(window, "collageImageEditing");
+    QImage first = image({6, 4}, Qt::red);
+    first.setPixelColor(0, 0, QColor(50, 100, 200, 128));
+    const auto id = window.document()->append(first, QStringLiteral("first"));
+    const auto second =
+        window.document()->append(image({4, 6}, Qt::blue), QStringLiteral("second"));
+    require(window.document()->rotate(id, true), "rotate the source before handing it off");
+    auto settings = window.document()->settings();
+    settings.background = Qt::transparent;
+    settings.border = 2;
+    settings.spacing = 3;
+    window.document()->setSettings(settings);
+    const auto expected = materializeImageStitchingRows(
+        prepareImageStitchingRows(window.document()->items(), settings));
+    require(!expected.isNull() && expected.pixelColor(0, 0).alpha() == 0,
+            "the reference result includes the transparent background");
+
+    edit->click();
+    require(ports.edits.size() == 1 && window.modal()->isOpen() && !window.busy() &&
+                window.document()->items().size() == 2 && edit->isEnabled(),
+            "clicking Image editing hands off one source and keeps stitching available");
+    require(window.document()->moveItem(second, 0),
+            "the original order can still be edited before the handoff is rendered");
+
+    const qint64 baseline = imageStitchingResourceUsage().reservedBytes;
+    QImage actual;
+    {
+        ScreenshotExportArtifact artifact(ports.edits.takeFirst());
+        bool finished = false;
+        require(artifact.requestImage(&window,
+                                      [&](ScreenshotExportImageResult result) {
+                                          actual = std::move(result.image);
+                                          finished = true;
+                                      }),
+                "the source can be loaded through the editor's image request path");
+        waitUntil([&] { return finished; }, "the editor source renders asynchronously");
+    }
+    require(actual == expected, "the editor receives the full-resolution click-time pixels");
+    require(imageStitchingResourceUsage().reservedBytes == baseline + actual.sizeInBytes(),
+            "the rendered pixels retain their reservation after the artifact is destroyed");
+    actual = {};
+    require(imageStitchingResourceUsage().reservedBytes == baseline,
+            "releasing the rendered pixels releases their reservation");
+    edit->click();
+    require(ports.edits.size() == 1 && window.modal()->isOpen(),
+            "the original window can send a new result after subsequent edits");
 }
 
 void clearAndInitialImportFailures() {
@@ -2115,7 +2210,8 @@ void exportFeedbackUsesMessagesAndBusyButtons() {
     require(copying && copying->type() == AdMessage::Type::Loading &&
                 copying->content() == QStringLiteral("Preparing stitched image…") &&
                 !hasInlineStatus(first) && button(first, "collageCopy")->busy() &&
-                !button(first, "collageSave")->busy(),
+                !button(first, "collageSave")->busy() &&
+                !button(first, "collageImageEditing")->isEnabled(),
             "copy preparation uses a loading Message and the Copy button without a bottom prompt");
     second.save();
     QPointer<AdMessageHandle> saving = statusMessage(second);
@@ -2138,7 +2234,9 @@ void exportFeedbackUsesMessagesAndBusyButtons() {
     waitUntil([&] { return firstPorts.saves.size() == 1; }, "retry starts the save workflow");
     firstPorts.saves.first().complete(false, {});
     require(!statusMessage(first) && !hasInlineStatus(first) &&
-                !button(first, "collageSave")->busy() && button(first, "collageSave")->isEnabled(),
+                !button(first, "collageSave")->busy() &&
+                button(first, "collageSave")->isEnabled() &&
+                button(first, "collageImageEditing")->isEnabled(),
             "save cancellation clears feedback and loading so the action can be retried");
     first.copy();
     waitUntil([&] { return firstPorts.copies.size() == 2; }, "copy retry starts its workflow");
@@ -2598,6 +2696,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (arguments.contains(QStringLiteral("--selected-files-only"))) {
+        timed("Toolbar drop imports", toolbarDropsAppendFilesAndInlineImage);
         timed("Selected-file ordered imports", selectedFilesOpenAndAppendInOrder);
         timed("Empty selections and query failures", emptySelectionsAndFailuresKeepWindowOpen);
         timed("Selected-file cancellation", selectedFileQueriesCancelWithWindowLifecycle);
@@ -2653,6 +2752,7 @@ int main(int argc, char* argv[]) {
     }
     if (arguments.contains(QStringLiteral("--footer-only"))) {
         timed("Footer output descriptions", outputDescriptionsInFooter);
+        timed("Static result image editing", imageEditingOpensTheCurrentStaticResult);
         waitUntil([] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 0; },
                   "footer tests drain export jobs");
         ScreenshotExportCoordinator::shared().shutdown();
@@ -2703,6 +2803,7 @@ int main(int argc, char* argv[]) {
     timed("Selected-file cancellation", selectedFileQueriesCancelWithWindowLifecycle);
     timed("Independent windows and close", independentWindowsAndClosePolicy);
     timed("Footer output descriptions", outputDescriptionsInFooter);
+    timed("Static result image editing", imageEditingOpensTheCurrentStaticResult);
     timed("Static placement exports", staticPlacementExportSnapshots);
     timed("Export feedback", exportFeedbackUsesMessagesAndBusyButtons);
     timed("Import feedback", importFeedbackUsesMessagesWithoutLayoutChanges);

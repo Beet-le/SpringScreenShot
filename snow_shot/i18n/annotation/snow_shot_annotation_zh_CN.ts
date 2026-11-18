@@ -467,6 +467,10 @@
             <translation>小数位数</translation>
         </message>
         <message>
+            <source>Dedicated Models</source>
+            <translation>专用模型</translation>
+        </message>
+        <message>
             <source>Dedicated model</source>
             <translation>专用模型</translation>
         </message>
@@ -537,6 +541,14 @@
         <message>
             <source>Distribute vertically</source>
             <translation>垂直分布</translation>
+        </message>
+        <message>
+            <source>Document Recognition Model</source>
+            <translation>文档识别模型</translation>
+        </message>
+        <message>
+            <source>Document recognition</source>
+            <translation>文档识别</translation>
         </message>
         <message>
             <source>Dotted arrow line</source>
@@ -991,6 +1003,10 @@
             <translation>不透明度</translation>
         </message>
         <message>
+            <source>Open document file</source>
+            <translation>打开文档文件</translation>
+        </message>
+        <message>
             <source>Open recording folder</source>
             <translation>打开录制文件夹</translation>
         </message>
@@ -1415,8 +1431,8 @@
             <translation>起始箭头 空心三角形</translation>
         </message>
         <message>
-            <source>Start moving the recording area when the cursor enters the outer quarter of its width or height.</source>
-            <translation>鼠标指针进入距边缘四分之一宽度或高度的范围时，开始移动录制区域。</translation>
+            <source>Start moving the recording area when the cursor enters the outer twelfth of its width or height.</source>
+            <translation>鼠标指针进入距边缘十二分之一宽度或高度的范围时，开始移动录制区域。</translation>
         </message>
         <message>
             <source>Start recording</source>

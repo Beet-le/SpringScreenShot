@@ -31,16 +31,8 @@
     <context>
         <name>ScreenshotImageConversionController</name>
         <message>
-            <source>Cancel</source>
-            <translation>Cancel</translation>
-        </message>
-        <message>
             <source>Image conversion failed</source>
             <translation>Image conversion failed</translation>
-        </message>
-        <message>
-            <source>Image conversion settings</source>
-            <translation>Image conversion settings</translation>
         </message>
         <message>
             <source>Model configuration changed. Retry to use the updated settings</source>
@@ -49,14 +41,6 @@
         <message>
             <source>No vision models are available</source>
             <translation>No vision models are available</translation>
-        </message>
-        <message>
-            <source>OK</source>
-            <translation>OK</translation>
-        </message>
-        <message>
-            <source>Retry</source>
-            <translation>Retry</translation>
         </message>
         <message>
             <source>The image conversion service is unavailable</source>
@@ -73,10 +57,6 @@
         <message>
             <source>Unable to load vision models</source>
             <translation>Unable to load vision models</translation>
-        </message>
-        <message>
-            <source>Vision model</source>
-            <translation>Vision model</translation>
         </message>
     </context>
     <context>
@@ -172,6 +152,10 @@
             <translation>Converting to Markdown</translation>
         </message>
         <message>
+            <source>Document recognition service is unavailable</source>
+            <translation>Document recognition service is unavailable</translation>
+        </message>
+        <message>
             <source>LaTeX recognition failed</source>
             <translation>LaTeX recognition failed</translation>
         </message>
@@ -200,6 +184,10 @@
             <translation>No table cells were recognized</translation>
         </message>
         <message>
+            <source>Paragraph grouping is unavailable. Using the original OCR lines</source>
+            <translation>Paragraph grouping is unavailable. Using the original OCR lines</translation>
+        </message>
+        <message>
             <source>Preparing text recognition components</source>
             <translation>Preparing text recognition components</translation>
         </message>
@@ -218,6 +206,10 @@
         <message>
             <source>Recognizing barcode</source>
             <translation>Recognizing barcode</translation>
+        </message>
+        <message>
+            <source>Recognizing document</source>
+            <translation>Recognizing document</translation>
         </message>
         <message>
             <source>Recognizing table</source>
@@ -266,6 +258,10 @@
         <message>
             <source>Text recognition request could not be prepared</source>
             <translation>Text recognition request could not be prepared</translation>
+        </message>
+        <message>
+            <source>The document file could not be opened</source>
+            <translation>The document file could not be opened</translation>
         </message>
         <message>
             <source>The selected recognition model is unavailable. Choose another model or retry</source>
@@ -337,6 +333,10 @@
         <message>
             <source>Paste</source>
             <translation>Paste</translation>
+        </message>
+        <message>
+            <source>Recognized document</source>
+            <translation>Recognized document</translation>
         </message>
         <message>
             <source>Rendering formula...</source>

@@ -31,16 +31,8 @@
     <context>
         <name>ScreenshotImageConversionController</name>
         <message>
-            <source>Cancel</source>
-            <translation>取消</translation>
-        </message>
-        <message>
             <source>Image conversion failed</source>
             <translation>图像转换失败</translation>
-        </message>
-        <message>
-            <source>Image conversion settings</source>
-            <translation>图像转换设置</translation>
         </message>
         <message>
             <source>Model configuration changed. Retry to use the updated settings</source>
@@ -49,14 +41,6 @@
         <message>
             <source>No vision models are available</source>
             <translation>没有可用的视觉模型</translation>
-        </message>
-        <message>
-            <source>OK</source>
-            <translation>确定</translation>
-        </message>
-        <message>
-            <source>Retry</source>
-            <translation>重试</translation>
         </message>
         <message>
             <source>The image conversion service is unavailable</source>
@@ -73,10 +57,6 @@
         <message>
             <source>Unable to load vision models</source>
             <translation>无法加载视觉模型</translation>
-        </message>
-        <message>
-            <source>Vision model</source>
-            <translation>视觉模型</translation>
         </message>
     </context>
     <context>
@@ -172,6 +152,10 @@
             <translation>正在转换为 Markdown</translation>
         </message>
         <message>
+            <source>Document recognition service is unavailable</source>
+            <translation>文档识别服务不可用</translation>
+        </message>
+        <message>
             <source>LaTeX recognition failed</source>
             <translation>LaTeX 识别失败</translation>
         </message>
@@ -200,6 +184,10 @@
             <translation>未识别到表格单元格</translation>
         </message>
         <message>
+            <source>Paragraph grouping is unavailable. Using the original OCR lines</source>
+            <translation>段落分组不可用，将使用原始 OCR 文本行</translation>
+        </message>
+        <message>
             <source>Preparing text recognition components</source>
             <translation>正在准备文本识别组件</translation>
         </message>
@@ -218,6 +206,10 @@
         <message>
             <source>Recognizing barcode</source>
             <translation>正在识别条码</translation>
+        </message>
+        <message>
+            <source>Recognizing document</source>
+            <translation>正在识别文档</translation>
         </message>
         <message>
             <source>Recognizing table</source>
@@ -266,6 +258,10 @@
         <message>
             <source>Text recognition request could not be prepared</source>
             <translation>无法准备文本识别请求</translation>
+        </message>
+        <message>
+            <source>The document file could not be opened</source>
+            <translation>无法打开文档文件</translation>
         </message>
         <message>
             <source>The selected recognition model is unavailable. Choose another model or retry</source>
@@ -337,6 +333,10 @@
         <message>
             <source>Paste</source>
             <translation>粘贴</translation>
+        </message>
+        <message>
+            <source>Recognized document</source>
+            <translation>已识别文档</translation>
         </message>
         <message>
             <source>Rendering formula...</source>

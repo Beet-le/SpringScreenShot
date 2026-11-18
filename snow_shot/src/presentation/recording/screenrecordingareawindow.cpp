@@ -59,7 +59,6 @@ constexpr QColor kIdleColor(0x40, 0x96, 0xff);
 constexpr QColor kRecordingColor(0xf5, 0x22, 0x2d);
 constexpr QColor kPausedColor(0xfa, 0xad, 0x14);
 constexpr qreal kResizeHitWidth = 6.0;
-constexpr int kFrameInset = snow_shot::presentation::recording::screenRecordingPhysicalFrameInset;
 constexpr int kMoveButtonGap = 8;
 } // namespace
 
@@ -104,9 +103,10 @@ QRect nativeClientGeometry(const QWidget& window) {
     return {};
 }
 
-QRegion borderPaintRegion(const QRectF& frame, const QRectF& selection, qreal padding) {
+QRegion borderPaintRegion(const QRectF& frame, const QRectF& selection, qreal padding,
+                          qreal scale) {
     const auto border = snow_shot::presentation::recording::screenRecordingAreaBorderGeometry(
-        frame, selection, padding);
+        frame, selection, padding, scale);
     QRegion region;
     for (const QRectF& strip : {border.top, border.bottom, border.left, border.right}) {
         if (!strip.isEmpty())
@@ -204,17 +204,30 @@ void ScreenRecordingAreaWindow::setFollowCaptureActive(bool active) {
         return;
     cancelRegionInteraction();
     cancelWebcamInteraction();
+    const bool restoreScreen = !active && m_captureScreen;
     m_followCaptureActive = active;
+    m_captureScreen.clear();
     m_captureViewport = active ? QRectF(m_recordingRegion) : QRectF();
     m_canvas->setVisible(!active && !m_trimming);
-    if (active)
+    if (active) {
         layoutCaptureViewport();
-    else
-        placeRecordingRegion(m_recordingRegion);
+    } else {
+        placeRecordingRegion(m_recordingRegion, restoreScreen);
+        m_captureLogicalRegion = {};
+    }
     applyInputMode();
 }
 
-void ScreenRecordingAreaWindow::setCaptureViewport(const QRectF& viewport) {
+void ScreenRecordingAreaWindow::setFollowPointerTracking(bool enabled) {
+    if (m_followPointerTracking == enabled)
+        return;
+    m_followPointerTracking = enabled;
+    m_regionInputRouter.reset();
+    if (enabled)
+        layoutRegionDragHandle();
+}
+
+void ScreenRecordingAreaWindow::setCaptureViewport(const QRectF& viewport, QScreen* screen) {
     if (!m_followCaptureActive || !viewport.isValid() || viewport.isEmpty())
         return;
     for (qreal value : {viewport.x(), viewport.y(), viewport.width(), viewport.height(),
@@ -222,9 +235,10 @@ void ScreenRecordingAreaWindow::setCaptureViewport(const QRectF& viewport) {
         if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<int>::max() / 2.0)
             return;
     }
-    if (m_captureViewport == viewport)
+    if (m_captureViewport == viewport && m_captureScreen == screen)
         return;
     m_captureViewport = viewport;
+    m_captureScreen = screen;
     layoutCaptureViewport();
 }
 
@@ -241,8 +255,9 @@ void ScreenRecordingAreaWindow::layoutCaptureViewport() {
     const QRectF logicalRegion = m_captureViewport;
     const qreal scale = 1.0;
 #else
-    QScreen* target =
-        ScreenshotGeometryMapper::screenForPhysicalRect(m_captureViewport.toAlignedRect());
+    QScreen* target = m_captureScreen.data();
+    if (!target)
+        target = ScreenshotGeometryMapper::screenForPhysicalRect(m_captureViewport.toAlignedRect());
     const qreal scale = target ? target->devicePixelRatio() : 1.0;
     const QPointF physicalOrigin =
         target ? ScreenshotGeometryMapper::physicalRectForScreen(*target).topLeft() : QPoint();
@@ -254,10 +269,19 @@ void ScreenRecordingAreaWindow::layoutCaptureViewport() {
     const auto geometry = snow_shot::presentation::recording::screenRecordingFollowFrameGeometry(
         logicalRegion, scale);
     m_captureLogicalRegion = logicalRegion;
+    const bool scaleChanged = m_captureScale != scale;
     m_captureScale = scale;
     m_captureWindowGeometry = geometry.windowGeometry;
+#ifndef Q_OS_MACOS
+    if (m_captureScreen && windowHandle() && windowHandle()->screen() != target) {
+        windowHandle()->setScreen(target);
+        applyNativePassThrough(true);
+    }
+#endif
     setGeometry(m_captureWindowGeometry);
     synchronizeCaptureViewport();
+    if (scaleChanged)
+        update();
     // The hidden canvas keeps its original geometry and viewport throughout follow.
 }
 
@@ -276,14 +300,15 @@ void ScreenRecordingAreaWindow::synchronizeCaptureViewport() {
     else
 #endif
         selection = m_captureLogicalRegion.translated(-QPointF(mapToGlobal(QPoint())));
-    const qreal inset = kFrameInset / scale;
-    const qreal padding = 1.0 / scale;
-    const QRectF frame = selection.adjusted(-inset, -inset, inset, inset);
+    const auto metrics = snow_shot::presentation::recording::screenRecordingAreaFrameMetrics(scale);
+    const QRectF frame = metrics.expandedRect(selection);
+    const qreal padding = metrics.paddingWidth;
     if (m_selectionRect != selection || m_frameRect != frame || m_paddingWidth != padding) {
         // Follow has no painted interior. Clear the old border as well as painting
         // the new one; mode changes and backing-store resizes still repaint fully.
-        const QRegion damage = borderPaintRegion(m_frameRect, m_selectionRect, m_paddingWidth) |
-                               borderPaintRegion(frame, selection, padding);
+        const QRegion damage =
+            borderPaintRegion(m_frameRect, m_selectionRect, m_paddingWidth, scale) |
+            borderPaintRegion(frame, selection, padding, scale);
         m_selectionRect = selection;
         m_frameRect = frame;
         m_paddingWidth = padding;
@@ -323,10 +348,11 @@ void ScreenRecordingAreaWindow::setRecordingRegion(const QRect& requestedRegion)
         static_cast<void>(m_canvasRuntime->clearDocumentPreservingViewports());
 }
 
-void ScreenRecordingAreaWindow::placeRecordingRegion(const QRect& region) {
+void ScreenRecordingAreaWindow::placeRecordingRegion(const QRect& region, bool restoreFromFollow) {
     const QScopedValueRollback<bool> settingRegion(m_settingRegion, true);
     m_recordingRegion = region;
 #ifdef Q_OS_MACOS
+    Q_UNUSED(restoreFromFollow);
     const QRectF logicalRegion(region);
     const qreal scale = 1.0;
 #else
@@ -342,6 +368,10 @@ void ScreenRecordingAreaWindow::placeRecordingRegion(const QRect& region) {
     m_paddingWidth = frameGeometry.paddingWidth;
     if (m_trimming)
         setFixedSize(frameGeometry.windowGeometry.size());
+#ifndef Q_OS_MACOS
+    if (restoreFromFollow && screen && windowHandle() && windowHandle()->screen() != screen)
+        windowHandle()->setScreen(screen);
+#endif
     setGeometry(frameGeometry.windowGeometry);
     m_physicalInsets = QMarginsF(m_selectionRect.left() * scale, m_selectionRect.top() * scale,
                                  (width() - m_selectionRect.right()) * scale,
@@ -511,7 +541,13 @@ void ScreenRecordingAreaWindow::layoutRegionDragHandle() {
     if (m_trimming || !editable) {
         if (m_regionDragHandle)
             m_regionDragHandle->hide();
-        m_regionInputRouter.reset();
+        if (!m_followCaptureActive || !m_followPointerTracking || !isVisible()) {
+            m_regionInputRouter.reset();
+        } else if (!m_regionInputRouter) {
+            m_regionInputRouter = std::make_unique<RecordingRegionInputRouter>(
+                [this](const QPoint& point) { emit followPointerMoved(point); },
+                RecordingRegionInputRouter::Events::Movement);
+        }
         return;
     }
     if (!m_regionDragHandle) {
@@ -899,14 +935,15 @@ void ScreenRecordingAreaWindow::layoutSelection() {
     QRectF selection = QRectF(rect()).marginsRemoved(
         QMarginsF(m_physicalInsets.left() / scale, m_physicalInsets.top() / scale,
                   m_physicalInsets.right() / scale, m_physicalInsets.bottom() / scale));
-    const qreal frameInset = kFrameInset / scale;
-    QRectF frame = selection.adjusted(-frameInset, -frameInset, frameInset, frameInset);
-    const qreal padding = 1.0 / scale;
+    const auto metrics = snow_shot::presentation::recording::screenRecordingAreaFrameMetrics(scale);
+    QRectF frame = metrics.expandedRect(selection);
+    qreal padding = metrics.paddingWidth;
     const auto nativeGeometry = snow_shot::presentation::recording::screenRecordingObservedGeometry(
         nativeClientGeometry(*this), scale, m_physicalInsets.toMargins());
     if (nativeGeometry.recordingRegion.isValid()) {
         selection = nativeGeometry.selectionRect;
         frame = nativeGeometry.frameRect;
+        padding = nativeGeometry.paddingWidth;
     }
     if (m_selectionRect == selection && m_frameRect == frame && m_paddingWidth == padding) {
         return;
@@ -1210,7 +1247,8 @@ void ScreenRecordingAreaWindow::paintEvent(QPaintEvent* event) {
     }
     painter.setRenderHint(QPainter::Antialiasing, false);
     const auto border = snow_shot::presentation::recording::screenRecordingAreaBorderGeometry(
-        m_frameRect, m_selectionRect, m_paddingWidth);
+        m_frameRect, m_selectionRect, m_paddingWidth,
+        m_followCaptureActive ? m_captureScale : devicePixelRatioF());
     painter.fillRect(border.top, color);
     painter.fillRect(border.bottom, color);
     painter.fillRect(border.left, color);

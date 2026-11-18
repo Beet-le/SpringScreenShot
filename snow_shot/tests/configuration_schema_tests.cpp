@@ -66,6 +66,15 @@ QJsonArray metadata() {
 }
 
 void publicMetadataMatchesOriginal(const QJsonArray& actual) {
+#ifdef Q_OS_MACOS
+    require(
+        !ConfigurationSchema::defaultValue(QStringLiteral("system/auto_start_at_boot")).toBool(),
+        "macOS login registration defaults off in both editions");
+#else
+    require(ConfigurationSchema::defaultValue(QStringLiteral("system/auto_start_at_boot")).toBool(),
+            "other platforms retain the enabled startup default");
+#endif
+
 #ifdef Q_OS_WIN
     QFile file(QString::fromUtf8(SNOW_SCHEMA_BASELINE_JSON));
     require(file.open(QIODevice::ReadOnly), "the original schema metadata fixture must open");
@@ -185,7 +194,7 @@ void nativeDefaultsRemainIntact(const QString& movies, const QString& pictures) 
         "edition-specific default booleans must remain intact");
 #ifdef Q_OS_MACOS
     require(ConfigurationSchema::defaultValue(QStringLiteral("updates/mode")) ==
-                    QStringLiteral("check") &&
+                    QStringLiteral("next_launch") &&
                 ConfigurationSchema::defaultValue(QStringLiteral(
                     "screenshot_ui/selection_display_unit")) == QStringLiteral("logical_pixels"),
             "native macOS update and coordinate defaults must remain intact");

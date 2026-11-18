@@ -1062,10 +1062,6 @@
     <context>
         <name>LoginItemService</name>
         <message>
-            <source>%1 needs a valid code signature to use launch at login. Reinstall the signed app</source>
-            <translation>%1 需要有效的程式碼簽章才能在登入時啟動。請重新安裝已簽章的應用程式</translation>
-        </message>
-        <message>
             <source>A launch-at-login change is already in progress</source>
             <translation>正在變更登入時啟動設定</translation>
         </message>
@@ -1078,24 +1074,8 @@
             <translation>無法變更登入時啟動設定：%1</translation>
         </message>
         <message>
-            <source>Could not save launch-at-login initialization. Registration was not changed</source>
-            <translation>無法儲存登入時啟動初始化狀態。註冊狀態未變更</translation>
-        </message>
-        <message>
             <source>Could not save the launch-at-login preference. The displayed macOS status is still current</source>
             <translation>無法儲存登入時啟動偏好設定。顯示的 macOS 狀態仍為目前狀態</translation>
-        </message>
-        <message>
-            <source>Move the signed %1 app to /Applications or ~/Applications to use launch at login</source>
-            <translation>請將已簽章的 %1 應用程式移至 /Applications 或 ~/Applications，以便在登入時啟動</translation>
-        </message>
-        <message>
-            <source>Move the signed Snow Shot app to /Applications or ~/Applications to use launch at login</source>
-            <translation>請將已簽章的 Snow Shot 應用程式移至 /Applications 或 ~/Applications，以使用登入時啟動功能</translation>
-        </message>
-        <message>
-            <source>Snow Shot needs a valid code signature to use launch at login. Reinstall the signed app</source>
-            <translation>Snow Shot 需要有效的程式碼簽章才能使用登入時啟動功能。請重新安裝已簽章的應用程式</translation>
         </message>
         <message>
             <source>macOS did not apply the launch-at-login change. Check Login Items in System Settings</source>
@@ -1348,6 +1328,10 @@
             <translation>轉換為 Markdown</translation>
         </message>
         <message>
+            <source>Document recognition</source>
+            <translation>文件辨識</translation>
+        </message>
+        <message>
             <source>Drag tools here to hide them from the screenshot toolbar</source>
             <translation>將工具拖到此處，即可在截圖工具列中隱藏它們</translation>
         </message>
@@ -1560,6 +1544,10 @@
         <message>
             <source>Active window</source>
             <translation>作用中視窗</translation>
+        </message>
+        <message>
+            <source>Adaptive guide colors</source>
+            <translation>自適應輔助線顏色</translation>
         </message>
         <message>
             <source>Add a mask to highlight text recognition results</source>
@@ -1790,6 +1778,10 @@
             <translation>自動停用</translation>
         </message>
         <message>
+            <source>Automatic disabling in fullscreen windows</source>
+            <translation>全螢幕視窗自動停用</translation>
+        </message>
+        <message>
             <source>Automatic text recognition</source>
             <translation>自動文字辨識</translation>
         </message>
@@ -1812,6 +1804,10 @@
         <message>
             <source>Automatically select newly created elements</source>
             <translation>自動選取新建立的元素</translation>
+        </message>
+        <message>
+            <source>Automatically start Spring ScreenShot in the background when you log in to your Mac</source>
+            <translation>登入 Mac 時自動在背景啟動 Spring ScreenShot</translation>
         </message>
         <message>
             <source>Autostart</source>
@@ -1998,10 +1994,6 @@
             <translation>自動檢查</translation>
         </message>
         <message>
-            <source>Check for new versions on GitHub and Gitee</source>
-            <translation>在 GitHub 和 Gitee 上檢查新版本</translation>
-        </message>
-        <message>
             <source>Child elements</source>
             <translation>子元素</translation>
         </message>
@@ -2016,6 +2008,10 @@
         <message>
             <source>Choose automatic window or window sub-element selection, or select manually</source>
             <translation>選擇自動選取視窗或視窗子元素，或手動選取</translation>
+        </message>
+        <message>
+            <source>Choose how Windows throttles the application's execution speed</source>
+            <translation>選擇 Windows 如何限制應用程式的執行速度</translation>
         </message>
         <message>
             <source>Choose how much execution time the application receives</source>
@@ -2158,6 +2154,10 @@
             <translation>選擇文字辨識完成後自動執行的動作</translation>
         </message>
         <message>
+            <source>Choose what happens when content is dropped on the floating toolbar</source>
+            <translation>選擇將內容拖放到浮動工具列時執行的操作</translation>
+        </message>
+        <message>
             <source>Choose what happens when the clipboard content or selected file is already pinned</source>
             <translation>選擇剪貼簿內容或所選檔案已固定到螢幕時的操作</translation>
         </message>
@@ -2186,8 +2186,12 @@
             <translation>選擇執行哪些操作時，同時以所選影像格式儲存至指定目錄</translation>
         </message>
         <message>
-            <source>Choose which fullscreen windows automatically disable global shortcuts</source>
-            <translation>選擇哪些全螢幕視窗會自動停用全域快速鍵</translation>
+            <source>Choose which fullscreen windows trigger automatic disabling</source>
+            <translation>選擇哪些全螢幕視窗會觸發自動停用</translation>
+        </message>
+        <message>
+            <source>Choose which inputs to disable</source>
+            <translation>選擇要停用的輸入功能</translation>
         </message>
         <message>
             <source>Clear</source>
@@ -2602,12 +2606,20 @@
             <translation>診斷</translation>
         </message>
         <message>
+            <source>Disable global mouse</source>
+            <translation>停用全域滑鼠</translation>
+        </message>
+        <message>
             <source>Disable global shortcuts</source>
             <translation>停用全域快速鍵</translation>
         </message>
         <message>
-            <source>Disable shortcuts in fullscreen windows</source>
-            <translation>在全螢幕視窗中停用快速鍵</translation>
+            <source>Disable scope</source>
+            <translation>停用範圍</translation>
+        </message>
+        <message>
+            <source>Disable/enable global mouse</source>
+            <translation>停用/啟用全域滑鼠</translation>
         </message>
         <message>
             <source>Disable/enable global shortcuts</source>
@@ -2898,6 +2910,10 @@
             <translation>全螢幕畫布（開啟/關閉滑鼠穿透）</translation>
         </message>
         <message>
+            <source>Fullscreen input settings</source>
+            <translation>全螢幕輸入設定</translation>
+        </message>
+        <message>
             <source>Fullscreen suppression</source>
             <translation>全螢幕抑制</translation>
         </message>
@@ -2948,10 +2964,6 @@
         <message>
             <source>Global mouse gestures</source>
             <translation>全域滑鼠手勢</translation>
-        </message>
-        <message>
-            <source>Global shortcut activation behavior</source>
-            <translation>全域快速鍵啟用行為</translation>
         </message>
         <message>
             <source>Global shortcuts</source>
@@ -3038,12 +3050,12 @@
             <translation>圖示</translation>
         </message>
         <message>
-            <source>Ignore global shortcuts while a matching focused window occupies an entire monitor</source>
-            <translation>符合篩選條件的焦點視窗佔滿整個顯示器時忽略全域快速鍵</translation>
-        </message>
-        <message>
             <source>Image and document files</source>
             <translation>影像與文件檔案</translation>
+        </message>
+        <message>
+            <source>Image editing</source>
+            <translation>影像編輯</translation>
         </message>
         <message>
             <source>Image export</source>
@@ -3080,6 +3092,14 @@
         <message>
             <source>Image size</source>
             <translation>影像大小</translation>
+        </message>
+        <message>
+            <source>Image splitting</source>
+            <translation>影像分割</translation>
+        </message>
+        <message>
+            <source>Image stitching</source>
+            <translation>影像拼接</translation>
         </message>
         <message>
             <source>Import</source>
@@ -3140,6 +3160,10 @@
         <message>
             <source>Interface settings</source>
             <translation>介面設定</translation>
+        </message>
+        <message>
+            <source>Invert guide colors that are similar to their sampled background color</source>
+            <translation>輔助線顏色與取樣的背景顏色相近時反轉輔助線顏色</translation>
         </message>
         <message>
             <source>JPEG</source>
@@ -3324,10 +3348,6 @@
         <message>
             <source>Maintain selection aspect ratio</source>
             <translation>保持選取範圍長寬比</translation>
-        </message>
-        <message>
-            <source>Manage Spring ScreenShot's login permission in macOS System Settings</source>
-            <translation>在 macOS 系統設定中管理 Spring ScreenShot 的登入權限</translation>
         </message>
         <message>
             <source>Manage macOS permissions for Spring ScreenShot</source>
@@ -3538,16 +3558,12 @@
             <translation>僅在顯示時</translation>
         </message>
         <message>
-            <source>Open</source>
-            <translation>開啟</translation>
-        </message>
-        <message>
-            <source>Open Login Items settings</source>
-            <translation>開啟登入項目設定</translation>
-        </message>
-        <message>
             <source>Open a canvas on the current display or toggle click-through</source>
             <translation>在目前顯示器上開啟畫布或切換滑鼠穿透</translation>
+        </message>
+        <message>
+            <source>Open at login</source>
+            <translation>登入時打開</translation>
         </message>
         <message>
             <source>Open image editing for each selected image file, or an empty window if no images are selected</source>
@@ -3628,6 +3644,18 @@
         <message>
             <source>Pages</source>
             <translation>頁面</translation>
+        </message>
+        <message>
+            <source>Pause or resume configured global mouse gestures</source>
+            <translation>暫停或恢復已設定的全域滑鼠手勢</translation>
+        </message>
+        <message>
+            <source>Pause the selected inputs while a matching focused window occupies an entire monitor</source>
+            <translation>當前景視窗符合篩選條件且佔滿整個顯示器時，暫停所選的輸入功能</translation>
+        </message>
+        <message>
+            <source>Performance</source>
+            <translation>效能</translation>
         </message>
         <message>
             <source>Permanently remove all saved screenshots</source>
@@ -3768,6 +3796,14 @@
         <message>
             <source>Portrait A4</source>
             <translation>直向 A4</translation>
+        </message>
+        <message>
+            <source>Power QoS</source>
+            <translation>電源 QoS</translation>
+        </message>
+        <message>
+            <source>Power saving</source>
+            <translation>省電</translation>
         </message>
         <message>
             <source>Preload the selected model for faster recognition. Requires a resident process and uses additional memory</source>
@@ -4726,10 +4762,6 @@
             <translation>Windows 啟動時在背景啟動 Spring ScreenShot</translation>
         </message>
         <message>
-            <source>Start Spring ScreenShot in the background when you log in</source>
-            <translation>登入時在背景啟動 Spring ScreenShot</translation>
-        </message>
-        <message>
             <source>Start Spring ScreenShot with administrator privileges when you sign in</source>
             <translation>登入時以系統管理員權限啟動 Spring ScreenShot</translation>
         </message>
@@ -4910,6 +4942,10 @@
             <translation>切換滑鼠游標下視窗的置頂狀態</translation>
         </message>
         <message>
+            <source>Toggle automatic disabling of the selected inputs in fullscreen windows. This shortcut stays active while automatic disabling is enabled</source>
+            <translation>切換全螢幕時自動停用所選輸入功能。啟用自動停用後，此快速鍵仍然有效</translation>
+        </message>
+        <message>
             <source>Toggle cursor visibility</source>
             <translation>切換游標顯示</translation>
         </message>
@@ -4932,6 +4968,10 @@
         <message>
             <source>Tool positions</source>
             <translation>工具位置</translation>
+        </message>
+        <message>
+            <source>Toolbar drop behavior</source>
+            <translation>工具列拖放行為</translation>
         </message>
         <message>
             <source>Toolbar opacity</source>
@@ -5048,10 +5088,6 @@
         <message>
             <source>Turn every global shortcut off or back on; this shortcut stays active while global shortcuts are disabled</source>
             <translation>關閉或重新開啟所有全域快速鍵；即使全域快速鍵已停用，此快速鍵仍然有效</translation>
-        </message>
-        <message>
-            <source>Turn off or back on the suppression of global shortcuts while the focused window is fullscreen; this shortcut stays active while fullscreen suppression is enabled</source>
-            <translation>關閉或重新開啟焦點視窗全螢幕時對全域快速鍵的抑制；即使全螢幕抑制已生效，此快速鍵仍然有效</translation>
         </message>
         <message>
             <source>UIA</source>
