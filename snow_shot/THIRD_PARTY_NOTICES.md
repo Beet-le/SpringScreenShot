@@ -307,7 +307,7 @@ licenses are included in the Rust dependency notice bundle. OpenCV is not
 required by this feature.
 
 
-## Snow Shot MCP executable
+## SpringScreenShot MCP executable
 
 `snow-shot-mcp` is GPL-3.0-only application code. It uses the official Rust MCP SDK
 (`rmcp`, Apache-2.0) and same-user local IPC (`interprocess`, 0BSD OR Apache-2.0).

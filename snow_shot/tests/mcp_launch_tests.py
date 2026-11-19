@@ -18,7 +18,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="snow-shot-mcp-launch-") as temporary:
         directory = Path(temporary)
         extension = ".exe" if os.name == "nt" else ""
-        bridge = directory / ("snow-shot-mcp" + extension)
+        bridge = directory / ("SpringScreenShot-mcp" + extension)
         sentinel = directory / ("snow_shot" + extension)
         source = directory / "launch_sentinel.rs"
         marker = directory / "launched.txt"

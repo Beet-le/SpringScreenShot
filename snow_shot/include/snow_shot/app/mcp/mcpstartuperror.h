@@ -20,7 +20,7 @@ enum class McpStartupError { None, RuntimeDirectory, EndpointOwned, LocalEndpoin
                                            "Could not secure the MCP runtime directory");
     case McpStartupError::EndpointOwned:
         return QCoreApplication::translate("snow_shot::app::mcp::ScreenshotMcpServer",
-                                           "Another Snow Shot instance owns the MCP endpoint");
+                                           "Another SpringScreenShot instance owns the MCP endpoint");
     case McpStartupError::LocalEndpoint:
         return QCoreApplication::translate("snow_shot::app::mcp::ScreenshotMcpServer",
                                            "Could not open the local MCP endpoint");

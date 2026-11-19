@@ -6,7 +6,7 @@ license = "GPL-3.0-only"
 publish = false
 
 [[bin]]
-name = "snow-shot-mcp"
+name = "SpringScreenShot-mcp"
 path = "src/main.rs"
 
 [features]

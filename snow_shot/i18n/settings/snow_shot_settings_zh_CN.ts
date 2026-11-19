@@ -1598,8 +1598,8 @@
             <translation>所有窗口</translation>
         </message>
         <message>
-            <source>Allow MCP clients running as your OS user to control Spring ScreenShot. Spring ScreenShot must be running</source>
-            <translation>允许以当前系统用户身份运行的 MCP 客户端控制 Spring ScreenShot。Spring ScreenShot 必须保持运行</translation>
+            <source>Allow MCP clients running as your OS user to control SpringScreenShot. SpringScreenShot must be running</source>
+            <translation>允许以当前系统用户身份运行的 MCP 客户端控制 SpringScreenShot。SpringScreenShot 必须保持运行</translation>
         </message>
         <message>
             <source>Allow resizing the selection from its borders while non-move tools are active</source>
@@ -2306,8 +2306,8 @@
             <translation>使用快捷键退出截图前确认</translation>
         </message>
         <message>
-            <source>Connect AI clients to Spring ScreenShot</source>
-            <translation>将 AI 客户端连接到 Spring ScreenShot</translation>
+            <source>Connect AI clients to SpringScreenShot</source>
+            <translation>将 AI 客户端连接到 SpringScreenShot</translation>
         </message>
         <message>
             <source>Contain</source>

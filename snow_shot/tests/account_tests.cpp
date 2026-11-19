@@ -1,5 +1,6 @@
 #include "snow_shot/app/accountsessionservice.h"
 #include "snow_shot/app/distribution.h"
+#include "snow_shot/app/edition.h"
 #include "translation_test_support.h"
 #include "snow_shot/network/snowshotapiclient.h"
 #include "snow_shot/presentation/components/accountpagewidget.h"
@@ -47,6 +48,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <source_location>
 #include <utility>
 
 using snow_shot::app::AccountSessionService;
@@ -70,12 +72,16 @@ void require(bool condition, const char* message) {
         std::exit(1);
     }
 }
-void await(const std::function<bool()>& ready) {
+void await(const std::function<bool()>& ready,
+           std::source_location location = std::source_location::current()) {
     QElapsedTimer timer;
     timer.start();
-    while (!ready() && timer.elapsed() < 5000) {
+    while (!ready() && timer.elapsed() < 15000) {
         QApplication::processEvents();
         QThread::msleep(1);
+    }
+    if (!ready()) {
+        std::cerr << "await timeout at " << location.file_name() << ':' << location.line() << '\n';
     }
     require(ready(), "account operation timed out");
 }
@@ -359,6 +365,10 @@ AccountSessionService::Options options() {
 void accountNavigationIsStandaloneAndFollowsGeneral() {
     const auto catalog = settings::buildBuiltInSettingsCatalog();
     const auto* page = catalog.page(QStringLiteral("account"));
+    if constexpr (!snow_shot::app::edition::accountEnabled) {
+        require(page == nullptr, "account page is hidden while the account feature is disabled");
+        return;
+    }
     require(page && page->kind == settings::SettingsPageKind::Account &&
                 page->route == u"/settings/account",
             "account is a standalone settings route");

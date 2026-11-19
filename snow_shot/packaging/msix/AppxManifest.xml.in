@@ -36,10 +36,10 @@
           EntryPoint="Windows.FullTrustApplication" uap10:Parameters="--autostart">
           <desktop:StartupTask TaskId="SnowShotStartup" Enabled="false" DisplayName="ms-resource:DisplayName" />
         </desktop:Extension>
-        <uap3:Extension Category="windows.appExecutionAlias" Executable="bin\snow-shot-mcp.exe"
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="bin\SpringScreenShot-mcp.exe"
           EntryPoint="Windows.FullTrustApplication" uap11:Subsystem="console" uap11:SupportsMultipleInstances="true">
           <uap3:AppExecutionAlias>
-            <desktop:ExecutionAlias Alias="snow-shot-store-mcp.exe" />
+            <desktop:ExecutionAlias Alias="SpringScreenShot-store-mcp.exe" />
           </uap3:AppExecutionAlias>
         </uap3:Extension>
         <com:Extension Category="windows.comServer">

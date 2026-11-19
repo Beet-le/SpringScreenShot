@@ -429,12 +429,12 @@ so every moment on screen can be expressed clearly and shared easily</source>
     <context>
         <name>EditionMetadata</name>
         <message>
-            <source>Snow Shot</source>
-            <translation>Snow Shot</translation>
-        </message>
-        <message>
             <source>Snow Shot Mini</source>
             <translation>Snow Shot Mini</translation>
+        </message>
+        <message>
+            <source>SpringScreenShot</source>
+            <translation>SpringScreenShot</translation>
         </message>
     </context>
     <context>

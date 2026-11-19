@@ -74,7 +74,7 @@ struct Policy {
     const auto local = localApplicationDataDirectory();
     return local.isEmpty() ? QString()
                            : QDir(local).filePath(
-                                 QStringLiteral("Microsoft/WindowsApps/snow-shot-store-mcp.exe"));
+                                 QStringLiteral("Microsoft/WindowsApps/SpringScreenShot-store-mcp.exe"));
 }
 
 [[nodiscard]] inline QString privacyPolicyUrl() {

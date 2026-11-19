@@ -361,10 +361,14 @@ class ApplicationController::Impl {
                     .value(QStringLiteral("api_configuration/server_url"))
                     .toString()));
         auto* accountSession = AccountSessionService::forClient(translationClient.get());
-        QObject::connect(accountSession, &AccountSessionService::registrationActivated, &q, [this] {
-            static_cast<void>(actionGate.dispatch(
-                [this] { ensureMainWindow().showSettingsLocation(QStringLiteral("account")); }));
-        });
+        if (accountSession) {
+            QObject::connect(
+                accountSession, &AccountSessionService::registrationActivated, &q, [this] {
+                    static_cast<void>(actionGate.dispatch([this] {
+                        ensureMainWindow().showSettingsLocation(QStringLiteral("account"));
+                    }));
+                });
+        }
         translationService = &translation::TranslationService::forClient(
             *translationClient, applicationStorage.configuration(),
             presentation::LanguageManager::instance().currentLocale());

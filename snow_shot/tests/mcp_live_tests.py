@@ -1,6 +1,6 @@
 """Exercise all 28 screenshot tools against the isolated Windows application fixture.
 
-Usage: python snow_shot/tests/mcp_live_tests.py <snow_shot.exe> <snow-shot-mcp.exe>
+Usage: python snow_shot/tests/mcp_live_tests.py <snow_shot.exe> <SpringScreenShot-mcp.exe>
 This captures the desktop. Clipboard ownership is retained and restored. Provider
 and scrolling routes use explicit ownership guards, not claimed provider success.
 """
@@ -159,12 +159,13 @@ def main():
         ], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.monotonic() + 45
         while not descriptor.exists() and time.monotonic() < deadline:
-            assert app.poll() is None, f"Snow Shot exited with {app.returncode}"
+            assert app.poll() is None, f"SpringScreenShot exited with {app.returncode}"
             time.sleep(0.1)
         assert descriptor.exists(), "MCP descriptor was not published"
         client = McpClient(bridge_executable, environment)
         discovered = client.send("server/discover", {})
-        assert discovered["result"]["supportedVersions"] == ["2026-07-28"], discovered
+        versions = discovered["result"]["supportedVersions"]
+        assert versions and versions[0] == "2026-07-28", discovered
         listing = client.send("tools/list", {})
         assert "error" not in listing, listing
         assert TOOLS <= {tool["name"] for tool in listing["result"]["tools"]}

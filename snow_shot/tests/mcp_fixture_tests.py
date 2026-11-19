@@ -853,7 +853,7 @@ def screenshot_fixture_measurement(args):
     for size in sizes:
         with tempfile.TemporaryDirectory(prefix="snow-shot-mcp-screenshot-") as temporary:
             directory = Path(temporary)
-            descriptor = directory / "snow-shot-mcp.json"
+            descriptor = directory / "SpringScreenShot-mcp.json"
             with (directory / "fixture.log").open("w", encoding="utf-8") as log:
                 fixture = subprocess.Popen([str(args.screenshot_fixture), "-platform", "offscreen",
                                             "--serve", str(directory),
@@ -888,7 +888,7 @@ def screenshot_fixture_measurement(args):
 def run(args, provider):
     with tempfile.TemporaryDirectory(prefix="snow-shot-mcp-real-") as temporary:
         directory = Path(temporary)
-        descriptor = directory / "snow-shot-mcp.json"
+        descriptor = directory / "SpringScreenShot-mcp.json"
         with (directory / "fixture.log").open("w", encoding="utf-8") as log:
             fixture = subprocess.Popen([str(args.fixture), "-platform", "offscreen", "--serve", str(directory)],
                                        stdout=log, stderr=log,

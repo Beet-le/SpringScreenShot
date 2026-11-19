@@ -222,7 +222,7 @@ manages registration and removes it when the package is uninstalled; Snow Shot
 does not write runtime shell registrations. See Microsoft's
 [packaged Explorer command guidance](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/integrate-packaged-app-with-file-explorer).
 MCP uses the console alias
-`snow-shot-store-mcp.exe`.
+`SpringScreenShot-store-mcp.exe`.
 
 The Store build uses separate default settings/data locations from the standalone
 app. It omits administrator launch and runtime shell-registration controls.
@@ -267,7 +267,7 @@ Suggested reviewer notes, to confirm against the submitted build:
 > Snow Shot Edit action opens supported files. Optional official online recognition
 > and AI features need a network connection; custom providers need configuration.
 > About links to privacy and feedback. Settings can enable startup and authenticated
-> local MCP through snow-shot-store-mcp.exe. Microsoft Store manages updates.
+> local MCP through SpringScreenShot-store-mcp.exe. Microsoft Store manages updates.
 > Administrator launch and runtime shell-registration controls are absent.
 
 Test updates through a private package flight before expanding production

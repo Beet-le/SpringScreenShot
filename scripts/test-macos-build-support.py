@@ -660,7 +660,7 @@ include([==[{(ROOT / 'cmake/SnowShotMiniMacOS.cmake').as_posix()}]==])
 
             result = verify()
             self.assertEqual(result.returncode, 0, result.stderr)
-            for relative in ('Contents/MacOS/snow_shot', 'Contents/MacOS/snow-shot-mcp',
+            for relative in ('Contents/MacOS/snow_shot', 'Contents/MacOS/SpringScreenShot-mcp',
                              'Contents/Frameworks/Unused.framework/Unused',
                              'Contents/PlugIns/imageformats/unused.dylib',
                              'Contents/Resources/assets/qrcode/detect.prototxt',
@@ -2022,7 +2022,7 @@ if name == 'ocr' and 'verify' in sys.argv and '--app' in sys.argv:
                 tool.write_text(mock)
                 tool.chmod(0o755)
             product = 'snow_shot_mini' if mini else 'snow_shot'
-            bridge = 'snow-shot-mini-mcp' if mini else 'snow-shot-mcp'
+            bridge = 'snow-shot-mini-mcp' if mini else 'SpringScreenShot-mcp'
             runtime = root / (product + '.app') / 'Contents/MacOS'
             runtime.mkdir(parents=True)
             for name in (product, bridge, 'snow-ocr-process', 'crashpad_handler'):
@@ -2034,7 +2034,7 @@ if name == 'ocr' and 'verify' in sys.argv and '--app' in sys.argv:
             script = (ROOT / 'cmake/DeploySnowShotMacOS.cmake.in').read_text()
             if mini:
                 script = script.replace('snow_shot.app', 'snow_shot_mini.app')
-                script = script.replace('snow-shot-mcp', 'snow-shot-mini-mcp')
+                script = script.replace('SpringScreenShot-mcp', 'snow-shot-mini-mcp')
             values = {'SNOW_MACOS_CODESIGN_IDENTITY': identity,
                       'SNOW_MACDEPLOYQT': str(root / 'macdeployqt'),
                       'SNOW_MACOS_OCR_ASSETS_ENABLED': 'ON' if ocr else 'OFF',

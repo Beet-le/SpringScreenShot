@@ -396,6 +396,7 @@ recording_options! {
     encoding_preset: EncodingPreset,
     r#loop: bool,
     capture_toolbar: bool,
+    follow_mouse: bool,
     post_processing: bool,
     post_processing_effect: PostProcessingEffect,
     progress_bar_color: String,
@@ -581,7 +582,7 @@ pub const TOOLS: &[(&str, &str, bool)] = &[
     ),
     (
         "snow_shot_app_action",
-        "Open an application page, restart, or quit Snow Shot.",
+        "Open an application page, restart, or quit SpringScreenShot.",
         false,
     ),
     (

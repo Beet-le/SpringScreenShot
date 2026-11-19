@@ -29,12 +29,12 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, thiserror::Error, Clone)]
 pub enum AppClientError {
     #[error(
-        "Snow Shot is not running or MCP is disabled. Start Snow Shot and enable MCP in Settings."
+        "SpringScreenShot is not running or MCP is disabled. Start SpringScreenShot and enable MCP in Settings."
     )]
     Unavailable,
-    #[error("Invalid or insecure Snow Shot MCP descriptor")]
+    #[error("Invalid or insecure SpringScreenShot MCP descriptor")]
     InvalidDescriptor,
-    #[error("Snow Shot local protocol error")]
+    #[error("SpringScreenShot local protocol error")]
     Protocol,
     #[error(
         "Screenshot request timed out; its outcome may be unknown. Refresh the session state before editing."
@@ -46,9 +46,9 @@ pub enum AppClientError {
         "The local connection closed; the mutation was not replayed. Refresh the session state before editing."
     )]
     Disconnected,
-    #[error("Snow Shot request capacity is full; retry after a pending request finishes")]
+    #[error("SpringScreenShot request capacity is full; retry after a pending request finishes")]
     QueueFull,
-    #[error("Snow Shot request exceeds the maximum JSON size")]
+    #[error("SpringScreenShot request exceeds the maximum JSON size")]
     RequestTooLarge,
 }
 impl AppClientError {
@@ -665,7 +665,7 @@ fn packaged_descriptor_path(local: PathBuf, family: &str) -> PathBuf {
     local
         .join("Packages")
         .join(family)
-        .join("LocalState/mcp/snow-shot-mcp.json")
+        .join(format!("LocalState/mcp/{}.json", crate::edition::MCP_NAME))
 }
 
 fn package_family_name() -> Option<String> {
@@ -706,9 +706,16 @@ mod tests {
             local
                 .join("Packages")
                 .join(family)
-                .join("LocalState/mcp/snow-shot-mcp.json")
+                .join(format!("LocalState/mcp/{}.json", crate::edition::MCP_NAME))
         );
-        assert_ne!(path, local.join("SnowShot/mcp/snow-shot-mcp.json"));
+        assert_ne!(
+            path,
+            local.join(format!(
+                "{}/mcp/{}.json",
+                crate::edition::REGISTRY_NAME,
+                crate::edition::MCP_NAME
+            ))
+        );
         assert_ne!(
             path,
             packaged_descriptor_path(local, "Other.Package_family")

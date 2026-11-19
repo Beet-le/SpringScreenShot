@@ -156,7 +156,7 @@ function Assert-SnowMsixAuditedStage {
             throw "Installer or script artifact in Store payload: $($file.Path)"
         }
     }
-    foreach ($required in @('bin/snow_shot.exe', 'bin/snow-shot-mcp.exe', 'bin/crashpad_handler.exe',
+    foreach ($required in @('bin/snow_shot.exe', 'bin/SpringScreenShot-mcp.exe', 'bin/crashpad_handler.exe',
             'bin/SnowShotExplorerCommand.dll',
             'bin/audios/camera_shutter.mp3', 'bin/assets/ocr/asset-manifest.json',
             'bin/assets/qrcode/detect.prototxt', 'bin/assets/qrcode/detect.caffemodel',
@@ -168,7 +168,7 @@ function Assert-SnowMsixAuditedStage {
     if ($manifest.schema -ne 2 -or $manifest.runtime.platform -cne "windows-$Architecture" -or
         $manifest.default_model -cne 'small') { throw 'Store OCR identity does not match the target.' }
     $runtimeRoot = Join-Path $Stage "bin/assets/ocr/runtimes/$($manifest.runtime.version)/windows-$Architecture"
-    $expectedBinaries = @('bin/snow_shot.exe', 'bin/snow-shot-mcp.exe', 'bin/crashpad_handler.exe',
+    $expectedBinaries = @('bin/snow_shot.exe', 'bin/SpringScreenShot-mcp.exe', 'bin/crashpad_handler.exe',
         'bin/SnowShotExplorerCommand.dll',
         "bin/assets/ocr/runtimes/$($manifest.runtime.version)/windows-$Architecture/snow-ocr-process-$($manifest.runtime.version)-windows-$Architecture.exe")
     if ((@($binaryPaths | Sort-Object) -join ',') -cne (@($expectedBinaries | Sort-Object) -join ',')) {

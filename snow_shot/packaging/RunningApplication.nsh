@@ -11,7 +11,12 @@
 !define SNOW_SHOT_INSTALLER_UPDATER "snow-shot-updater"
 !endif
 !ifndef SNOW_SHOT_INSTALLER_MCP
+!if "${SNOW_SHOT_INSTALLER_EXECUTABLE}" == "snow_shot"
+; The full edition brands its MCP bridge separately from the updater identity.
+!define SNOW_SHOT_INSTALLER_MCP "SpringScreenShot-mcp"
+!else
 !searchreplace SNOW_SHOT_INSTALLER_MCP "${SNOW_SHOT_INSTALLER_UPDATER}" "-updater" "-mcp"
+!endif
 !endif
 
 Var SnowShotAppWasClosed

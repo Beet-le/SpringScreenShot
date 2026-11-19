@@ -1,13 +1,21 @@
 //! Compile-time product identity and the reduced Mini MCP contract.
 pub const MINI: bool = cfg!(feature = "mini");
 pub const PRODUCT: &str = if MINI { "snow-shot-mini" } else { "snow-shot" };
-pub const PRODUCT_NAME: &str = if MINI { "Snow Shot Mini" } else { "Snow Shot" };
+pub const PRODUCT_NAME: &str = if MINI {
+    "Snow Shot Mini"
+} else {
+    "SpringScreenShot"
+};
 pub const MCP_NAME: &str = if MINI {
     "snow-shot-mini-mcp"
 } else {
-    "snow-shot-mcp"
+    "SpringScreenShot-mcp"
 };
-pub const REGISTRY_NAME: &str = if MINI { "SnowShotMini" } else { "SnowShot" };
+pub const REGISTRY_NAME: &str = if MINI {
+    "SnowShotMini"
+} else {
+    "SpringScreenShot"
+};
 pub const APP_NAME: &str = if MINI { "snow_shot_mini" } else { "snow_shot" };
 
 pub fn method_enabled(name: &str) -> bool {

@@ -157,7 +157,7 @@ function(_snow_add_mini_helpers)
     if(SNOW_SHOT_ENABLE_MCP)
         snow_add_rust_executable(snow_shot_mini_mcp
             PACKAGE snow-shot-mcp MANIFEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rust/snow-shot-mcp"
-            OUTPUT_NAME snow-shot-mcp PRODUCTION_PROFILE release-size
+            OUTPUT_NAME SpringScreenShot-mcp PRODUCTION_PROFILE release-size
             FEATURES mini REPRODUCIBLE SIZE_OPTIMIZED)
     endif()
 endfunction()
@@ -381,7 +381,8 @@ if(SNOW_SHOT_BUILD_TESTS)
     foreach(_edition IN ITEMS full mini)
         add_executable(snow-shot-${_edition}-mcp-edition-tests tests/mcp_edition_tests.cpp)
         snow_shot_set_source_dependency_edition(snow-shot-${_edition}-mcp-edition-tests ${_edition})
-        target_include_directories(snow-shot-${_edition}-mcp-edition-tests PRIVATE include)
+        target_include_directories(snow-shot-${_edition}-mcp-edition-tests PRIVATE
+            include "${SNOW_IMAGE_SOURCE_DIR}/include")
         target_link_libraries(snow-shot-${_edition}-mcp-edition-tests PRIVATE
             snow_shot_edition_${_edition} Qt6::Gui)
     endforeach()

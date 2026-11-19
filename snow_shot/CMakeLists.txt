@@ -416,7 +416,7 @@ if(SNOW_SHOT_ENABLE_MCP)
     snow_add_rust_executable(snow_shot_mcp
         PACKAGE snow-shot-mcp
         MANIFEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rust/snow-shot-mcp"
-        OUTPUT_NAME snow-shot-mcp
+        OUTPUT_NAME SpringScreenShot-mcp
         PRODUCTION_PROFILE release-size
         REPRODUCIBLE
         SIZE_OPTIMIZED
@@ -930,6 +930,9 @@ target_link_libraries(snow_shot_settings_search PUBLIC
     snow_shot_storage
     Qt6::Widgets
 )
+if(WIN32)
+    target_link_libraries(snow_shot_settings_search PUBLIC ntdll)
+endif()
 
 add_library(snow_shot_main_window_skin STATIC
     include/snow_shot/presentation/mainwindowskincontroller.h
@@ -5589,6 +5592,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/tools/screenshottoolpalettestylecomponents.cpp
         src/presentation/tools/screenshottoolpalettestylemodel.cpp
         src/presentation/tools/screenshottoolpalettestylepresets.cpp
+        src/telemetry/annotationusage.cpp
+        src/telemetry/usageevents.cpp
     )
     if(MSVC)
         set_property(SOURCE tests/screenshot_pinned_window_tests.cpp APPEND PROPERTY

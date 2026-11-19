@@ -12,16 +12,19 @@ pub(super) fn reject_cursor(request: Option<PaginatedRequestParams>) -> Result<(
 }
 pub(super) fn resources() -> ListResourcesResult {
     ListResourcesResult::with_all_items(vec![
-        Resource::new("snow-shot://capabilities", "Snow Shot capability catalog")
-            .with_mime_type("application/json"),
+        Resource::new(
+            "snow-shot://capabilities",
+            "SpringScreenShot capability catalog",
+        )
+        .with_mime_type("application/json"),
         Resource::new(
             "snow-shot://application/status",
-            "Snow Shot application state",
+            "SpringScreenShot application state",
         )
         .with_mime_type("application/json"),
         Resource::new(
             "snow-shot://settings",
-            "Snow Shot settings and field metadata",
+            "SpringScreenShot settings and field metadata",
         )
         .with_mime_type("application/json"),
     ])
@@ -98,7 +101,7 @@ pub(super) fn resource_request(uri: &str) -> Result<(&'static str, Value), McpEr
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
             {
                 return Err(McpError::invalid_params(
-                    "Invalid Snow Shot resource identifier",
+                    "Invalid SpringScreenShot resource identifier",
                     None,
                 ));
             }
@@ -106,7 +109,7 @@ pub(super) fn resource_request(uri: &str) -> Result<(&'static str, Value), McpEr
         }
     }
     Err(McpError::invalid_params(
-        "Unknown Snow Shot resource URI",
+        "Unknown SpringScreenShot resource URI",
         None,
     ))
 }
@@ -152,7 +155,10 @@ pub(super) fn prompt(request: GetPromptRequestParams) -> Result<GetPromptResult,
         .into_iter()
         .find(|p| p.name == request.name)
     else {
-        return Err(McpError::invalid_params("Unknown Snow Shot prompt", None));
+        return Err(McpError::invalid_params(
+            "Unknown SpringScreenShot prompt",
+            None,
+        ));
     };
     let arguments = request.arguments.unwrap_or_default();
     let fields = definition.arguments.unwrap_or_default();

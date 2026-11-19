@@ -2651,7 +2651,7 @@ SettingsItemDefinition mcpEnabledItem() {
                       QT_TRANSLATE_NOOP("SettingsCatalog", "Enable MCP integration"),
                       QT_TRANSLATE_NOOP("SettingsCatalog",
                                         "Allow MCP clients running as your OS user to control "
-                                        "Spring ScreenShot. Spring ScreenShot must be running"),
+                                        "SpringScreenShot. SpringScreenShot must be running"),
                       QStringLiteral("mcp/enabled"), SettingsSwitchBinding::McpEnabled);
 }
 
@@ -5018,7 +5018,7 @@ constexpr CatalogSectionRecord catalogPageConnectionsServicesSections[] = {
         .id = u"mcp",
         .title = settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "MCP")),
         .description = settingsText(
-            QT_TRANSLATE_NOOP("SettingsCatalog", "Connect AI clients to Spring ScreenShot")),
+            QT_TRANSLATE_NOOP("SettingsCatalog", "Connect AI clients to SpringScreenShot")),
         .reset = SettingsSectionReset ::None,
         .items = catalogPageConnectionsServicesSectionMcpItems,
         .factory = nullptr,
@@ -5576,12 +5576,12 @@ SettingsCatalog::SettingsCatalog(QVector<SettingsPageDefinition> pages,
                                  SettingsLocation defaultLocation)
     : m_pages(std::move(pages)), m_navigation(std::move(navigation)),
       m_defaultLocation(std::move(defaultLocation)) {
-    if constexpr (!app::edition::qrRecognition || !app::edition::tableRecognition ||
-                  !app::edition::imageConversion || !app::edition::latexRecognition ||
-                  !app::edition::textTranslation || !app::edition::apiConfiguration ||
-                  !app::edition::extendedFeatures) {
+    if constexpr (!app::edition::accountEnabled || !app::edition::qrRecognition ||
+                  !app::edition::tableRecognition || !app::edition::imageConversion ||
+                  !app::edition::latexRecognition || !app::edition::textTranslation ||
+                  !app::edition::apiConfiguration || !app::edition::extendedFeatures) {
         const auto pageAvailable = [](const QString& id) {
-            return (!app::edition::isMini || id != QStringLiteral("account")) &&
+            return (app::edition::accountEnabled || id != QStringLiteral("account")) &&
                    (app::edition::textTranslation || id != QStringLiteral("translation")) &&
                    (app::edition::apiConfiguration || id != QStringLiteral("api-configuration")) &&
                    (app::edition::extendedFeatures || id != QStringLiteral("extended-features"));

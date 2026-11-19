@@ -1492,17 +1492,20 @@ class McpStatusSettingsWidget final : public SettingsCustomWidget {
         server.insert(QStringLiteral("command"), executable);
         server.insert(QStringLiteral("args"), QJsonArray{});
         QJsonObject servers;
-        servers.insert(snow_shot::app::edition::productId(), server);
+        servers.insert(snow_shot::app::edition::mcpProductId(), server);
         QJsonObject config;
         config.insert(QStringLiteral("mcpServers"), servers);
         m_config->setPlainText(QString::fromUtf8(QJsonDocument(config).toJson()));
         const QString endpoint =
             snow_shot::app::distribution::isStoreManaged()
                 ? QDir(snow_shot::app::distribution::mcpRuntimeDirectory())
-                      .filePath(QStringLiteral("snow-shot-mcp.json"))
+                      .filePath(snow_shot::app::edition::mcpProductId() +
+                                QStringLiteral("-mcp.json"))
                 : QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
-                      .filePath(snow_shot::app::edition::registryName() + QStringLiteral("/mcp/") +
-                                snow_shot::app::edition::productId() + QStringLiteral("-mcp.json"));
+                      .filePath(snow_shot::app::edition::mcpRegistryName() +
+                                QStringLiteral("/mcp/") +
+                                snow_shot::app::edition::mcpProductId() +
+                                QStringLiteral("-mcp.json"));
         m_endpoint->setText(
             QCoreApplication::translate("ScreenshotMcpSettings", "Local endpoint descriptor: %1")
                 .arg(QDir::toNativeSeparators(endpoint)));

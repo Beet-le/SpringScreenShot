@@ -22,7 +22,7 @@ function Write-Pe([string]$Path, [string]$Architecture) {
     [IO.File]::WriteAllBytes($Path, $bytes)
 }
 function New-Fixture([string]$Stage, [string]$Architecture) {
-    $files = @('bin/snow_shot.exe', 'bin/snow-shot-mcp.exe', 'bin/crashpad_handler.exe',
+    $files = @('bin/snow_shot.exe', 'bin/SpringScreenShot-mcp.exe', 'bin/crashpad_handler.exe',
         'bin/SnowShotExplorerCommand.dll',
         'bin/audios/camera_shutter.mp3', 'share/snow-shot/licenses/LICENSES.txt',
         'bin/assets/qrcode/detect.prototxt', 'bin/assets/qrcode/detect.caffemodel',
@@ -367,7 +367,7 @@ endif()
     Require ($minimum -ceq '10.0.19041.0') 'The x64 Store package must retain its Windows 10 baseline.'
     $manifestText = $manifest.OuterXml
     Require ($manifestText.Contains('--autostart') -and $manifestText.Contains('SnowShotStartup') -and
-        $manifestText.Contains('snow-shot-store-mcp.exe') -and $manifestText.Contains('mediumIL') -and
+        $manifestText.Contains('SpringScreenShot-store-mcp.exe') -and $manifestText.Contains('mediumIL') -and
         $manifestText.Contains('runFullTrust') -and $manifestText.Contains('microphone') -and
         $manifestText.Contains('webcam')) 'Packaged launch integrations/capabilities must be declared.'
     $identity.PublisherDisplayName = 'Snow & Apps'

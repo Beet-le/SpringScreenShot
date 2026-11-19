@@ -1598,8 +1598,8 @@
             <translation>All windows</translation>
         </message>
         <message>
-            <source>Allow MCP clients running as your OS user to control Spring ScreenShot. Spring ScreenShot must be running</source>
-            <translation>Allow MCP clients running as your OS user to control Spring ScreenShot. Spring ScreenShot must be running</translation>
+            <source>Allow MCP clients running as your OS user to control SpringScreenShot. SpringScreenShot must be running</source>
+            <translation>Allow MCP clients running as your OS user to control SpringScreenShot. SpringScreenShot must be running</translation>
         </message>
         <message>
             <source>Allow resizing the selection from its borders while non-move tools are active</source>
@@ -2306,8 +2306,8 @@
             <translation>Confirm before exiting screenshot via shortcut</translation>
         </message>
         <message>
-            <source>Connect AI clients to Spring ScreenShot</source>
-            <translation>Connect AI clients to Spring ScreenShot</translation>
+            <source>Connect AI clients to SpringScreenShot</source>
+            <translation>Connect AI clients to SpringScreenShot</translation>
         </message>
         <message>
             <source>Contain</source>

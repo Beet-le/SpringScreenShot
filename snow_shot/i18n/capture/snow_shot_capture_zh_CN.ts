@@ -584,8 +584,8 @@
     <context>
         <name>snow_shot::app::mcp::ScreenshotMcpServer</name>
         <message>
-            <source>Another Snow Shot instance owns the MCP endpoint</source>
-            <translation>另一个 Snow Shot 实例正在使用 MCP 端点</translation>
+            <source>Another SpringScreenShot instance owns the MCP endpoint</source>
+            <translation>另一个 SpringScreenShot 实例正在使用 MCP 端点</translation>
         </message>
         <message>
             <source>Could not open the local MCP endpoint</source>

@@ -174,7 +174,7 @@ AccountSessionService::AccountSessionService(SnowShotApiClient& client, Options 
 AccountSessionService::~AccountSessionService() = default;
 
 AccountSessionService* AccountSessionService::forClient(SnowShotApiClient* client) {
-    if (!client || edition::isMini)
+    if (!client || !edition::accountEnabled)
         return nullptr;
     for (auto* service :
          client->findChildren<AccountSessionService*>(QString(), Qt::FindDirectChildrenOnly))

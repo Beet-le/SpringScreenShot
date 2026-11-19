@@ -157,7 +157,6 @@
     "settings_action_bindings": {
       "adapter": "registry fieldForAction, settings_action dispatches SettingsRuntimeSession.triggerAction",
       "members": [
-        "OpenLoginItemSettings",
         "RestartAsAdministrator",
         "ClearCaptureHistory",
         "ClearPinnedHistory",

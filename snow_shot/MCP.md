@@ -19,8 +19,8 @@ Claude-style configuration:
 ```json
 {
   "mcpServers": {
-    "snow-shot": {
-      "command": "D:\\Snow Shot\\bin\\snow-shot-mcp.exe",
+    "SpringScreenShot": {
+      "command": "D:\\Snow Shot\\bin\\SpringScreenShot-mcp.exe",
       "args": []
     }
   }
@@ -30,13 +30,13 @@ Claude-style configuration:
 Codex-style stdio configuration:
 
 ```toml
-[mcp_servers.snow_shot]
-command = 'D:\Snow Shot\bin\snow-shot-mcp.exe'
+[mcp_servers.SpringScreenShot]
+command = 'D:\Snow Shot\bin\SpringScreenShot-mcp.exe'
 args = []
 ```
 
 On macOS set `command` to, for example,
-`/Applications/Snow Shot.app/Contents/MacOS/snow-shot-mcp`.
+`/Applications/Snow Shot.app/Contents/MacOS/SpringScreenShot-mcp`.
 The bridge leaves application startup to you by default. Add `"--launch-app"` to
 `args` to allow one launch attempt of the sibling Snow Shot executable. This does
 not enable MCP integration: enable it in the application first. The bridge waits
@@ -444,7 +444,7 @@ desktop session:
 ```powershell
 python snow_shot/tests/mcp_live_tests.py `
   build/windows-msvc-debug/snow_shot/Debug/snow_shot.exe `
-  build/windows-msvc-debug/cargo/x86_64-pc-windows-msvc/debug/snow-shot-mcp.exe
+  build/windows-msvc-debug/cargo/x86_64-pc-windows-msvc/debug/SpringScreenShot-mcp.exe
 ```
 
 Configurable canvas fill styles accept `fill_style: "border"`, `"solid"`, `"cross_line"`,

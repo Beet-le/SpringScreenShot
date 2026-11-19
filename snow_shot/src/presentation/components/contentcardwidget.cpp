@@ -202,7 +202,7 @@ QWidget* ContentCardWidget::createPage(
 #endif
 
     } else if (definition.kind == snow_shot::presentation::settings::SettingsPageKind::Account) {
-#if !SNOW_SHOT_EDITION_MINI
+#if SNOW_SHOT_ENABLE_ACCOUNT
         page = new AccountPageWidget(
             snow_shot::app::AccountSessionService::forClient(m_translationClient), m_stack);
 #endif

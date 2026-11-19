@@ -66,7 +66,7 @@ snow_install_rust_licenses(
 file(READ "${CMAKE_CURRENT_LIST_DIR}/DeploySnowShotMacOS.cmake.in" _mini_deploy)
 string(REPLACE "@SNOW_MACOS_OCR_RUNTIME_ONLY@" "ON" _mini_deploy "${_mini_deploy}")
 string(REPLACE "snow_shot.app" "snow_shot_mini.app" _mini_deploy "${_mini_deploy}")
-string(REPLACE "snow-shot-mcp" "snow-shot-mini-mcp" _mini_deploy "${_mini_deploy}")
+string(REPLACE "SpringScreenShot-mcp" "snow-shot-mini-mcp" _mini_deploy "${_mini_deploy}")
 string(REPLACE "snow-shot-updater" "snow-shot-mini-updater" _mini_deploy "${_mini_deploy}")
 string(REPLACE "macos-ocr-verification.json" "macos-mini-ocr-verification.json" _mini_deploy "${_mini_deploy}")
 string(APPEND _mini_deploy [==[

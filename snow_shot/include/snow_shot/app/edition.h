@@ -31,6 +31,9 @@
 #ifndef SNOW_SHOT_ENABLE_EXTENDED_FEATURES
 #define SNOW_SHOT_ENABLE_EXTENDED_FEATURES (!SNOW_SHOT_EDITION_MINI)
 #endif
+#ifndef SNOW_SHOT_ENABLE_ACCOUNT
+#define SNOW_SHOT_ENABLE_ACCOUNT 0
+#endif
 
 namespace snow_shot::app::edition {
 inline constexpr bool isMini = SNOW_SHOT_EDITION_MINI != 0;
@@ -42,10 +45,11 @@ inline constexpr bool latexRecognition = SNOW_SHOT_ENABLE_LATEX_RECOGNITION != 0
 inline constexpr bool textTranslation = SNOW_SHOT_ENABLE_TEXT_TRANSLATION != 0;
 inline constexpr bool apiConfiguration = SNOW_SHOT_ENABLE_API_CONFIGURATION != 0;
 inline constexpr bool extendedFeatures = SNOW_SHOT_ENABLE_EXTENDED_FEATURES != 0;
+inline constexpr bool accountEnabled = SNOW_SHOT_ENABLE_ACCOUNT != 0;
 
 [[nodiscard]] inline QString productName() {
     return isMini ? QCoreApplication::translate("EditionMetadata", "Snow Shot Mini")
-                  : QCoreApplication::translate("EditionMetadata", "Snow Shot");
+                  : QCoreApplication::translate("EditionMetadata", "SpringScreenShot");
 }
 [[nodiscard]] inline QString applicationName() {
     return isMini ? QStringLiteral("snow_shot_mini") : QStringLiteral("snow_shot");
@@ -63,6 +67,14 @@ inline constexpr bool extendedFeatures = SNOW_SHOT_ENABLE_EXTENDED_FEATURES != 0
 [[nodiscard]] inline QString productId() {
     return isMini ? QStringLiteral("snow-shot-mini") : QStringLiteral("snow-shot");
 }
+// MCP-facing identity is branded separately from the internal product identity so the
+// updater, data directory and registry integrations keep their stable names.
+[[nodiscard]] inline QString mcpProductId() {
+    return isMini ? QStringLiteral("snow-shot-mini") : QStringLiteral("SpringScreenShot");
+}
+[[nodiscard]] inline QString mcpRegistryName() {
+    return isMini ? QStringLiteral("SnowShotMini") : QStringLiteral("SpringScreenShot");
+}
 [[nodiscard]] inline QString portableMarkerName() {
     return isMini ? QStringLiteral("__mini_data_directory") : QStringLiteral("__data_directory");
 }
@@ -75,9 +87,9 @@ inline constexpr bool extendedFeatures = SNOW_SHOT_ENABLE_EXTENDED_FEATURES != 0
 }
 [[nodiscard]] inline QString mcpName() {
 #ifdef Q_OS_WIN
-    return productId() + QStringLiteral("-mcp.exe");
+    return mcpProductId() + QStringLiteral("-mcp.exe");
 #else
-    return productId() + QStringLiteral("-mcp");
+    return mcpProductId() + QStringLiteral("-mcp");
 #endif
 }
 [[nodiscard]] inline QString bundleId() {

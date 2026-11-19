@@ -6,7 +6,7 @@ use serde_json::Value;
 pub(super) fn successful(result: &CallToolResult) -> Result<(), McpError> {
     if result.is_error == Some(true) {
         return Err(McpError::invalid_params(
-            "Snow Shot job is unavailable",
+            "SpringScreenShot job is unavailable",
             result.structured_content.clone(),
         ));
     }

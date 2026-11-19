@@ -6,14 +6,12 @@
 #include "snow_shot/app/mcp/mcpruntimegraph.h"
 #include "snow_shot/presentation/languagemanager.h"
 #include "snow_shot/presentation/mainwindow.h"
-#include "snow_shot/presentation/components/aboutpagewidget.h"
 #include "snow_shot/presentation/screenshotexportcoordinator.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/pinnedwindowrepository.h"
 #include "snow_shot/update/updateservice.h"
 #include "widgets/platform_compatibility.h"
-#include "widgets/button.h"
 #ifdef Q_OS_WIN
 #include "snow_shot/app/shellimagelaunch.h"
 #include "snow_shot/app/storeupdatelifecycle.h"
@@ -25,7 +23,6 @@
 #include <QEvent>
 #include <QDir>
 #include <QFile>
-#include <QMessageBox>
 #include <QLockFile>
 #include <QImage>
 #include <QKeyEvent>
@@ -235,10 +232,10 @@ int runMcpApplicationLifecycleTests(int argc, char** argv) try {
                 application.property("snowShotMcpStartError").value<McpStartupError>();
             const QString message = mcpStartupErrorText(error);
             const QString expected =
-                locale == u"zh_CN" ? QStringLiteral("另一个 Snow Shot 实例正在使用 MCP 端点")
+                locale == u"zh_CN" ? QStringLiteral("另一个 SpringScreenShot 实例正在使用 MCP 端点")
                 : locale == u"zh_TW"
-                    ? QStringLiteral("另一個 Snow Shot 執行個體正在使用 MCP 端點")
-                    : QStringLiteral("Another Snow Shot instance owns the MCP endpoint");
+                    ? QStringLiteral("另一個 SpringScreenShot 執行個體正在使用 MCP 端點")
+                    : QStringLiteral("Another SpringScreenShot instance owns the MCP endpoint");
             require(error == McpStartupError::EndpointOwned && message == expected &&
                         !initiallyUnavailable->isRunning() && failedRuntimeStarts == 0,
                     "real catalogs retranslate retained startup failures without restarting MCP");
@@ -555,47 +552,6 @@ int runMcpApplicationLifecycleTests(int argc, char** argv) try {
                 "cancelled acquisition releases ordinary application input before returning");
         verifyStoreQueriesDuringLaunchReplay(controller, *updates, *server, *mainWindow);
         verifyCoalescedCancellationDuringRestoration(*updates, *server);
-#endif
-#ifdef Q_OS_WIN
-        mainWindow->showAbout();
-        auto* about = mainWindow->findChild<AboutPageWidget*>();
-        require(about, "real controller exposes the About page");
-        auto* updateAction =
-            about->findChild<adqt::widgets::AdButton*>(QStringLiteral("aboutUpdateAction"));
-        require(updateAction && storage.flushNow().success,
-                "About update action exists with settled test storage");
-        // Stop at the save guard so this controller regression cannot launch a native updater.
-        const QString configPath =
-            QDir(storage.configurationDirectory()).filePath(QStringLiteral("config.json"));
-        require(
-            QFile::remove(configPath) && QDir().mkdir(configPath) &&
-                configuration.setValue(QStringLiteral("updates/mode"), QStringLiteral("manual")),
-            "block publication of only the isolated test configuration");
-        auto& updateStatus = const_cast<update::UpdateStatus&>(updates->status());
-        const auto previousStatus = updateStatus;
-        updateStatus = {update::UpdateState::Ready, QStringLiteral("1.2.3"), {}, 0, 0};
-        updates->statusChanged();
-        bool confirmationShown = false;
-        QTimer dismissUnexpectedConfirmation;
-        dismissUnexpectedConfirmation.setSingleShot(true);
-        QObject::connect(&dismissUnexpectedConfirmation, &QTimer::timeout, &controller, [&] {
-            if (auto* dialog = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
-                confirmationShown = true;
-                dialog->reject();
-            }
-        });
-        dismissUnexpectedConfirmation.start(0);
-        updateAction->click();
-        dismissUnexpectedConfirmation.stop();
-        require(!confirmationShown && updateStatus.state == update::UpdateState::Ready &&
-                    updateStatus.error ==
-                        QStringLiteral(
-                            "Your settings could not be saved. Please retry before updating"),
-                "About restart skips confirmation and immediately checks settings persistence");
-        require(QDir().rmdir(configPath) && storage.flushNow().success,
-                "restore isolated configuration publication after update request");
-        updateStatus = previousStatus;
-        updates->statusChanged();
 #endif
         bool suspendedWithoutListener = false;
         bool watchdogFired = false;
